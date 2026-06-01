@@ -453,12 +453,12 @@ Last updated: 2026-06-01
 - Validation:
   - `rustfmt --edition 2024 --check crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs`
   - `git diff --check -- crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs docs/source/offline_kagemusha.md roadmap.md status.md`
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-redeem-request-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
     (1 passed; 0.57s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_ffi_rejects_malformed_redeem_proof_without_output --lib -- --test-threads=1`
-    (1 passed; 1.20s test time after rebuild)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
-    (1 passed; 0.72s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-redeem-request-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_ffi_rejects_malformed_redeem_proof_without_output --lib -- --test-threads=1`
+    (1 passed; 1.79s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-redeem-request-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 1.08s test time)
 
 ## 2026-06-01 Kagemusha recursive verifier slice LEN=4 binding
 
@@ -1326,6 +1326,5324 @@ Last updated: 2026-06-01
   - BOI `npm run verify` (typecheck plus 56 Vitest tests passed)
   - `git diff --check` in both repositories
 
+## 2026-06-01 SCCP release-bundle JS export transcript guard
+
+- Added a strict release-bundle verifier regression that rewrites the copied
+  `js-sdk` corridor log to omit
+  `javascript/iroha_js/test/sccpPackageExports.test.js` while preserving the
+  other JS phase fragments and success markers. Verification must now reject
+  that forged public attachment, proving the package-root SCCP helper import
+  test is enforced at bundle-review time, not only during report generation.
+- Updated bridge-proof documentation and the roadmap to describe the public
+  release-bundle transcript guard.
+- Validation: pending.
+
+## 2026-06-01 SCCP release-bundle UI-prover invariant guard
+
+- Tightened `scripts/sccp_verify_release_bundle.py` so the public release-bundle
+  verifier rejects duplicate helper symbols in SCCP user-prover submission
+  rows, both in the JavaScript/web default row and in every per-SDK helper map.
+  A repeated helper can no longer count as coverage for an omitted portal or
+  mobile proof-generation entrypoint in a self-consistent release bundle.
+- The same verifier now requires the UI-owned witness/prover hook markers in
+  every per-SDK row: JavaScript/web `witnessProvider`/`proveFn`, Python
+  `witness_provider`/`prove`, Swift `WitnessProvider`/`ProveFunction`, and
+  Kotlin/Java Android `WitnessProvider`/`ProofEngine`.
+- Updated the bridge-proof docs and roadmap so the strict release artifact gate
+  matches the release-readiness test policy.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "duplicate_submission_surface_helpers or requires_submission_surface_ui_hooks or submission_surface"`
+    (`7 passed, 94 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`119 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`753 passed`)
+
+## 2026-06-01 Sumeragi vNext/verification TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with TLC modes for
+  `vnext-chain-order`, `vnext-rechain`, `vnext-rechain-error-label`,
+  `vnext-signature`, `vnext-signing-preimage`, `vnext-control-ingress`,
+  `vnext-slot-lifecycle`, `vnext-validation`, `vnext-deadline-protection`,
+  `validation-stall-redrive`, `verify-cache-key`, `vote-verify-async`, and
+  `qc-verify-async`, including matching `-bug-*` expected-failure modes.
+- No TLA+ spec or config semantics changed. Raw TLC probes completed the full
+  finite state graph for those thirteen fast configs. `vnext-stake-weight-fast`
+  was intentionally left Apalache-only in this tranche because the raw TLC
+  probe returned an invariant failure and needs separate config/spec triage.
+- Updated the formal docs, CI inventory, and roadmap to mark the thirteen
+  families as TLC-cross-checked. The documented TLC fast-mode gap is now 100
+  missing modes out of 499 documented fast rows, with 399 fast modes wired into
+  the TLC runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`100` missing, `399` TLC-wired fast modes)
+  - Apalache typecheck and `sumeragi_apalache.sh <mode>-fast` for the thirteen
+    newly wired families
+  - `sumeragi_tlc.sh <mode>-fast` for the thirteen newly wired families
+  - sequential TLC mutation sweeps for `vnext-chain-order` (`19`),
+    `vnext-rechain` (`17`), `vnext-rechain-error-label` (`13`),
+    `vnext-signature` (`16`), `vnext-signing-preimage` (`27`),
+    `vnext-control-ingress` (`28`), `vnext-slot-lifecycle` (`32`),
+    `vnext-validation` (`15`), `vnext-deadline-protection` (`24`),
+    `validation-stall-redrive` (`24`), `verify-cache-key` (`27`),
+    `vote-verify-async` (`30`), and `qc-verify-async` (`39`), all producing
+    the expected invariant failure
+
+## 2026-06-01 SCCP JS package-root export evidence guard
+
+- Added a release-readiness negative test that rejects a passed `js-sdk` phase
+  artifact if the phase block omits
+  `javascript/iroha_js/test/sccpPackageExports.test.js`. This makes the
+  package-root SCCP helper export check mandatory release evidence for web
+  portal prover readiness, alongside the existing source/dist/declaration helper
+  surface checks.
+- Updated bridge-proof documentation and the roadmap to call out the package
+  export transcript requirement.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "js_package_export_transcript or js_package_dist_transcript or js_helper_symbols_exist_in_portal_artifacts"`
+    (`3 passed, 15 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`18 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`751 passed`)
+
+## 2026-06-01 Sumeragi recovery/native-AMX TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-locked-qc-recovery-fast`, `range-pull-recovery-fast`,
+  `native-amx-journal-fast`, `native-amx-ingress-fast`, and their matching
+  `-bug-*` expected-failure modes.
+- No TLA+ spec or config semantics changed. The existing finite configs remain
+  deadlock-safe with their current `CHECK_DEADLOCK` settings.
+- Updated the formal docs, CI inventory, and roadmap to mark missing locked-QC
+  payload recovery, range-pull recovery, native AMX journal replay, and native
+  AMX ingress as TLC-cross-checked. The documented TLC fast-mode gap is now 113
+  missing modes out of 499 documented fast rows, with 386 fast modes wired into
+  the TLC runner.
+- `certified-fetch-fast` remains Apalache-covered after its TLC probe continued
+  expanding for several minutes. The 20-second TLC probes for
+  `missing-block-fetch-fast`, `missing-block-hard-cap-fast`,
+  `missing-block-hard-cap-cleanup-fast`, `missing-block-view-change-fast`,
+  `native-amx-attestation-fast`, `native-amx-routing-plan-fast`, and
+  `native-amx-receipt-fast` also timed out and should get separate bounded-TLC
+  passes.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - documented TLC gap script (`113` missing, `386` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingLockedQcRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRangePullRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxJournalReplay.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxIngressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-locked-qc-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh range-pull-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-journal-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-locked-qc-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh range-pull-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-journal-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-ingress-fast`
+  - sequential TLC mutation sweeps for `missing-locked-qc-recovery` (`31`),
+    `range-pull-recovery` (`47`), `native-amx-journal` (`17`), and
+    `native-amx-ingress` (`19`), all producing the expected invariant failure
+
+## 2026-06-01 SCCP user-prover helper uniqueness guard
+
+- Added a release-readiness regression that rejects duplicate helper symbols in
+  every public user-prover submission-surface row, both in the default
+  JavaScript/web list and in each per-SDK helper map. This prevents release
+  evidence from accidentally counting a repeated helper as coverage for an
+  omitted portal or mobile proof-generation entrypoint.
+- Updated bridge-proof documentation and the roadmap to describe the uniqueness
+  requirement for SDK helper rows.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "helper_symbols_are_unique or helper_symbols_exist or python_helper_symbols_are_package_root_exports or user_prover"`
+    (`6 passed, 11 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`17 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`750 passed`)
+
+## 2026-06-01 SCCP Python package-root helper export guard
+
+- Added a release-readiness regression that imports `iroha_torii_client` from
+  the local Python SDK package root and requires every non-callback Python
+  helper/class named in the public SCCP user-prover rows to be available as a
+  package attribute and listed in `__all__`.
+- This closes the Python app-import side of the UI prover contract and tightens
+  the web portal side: JS helper rows now also require non-callback helper
+  exports to exist in both source and packaged package entrypoints, while
+  Python portal/mobile clients have an executable guard for package-root
+  exports.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "python_helper_symbols_are_package_root_exports or ui_hook_symbols or helper_symbols_exist"`
+    (`4 passed, 13 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`17 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "submission_surface"`
+    (`5 passed, 94 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`116 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`78 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`750 passed`)
+
+## 2026-06-01 SCCP source-adapter gate hash release binding
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so required
+  source-adapter gates must publish `gate_hash` as the lane's named final gate
+  transcript: `solana_full_light_client_gate_hash`,
+  `ton_full_light_client_gate_hash`, `tron_dpos_source_gate_hash`, or
+  `substrate_runtime_storage_gate_hash`. A release bundle can no longer point
+  `gate_hash` at a component audit role such as Solana tower replay or TON
+  masterchain config while keeping the expected audit keys present.
+- Applied the same named-gate binding to public
+  `cryptographic_evidence.source_adapter_gate_hash`, and added a regression
+  that mutates both the embedded all-lanes evidence and the public crypto table.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_source_gate_hash_named_role_drift`
+    (`1 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate or crypto_evidence"`
+    (`15 passed, 84 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`99 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`749 passed`)
+
+## 2026-06-01 Sumeragi block-sync recovery TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-evidence-replay-fast`, `block-sync-recovery-fast`, and their
+  matching `-bug-*` expected-failure modes so known-block commit-evidence
+  replay pacing and BlockSyncUpdate recovery admission have independent TLC
+  coverage.
+- No spec or config semantics changed. The existing finite configs remain
+  deadlock-safe without adding `CHECK_DEADLOCK FALSE`.
+- The larger `certified-fetch-fast` TLC probe was intentionally left out of
+  this tranche after its state space continued expanding for several minutes;
+  it remains Apalache-covered and should get a separate TLC-bounded pass.
+- Updated the formal docs, CI inventory, and roadmap to mark the two recovery
+  families as TLC-cross-checked. The documented TLC fast-mode gap is now 117
+  missing modes out of 499 documented fast rows, with 382 fast modes wired into
+  the TLC runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitEvidenceReplayGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-evidence-replay-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-evidence-replay-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-fast`
+  - sequential TLC mutation sweeps for `commit-evidence-replay` (`12`) and
+    `block-sync-recovery` (`15`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi core RBC TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `rbc-causality-fast`, `rbc-ready-emission-fast`,
+  `rbc-deliver-emission-fast`, `rbc-delivered-rebroadcast-fast`,
+  `rbc-rebroadcast-cursor-fast`, `rbc-rebroadcast-action-fast`,
+  `rbc-next-due-fast`, and their matching `-bug-*` expected-failure modes so
+  the core RBC INIT/chunk/READY/DELIVER causality, local emission,
+  delivered-session rebroadcast, stalled-rebroadcast selection/action, and
+  next-due scheduler models have independent TLC coverage.
+- No spec or config semantics changed. The existing finite configs remain
+  deadlock-safe without adding `CHECK_DEADLOCK FALSE`.
+- Updated the formal docs, CI inventory, and roadmap to mark the seven RBC
+  families as TLC-cross-checked. The documented TLC fast-mode gap is now 119
+  missing modes out of 499 documented fast rows, with 380 fast modes wired into
+  the TLC runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcCausalityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcReadyEmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcDeliverEmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcDeliveredRebroadcastGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcRebroadcastCursorGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcRebroadcastActionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcNextDueGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-causality-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-ready-emission-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-emission-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-delivered-rebroadcast-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-rebroadcast-cursor-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-rebroadcast-action-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-next-due-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-causality-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-ready-emission-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-deliver-emission-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-delivered-rebroadcast-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-cursor-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-action-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-next-due-fast`
+  - sequential TLC mutation sweeps for `rbc-causality` (`25`),
+    `rbc-ready-emission` (`24`), `rbc-deliver-emission` (`31`),
+    `rbc-delivered-rebroadcast` (`22`), `rbc-rebroadcast-cursor` (`13`),
+    `rbc-rebroadcast-action` (`24`), and `rbc-next-due` (`26`), all
+    producing the expected invariant failure
+
+## 2026-06-01 Sumeragi core safety TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `fork-fast`,
+  `quorum-fast`, `rbc-fast`, and their matching `-bug-*` expected-failure
+  modes so same-height fork safety, fail-closed quorum arithmetic, and RBC
+  deliver-quorum gating have independent TLC coverage in addition to Apalache.
+- No spec or config semantics changed. The existing finite configs remain
+  deadlock-safe without adding `CHECK_DEADLOCK FALSE`; `quorum-fast` is finite
+  but intentionally transition-heavy under TLC because every arithmetic sample
+  can transition to every other sampled state.
+- Updated the formal docs, CI inventory, and roadmap to mark the three core
+  safety families as TLC-cross-checked. The documented TLC fast-mode gap is now
+  126 missing modes out of 499 documented fast rows, with 373 fast modes wired
+  into the TLC runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiForkSafety.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumPolicy.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcDeliverQuorum.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fork-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fork-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-fast`
+  - sequential TLC mutation sweeps for `fork` (`1`), `quorum` (`6`), and
+    `rbc` (`4`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi recovery helper TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `recovery-fsm-reason-fast`, `round-recovery-bundle-window-fast`,
+  `committed-edge-conflict-fast`, `lock-rejected-sink-fast`, and their matching
+  `-bug-*` expected-failure modes so recovery reason classification,
+  same-height recovery bundle windows, committed-edge conflict suppression, and
+  lock-rejected branch sink lifecycle have independent TLC coverage.
+- These four models are stuttering helper gates, so their existing configs
+  remain deadlock-safe without adding `CHECK_DEADLOCK FALSE`.
+- Updated the formal docs, CI inventory, and roadmap to mark the four gates as
+  TLC-cross-checked. The documented TLC fast-mode gap is now 129 missing modes
+  out of 499 documented fast rows, with 370 fast modes wired into the TLC
+  runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRecoveryFsmReasonGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRoundRecoveryBundleWindowGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommittedEdgeConflictGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLockRejectedSinkGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-fsm-reason-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh round-recovery-bundle-window-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh committed-edge-conflict-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh lock-rejected-sink-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh recovery-fsm-reason-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh round-recovery-bundle-window-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh committed-edge-conflict-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh lock-rejected-sink-fast`
+  - sequential TLC mutation sweeps for `recovery-fsm-reason` (`16`),
+    `round-recovery-bundle-window` (`19`), `committed-edge-conflict` (`23`),
+    and `lock-rejected-sink` (`25`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi frontier/payload TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-block-sync-hint-fast`, `missing-payload-fetch-window-fast`,
+  `round-trace-status-fast`, `missing-block-ingress-fetch-fast`,
+  `payload-progress-availability-fast`, and their matching `-bug-*`
+  expected-failure modes so frontier block-sync hints, same-height
+  missing-payload fetch windows, round-trace status, exact-frontier ingress
+  grace, and actor-local payload-progress availability have independent TLC
+  coverage.
+- These five models are stuttering helper gates, so their existing configs
+  remain deadlock-safe without adding `CHECK_DEADLOCK FALSE`.
+- Updated the formal docs, CI inventory, and roadmap to mark the five gates as
+  TLC-cross-checked. The documented TLC fast-mode gap is now 133 missing modes
+  out of 499 documented fast rows, with 366 fast modes wired into the TLC
+  runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierBlockSyncHintGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingPayloadFetchWindowGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRoundTraceStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockIngressFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPayloadProgressAvailabilityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-block-sync-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-payload-fetch-window-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh round-trace-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-ingress-fetch-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh payload-progress-availability-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-block-sync-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-payload-fetch-window-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh round-trace-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-ingress-fetch-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh payload-progress-availability-fast`
+  - sequential TLC mutation sweeps for `frontier-block-sync-hint` (`27`),
+    `missing-payload-fetch-window` (`24`), `round-trace-status` (`28`),
+    `missing-block-ingress-fetch` (`12`), and
+    `payload-progress-availability` (`12`), all producing the expected
+    invariant failure
+
+## 2026-06-01 Sumeragi execution witness/Kura TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `exec-witness-recorder-fast`, `exec-witness-access-key-fast`,
+  `smt-path-hash-fast`, `kura-replica-advert-fast`, and their matching
+  `-bug-*` expected-failure modes so execution-witness recorder/key parsing,
+  sparse-Merkle path hashing, and Kura replica advert ingress have independent
+  TLC coverage.
+- Added `CHECK_DEADLOCK FALSE` to the execution-witness recorder,
+  execution-witness access-key, and SMT path/hash fast and mutation configs
+  because those models intentionally terminate after finite `checked` counter
+  traces; the Kura replica advert configs remain ordinary stuttering models.
+- Updated the formal docs, CI inventory, and roadmap to mark the four gates as
+  TLC-cross-checked. The documented TLC fast-mode gap is now 138 missing modes
+  out of 499 documented fast rows, with 361 fast modes wired into the TLC
+  runner.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiExecWitnessRecorderGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiExecWitnessAccessKeyGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSmtPathHashGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKuraReplicaAdvertGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh exec-witness-recorder-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh exec-witness-access-key-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh smt-path-hash-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-replica-advert-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh exec-witness-recorder-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh exec-witness-access-key-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh smt-path-hash-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-replica-advert-fast`
+  - sequential TLC mutation sweeps for `exec-witness-recorder` (`39`),
+    `exec-witness-access-key` (`29`), `smt-path-hash` (`20`), and
+    `kura-replica-advert` (`12`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi status projection TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `settlement-status-fast`, `nexus-economics-status-fast`,
+  `npos-repair-coverage-status-fast`, `vote-validation-drop-status-fast`, and
+  their matching `-bug-*` expected-failure modes so settlement telemetry,
+  Nexus fee/staking status, NPoS repair coverage, and vote-validation drop
+  telemetry have independent TLC coverage.
+- These four models are bounded `checked` counter state machines, so TLC
+  explores the finite status-projection cases with `CHECK_DEADLOCK FALSE`
+  on the fast and expected-failure configs to accept intentional terminal
+  counter states.
+- Updated the formal docs, CI inventory, and roadmap to mark the four status
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSettlementStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNexusEconomicsStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNposRepairCoverageStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteValidationDropStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh settlement-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh nexus-economics-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh npos-repair-coverage-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-validation-drop-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh settlement-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh nexus-economics-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh npos-repair-coverage-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-validation-drop-status-fast`
+  - sequential TLC mutation sweeps for `settlement-status` (`32`),
+    `nexus-economics-status` (`33`), `npos-repair-coverage-status` (`17`), and
+    `vote-validation-drop-status` (`35`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi RBC stash/status TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `rbc-rebroadcast-selection-fast`, `pending-rbc-stash-fast`,
+  `rbc-status-handle-fast`, `rbc-backlog-status-fast`, and their matching
+  `-bug-*` expected-failure modes so RBC rebroadcaster selection,
+  pending-frame stashing, status handle lifecycle, and backlog snapshot
+  accounting have independent TLC coverage.
+- The rebroadcast selection, status-handle, and backlog-status models are
+  bounded stuttering checks; the pending-RBC stash model uses its existing
+  finite `Apply/Stable` transition relation. No terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the four helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcRebroadcastSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingRbcStashGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStatusHandleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcBacklogStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-selection-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-rbc-stash-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-status-handle-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-backlog-status-fast`
+  - sequential TLC mutation sweeps for `rbc-rebroadcast-selection` (`11`),
+    `pending-rbc-stash` (`44`), `rbc-status-handle` (`31`), and
+    `rbc-backlog-status` (`25`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi RBC session/commit TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `rbc-commit-processing-fast`, `rbc-deliver-acceptance-fast`,
+  `rbc-payload-layout-fast`, `rbc-session-chunk-ingest-fast`,
+  `rbc-session-ready-deliver-fast`, `rbc-delivered-payload-bytes-fast`, and
+  their matching `-bug-*` expected-failure modes so RBC commit wakeups, final
+  DELIVER acceptance, payload layout projection, session chunk ingest,
+  READY/DELIVER recording, and delivered-byte telemetry have independent TLC
+  coverage.
+- These six models are bounded one-state checks with stuttering
+  `Next == UNCHANGED vars` transitions, so no terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the six helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcCommitProcessingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcDeliverAcceptanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcPayloadLayoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcSessionChunkIngestGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcSessionReadyDeliverGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcDeliveredPayloadBytesGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-commit-processing-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-deliver-acceptance-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-payload-layout-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-session-chunk-ingest-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-session-ready-deliver-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-delivered-payload-bytes-fast`
+  - sequential TLC mutation sweeps for `rbc-commit-processing` (`10`),
+    `rbc-deliver-acceptance` (`10`), `rbc-payload-layout` (`16`),
+    `rbc-session-chunk-ingest` (`19`), `rbc-session-ready-deliver` (`20`), and
+    `rbc-delivered-payload-bytes` (`16`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi RBC chunk/payload TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `rbc-chunk-target-fast`, `rbc-chunk-payload-cap-fast`,
+  `rbc-chunk-allocation-fast`, `rbc-payload-chunking-fast`,
+  `rbc-rs16-initial-fanout-fast`, `rbc-chunk-broadcast-order-fast`, and their
+  matching `-bug-*` expected-failure modes so RBC chunk fanout, payload frame
+  caps, weighted allocation, payload chunking, RS16 fanout, and broadcast
+  ordering have independent TLC coverage.
+- These six models are bounded one-state checks with stuttering
+  `Next == UNCHANGED vars` transitions, so no terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the six helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcChunkTargetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcChunkPayloadCapGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcChunkAllocationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcPayloadChunkingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcRs16InitialFanoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcChunkBroadcastOrderGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-chunk-target-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-chunk-payload-cap-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-chunk-allocation-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-payload-chunking-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-rs16-initial-fanout-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-chunk-broadcast-order-fast`
+  - sequential TLC mutation sweeps for `rbc-chunk-target` (`10`),
+    `rbc-chunk-payload-cap` (`12`), `rbc-chunk-allocation` (`11`),
+    `rbc-payload-chunking` (`10`), `rbc-rs16-initial-fanout` (`12`), and
+    `rbc-chunk-broadcast-order` (`12`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi roster and signer TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `local-signed-block-lookup-fast`, `live-vote-roster-fast`,
+  `canonical-round-roster-fast`, `commit-topology-state-fast`,
+  `precommit-signer-history-fast`, and their matching `-bug-*`
+  expected-failure modes so local signed-block materialization, live/canonical
+  roster selection, commit-topology reset state, and precommit signer-history
+  fallback have independent TLC coverage.
+- These five models are bounded one-state checks with stuttering
+  `Next == UNCHANGED vars` transitions, so no terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLocalSignedBlockLookupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLiveVoteRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCanonicalRoundRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitTopologyStateGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitSignerHistoryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh local-signed-block-lookup-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh live-vote-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh canonical-round-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-topology-state-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-signer-history-fast`
+  - sequential TLC mutation sweeps for `local-signed-block-lookup` (`16`),
+    `live-vote-roster` (`16`), `canonical-round-roster` (`22`),
+    `commit-topology-state` (`29`), and `precommit-signer-history` (`23`),
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi timing and observability TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `effective-mode-fast`,
+  `effective-timing-fast`, `hotspot-log-summary-fast`,
+  `adaptive-observability-fast`, `counter-backpressure-cooldown-fast`, and
+  their matching `-bug-*` expected-failure modes so the effective mode/timing,
+  hotspot summary, adaptive observability, and counter-backpressure cooldown
+  helpers have independent TLC coverage.
+- These five models are bounded one-state checks with stuttering
+  `Next == UNCHANGED vars` transitions, so no terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEffectiveModeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEffectiveTimingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiHotspotLogSummaryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiAdaptiveObservabilityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCounterBackpressureCooldownGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh effective-mode-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh effective-timing-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh hotspot-log-summary-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh adaptive-observability-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh counter-backpressure-cooldown-fast`
+  - sequential TLC mutation sweeps for `effective-mode` (`15`),
+    `effective-timing` (`22`), `hotspot-log-summary` (`21`),
+    `adaptive-observability` (`25`), and `counter-backpressure-cooldown`
+    (`18`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi dedup, persistence, and vote-conflict TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `ingress-dedup-cache-fast`, `rbc-status-persistence-fast`,
+  `worker-queue-status-fast`, `same-height-vote-conflict-fast`,
+  `proposal-stale-vote-fast`, and their matching `-bug-*`
+  expected-failure modes so the ingress dedup, RBC persistence, worker queue,
+  same-height local vote conflict, and proposal-side stale-vote helpers have
+  independent TLC coverage.
+- These five models are bounded one-state checks with stuttering
+  `Next == UNCHANGED vars` transitions, so no terminal-state
+  `CHECK_DEADLOCK FALSE` changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIngressDedupCacheGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStatusPersistenceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiWorkerQueueStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSameHeightVoteConflictGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalStaleVoteGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh ingress-dedup-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-status-persistence-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh worker-queue-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh same-height-vote-conflict-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-stale-vote-fast`
+  - sequential TLC mutation sweeps for `ingress-dedup-cache` (`31`),
+    `rbc-status-persistence` (`33`), `worker-queue-status` (`26`),
+    `same-height-vote-conflict` (`36`), and `proposal-stale-vote` (`38`),
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi RBC and ingress status TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `pending-rbc-status-fast`,
+  `ingress-status-counters-fast`, `phase-latency-status-fast`,
+  `rbc-status-lookup-fast`, `rbc-status-retention-fast`, and their matching
+  `-bug-*` expected-failure modes so pending-RBC status, ingress counters,
+  phase latency projection, and RBC status lookup/retention helpers have
+  independent TLC coverage.
+- These five models use stuttering `Next == UNCHANGED vars` transitions for
+  their bounded one-state checks, so no terminal-state `CHECK_DEADLOCK FALSE`
+  changes were needed.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingRbcStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIngressStatusCountersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPhaseLatencyStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStatusLookupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStatusRetentionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-rbc-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh ingress-status-counters-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh phase-latency-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-status-lookup-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-status-retention-fast`
+  - sequential TLC mutation sweeps for all RBC/ingress status configs:
+    `pending-rbc-status` (`27`), `ingress-status-counters` (`33`),
+    `phase-latency-status` (`29`), `rbc-status-lookup` (`21`), and
+    `rbc-status-retention` (`17`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi status and telemetry TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `telemetry-status-fast`,
+  `lane-detail-status-fast`, `mode-status-fast`,
+  `effective-timing-status-fast`, `tx-queue-backpressure-status-fast`, and
+  their matching `-bug-*` expected-failure modes so the telemetry, lane-detail,
+  mode, effective-timing, and transaction-queue backpressure status helpers
+  have independent TLC coverage.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiTelemetryStatusGate*.cfg`,
+  `SumeragiLaneDetailStatusGate*.cfg`, `SumeragiModeStatusGate*.cfg`,
+  `SumeragiEffectiveTimingStatusGate*.cfg`, and
+  `SumeragiTxQueueBackpressureStatusGate*.cfg` TLC configs so terminal bounded
+  counter states are checked as finite executions.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTelemetryStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLaneDetailStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiModeStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEffectiveTimingStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTxQueueBackpressureStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh telemetry-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh lane-detail-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh mode-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh effective-timing-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh tx-queue-backpressure-status-fast`
+  - sequential TLC mutation sweeps for all status/telemetry configs:
+    `telemetry-status` (`27`), `lane-detail-status` (`28`),
+    `mode-status` (`29`), `effective-timing-status` (`30`), and
+    `tx-queue-backpressure-status` (`20`), all producing the expected
+    invariant failure
+
+## 2026-06-01 Sumeragi liveness and recovery status TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-qc-liveness-status-fast`, `sidecar-no-proposal-status-fast`,
+  `timing-status-counters-fast`, `roster-recovery-status-fast`,
+  `range-pull-status-fast`, and their matching `-bug-*` expected-failure modes
+  so the missing-QC, sidecar/no-proposal, timing, roster-recovery, and
+  range-pull status helpers have independent TLC coverage.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiMissingQcLivenessStatusGate*.cfg`,
+  `SumeragiSidecarNoProposalStatusGate*.cfg`,
+  `SumeragiTimingStatusCountersGate*.cfg`,
+  `SumeragiRosterRecoveryStatusGate*.cfg`, and
+  `SumeragiRangePullStatusGate*.cfg` TLC configs so terminal bounded counter
+  states are checked as finite executions.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcLivenessStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSidecarNoProposalStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTimingStatusCountersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterRecoveryStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRangePullStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-liveness-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh sidecar-no-proposal-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh timing-status-counters-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-recovery-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh range-pull-status-fast`
+  - sequential TLC mutation sweeps for all liveness/recovery status configs:
+    `missing-qc-liveness-status` (`22`), `sidecar-no-proposal-status` (`23`),
+    `timing-status-counters` (`26`), `roster-recovery-status` (`25`), and
+    `range-pull-status` (`20`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi QC and committee status TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `qc-rebuild-status-fast`, `qc-rebuild-quorum-fast`,
+  `collector-targeting-status-fast`, `deterministic-committee-status-fast`,
+  and their matching `-bug-*` expected-failure modes so QC rebuild status
+  accounting, QC rebuild quorum reachability, collector-targeting status, and
+  deterministic committee-size publication have independent TLC coverage.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiQcRebuildStatusGate*.cfg`,
+  `SumeragiCollectorTargetingStatusGate*.cfg`, and
+  `SumeragiDeterministicCommitteeStatusGate*.cfg` TLC configs so terminal
+  bounded counter states are checked as finite executions.
+- Updated the formal docs, CI inventory, and roadmap to mark the four helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcRebuildStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcRebuildQuorumGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCollectorTargetingStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDeterministicCommitteeStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-rebuild-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-rebuild-quorum-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-targeting-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deterministic-committee-status-fast`
+  - sequential TLC mutation sweeps for all QC/committee status configs:
+    `qc-rebuild-status` (`21`), `qc-rebuild-quorum` (`14`),
+    `collector-targeting-status` (`18`), and
+    `deterministic-committee-status` (`8`), all producing the expected
+    invariant failure
+
+## 2026-06-01 Sumeragi recovery status TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `recovery-status-counters-fast`, `deferred-recovery-status-fast`, and their
+  matching `-bug-*` expected-failure modes so missing-block/recovery status
+  accounting and deferred recovery status accounting have independent TLC
+  coverage.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiRecoveryStatusCountersGate*.cfg` and
+  `SumeragiDeferredRecoveryStatusGate*.cfg` TLC configs so terminal bounded
+  counter states are checked as finite executions.
+- Updated the formal docs, CI inventory, and roadmap to mark the two helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRecoveryStatusCountersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDeferredRecoveryStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh recovery-status-counters-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deferred-recovery-status-fast`
+  - sequential TLC mutation sweeps for all recovery status configs:
+    `recovery-status-counters` (`18`) and `deferred-recovery-status` (`15`),
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi pending/frontier payload TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `pending-block-active-for-tip-fast`, `pending-fast-unblock-fast`,
+  `blocking-pending-blocks-fast`, `quorum-recovery-vote-drain-fast`,
+  `frontier-body-gap-payload-drain-fast`,
+  `rbc-authoritative-payload-progress-fast`,
+  `slot-authoritative-payload-fast`, and their matching `-bug-*`
+  expected-failure modes so pending-tip activity, pending fast-unblock,
+  blocking pending-block counters, vote-drain urgency, frontier payload-drain
+  urgency, RBC authoritative payload progress, and slot-level authoritative
+  payload lookup have independent TLC coverage.
+- Updated the formal docs, CI inventory, and roadmap to mark the seven helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingBlockActiveForTipGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingFastUnblockGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockingPendingBlocksGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRecoveryVoteDrainUrgentGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierBodyGapPayloadDrainUrgentGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcAuthoritativePayloadProgressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSlotAuthoritativePayloadGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-active-for-tip-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-fast-unblock-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh blocking-pending-blocks-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-recovery-vote-drain-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-body-gap-payload-drain-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-authoritative-payload-progress-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh slot-authoritative-payload-fast`
+  - sequential TLC mutation sweeps for all pending/frontier payload configs:
+    `pending-block-active-for-tip` (`16`), `pending-fast-unblock` (`12`),
+    `blocking-pending-blocks` (`18`), `quorum-recovery-vote-drain` (`17`),
+    `frontier-body-gap-payload-drain` (`16`),
+    `rbc-authoritative-payload-progress` (`19`), and
+    `slot-authoritative-payload` (`21`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi payload availability TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `local-payload-availability-fast`, `highest-qc-fetch-body-known-fast`,
+  `authoritative-payload-progress-fast`, `authoritative-block-payload-fast`,
+  `block-payload-canonicalization-fast`, and their matching `-bug-*`
+  expected-failure modes so actor-local payload availability, highest-QC
+  body-known suppression, authoritative progress lookup, hash-level
+  authoritative payload availability, and canonical proposal payload bytes have
+  independent TLC coverage.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLocalPayloadAvailabilityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiHighestQcFetchBodyKnownGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiAuthoritativePayloadProgressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiAuthoritativeBlockPayloadGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockPayloadCanonicalizationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh local-payload-availability-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh highest-qc-fetch-body-known-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh authoritative-payload-progress-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh authoritative-block-payload-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-payload-canonicalization-fast`
+  - sequential TLC mutation sweeps for all payload availability configs:
+    `local-payload-availability` (`12`),
+    `highest-qc-fetch-body-known` (`12`),
+    `authoritative-payload-progress` (`12`),
+    `authoritative-block-payload` (`13`), and
+    `block-payload-canonicalization` (`12`), all producing the expected
+    invariant failure
+
+## 2026-06-01 Sumeragi consensus capability and DA gate TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `consensus-caps-status-fast`, `consensus-handshake-caps-fast`,
+  `consensus-message-labels-fast`, `da-gate-fast`,
+  `da-gate-status-fast`, and their matching `-bug-*` expected-failure modes
+  so consensus capability projection, handshake capability construction,
+  consensus message labels, DA gate evaluation, and DA gate status accounting
+  have independent TLC coverage.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiConsensusCapsStatusGate*.cfg` and
+  `SumeragiDaGateStatusGate*.cfg` TLC configs so terminal bounded-case states
+  are checked as finite executions.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiConsensusCapsStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiConsensusHandshakeCapsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiConsensusMessageLabelsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDaGateHelperGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDaGateStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-caps-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-handshake-caps-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-message-labels-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh da-gate-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh da-gate-status-fast`
+  - sequential TLC mutation sweeps for all consensus capability/DA configs:
+    `consensus-caps-status` (`26`), `consensus-handshake-caps` (`24`),
+    `consensus-message-labels` (`25`), `da-gate` (`18`), and
+    `da-gate-status` (`25`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi lock and precommit TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-known-locally-fast`, `block-known-for-lock-fast`,
+  `active-lock-reject-recovery-fast`, `locked-qc-helper-fast`,
+  `precommit-qc-extends-locked-fast`,
+  `drop-precommit-vote-for-lock-fast`, `precommit-fast`, and their matching
+  `-bug-*` expected-failure modes so the local/lock block-known helpers,
+  active lock-reject recovery route, locked-QC helper, precommit-QC locked
+  wrapper, precommit-vote lock filter, and precommit vote-emission gate have
+  independent TLC coverage.
+- Updated the formal docs, CI inventory, and roadmap to mark the seven helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockKnownLocallyGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockKnownForLockGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiActiveLockRejectRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLockedQcHelperGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitQcExtendsLockedGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDropPrecommitVoteForLockGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitVoteGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-known-locally-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-known-for-lock-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh active-lock-reject-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh locked-qc-helper-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-qc-extends-locked-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh drop-precommit-vote-for-lock-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-fast`
+  - sequential TLC mutation sweeps for all lock/precommit helper configs:
+    `block-known-locally` (`12`), `block-known-for-lock` (`15`),
+    `active-lock-reject-recovery` (`21`), `locked-qc-helper` (`15`),
+    `precommit-qc-extends-locked` (`15`),
+    `drop-precommit-vote-for-lock` (`17`), and `precommit` (`9`), all
+    producing the expected invariant failure
+
+## 2026-06-01 Sumeragi requeue and dependency helper TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `requeue-transactions-fast`, `tick-deadline-helpers-fast`,
+  `proposal-parent-resolution-fast`, `highest-qc-dependency-deferral-fast`,
+  `precommit-qc-view-change-fast`, and their matching `-bug-*`
+  expected-failure modes so the transaction requeue, deadline scheduling,
+  parent resolution, highest-QC dependency deferral, and precommit-QC
+  view-change helper gates have independent TLC coverage.
+- Updated the formal docs, CI inventory, and roadmap to mark the five helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRequeueTransactionsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTickDeadlineHelpersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalParentResolutionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiHighestQcDependencyDeferralGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh requeue-transactions-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh tick-deadline-helpers-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-parent-resolution-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh highest-qc-dependency-deferral-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-qc-view-change-fast`
+  - sequential TLC mutation sweeps for all requeue/dependency helper configs:
+    `requeue-transactions` (`20`), `tick-deadline-helpers` (`28`),
+    `proposal-parent-resolution` (`22`),
+    `highest-qc-dependency-deferral` (`22`), and
+    `precommit-qc-view-change` (`19`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi pacemaker and pacing TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `pacemaker-core-fast`,
+  `pacemaker-core-bug-*`, `pacemaker-evaluation-fast`,
+  `pacemaker-evaluation-bug-*`, `pacing-governor-fast`, and
+  `pacing-governor-bug-*` modes so the Pacemaker state-machine, aggregate
+  pacemaker evaluation, and pacing-governor factor helpers have independent
+  TLC coverage.
+- Adjusted `SumeragiPacingGovernorGate.tla` to use a TLC-representable bounded
+  ratio saturation sentinel above every modeled pressure/clear threshold
+  instead of the concrete `u32::MAX` value that TLC cannot enumerate.
+- Updated the formal docs, CI inventory, and roadmap to mark the three helper
+  gates as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPacemakerCoreGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPacemakerEvaluationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPacingGovernorGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacemaker-core-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacemaker-evaluation-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacing-governor-fast`
+  - sequential TLC mutation sweeps for all pacemaker/pacing configs:
+    `pacemaker-core` (`13`), `pacemaker-evaluation` (`40`), and
+    `pacing-governor` (`19`), all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi prevalidated commit helper TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `prevalidated-commit-artifact-fast`,
+  `prevalidated-commit-artifact-bug-*`, `commit-job-dispatch-fast`, and
+  `commit-job-dispatch-bug-*` modes so the prevalidated commit artifact trust
+  gate and commit-job dispatch ownership gate have independent TLC coverage.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  prevalidated commit artifact and commit-job dispatch gates as
+  TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrevalidatedCommitArtifactGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitJobDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh prevalidated-commit-artifact-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-job-dispatch-fast`
+  - sequential `prevalidated-commit-artifact-bug-*` TLC runs for all 14
+    mutation configs and `commit-job-dispatch-bug-*` TLC runs for all 26
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi membership ingress TLC cross-checks
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `membership-view-hash-fast`, `membership-mismatch-status-fast`,
+  `membership-advert-fast`, `membership-mismatch-ingress-fast`,
+  `consensus-params-ingress-fast`, and their matching `-bug-*`
+  expected-failure mode families.
+- Added explicit `CHECK_DEADLOCK FALSE` to the finite
+  `SumeragiMembershipMismatchStatusGate*.cfg` and
+  `SumeragiMembershipMismatchIngressGate*.cfg` TLC configs so TLC checks the
+  terminal helper states as bounded case executions instead of reporting them
+  as deadlocks.
+- Updated the formal docs, CI inventory, and roadmap to mark the membership
+  hash/status/advert/ingress and consensus-params ingress helper gates as
+  TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipViewHashGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipMismatchStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipAdvertGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipMismatchIngressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiConsensusParamsIngressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-view-hash-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-mismatch-status-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-advert-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-mismatch-ingress-fast`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-params-ingress-fast`
+  - sequential TLC mutation sweeps for all membership/ingress configs:
+    `membership-view-hash` (`16`), `membership-mismatch-status` (`23`),
+    `membership-advert` (`24`), `membership-mismatch-ingress` (`25`), and
+    `consensus-params-ingress` (`19`), all producing the expected invariant
+    failure
+
+## 2026-06-01 Sumeragi roster index projection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `roster-index-projection-fast` and `roster-index-projection-bug-*` modes so
+  roster index projection has independent TLC coverage for empty-topology
+  projection, contiguous local fallback, sparse provider positions,
+  incomplete-provider fallback, provider-index overflow, manager
+  normalization, empty-projection roster-length fallback, zero-length managers,
+  and overflow preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark roster index
+  projection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterIndexProjectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-index-projection-fast`
+  - sequential `roster-index-projection-bug-*` TLC runs for all 15 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi BlockSyncUpdate roster hydration TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-update-roster-fast` and `block-sync-update-roster-bug-*` modes so
+  BlockSyncUpdate roster hydration has independent TLC coverage for update
+  construction, consensus-mode resolution, persisted before history ordering,
+  lookup argument forwarding, short-circuit behavior, uncertified fallback
+  admission, commit-topology/world fallback material, saturating live-key
+  filtering, mode canonicalization, selection application, unrostered
+  no-selection preservation, and NPoS stake-snapshot fill rules.
+- Updated the formal docs, CI inventory, and roadmap to mark BlockSyncUpdate
+  roster hydration as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncUpdateRosterHydrationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-roster-fast`
+  - sequential `block-sync-update-roster-bug-*` TLC runs for all 24 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi persisted roster selection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `persisted-roster-selection-fast` and `persisted-roster-selection-bug-*`
+  modes so persisted block-sync roster selection has independent TLC coverage
+  for mode tags, commit-journal priority, cache hit and insertion guards,
+  source labels, artifact recording, sidecar allow/hash gates, successor
+  previous-hash and evidence-target gates, previous-roster stake conversion,
+  checkpoint-only previous evidence, and fail-closed no-source behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark persisted
+  block-sync roster selection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPersistedRosterSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh persisted-roster-selection-fast`
+  - sequential `persisted-roster-selection-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block-sync history roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-history-roster-fast` and `block-sync-history-roster-bug-*` modes
+  so block-sync historical roster selection has independent TLC coverage for
+  mode-tag selection, precommit exact filters and max-view choice,
+  commit-QC/checkpoint history filters and max height/view choice, precommit
+  derivation admission, source labels, roster height/view adjustment,
+  checkpoint height filtering, stake-snapshot forwarding, and post-validation
+  fallback.
+- Updated the formal docs, CI inventory, and roadmap to mark the block-sync
+  history roster helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncHistoryRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-history-roster-fast`
+  - sequential `block-sync-history-roster-bug-*` TLC runs for all 27 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block-sync roster evidence TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-roster-evidence-fast` and `block-sync-roster-evidence-bug-*`
+  modes so block-sync roster evidence helpers have independent TLC coverage for
+  missing commit-proof priority, Permissioned and NPoS classification, NPoS
+  stake-snapshot requirements, exact `has_roster` projection, and applying
+  roster selections into commit-QC, checkpoint, and stake-snapshot update lanes
+  without changing unrelated fields.
+- Updated the formal docs, CI inventory, and roadmap to mark the block-sync
+  roster evidence helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterEvidenceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-evidence-fast`
+  - sequential `block-sync-roster-evidence-bug-*` TLC runs for all 21
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block roster cache TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-roster-caches-fast` and `block-roster-caches-bug-*` modes so block
+  roster cache helpers have independent TLC coverage for roster-selection key
+  admission, NPoS stake requirements, key-field retention, block-view
+  exclusion, signer-key canonicalization and PRF seed binding, signer-cache and
+  roster-cache clear/get/touch/update/eviction behavior, stale order handling,
+  zero-capacity no-ops, and block-scoped signer-cache removal.
+- Updated the formal docs, CI inventory, and roadmap to mark the block roster
+  cache helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockRosterCachesGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-roster-caches-fast`
+  - sequential `block-roster-caches-bug-*` TLC runs for all 30 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi roster artifact selection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `roster-artifact-selection-fast` and `roster-artifact-selection-bug-*` modes
+  so roster artifact selection has independent TLC coverage for
+  commit/checkpoint/block view priority, no-artifact fall-through, cert-only
+  and checkpoint-only selection, commit-preferred combined selection,
+  checkpoint view/root attachment gates, roster-mismatch handling,
+  stake-snapshot source priority, validation input/root/epoch choices, and
+  genesis-stub admission.
+- Updated the formal docs, CI inventory, and roadmap to mark the roster
+  artifact selection helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterArtifactSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-artifact-selection-fast`
+  - sequential `roster-artifact-selection-bug-*` TLC runs for all 28 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi roster-validation core TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `roster-validation-core-fast` and `roster-validation-core-bug-*` modes so
+  core roster validation has independent TLC coverage for roster emptiness,
+  validator-set hash binding, signer-bitmap length and bounds, genesis-stub
+  unsigned handling, permissioned/NPoS quorum, stake snapshot matching, PoP
+  lookup, checkpoint root/expiry binding, preimage fields, BLS input selection,
+  and return-shape preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark the core
+  roster-validation helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCoreGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-core-fast`
+  - sequential `roster-validation-core-bug-*` TLC runs for all 30 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi roster-validation cached TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `roster-validation-cached-fast` and `roster-validation-cached-bug-*` modes so
+  cached roster-validation wrappers have independent TLC coverage for subject
+  prefilters, empty-aggregate memo bypass, memo-key input binding, memo
+  hit/miss behavior, success insertion, validation argument forwarding, and
+  prefilter-before-memo ordering.
+- Updated the formal docs, CI inventory, and roadmap to mark the cached
+  roster-validation wrapper helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCachedGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-cached-fast`
+  - sequential `roster-validation-cached-bug-*` TLC runs for all 24 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi roster-validation memo TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `roster-validation-memo-fast` and `roster-validation-memo-bug-*` modes so
+  roster-validation memo caches have independent TLC coverage for construction,
+  get/touch behavior, zero-capacity inserts, insert/update semantics, live-key
+  eviction, commit/checkpoint lane isolation, refresh clearing, and shared
+  capacity.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  roster-validation memo cache helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationMemoGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast`
+  - sequential `roster-validation-memo-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi embedded-QC roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `embedded-qc-roster-fast` and
+  `embedded-qc-roster-bug-*` modes so embedded-QC roster bootstrapping has
+  independent TLC coverage for roster shape, authoritative anchoring,
+  proof-of-possession, permissioned quorum, NPoS stake snapshot and signer-map
+  policy, aggregate recovery, cache replacement, and payload recovery deferral.
+- Updated the formal docs, CI inventory, and roadmap to mark the embedded-QC
+  roster bootstrap helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEmbeddedQcRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh embedded-qc-roster-fast`
+  - sequential `embedded-qc-roster-bug-*` TLC runs for all 24 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi signature-index recovery TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `signature-index-recovery-fast` and `signature-index-recovery-bug-*` modes so
+  commit signature-index recovery has independent TLC coverage for raw-index
+  trust, fallback scanning, BLS eligibility, no-match and ambiguous-match
+  rejection, duplicate detection, raw-priority preservation, and replacement
+  fail-closed behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  signature-index recovery helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSignatureIndexRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh signature-index-recovery-fast`
+  - sequential `signature-index-recovery-bug-*` TLC runs for all 13 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi autoscale transition TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `autoscale-transition-fast`
+  and `autoscale-transition-bug-*` modes so autoscale transition commit gating
+  has independent TLC coverage for enabled checks, exact transition-height
+  matching, success-path queue reconfiguration, failed-commit suppression, and
+  reported-height preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark the autoscale
+  transition commit gate as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiAutoscaleTransitionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast`
+  - sequential `autoscale-transition-bug-*` TLC runs for all 9 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit-pipeline status TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-pipeline-status-fast` and `commit-pipeline-status-bug-*` modes so
+  commit-pipeline status recording has independent TLC coverage for status
+  reset behavior, last-field storage, EMA initialization and blending, non-EMA
+  field preservation, snapshot projection, and test reset cleanup.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  commit-pipeline status recorder helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-status-fast`
+  - sequential `commit-pipeline-status-bug-*` TLC runs for all 26 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit-pipeline sample TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-pipeline-sample-fast` and `commit-pipeline-sample-bug-*` modes so
+  commit-pipeline timing sample projection has independent TLC coverage for
+  finish-total replacement, duration saturation, core duration field mapping,
+  drain-stage independence, total-vs-phase separation, and bookkeeping
+  exclusion from status samples.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  commit-pipeline timing sample helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineSampleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-sample-fast`
+  - sequential `commit-pipeline-sample-bug-*` TLC runs for all 11 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit-drain summary TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-drain-summary-fast` and `commit-drain-summary-bug-*` modes so
+  commit-drain summary aggregation has independent TLC coverage for result-count
+  saturation, progress ownership, absent timing handling, per-stage timing
+  independence, and stage accumulator saturation.
+- Updated the formal docs, CI inventory, and roadmap to mark the commit-drain
+  summary aggregation helper as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitDrainSummaryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-drain-summary-fast`
+  - sequential `commit-drain-summary-bug-*` TLC runs for all 10 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit-result drain TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `commit-result-drain-fast`
+  and `commit-result-drain-bug-*` modes so asynchronous commit-result draining
+  has independent TLC coverage for result-id ownership, stale and ownerless
+  result suppression, disconnected worker cleanup, inline fallback admission,
+  local-outside signature recovery, summary/progress side effects, pacemaker
+  kickstart, inflight cleanup, and drain-loop stop semantics.
+- Updated the formal docs, CI inventory, and roadmap to mark the commit-result
+  drain gate as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitResultDrainGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-result-drain-fast`
+  - sequential `commit-result-drain-bug-*` TLC runs for all 27 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi online-validator relay counters TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `online-validator-relay-counters-fast` and
+  `online-validator-relay-counters-bug-*` modes so online-validator counting
+  and relay drop counters have independent TLC coverage for roster membership
+  filtering, peer-id identity, offline and outsider exclusion, duplicate roster
+  canonicalization, online-iterator semantics, relay lane totals, direct
+  counter forwarding, cap-family collection, and saturating arithmetic.
+- Updated the formal docs, CI inventory, and roadmap to mark online-validator
+  and relay counter helpers as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiOnlineValidatorRelayCountersGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh online-validator-relay-counters-fast`
+  - sequential `online-validator-relay-counters-bug-*` TLC runs for all 24
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi requester roster-proof TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `requester-roster-proof-fast` and `requester-roster-proof-bug-*` modes so
+  requester local roster-proof detection has independent TLC coverage for
+  committed snapshot, Commit-QC cache, precommit signer record, and highest-QC
+  proof sources, plus no-evidence and wrong phase/hash/height/view/epoch or
+  vNext chain-order rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark requester
+  roster-proof detection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRequesterRosterProofGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh requester-roster-proof-fast`
+  - sequential `requester-roster-proof-bug-*` TLC runs for all 20 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi near-quorum NEW_VIEW rebroadcast TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `near-quorum-new-view-rebroadcast-fast` and
+  `near-quorum-new-view-rebroadcast-bug-*` modes so near-quorum NEW_VIEW
+  rebroadcast has independent TLC coverage for validator/frontier/support/quorum
+  admission, cooldown-floor gating, NEW_VIEW dispatch metadata, backpressure
+  result handling, pacemaker nudge deadlines, and time-overflow fail-closed
+  behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark near-quorum
+  NEW_VIEW rebroadcast as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNearQuorumNewViewRebroadcastGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-new-view-rebroadcast-fast`
+  - sequential `near-quorum-new-view-rebroadcast-bug-*` TLC runs for all 17
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi late NEW_VIEW emission TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `late-new-view-emission-fast`
+  and `late-new-view-emission-bug-*` modes so late NEW_VIEW near-quorum
+  emission has independent TLC coverage for frontier/view/local-index gates,
+  permissioned and NPoS completion policy, stake-roster and signer-map error
+  handling, same-slot supersession, completion-vs-catch-up ordering, and inner
+  emission failure propagation.
+- Updated the formal docs, CI inventory, and roadmap to mark late NEW_VIEW
+  emission as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLateNewViewEmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh late-new-view-emission-fast`
+  - sequential `late-new-view-emission-bug-*` TLC runs for all 20 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi frontier NEW_VIEW catch-up TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-new-view-catch-up-fast` and `frontier-new-view-catch-up-bug-*`
+  modes so active-frontier NEW_VIEW catch-up emission has independent TLC
+  coverage for resilience gating, non-empty remote support, local signer
+  exclusion, committed-frontier height gating, canonical highest-QC matching,
+  hash-only canonical payload admission, tracked-view presence, and
+  successor-window bounds.
+- Updated the formal docs, CI inventory, and roadmap to mark frontier NEW_VIEW
+  catch-up as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierNewViewCatchUpGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-new-view-catch-up-fast`
+  - sequential `frontier-new-view-catch-up-bug-*` TLC runs for all 14 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi NEW_VIEW highest-QC votes TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `new-view-highest-qc-votes-fast` and `new-view-highest-qc-votes-bug-*` modes
+  so NEW_VIEW highest-QC vote selection has independent TLC coverage for signer
+  filtering, exact height/view/epoch NEW_VIEW slot filtering, candidate
+  presence and phase validation, exact-reference grouping, duplicate grouping,
+  and deterministic height/view/phase/hash ranking.
+- Updated the formal docs, CI inventory, and roadmap to mark NEW_VIEW
+  highest-QC vote selection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNewViewHighestQcVotesGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh new-view-highest-qc-votes-fast`
+  - sequential `new-view-highest-qc-votes-bug-*` TLC runs for all 13 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi distinct vote epochs TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `distinct-vote-epochs-fast`
+  and `distinct-vote-epochs-bug-*` modes so cached vote-log epoch replay has
+  independent TLC coverage for exact Commit vote filtering by hash, height, and
+  view, duplicate epoch collapse, vote value epoch vs key epoch selection, and
+  commit-topology replay gating.
+- Updated the formal docs, CI inventory, and roadmap to mark distinct vote
+  epochs as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDistinctVoteEpochsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh distinct-vote-epochs-fast`
+  - sequential `distinct-vote-epochs-bug-*` TLC runs for all 11 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit-pipeline scheduling TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-pipeline-scheduling-fast` and `commit-pipeline-scheduling-bug-*`
+  modes so commit-pipeline scheduling has independent TLC coverage for
+  tick/event entry, wakeup clearing, deadline bypass, recovery-candidate
+  inclusion, budget-exhaustion wakeups, backlog observation, last-run updates,
+  candidate processing, and idle-view budget preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark commit-pipeline
+  scheduling as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-scheduling-fast`
+  - sequential `commit-pipeline-scheduling-bug-*` TLC runs for all 32 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi Kura retry TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `kura-retry-fast` and
+  `kura-retry-bug-*` modes so pending-block Kura retry state has independent
+  TLC coverage for retry due boundaries, reset and mark-persisted cleanup,
+  zero-budget and max-attempt aborts, exponential backoff, checked-add
+  overflow handling, and public `next_in_ms` clamping.
+- Updated the formal docs, CI inventory, and roadmap to mark pending-block
+  Kura retry behavior as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKuraRetryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-retry-fast`
+  - sequential `kura-retry-bug-*` TLC runs for all 21 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-06-01 Sumeragi pending-block marker TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `pending-block-marker-fast`
+  and `pending-block-marker-bug-*` modes so `PendingBlock` progress markers and
+  cooldown gates have independent TLC coverage for local commit-vote emission,
+  commit-QC observation, reset behavior, quorum reschedule cooldowns,
+  vote-backed stale-progress and vote-count gating, precommit rebroadcast
+  cooldowns, validation redrive cooldowns, and marker writes.
+- Updated the formal docs, CI inventory, and roadmap to mark pending-block
+  marker/cooldown behavior as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingBlockMarkerGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-marker-fast`
+  - sequential `pending-block-marker-bug-*` TLC runs for all 27 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi pending-block lifecycle TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `pending-block-lifecycle-fast` and `pending-block-lifecycle-bug-*` modes so
+  `PendingBlock` lifecycle helpers have independent TLC coverage for
+  constructor defaults, same-subject lifecycle preservation, different-subject
+  lifecycle reset, revive/abort/retire accessors, Kura persistence state,
+  scheduler cleanup, and retired-payload refresh behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark pending-block
+  lifecycle behavior as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingBlockLifecycleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-lifecycle-fast`
+  - sequential `pending-block-lifecycle-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi pending-progress TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `pending-progress-fast` and
+  `pending-progress-bug-*` modes so pending-progress accounting helpers have
+  independent TLC coverage for exact, non-aborted pending-map and
+  commit-inflight touches, activation-window timestamp/timer resets,
+  post-commit tip-extension refresh admission, and RBC recent-progress
+  zero-window/height/age gating.
+- Updated the formal docs, CI inventory, and roadmap to mark pending-progress
+  accounting as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingProgressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-progress-fast`
+  - sequential `pending-progress-bug-*` TLC runs for all 27 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi empty-block QC drop TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `empty-block-qc-drop-fast`
+  and `empty-block-qc-drop-bug-*` modes so empty-block QC filtering has
+  independent TLC coverage for non-NewView empty-block QC rejection,
+  known-block/non-empty/time-trigger pass-through behavior, invalid-payload
+  recording, downstream stop/continue selection, and block-scoped pending,
+  request, RBC, QC, proposal, vote, roster, and signer cleanup.
+- Updated the formal docs, CI inventory, and roadmap to mark empty-block QC
+  filtering as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEmptyBlockQcDropGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh empty-block-qc-drop-fast`
+  - sequential `empty-block-qc-drop-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi committed-height QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `committed-height-qc-fast`
+  and `committed-height-qc-bug-*` modes so committed-height QC admission has
+  independent TLC coverage for future-QC continuation, matching committed-block
+  record-only side effects, unknown/divergent stale-drop behavior, divergent
+  commit-QC validation context, genesis-stub policy, stake snapshot
+  preservation, and finality evidence emission.
+- Updated the formal docs, CI inventory, and roadmap to mark committed-height
+  QC admission as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommittedHeightQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh committed-height-qc-fast`
+  - sequential `committed-height-qc-bug-*` TLC runs for all 26 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit anchor QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `commit-anchor-qc-fast` and
+  `commit-anchor-qc-bug-*` modes so commit-anchor QC promotion has independent
+  TLC coverage for highest/locked QC selection, equal/newer anchor handling,
+  precommit vote pruning on lock changes, incompatible highest-QC realignment,
+  and final status updates.
+- Updated the formal docs, CI inventory, and roadmap to mark commit-anchor QC
+  promotion as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitAnchorQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-anchor-qc-fast`
+  - sequential `commit-anchor-qc-bug-*` TLC runs for all 12 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi stale-view commit-QC fetch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `stale-view-commit-qc-fetch-fast` and
+  `stale-view-commit-qc-fetch-bug-*` modes so stale-view commit-QC fetch
+  admission has independent TLC coverage for exact hash/height/view matching,
+  valid and active pending state, local commit-vote gating, exact tip
+  extension, parent/tip continuity, and the all-absent parent/tip case.
+- Updated the formal docs, CI inventory, and roadmap to mark stale-view
+  commit-QC fetch admission as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStaleViewCommitQcFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-view-commit-qc-fetch-fast`
+  - sequential `stale-view-commit-qc-fetch-bug-*` TLC runs for all 11
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi known-block commit-QC recovery TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `known-block-commit-qc-recovery-fast` and
+  `known-block-commit-qc-recovery-bug-*` modes so known-block commit-QC
+  recovery helpers have independent TLC coverage for commit-QC-only vs body
+  fetch planning, pending-tip extension, stale-view commit-QC fetch admission,
+  local commit-vote and consensus-active gates, parent/tip continuity, and
+  override/map source selection.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block
+  commit-QC recovery as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKnownBlockCommitQcRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-commit-qc-recovery-fast`
+  - sequential `known-block-commit-qc-recovery-bug-*` TLC runs for all 20
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit pipeline recovery TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-pipeline-recovery-fast` and `commit-pipeline-recovery-bug-*` modes
+  so adapter-side commit recovery ordering has independent TLC coverage for
+  local commit-QC formation before peer recovery, stale local-vote recovery
+  admission, commit-QC marker preservation, missing-payload and off-tip
+  rejection, near-quorum retransmit, and quorum missing-signer targets.
+- Updated the formal docs, CI inventory, and roadmap to mark commit-pipeline
+  recovery as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-recovery-fast`
+  - sequential `commit-pipeline-recovery-bug-*` TLC runs for all 14 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi commit roots TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `commit-roots-fast` and
+  `commit-roots-bug-*` modes so commit-QC execution-root consistency has
+  independent TLC coverage for permissioned and NPoS same-root aggregation,
+  wrong-context vote rejection, deterministic low-root tie-breaks, mixed-root
+  quorum rejection, under-quorum rejection, and QC validation root-mismatch
+  rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark commit-root
+  consistency as TLC-cross-checked, with witness-constrained TLC-specific
+  `MaxValidators = 4` / `MaxStake = 7` configs so the state space stays
+  bounded for local reruns while Apalache retains the broader existing configs.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitRootConsistency.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-roots-fast`
+  - sequential `commit-roots-bug-*` TLC runs for all 6 TLC-specific mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi build signers bitmap TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `build-signers-bitmap-fast` and `build-signers-bitmap-bug-*` modes so QC
+  signer-bitmap construction has independent TLC coverage for empty-roster
+  handling, exact bitmap byte length, little-endian bit placement, ORing
+  multiple signers, duplicate collapse, and out-of-range/padding-bit filtering.
+- Updated the formal docs, CI inventory, and roadmap to mark signer-bitmap
+  construction as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBuildSignersBitmapGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast`
+  - sequential `build-signers-bitmap-bug-*` TLC runs for all 17 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi manifest gate reschedule TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `manifest-gate-reschedule-fast` and `manifest-gate-reschedule-bug-*` modes
+  so the manifest-gated quorum-reschedule branch has independent TLC coverage
+  for effective-work classification, retention, marker selection, no-target
+  no-ops, authoritative-rotation suppression, plain zero-work cleanup, and
+  vote-backed evidence/frontier-owner effectiveness.
+- Updated the formal docs, CI inventory, and roadmap to mark manifest-gated
+  quorum rescheduling as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiManifestGateRescheduleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh manifest-gate-reschedule-fast`
+  - sequential `manifest-gate-reschedule-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi near-quorum preemptive escalation TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `near-quorum-preemptive-escalation-fast` and
+  `near-quorum-preemptive-escalation-bug-*` modes so the pre-timeout
+  near-quorum missing-payload escalation coordinator has independent TLC
+  coverage for exhausted-budget fail-closed behavior, missing-pending
+  rejection, fresh request and in-flight range-pull duplicate suppression,
+  stale/mismatched duplicate admission, delegate-count/progress authority, and
+  the one-candidate per-tick cap.
+- Updated the formal docs, CI inventory, and roadmap to mark near-quorum
+  preemptive escalation as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNearQuorumPreemptiveEscalationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast`
+  - sequential `near-quorum-preemptive-escalation-bug-*` TLC runs for all 22
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi preemptive vote-backed retransmit TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `preemptive-vote-backed-retransmit-fast` and
+  `preemptive-vote-backed-retransmit-bug-*` modes so the pre-timeout
+  vote-backed retransmit handoff has independent TLC coverage for candidate
+  admission, absent-pending fail-closed behavior, vote-roster target preference
+  and commit-topology fallback, empty-target preservation, downstream action
+  detection, pending retention, and near-quorum flag accuracy.
+- Updated the formal docs, CI inventory, and roadmap to mark preemptive
+  vote-backed retransmit handoff as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPreemptiveVoteBackedRetransmitGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh preemptive-vote-backed-retransmit-fast`
+  - sequential `preemptive-vote-backed-retransmit-bug-*` TLC runs for all 22
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi isolated vote-backed handoff TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `isolated-vote-backed-handoff-fast` and
+  `isolated-vote-backed-handoff-bug-*` modes so the one-vote frontier handoff
+  helper has independent TLC coverage for resilience, one-vote under-quorum,
+  next-height, and cached-QC admission gates, recovery/body-event side
+  effects, seeded slot validation, committed-anchor range-pull success, and
+  reason-label preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark isolated
+  vote-backed handoff as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIsolatedVoteBackedHandoffGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh isolated-vote-backed-handoff-fast`
+  - sequential `isolated-vote-backed-handoff-bug-*` TLC runs for all 19
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi quorum rebroadcast dispatch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `quorum-rebroadcast-dispatch-fast` and
+  `quorum-rebroadcast-dispatch-bug-*` modes so pending-block rebroadcast
+  dispatch has independent TLC coverage for local-vote gating, fail-closed
+  relay/no-target/cooldown/backlog/empty-target exits, forced fanout bypasses,
+  vote replay before payload repair, missing commit-QC fetch gating,
+  near-quorum BlockSyncUpdate fanout, BlockCreated replay gating, and
+  precommit rebroadcast marker stamping.
+- Updated the formal docs, CI inventory, and roadmap to mark quorum rebroadcast
+  dispatch as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRebroadcastDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-rebroadcast-dispatch-fast`
+  - sequential `quorum-rebroadcast-dispatch-bug-*` TLC runs for all 24
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi completed quorum view-advance TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `completed-quorum-view-advance-fast` and
+  `completed-quorum-view-advance-bug-*` modes so completed quorum-reschedule
+  view advancement has independent TLC coverage for exact slot routing,
+  no-slot/stale-slot fallback, generic non-exact routing, current-view maximum
+  selection, saturating active-view advancement, timestamp and cause
+  preservation, generic slot-state preservation, and rebroadcast-latch
+  clearing.
+- Updated the formal docs, CI inventory, and roadmap to mark completed quorum
+  view advancement as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCompletedQuorumViewAdvanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh completed-quorum-view-advance-fast`
+  - sequential `completed-quorum-view-advance-bug-*` TLC runs for all 15
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi vote-backed reassembly stall TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `vote-backed-reassembly-stall-fast` and
+  `vote-backed-reassembly-stall-bug-*` modes so vote-backed same-height
+  frontier reassembly stall helpers have independent TLC coverage for hard-cap
+  arithmetic, exact active quorum-timeout slot ownership, recovery-owner
+  fallback after rejected slots, latest progress timestamp selection, and
+  owner plus quorum stall-age expiry thresholds.
+- Updated the formal docs, CI inventory, and roadmap to mark vote-backed
+  reassembly stall handling as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteBackedReassemblyStallGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-backed-reassembly-stall-fast`
+  - sequential `vote-backed-reassembly-stall-bug-*` TLC runs for all 19
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi RBC availability reschedule TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `rbc-availability-reschedule-fast` and
+  `rbc-availability-reschedule-bug-*` modes so DA/RBC availability gating for
+  quorum rescheduling has independent TLC coverage for DA-disabled and timeout
+  fail-open behavior, local payload availability, absent/invalid/delivered and
+  complete-ready session fail-open behavior, and pending-entry, missing-chunk,
+  missing READY quorum, zero-timeout pending, and complete-but-not-ready
+  blocking behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark RBC availability
+  reschedule gating as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcAvailabilityRescheduleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast`
+  - sequential `rbc-availability-reschedule-bug-*` TLC runs for all 13
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi quorum reschedule backoff TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `quorum-reschedule-backoff-fast` and `quorum-reschedule-backoff-bug-*` modes
+  so quorum reschedule backoff and contiguous-frontier fast resend have
+  independent TLC coverage for zero base backoff, vote-deficit multipliers,
+  zero-timeout non-escalation, moderate/severe stall escalation, resend-window
+  clamping, and relay, vote-queue, RBC, contiguity, zero-vote, and quorum
+  fast-resend gates.
+- Updated the formal docs, CI inventory, and roadmap to mark quorum reschedule
+  backoff as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRescheduleBackoffGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-reschedule-backoff-fast`
+  - sequential `quorum-reschedule-backoff-bug-*` TLC runs for all 20 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi paced retransmit targets TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `paced-retransmit-targets-fast` and `paced-retransmit-targets-bug-*` modes
+  so paced retransmit target selection has independent TLC coverage for
+  zero-limit and empty-list fail-closed behavior, under-limit order/duplicate
+  preservation, over-limit sort/dedup, height/view offset rotation, modulo
+  handling, exact truncation, and selected limit enforcement.
+- Updated the formal docs, CI inventory, and roadmap to mark paced retransmit
+  target selection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPacedRetransmitTargetsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh paced-retransmit-targets-fast`
+  - sequential `paced-retransmit-targets-bug-*` TLC runs for all 17 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi retransmit backpressure TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `retransmit-backpressure-fast` and `retransmit-backpressure-bug-*` modes so
+  retransmit pacing helpers have independent TLC coverage for transaction
+  queue pressure, RBC pressure, additive combined scoring, target-limit
+  floors, zero-target handling, cooldown multipliers, consensus and
+  near-quorum backlog backoff scaling, and near-quorum timeout clamps.
+- Updated the formal docs, CI inventory, and roadmap to mark retransmit
+  backpressure pacing as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRetransmitBackpressureGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh retransmit-backpressure-fast`
+  - sequential `retransmit-backpressure-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi quorum retransmit TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `quorum-retransmit-fast` and
+  `quorum-retransmit-bug-*` modes so commit-vote repair target selection has
+  independent TLC coverage for empty/local-only rosters, observed versus
+  missing voters, near-quorum full fanout, signer-mapping fallback, local
+  exclusion, stable target ordering, duplicate rejection, and view-mapped
+  canonical peer resolution.
+- Updated the formal docs, CI inventory, and roadmap to mark quorum retransmit
+  target selection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRetransmitTargetsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-retransmit-fast`
+  - sequential `quorum-retransmit-bug-*` TLC runs for all 12 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi P2P topology refresh TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `p2p-topology-refresh-fast` and `p2p-topology-refresh-bug-*` modes so P2P
+  topology refresh coordination has independent TLC coverage for empty,
+  unchanged, changed, and stray refresh decisions, local-seen latching,
+  local-removal status, queue clearing, gossip payloads, trusted-peer network
+  updates, and `last_advertised` preservation/mutation.
+- Updated the formal docs, CI inventory, and roadmap to mark P2P topology
+  refresh coordination as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiP2pTopologyRefreshGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast`
+  - sequential `p2p-topology-refresh-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi trusted P2P topology TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `p2p-topology-trusted-fast` and `p2p-topology-trusted-bug-*` modes so the
+  trusted-peer P2P topology helpers have independent TLC coverage for
+  world/local/trusted union, BTreeSet deduplication, outside-only filtering,
+  observed online-order preservation, duplicate stray preservation, trusted
+  observer exclusion, and topology-size deduplication.
+- Updated the formal docs, CI inventory, and roadmap to mark trusted-peer P2P
+  topology refresh as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiP2pTopologyTrustedGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-trusted-fast`
+  - sequential `p2p-topology-trusted-bug-*` TLC runs for all 9 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi active topology selection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `active-topology-selection-fast` and `active-topology-selection-bug-*` modes
+  so active validator topology selection has independent TLC coverage for
+  commit/world/trusted source priority, BLS filtering, deduplication,
+  canonical sorting, primary versus trusted PoP filtering, quorum-preserving
+  complete PoP filters, and empty-source fallback behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark active topology
+  selection as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiActiveTopologySelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh active-topology-selection-fast`
+  - sequential `active-topology-selection-bug-*` TLC runs for all 15 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi topology role-filter TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `topology-role-filter-fast` and `topology-role-filter-bug-*` modes so
+  topology role classification, consensus role slices, role-filtered
+  signature selection, and previous-block-hash audit-role derivation have
+  independent TLC coverage.
+- Added `CHECK_DEADLOCK FALSE` to the role-filter TLC configs because this
+  helper model intentionally terminates after the checked state.
+- Updated the formal docs, CI inventory, and roadmap to mark topology
+  role/signature filtering as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyRoleFilterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-role-filter-fast`
+  - sequential `topology-role-filter-bug-*` TLC runs for all 32 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi topology fanout TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `topology-fanout-fast` and
+  `topology-fanout-bug-*` modes so topology fanout and redundant-send helpers
+  have independent TLC coverage for `2f + 1` redundant sends, zero-length
+  roster normalization, `u8::MAX` clamps, `f + 1` view-change quorums,
+  configured redundant floors, and proxy-tail fanout wrapping, leader
+  exclusion, uniqueness, and non-leader caps.
+- Updated the formal docs, CI inventory, and roadmap to mark topology fanout
+  and redundant-send helper coverage as TLC-cross-checked.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyFanoutGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-fanout-fast`
+  - sequential `topology-fanout-bug-*` TLC runs for all 18 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi PRF leader/shuffle TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `prf-leader-shuffle-fast` and `prf-leader-shuffle-bug-*` modes so PRF
+  topology ordering helpers have independent TLC coverage for empty/single
+  roster stability, view-modulo leader selection, periodic/cycle-distinct
+  leader schedules, shuffle length/distinctness, wrapper canonicalization,
+  view reset, and height-specific permutations.
+- Updated the formal docs, CI inventory, and roadmap to mark PRF
+  leader/shuffle topology ordering as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrfLeaderShuffleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh prf-leader-shuffle-fast`
+  - sequential `prf-leader-shuffle-bug-*` TLC runs for all 15 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi topology mutation TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `topology-mutation-fast`
+  and `topology-mutation-bug-*` modes so ordered topology mutation helpers
+  have independent TLC coverage for modulo rotations, view preservation,
+  forward-only `nth_rotation`, deduplicating topology construction, peer-list
+  update ordering, block-commit view reset, and canonical sort/dedup behavior.
+- Updated the formal docs, CI inventory, and roadmap to mark topology
+  ordered-roster mutation as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyMutationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-mutation-fast`
+  - sequential `topology-mutation-bug-*` TLC runs for all 22 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi collector selection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `collector-selection-fast` and `collector-selection-bug-*` modes so
+  collector fanout/selection helpers have independent TLC coverage for
+  commit-quorum floors, non-leader caps, proxy-tail defaults, fallback
+  wrapping, leader/duplicate exclusion, PRF range/distinctness, and seeded
+  deterministic source selection.
+- Updated the formal docs, CI inventory, and roadmap to mark collector
+  selection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCollectorSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-selection-fast`
+  - sequential `collector-selection-bug-*` TLC runs for all 18 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi lane interleave TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `lane-interleave-fast` and
+  `lane-interleave-bug-*` modes so routing-decision lane interleaving has
+  independent TLC coverage for empty/single fallbacks, sorted lane traversal,
+  intra-lane stability, skewed lane round-robin draining, and slot
+  height/view offset rotation and wrapping.
+- Updated the formal docs, CI inventory, and roadmap to mark lane interleaving
+  as a TLC-cross-checked Sumeragi helper; the roadmap now also reflects the
+  already-existing collector-plan TLC coverage.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLaneInterleaveGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh lane-interleave-fast`
+  - sequential `lane-interleave-bug-*` TLC runs for all 11 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 SCCP TRON route-canary SDK parity
+
+- Added the TRON v3 transaction route-canary evidence transcript to the
+  Python, JavaScript, Swift, Kotlin/JVM, and Java Android SDK surfaces. The
+  helpers recompute the governed SORA -> TRON destination binding and route
+  allowlist hash, require live message-proof and owner-recovery evidence, bind
+  block number/timestamp/log index and transaction hashes, and reject reused
+  governed hash roles before returning the canary hash.
+- Kotlin/JVM and Java Android now reuse their canonical TRON Base58Check
+  address decoders for route-canary owner and recovered-address checks, keeping
+  portal/mobile canary evidence aligned with the Rust/operator transcript.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME="$HOME/Library/Android/sdk" ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" scripts/check_sccp_production_corridor.sh --phase js-sdk --phase python-sdk --phase swift-sdk --phase kotlin-sdk --phase java-android`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME="$HOME/Library/Android/sdk" ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" scripts/check_sccp_production_corridor.sh --phase rust-sccp --phase evidence-scripts --phase contract-smoke --phase core-admission`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'route_canary_evidence'`
+  - `node --test --test-name-pattern='route canary' test/sccpSolanaProver.test.js`
+  - `node --test --test-name-pattern='package dist entrypoint exports Solana source-state helpers' test/package_dist.test.js`
+  - `swift test --filter SccpSolanaProverTests/testTronRouteCanaryEvidenceBindsTransactionTranscript`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests 'org.hyperledger.iroha.sdk.sccp.TronSccpProverTest.derivesTronRouteCanaryEvidenceHash' --console=plain`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME="$HOME/Library/Android/sdk" ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.TronSccpProverTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+
+## 2026-06-01 Sumeragi commitment snapshot builder TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commitment-snapshot-builder-fast` and
+  `commitment-snapshot-builder-bug-*` modes so lane/dataspace commitment
+  snapshot construction has independent TLC coverage for block context,
+  lane/dataspace IDs, transaction/chunk counters, RBC byte and TEU aggregate
+  field separation, and sorted map projection order.
+- Updated the formal docs, CI inventory, and roadmap to mark commitment
+  snapshot building as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitmentSnapshotBuilderGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commitment-snapshot-builder-fast`
+  - sequential `commitment-snapshot-builder-bug-*` TLC runs for all 6
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal batch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-batch-fast` and
+  `proposal-batch-bug-*` modes so proposal batch trimming and
+  canonicalization helpers have independent TLC coverage for excess tail
+  removal, singleton/zero-size floor behavior, removed transaction companion
+  alignment, deterministic key sorting, duplicate-key stability, companion
+  alignment after canonicalization, and length preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal batch
+  trim/canonicalization as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalBatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-batch-fast`
+  - sequential `proposal-batch-bug-*` TLC runs for all 19 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal defer-warning TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `proposal-defer-warning-fast` and `proposal-defer-warning-bug-*` modes so
+  proposal-defer warning throttling has independent TLC coverage for first
+  emission, cooldown suppression and boundary replay, key separation, empty
+  topology view normalization, zero-cooldown behavior, and GC retention/prune
+  boundaries. The defer-warning TLC configs now disable deadlock checking
+  because the bounded counter model intentionally terminates after the final
+  candidate is checked.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal-defer
+  warning throttling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalDeferWarningThrottleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast`
+  - sequential `proposal-defer-warning-bug-*` TLC runs for all 15 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal backpressure TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `proposal-backpressure-fast` and `proposal-backpressure-bug-*` modes so
+  proposal backpressure classification has independent TLC coverage for
+  should-defer signals, pacing-only classification, hard-stop suppression, and
+  queued proposal work admission after pacing pressure.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal
+  backpressure classification as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalBackpressureGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast`
+  - sequential `proposal-backpressure-bug-*` TLC runs for all 19 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi non-RBC payload budget TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `non-rbc-payload-budget-fast` and `non-rbc-payload-budget-bug-*` modes so
+  non-RBC proposal payload frame-cap derivation has independent TLC coverage
+  for saturating headroom subtraction, absent block-payload caps, explicit cap
+  min/clamp behavior, and zero/small frame caps.
+- Updated the formal docs, CI inventory, and roadmap to mark non-RBC payload
+  frame budgeting as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNonRbcPayloadBudgetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh non-rbc-payload-budget-fast`
+  - sequential `non-rbc-payload-budget-bug-*` TLC runs for all 9 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP audited source-adapter target binding
+
+- Tightened the Rust SCCP source-adapter deployment matcher so Solana and TON
+  full-light-client audit fields are only structurally valid on deployments
+  targeting SORA. This prevents an audited-looking foreign-target deployment
+  hash from passing the generic material/deployment matcher while its
+  full-light-client audit proof capsules would not be required by the SORA
+  production gate.
+- Updated bridge-proof documentation and the roadmap to state that Solana/TON
+  audit fields are both lane-local and SORA-bound before governance staging.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp source_adapter_deployment_requires_audited_full_light_client_engines --lib`
+    (`2 passed; 236 filtered out`)
+
+## 2026-06-01 Sumeragi proposal budget TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-budget-fast` and
+  `proposal-budget-bug-*` modes so proposal-side queue caps, DA payload
+  budget selection, transaction caps, fast-finality transaction/gas caps, and
+  stale-window scaling have independent TLC coverage across the existing
+  twenty-one mutation configs.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal
+  budget/cap helpers as a TLC-cross-checked Sumeragi gate.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalBudgetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-budget-fast`
+  - sequential `proposal-budget-bug-*` TLC runs for all 21 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi missing-block clear TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `missing-block-clear-fast`
+  and `missing-block-clear-bug-*` modes so the missing-block clear reason
+  helper has independent TLC coverage for payload-available clears requiring a
+  local payload, obsolete clears allowing absent local payloads, reason
+  separation, local-payload handling, and always/never-clear mutations.
+- Updated the formal docs, CI inventory, and roadmap to mark missing-block
+  clear reasons as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockClearGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-clear-fast`
+  - sequential `missing-block-clear-bug-*` TLC runs for all 7 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 SCCP web portal helper artifact guard
+
+- Added a release-readiness regression that requires every JavaScript/web
+  user-prover helper named in the public SCCP submission-surface rows to exist
+  in `javascript/iroha_js/src/sccp.js`, packaged `dist/sccp.js`, and
+  `index.d.ts`, so portal builds cannot silently lose proof-generation
+  declarations while the source helper still exists. The Markdown readiness
+  report now lists that source/dist/declaration artifact coverage as required
+  release evidence.
+- Extended the public user-prover helper maps so release evidence must include
+  the UI-owned witness/prover hook surfaces across SDKs: JavaScript/web
+  `witnessProvider`/`proveFn`, Python `witness_provider`/`prove`, Swift
+  witness-provider protocols and `ProveFunction` typealiases, Kotlin proof
+  engines, Java Android nested proof engines, and the Solana/TON source-state
+  audit proof engines.
+- Updated the bridge-proof documentation to describe the current
+  deployment-backed source-adapter production gate instead of the old global
+  "production remains blocked" wording: typed source proofs must be persisted
+  and still need non-placeholder material, source-adapter deployment,
+  destination rollout, route allowlist, and live canary evidence.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ui_hook_symbols or helper_symbols_exist"`
+    (`3 passed, 12 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`15 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`113 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`130 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`747 passed`)
+
+## 2026-06-01 Sumeragi missing-request clear TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-request-clear-fast` and `missing-request-clear-bug-*` modes so
+  missing-block request clearing has independent TLC coverage for locked-QC
+  same-hash preservation, committed/locked ancestry conflicts, future conflict
+  preservation, durable lock competitors, unresolved parentless futures,
+  uncommitted lock conflicts, stale drops below committed height, payload-local
+  stale clears, committed-history stale clears, and committed-height repair
+  continuity.
+- Updated the formal docs, CI inventory, and roadmap to mark missing-block
+  request clearing as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingRequestClearGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-request-clear-fast`
+  - sequential `missing-request-clear-bug-*` TLC runs for all 14 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP UI full-light role helper release surface
+
+- Tightened `scripts/sccp_release_readiness_report.py` so Solana and TON
+  user-prover submission surface rows require the per-role full-light-client
+  audit proof request helpers across JavaScript/web, Python, Swift,
+  Kotlin/JVM, and Java Android, not only the aggregate request builders.
+- Updated the release-readiness tests and bridge-proof docs so production
+  bundles cannot claim portal/mobile proof-generation coverage while omitting
+  lane-local helpers such as Solana bank/fork-choice and TON validator-set
+  transition proof requests.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 scripts/sccp_release_readiness_report.py --help >/dev/null`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k "helper_symbol or user_prover or release_readiness_sdk_helper or submission_surface or per_sdk"`
+    (`8 passed, 103 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`111 passed`)
+
+## 2026-06-01 Sumeragi BlockCreated admission TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-created-admission-fast` and `block-created-admission-bug-*` modes so
+  direct `BlockCreated` payload admission has independent TLC coverage for
+  payload acceptance, duplicate handling, replay preservation, dependency and
+  parent/gap repair, stale cleanup, invalid evidence, lock-reject records,
+  proposal context, phase sampling, commit-pipeline wakeup, missing-request
+  clearing, and payload-mismatch recovery.
+- Updated the formal docs, CI inventory, and roadmap to mark direct
+  `BlockCreated` admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-created-admission-fast`
+  - sequential `block-created-admission-bug-*` TLC runs for all 54 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP release-bundle TRON canary public metadata
+
+- Extended release-readiness `cryptographic_evidence` rows with
+  `route_canary_block_number` and `route_canary_block_timestamp`, derived from
+  the embedded TRON route-canary lane evidence. The Markdown report now renders
+  those fields beside the canary evidence hash/source so release reviewers can
+  see the live TRON canary height and timestamp without digging through the raw
+  TOML.
+- Hardened `scripts/sccp_verify_release_bundle.py` so the public report must
+  keep those fields bound to `route_allowlist.route_canary.block_number` and
+  `route_allowlist.route_canary.block_timestamp`, must use a positive block
+  number and non-negative timestamp for TRON, and must keep the fields `null`
+  for non-TRON lanes.
+- Remaining production activation still requires governed deployment evidence,
+  live canary evidence from the target deployment, and a final self-verified
+  public release bundle attached to release notes.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_for_complete_evidence_and_corridor pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift`
+    (`4 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`111 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`98 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`745 passed`)
+
+## 2026-06-01 Sumeragi QC signer-bitmap TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `qc-signers-fast` and
+  `qc-signers-bug-*` modes so QC signer-bitmap admission has independent TLC
+  coverage for canonical bitmap length, out-of-bounds signer bits,
+  voting-only quorum counts, observer/padding exclusion, and under-quorum
+  rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark QC signer-bitmap
+  admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcSignerBitmap.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+  - sequential `qc-signers-bug-*` TLC runs for all 4 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-06-01 SCCP TON SDK transition alias hardening
+
+- Tightened the Python and JavaScript SCCP SDK TON shard-state source-state
+  proof builders so nested validator-set transition proofs reject duplicate
+  camelCase/snake_case aliases for every field consumed by the transition-chain
+  witness normalizer, including `transitionSignatureHash`.
+- Mirrored the JavaScript source change into `javascript/iroha_js/dist/sccp.js`
+  for package consumers and added Python/JavaScript regression coverage for
+  UI-provided transition proofs that try to submit both transition-signature
+  hash aliases.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "ton_and_substrate_source_proof_transcripts"`
+    (`1 passed, 76 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`77 passed`)
+  - `node --test --test-name-pattern "TON shard-state" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`82 passed`)
+
+## 2026-06-01 Sumeragi peer-admin detection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `peer-admin-detection-fast` and `peer-admin-detection-bug-*` modes so the
+  peer-admin transaction detection helper has independent TLC coverage for
+  case-insensitive instruction IDs, admin substring matching, non-admin ID
+  rejection, external signed transaction gating, executable-kind gating,
+  empty-batch rejection, and any-instruction batch detection.
+- Updated the formal docs, CI inventory, and roadmap to mark peer-admin
+  detection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPeerAdminDetectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh peer-admin-detection-fast`
+  - sequential `peer-admin-detection-bug-*` TLC runs for all 18 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal admission TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-admission-fast` and
+  `proposal-admission-bug-*` modes so proposal metadata admission has
+  independent TLC coverage for stale height/view rejection, proposal epoch
+  checks, highest-QC and parent-hash checks, committed-edge conflict handling,
+  missing highest-QC dependency repair deferral, local metadata checks,
+  locked-QC rejection, accepted-proposal side effects, highest-QC update
+  gating, lock-lag catchup deferral, and the no commit-pipeline/no
+  payload-phase side-effect contract.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal metadata
+  admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-admission-fast`
+  - sequential `proposal-admission-bug-*` TLC runs for all 43 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi stale RBC hint repair TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `stale-rbc-hint-repair-fast` and `stale-rbc-hint-repair-bug-*` modes so the
+  stale RBC proposal-hint bridge has independent TLC coverage for DA,
+  repair-kind, exact-frontier, cached-hint identity, stale-drop, no-stash, and
+  no-repair-arm requirements.
+- Updated the formal docs, CI inventory, and roadmap to mark stale RBC hint
+  repair as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStaleRbcHintRepairGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-rbc-hint-repair-fast`
+  - sequential `stale-rbc-hint-repair-bug-*` TLC runs for all 11 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP ETH/BSC source runtime-bytecode TOML gate
+
+- Tightened `scripts/sccp_eth_source_bridge_evidence.py` and
+  `scripts/sccp_bsc_source_bridge_evidence.py` so direct source-evidence
+  `--toml` output now requires `--source-bridge-runtime-bytecode-hex` or
+  `--source-bridge-runtime-bytecode-file`. Hash-only source bridge code metadata
+  remains valid for diagnostic JSON, but JSON `toml_ready` stays false until the
+  runtime bytecode preimage is supplied and the helper can derive the governed
+  Keccak-256 runtime code hash.
+- Updated the ETH/BSC source-evidence tests and bridge-proof operator docs to
+  pin the fail-closed production path: record-hash pins alone no longer make
+  source TOML renderable, while runtime-bytecode-backed inputs render the audit
+  comment all-lanes replays.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py`
+    (`43 passed`)
+
+## 2026-06-01 Sumeragi stale proposal-hint repair TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `stale-proposal-hint-repair-fast` and
+  `stale-proposal-hint-repair-bug-*` modes so the stale-view proposal hint
+  repair exception has independent TLC coverage for DA, active-height,
+  one-view-behind, committed-QC identity, stale-view drop, and rejected-hint
+  no-side-effect requirements.
+- Updated the formal docs, CI inventory, and roadmap to mark stale
+  proposal-hint repair as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStaleProposalHintRepairGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-proposal-hint-repair-fast`
+  - sequential `stale-proposal-hint-repair-bug-*` TLC runs for all 14 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal-hint TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-hint-fast` and
+  `proposal-hint-bug-*` modes so inbound proposal-hint admission has
+  independent TLC coverage for stale height/view rejection, highest-QC
+  reference validation, cached and committed-edge conflict handling, local
+  metadata checks, locked-QC rejection, missing future highest-QC repair
+  deferral, accepted-hint side effects, highest-QC update gating, and
+  lock-lag catchup deferral.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal-hint
+  admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalHintAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-hint-fast`
+  - sequential `proposal-hint-bug-*` TLC runs for all 40 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal cache TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-cache-fast` and
+  `proposal-cache-bug-*` modes so bounded ProposalCache behavior has
+  independent TLC coverage for independent hint/proposal limits, zero-limit
+  insertion drops, lowest-key overflow eviction, eviction metrics, duplicate
+  hint replacement, pop-kind isolation, observed timestamp retention, and
+  committed-height pruning.
+- Updated the formal docs, CI inventory, and roadmap to mark the proposal
+  cache helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalCacheGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-cache-fast`
+  - sequential `proposal-cache-bug-*` TLC runs for all 25 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi proposal mismatch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `proposal-mismatch-fast` and
+  `proposal-mismatch-bug-*` modes so proposal metadata mismatch detection has
+  independent TLC coverage for height, view, parent hash, transaction root,
+  state root, and payload hash being reported in implementation priority
+  order, missing parent and transaction roots defaulting to zero, zero proposal
+  state roots remaining compatibility values, payload mismatches still being
+  checked after a zero state-root compatibility case, and no-mismatch results
+  being allowed only when all compared fields are compatible.
+- Updated the formal docs, CI inventory, and roadmap to mark proposal mismatch
+  detection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalMismatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-mismatch-fast`
+  - sequential `proposal-mismatch-bug-*` TLC runs for all 15 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi invalid-proposal evidence TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `invalid-proposal-evidence-fast` and `invalid-proposal-evidence-bug-*` modes
+  so invalid-proposal evidence wrapping/building has independent TLC coverage
+  for the wrapper emitting `InvalidProposal` evidence while preserving the
+  proposal and validation reason, the builder deriving proposer from the first
+  block signature with a zero fallback, using the block header view, caller
+  epoch, and caller payload hash, carrying the QC selected for validation
+  evidence, preserving the parent/height relation required by downstream
+  validation, and recording the validation error string rather than a label.
+- Updated the formal docs, CI inventory, and roadmap to mark invalid-proposal
+  evidence building as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiInvalidProposalEvidenceBuildGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh invalid-proposal-evidence-fast`
+  - sequential `invalid-proposal-evidence-bug-*` TLC runs for all 16 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP all-lanes Substrate gate and TRON route-canary metadata
+
+- Tightened the all-lanes readiness gate so Substrate-family source-adapter
+  evidence must carry the `sccp_substrate_runtime_storage_gate_hash` audit
+  comment. The preflight rejects missing, zero, or mismatched metadata after
+  recomputing the runtime-storage gate from the governed source material and
+  source-adapter deployment records, so a hand-built bundle cannot open the
+  lane by relying on unstaged local derivation.
+- Extended the direct TRON source-bridge full-TOML renderer and live replay
+  path to require and emit route-canary block number and timestamp metadata in
+  both audit comments and structured route-allowlist fields before all-lanes
+  readiness can pass. Direct and live evidence now derive the same
+  `iroha:sccp:tron-route-canary-evidence:v3` transcript, which binds that block
+  metadata into the route-canary evidence hash.
+- Updated the bridge-proof operator docs and roadmap to describe the
+  fail-closed Substrate gate metadata import and the TRON route-canary block
+  metadata required by direct/live rollout evidence.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_tron_source_bridge_evidence.py scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py pytests/scripts/sccp_tron_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+    (`80 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`129 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`169 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`13 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+    (`109 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp tron_route_canary_evidence_hash_matches_source_bridge_script_vector -- --nocapture`
+    (`1 passed; 237 filtered out`)
+  - `cargo test -p iroha_torii configured_all_lanes_launch --lib`
+    (`13 passed`)
+  - `cargo test -p iroha_core submit_sccp_inbound_message_rejects_tron_route_canary_transcript_drift_after_source_gate --test bridge_proofs`
+    (`1 passed`)
+  - `cargo test -p iroha_core configured_all_lanes_launch --lib`
+    (`0 matched; compiled successfully`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`745 passed`)
+
+## 2026-06-01 Sumeragi block-body response dispatch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-body-response-dispatch-fast` and
+  `block-body-response-dispatch-bug-*` modes so exact BlockBodyResponse
+  fallback and companion dispatch has independent TLC coverage for under-cap
+  `BlockCreated` companions being sent before the rich response, oversized
+  companions being skipped, `BlockSyncUpdate` bodies getting a plain fallback
+  before the rich response, the rich response always being sent, direct
+  commit-QC companions being sent after the response only when available, and
+  every dispatch using the bypass/background path.
+- Updated the formal docs, CI inventory, and roadmap to mark exact
+  BlockBodyResponse fallback/companion dispatch as a TLC-cross-checked
+  Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockBodyResponseDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-response-dispatch-fast`
+  - sequential `block-body-response-dispatch-bug-*` TLC runs for all 14
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block-body detached commit-QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-body-detached-commit-qc-fast` and
+  `block-body-detached-commit-qc-bug-*` modes so detached BlockBodyResponse
+  commit-QC handling has independent TLC coverage for responses without commit
+  QCs not calling the QC handler or clearing requests, already cached QCs
+  clearing obsolete missing commit-QC requests without re-handling, uncached
+  QCs calling the handler, post-handle clearing being driven by whether the QC
+  is cached afterward, and handler errors still clearing only when the QC
+  became cached.
+- Updated the formal docs, CI inventory, and roadmap to mark detached
+  BlockBodyResponse commit-QC handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDetachedBlockBodyCommitQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-detached-commit-qc-fast`
+  - sequential `block-body-detached-commit-qc-bug-*` TLC runs for all 10
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block-body direct commit-QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-body-direct-commit-qc-fast` and
+  `block-body-direct-commit-qc-bug-*` modes so direct commit-QC extraction from
+  BlockBodyResponse payloads has independent TLC coverage for body identity
+  matching response block hash, height, and view, `BlockSyncUpdate` bodies
+  preferring embedded commit QCs before validator-checkpoint-derived QCs and
+  locally available direct QCs, `BlockCreated` bodies using only local direct
+  QCs, no-source responses returning no QC, and identity mismatches being
+  rejected for both body kinds.
+- Updated the formal docs, CI inventory, and roadmap to mark BlockBodyResponse
+  direct commit-QC extraction as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockBodyDirectCommitQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-direct-commit-qc-fast`
+  - sequential `block-body-direct-commit-qc-bug-*` TLC runs for all 14
+    mutation configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi materialize-QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `materialize-qc-fast` and
+  `materialize-qc-bug-*` modes so QC materialization and Kura recovery have
+  independent TLC coverage for existing cached QCs winning immediately, empty
+  rosters recovering only from Kura, non-empty rosters trying local vote
+  formation before Kura recovery and local signer aggregation, NPoS requiring
+  a stake roster and stake quorum, commit-root filtering and empty vote sets
+  failing closed, permissioned and NPoS under-quorum cases being rejected,
+  aggregation and canonical mapping failures returning no QC, prepare-phase
+  quorums remaining admissible, and recovered/rebuilt QCs being cached.
+- Updated the formal docs, CI inventory, and roadmap to mark QC
+  materialization and Kura recovery as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMaterializeQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh materialize-qc-fast`
+  - sequential `materialize-qc-bug-*` TLC runs for all 17 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi direct commit-QC source TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `direct-commit-qc-for-block-fast` and
+  `direct-commit-qc-for-block-bug-*` modes so direct commit-QC companion
+  selection has independent TLC coverage for exact cached commit QCs winning
+  immediately, world-derived commit QCs winning before local formation, a
+  non-empty exact round roster blocking fallback topology, fallback topology
+  being used only when no primary roster is available, quorum floors using
+  `max(1)`, local formation running only with enough votes, using commit phase
+  and the target block subject, and returning formed QCs only after cache
+  readback for the same block.
+- Updated the formal docs, CI inventory, and roadmap to mark the direct
+  commit-QC source selection helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDirectCommitQcForBlockGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh direct-commit-qc-for-block-fast`
+  - sequential `direct-commit-qc-for-block-bug-*` TLC runs for all 16 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 Sumeragi block-body repair epoch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-body-repair-epoch-fast` and `block-body-repair-epoch-bug-*` modes so
+  the observed commit-QC epoch source helper for body repair has independent
+  TLC coverage for exact cached commit QCs having highest priority, matching
+  deferred missing-payload commit QCs beating pending blocks, pending sources
+  requiring an observed commit QC with an epoch, deferred sources being
+  commit-phase records bound to the response block hash, height, and view,
+  missing or mismatched sources returning no epoch, and no-source cases staying
+  empty.
+- Updated the formal docs, CI inventory, and roadmap to mark the block-body
+  repair observed epoch source helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockBodyRepairEpochGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-repair-epoch-fast`
+  - sequential `block-body-repair-epoch-bug-*` TLC runs for all 13 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-06-01 SCCP Substrate runtime-storage gate TOML pin
+
+- Tightened `scripts/sccp_substrate_source_evidence.py` so Substrate-family
+  production TOML requires `--expected-runtime-storage-gate-hash` in addition
+  to the governed source-material and source-adapter deployment hashes.
+  Diagnostic JSON still renders without the pin, but `toml_ready` now stays
+  false until the runtime-storage gate hash is supplied and matches the
+  canonical hash derived from the governed material and deployment records.
+- Updated the bridge-proof operator notes and roadmap so Substrate source
+  rollout instructions include the source-material, deployment, and
+  runtime-storage gate pins required before production TOML can be emitted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_substrate_source_evidence.py pytests/scripts/sccp_substrate_source_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_substrate_source_evidence_test.py -k "runtime_storage_gate_hash"`
+    (`2 passed, 17 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_substrate_source_evidence_test.py`
+    (`19 passed`)
+
+## 2026-05-31 SCCP Solana user-prover backend release surface
+
+- Corrected the release-readiness user-prover submission surface for the Solana
+  lane so public reports list `sccp-solana-recursive-mainnet-v1` as the
+  browser/mobile proof-request backend. The Solana destination manifest remains
+  bound to the `solana-program-v1` verifier-program backend, but release notes
+  no longer conflate that target verifier key with the UI/local recursive
+  prover backend consumed by JavaScript, Python, Swift, Kotlin, and Java Android
+  SDK requests.
+- Updated the bridge-proof docs and roadmap to call out that distinction.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`13 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "submission_surface or user_prover"`
+    (`5 passed, 93 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`98 passed`)
+
+## 2026-06-01 SCCP TRON route-canary block metadata propagation
+
+- Hardened saved-summary replay validation in
+  `scripts/sccp_tron_live_evidence.py`: source-event offline replay now
+  requires the saved transaction `block_number`/`block_timestamp` fields and a
+  matching `solid_block` timestamp/height binding, and route-canary full-TOML
+  replay now requires the saved canary transaction block metadata before
+  regenerating offline governance arguments.
+- Extended the direct and live TRON full-TOML renderers to carry route-canary
+  block number/timestamp audit metadata into route-allowlist records, promoted
+  those values into all-lanes `route_canary.block_number` and
+  `route_canary.block_timestamp`, and made release-bundle verification reject
+  missing, non-positive block numbers or negative timestamps before public
+  route evidence can pass.
+- Threaded the same fields through configured `iroha_config` SCCP route
+  allowlists, Torii/Core launch-readiness conversion, and the ZK consensus
+  policy hash so nodes cannot advertise production SCCP policy while omitting
+  the TRON canary block anchor.
+- Added regressions proving hand-edited source-event replay JSON and
+  route-canary full-TOML JSON/all-lanes/release-bundle artifacts cannot drop or
+  drift the block metadata gathered from live `gettransactioninfobyid` readback.
+- Updated `docs/source/bridge_proofs.md` and `roadmap.md` to document that
+  saved JSON replay and public release artifacts revalidate the carried TRON
+  block metadata instead of trusting previously emitted readiness flags.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py scripts/sccp_tron_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_tron_live_evidence_test.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'replay_requires_block_metadata or block_timestamp or block_number or txid_aliases or log_index'`
+    (`16 passed, 153 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`169 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+    (`80 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'direct_tron_full_toml_with_audited_metadata or tron_live or tron_route_canary'`
+    (`19 passed, 110 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'route_canary_field_drift or tron_route_canary'`
+    (`7 passed, 91 deselected`)
+  - `cargo test -p iroha_torii configured_all_lanes -- --nocapture`
+    (`13 passed`)
+  - `cargo test -p iroha_core configured_sccp_all_lanes_launch -- --nocapture`
+    (`13 passed`)
+  - `cargo test -p iroha_core zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`745 passed`)
+
+## 2026-05-31 Sumeragi same-height block-body repair TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `same-height-block-body-repair-fast` and
+  `same-height-block-body-repair-bug-*` modes so the same-height exact
+  block-body repair admission helper has independent TLC coverage for requiring
+  the current frontier height, allowing repair from a matching pending
+  missing-block request, deferred missing-payload commit QC, or active missing
+  commit-QC repair round, requiring pending and deferred sources to be
+  commit-phase records bound to the exact block hash, height, and view,
+  rejecting non-actionable dependencies, and keeping no-source responses
+  inadmissible.
+- Updated the formal docs, CI inventory, and roadmap to mark the same-height
+  block-body repair admission helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSameHeightBlockBodyRepairGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh same-height-block-body-repair-fast`
+  - sequential `same-height-block-body-repair-bug-*` TLC runs for all 15
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-body request-stash TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-body-request-stash-fast` and `block-body-request-stash-bug-*` modes
+  so the exact block-body requester stash-window helper has independent TLC
+  coverage for configured missing-request margins being floored at one,
+  next-height and within-margin requests being stashed, inclusive upper bounds,
+  beyond-margin, same-height, and stale-height requests being rejected, zero
+  committed-height next slots being allowed, and saturating lower/upper
+  boundaries preserving Rust-style inclusive range semantics.
+- Updated the formal docs, CI inventory, and roadmap to mark the exact
+  block-body requester stash-window helper as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockBodyRequestStashGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-request-stash-fast`
+  - sequential `block-body-request-stash-bug-*` TLC runs for all 11 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Substrate request-bound source-proof guard
+
+- JavaScript, Python, Swift, Kotlin/JVM, and Java Android Substrate runtime-call
+  submission builders now reject non-empty standalone `sourceProofBytes` unless
+  the caller supplies a wrapped `proofResult`. The runtime-call payload carries
+  proof bytes, transparent public inputs, and `bundleBytes`, but not those
+  request-bound source-proof bytes, so portal/mobile submissions now fail
+  before packaging material that cannot be tied back to the request hash.
+- Regenerated the JavaScript `dist/` artifact and extended source plus
+  package-dist regressions for the published Substrate submission guard.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `node --test --test-name-pattern "builds Substrate SCCP runtime-call submissions" javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "test_builds_substrate_sccp_runtime_call_submission"`
+    (`1 passed, 76 deselected`)
+  - `swift test --filter SccpSolanaProverTests/testBuildsSubstrateRuntimeCallSubmission`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests "org.hyperledger.iroha.sdk.sccp.SubstrateSccpProverTest.runtimeCallSubmissionPackagesWrappedProofResult" --console=plain`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain -Dandroid.test.mains=org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-05-31 SCCP TRON transaction-info block binding
+
+- Hardened `scripts/sccp_tron_live_evidence.py` so source-event and
+  route-canary `gettransactioninfobyid` readback must include exact positive
+  integer `blockNumber` and exact nonnegative integer `blockTimeStamp` values.
+  Source-event evidence now also cross-checks the transaction-info
+  `blockTimeStamp` against the fetched canonical block header timestamp before
+  deriving source-proof material.
+- Added TRON live-evidence regressions for missing source-event and
+  route-canary transaction-info block metadata and for source-event
+  transaction-info timestamp drift from the block header.
+- Updated `docs/source/bridge_proofs.md` and `roadmap.md` so operator runbooks
+  describe the required block metadata, the source-event timestamp/header
+  check, and the stricter transaction-id alias requirements.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'block_timestamp or block_number or txid_aliases or log_index'`
+    (`15 passed, 152 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`167 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`736 passed`)
+
+## 2026-05-31 Sumeragi block-body repair TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `block-body-repair-fast` and
+  `block-body-repair-bug-*` modes so the RBC exact block-body repair admission
+  helper has independent TLC coverage for DA/RBC being enabled, response
+  height matching the current frontier height, the RBC session existing with
+  matching metadata, authoritative payloads already known locally suppressing
+  repair, expected payload hashes being present, `BlockCreated` and
+  `BlockSyncUpdate` bodies both being accepted when exact, and block
+  hash/height/view/payload hash identity mismatches being rejected.
+- Updated the formal docs, CI inventory, and roadmap to mark the RBC
+  block-body repair admission helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockBodyRepairGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-body-repair-fast`
+  - sequential `block-body-repair-bug-*` TLC runs for all 12 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync future-window TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-future-window-fast` and
+  `block-sync-future-window-bug-*` modes so the future BlockSyncUpdate
+  drop/window helper has independent TLC coverage for known local blocks
+  bypassing all drop gates, requested missing-block recovery being bounded by
+  the committed-height margin before parent availability can short-circuit,
+  unresolved lower missing heights dropping far-ahead sparse updates before
+  known parents admit connected chains, generic height/view windows preserving
+  disabled and boundary cases, stale or absent phase-view baselines not
+  dropping updates, and saturated height arithmetic staying inclusive.
+- Updated the formal docs, CI inventory, and roadmap to mark the future
+  BlockSyncUpdate drop/window helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncFutureWindowGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-future-window-fast`
+  - sequential `block-sync-future-window-bug-*` TLC runs for all 17 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi deferred block-sync replay TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `deferred-block-sync-replay-fast` and
+  `deferred-block-sync-replay-bug-*` modes so the deferred BlockSyncUpdate
+  replay helper has independent TLC coverage for empty queues doing no work,
+  commit or validation inflight work preserving the deferred queue, replay
+  selecting the first ordered key, removing the selected entry before calling
+  the handler, forwarding the stored update and sender unchanged, logging
+  handler errors while still reporting a successful replay, preserving later
+  ordered entries, and treating remove-missing races as no-handle false
+  returns.
+- Updated the formal docs, CI inventory, and roadmap to mark the deferred
+  BlockSyncUpdate replay helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDeferredBlockSyncReplayGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-replay-fast`
+  - sequential `deferred-block-sync-replay-bug-*` TLC runs for all 16 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Substrate runtime-storage gate release evidence
+
+- Added a canonical `substrate_runtime_storage_gate_hash` renderer to
+  `scripts/sccp_substrate_source_evidence.py`, matching Rust's
+  `sccp:substrate:runtime-storage-gate:v1` transcript over the governed
+  source material hash, source-adapter deployment hash, runtime-storage circuit,
+  FastPQ parameter set, and source-state verifier hash.
+- The all-lanes readiness summary now derives that gate for SORA-Kusama,
+  SORA-Polkadot, and SORA2 and marks it as required source-adapter audit
+  evidence. The release-bundle verifier now rejects ready bundles whose
+  Substrate-family source-gate summary omits or renames
+  `substrate_runtime_storage_gate_hash`, or replays it from another governed
+  lane hash.
+- Updated bridge-proof docs and the roadmap to state that Substrate-family
+  runtime-storage source proof readiness is machine-audited in release bundles,
+  not just enforced by Rust admission.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_substrate_source_evidence.py scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_substrate_source_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_substrate_source_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "substrate_runtime_storage_gate or source_gate"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate"`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`737 passed`)
+
+## 2026-05-31 Sumeragi deferred block-sync cache TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `deferred-block-sync-cache-fast` and `deferred-block-sync-cache-bug-*` modes
+  so the deferred BlockSyncUpdate cache/defer integration helper has
+  independent TLC coverage for commit-vote stripping before caching, full
+  `(height, view, block_hash)` key matching, distinct height/view/hash insert
+  behavior, same-key merge filling missing commit-QC sidecars without
+  overwriting existing commit-QC sidecars, Some-only sender replacement, cap
+  enforcement after insert and merge paths, `defer_block_sync_update` invoking
+  the cache path first, deferral reason forwarding, and recording
+  `BlockSyncUpdate`/`Deferred`/`CommitPipelineActive` after caching.
+- Updated the formal docs, CI inventory, and roadmap to mark the deferred
+  BlockSyncUpdate cache/defer integration helper as a TLC-cross-checked
+  Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDeferredBlockSyncCacheGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-cache-fast`
+  - sequential `deferred-block-sync-cache-bug-*` TLC runs for all 20 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi deferred block-sync helper TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `deferred-block-sync-helper-fast` and `deferred-block-sync-helper-bug-*`
+  modes so the deferred BlockSyncUpdate helper has independent TLC coverage
+  for validation blocking only on active conflicting work, deferral reason
+  priority from commit work to validation to pending processing with the
+  certified exact-frontier bypass suppressing all reasons, merge filling
+  missing commit/checkpoint/stake sidecars without overwriting existing
+  sidecars, sender replacement only when the incoming sender is present,
+  commit-evidence detection from commit QC, validator checkpoint, or stake
+  snapshot, unlimited cap-zero behavior, cap eviction until within limit while
+  retaining evidence and newer view/height/hash, and eviction metrics
+  incrementing only when entries are removed.
+- Updated the formal docs, CI inventory, and roadmap to mark the deferred
+  BlockSyncUpdate helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDeferredBlockSyncHelperGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-helper-fast`
+  - sequential `deferred-block-sync-helper-bug-*` TLC runs for all 29 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi pending-response flush TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `pending-response-flush-fast` and `pending-response-flush-bug-*` modes so
+  the pending fetch/body readiness flush helper has independent TLC coverage
+  for absent pending keys not building payloads or returning ready, canonical
+  deferral preserving pending entries, ready fetch entries building payloads,
+  removing pending entries, and calling batch fanout for exactly the recorded
+  requesters with force/highest/hintless bypass disabled, ready body entries
+  building exact `BlockBodyResponse` values bound to the block
+  hash/height/view/payload, removing pending body entries, dispatching only
+  recorded requesters, and using the plain-fallback helper.
+- Updated the formal docs, CI inventory, and roadmap to mark the pending
+  fetch/body readiness flush helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingResponseFlushGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-response-flush-fast`
+  - sequential `pending-response-flush-bug-*` TLC runs for all 30 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi fetch-pending batch fanout TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `fetch-pending-responses-batch-fast` and
+  `fetch-pending-responses-batch-bug-*` modes so the batched
+  fetch-pending-block fanout helper has independent TLC coverage for empty peer
+  sets returning without payload building, commit-QC-only requesters
+  dispatching first and retaining their restash flag on failure,
+  commit-QC-only peers being excluded from payload fanout, consensus payload
+  requesters receiving exact-body companions, per-requester hintless policy
+  with allowance and roster-proof arguments preserved, roster-hinted updates
+  sending a fitting `BlockCreated` companion before the main update, created
+  bypass requiring the hintless-bypass allowance, force bypass and consensus
+  priority being forwarded, and non-hintless payload sends keeping the
+  allow-hintless argument.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  fetch-pending batch response fanout helper as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFetchPendingResponsesBatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fetch-pending-responses-batch-fast`
+  - sequential `fetch-pending-responses-batch-bug-*` TLC runs for all 26
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi fetch-pending response-send TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `fetch-pending-response-send-fast` and
+  `fetch-pending-response-send-bug-*` modes so the single
+  fetch-pending-block response send helper has independent TLC coverage for
+  hintless `BlockSyncUpdate` allowance plus requester roster proof, invalid
+  hintless downgrade to `BlockCreated`, cached QC sidecars applying before
+  trimming, bypass selection from force/consensus/highest/created/hintless
+  policy, fallback preserving the originally computed bypass decision, update
+  trimming falling back to `BlockCreated` or dropping oversized payloads,
+  direct commit-QC companions being emitted when available even if the payload
+  drops, companions requiring QC material, and companions preceding the final
+  payload.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  fetch-pending response send helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFetchPendingResponseSendGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fetch-pending-response-send-fast`
+  - sequential `fetch-pending-response-send-bug-*` TLC runs for all 26
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi background fallback TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `background-fallback-fast` and `background-fallback-bug-*` modes so the
+  background fallback network dispatch helper has independent TLC coverage for
+  post requests remaining P2P posts, broadcast requests remaining broadcasts,
+  block/control/native payload classes being preserved, block-message priority
+  projecting from the embedded priority, control-flow and native AMX fallbacks
+  staying high priority, posts preserving peer targets, and broadcasts omitting
+  peers.
+- Updated the formal docs, CI inventory, and roadmap to mark the background
+  fallback network dispatch helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBackgroundFallbackGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh background-fallback-fast`
+  - sequential `background-fallback-bug-*` TLC runs for all 13 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi background bypass TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `background-bypass-fast` and `background-bypass-bug-*` modes so the
+  background scheduler bypass helper has independent TLC coverage for accepted
+  post payloads bypassing through fallback, accepted broadcast payloads
+  bypassing only for the broadcast-safe message set, broadcast QC/vote/fetch
+  request messages staying queued, control-flow and native AMX requests staying
+  queued, disabled workers dispatching accepted requests inline, and
+  forced-queue scheduling never bypassing even when the message would otherwise
+  be eligible.
+- Updated the formal docs, CI inventory, and roadmap to mark the background
+  scheduler bypass helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBackgroundBypassGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh background-bypass-fast`
+  - sequential `background-bypass-bug-*` TLC runs for all 13 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release bundle self-verification
+
+- Hardened `scripts/sccp_release_bundle.py` so production-ready public release
+  bundles run the strict release-bundle verifier against the generated
+  manifest, readiness report, all-lanes summary, copied evidence, and corridor
+  logs before the builder reports success.
+- Updated the release-bundle tests and bridge-proof documentation so
+  portal/mobile user-prover release evidence is now fail-closed during
+  packaging and still independently re-verifiable after upload.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "self_verifier or writes_hash_bound_public_artifacts"`
+    (`2 passed, 96 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`98 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --log-dir dist/sccp-production-corridor-codex-20260531-selfverify`
+    (`rust-sccp`: `238 passed`; `evidence-scripts`: `727 passed`;
+    `js-sdk`: `130 passed`; `python-sdk`: `77 passed`; `swift-sdk`:
+    `72 + 1` tests passed; `kotlin-sdk`: `BUILD SUCCESSFUL`;
+    `java-android`: `BUILD SUCCESSFUL`; `contract-smoke`:
+    `sccp_message_bridge_smoke: ok`; `core-admission`: `32 passed`)
+
+## 2026-05-31 Sumeragi background dispatch TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `background-dispatch-fast` and `background-dispatch-bug-*` modes so the
+  background request dispatch fallback helper has independent TLC coverage for
+  every request variant remaining blocking-eligible for caller-side inline
+  fallback, ready queues enqueueing without returning a request, full queues
+  recording overflow and returning without drop status, unavailable workers
+  recording drop status and returning, stable telemetry kind labels, and
+  returned requests preserving their original kind.
+- Updated the formal docs, CI inventory, and roadmap to mark the background
+  request dispatch fallback helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBackgroundDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh background-dispatch-fast`
+  - sequential `background-dispatch-bug-*` TLC runs for all 9 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi background frame-cap TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `background-frame-cap-fast` and `background-frame-cap-bug-*` modes so the
+  background consensus frame-cap preparation helper has independent TLC
+  coverage for fetch/control messages using the control cap, payloads using
+  the payload cap, under-cap preservation, oversized payload and update drops,
+  commit-vote trimming, permissioned stale-stake trimming versus NPoS stake
+  retention, commit-QC sidecar priority before validator checkpoints,
+  `BlockBodyResponse` update trimming before `BlockCreated` downgrade, direct
+  `BlockSyncUpdate` fallback preference only when it fits, and changed/dropped
+  status following the prepared result.
+- Updated the formal docs, CI inventory, and roadmap to mark the background
+  consensus frame-cap preparation helper as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBackgroundFrameCapGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh background-frame-cap-fast`
+  - sequential `background-frame-cap-bug-*` TLC runs for all 19 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Substrate bundle payload gate
+
+- Hardened Substrate runtime proof-request and runtime-call submission builders
+  across JavaScript, Python, Swift, Kotlin/JVM, and Java Android so
+  `bundleBytes` now shares the native recursive proof-byte corridor: non-empty,
+  non-all-zero, and capped at 2 MiB before a web portal or mobile app builds a
+  prover request or SCALE runtime-call envelope.
+- Extended the Rust `iroha_sccp` Substrate runtime package builder to reject
+  canonical message-bundle bytes outside that same corridor before emitting a
+  `SubstrateRuntimeCall` submission payload, matching the Solana and TON native
+  lanes.
+- Rebuilt the JavaScript `dist` artifact and updated the bridge-proof docs plus
+  roadmap so packaged web SDK behavior and operator guidance include Substrate
+  runtime-call bundle preflight.
+- Validation:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --check src/sccp.js && node --check dist/sccp.js && node --test --test-name-pattern "Substrate runtime proof|Substrate SCCP runtime-call|SCCP Substrate runtime proof helpers" test/sccpSolanaProver.test.js test/package_dist.test.js`
+    (`4 passed`)
+  - `cd javascript/iroha_js && node --test test/sccpSolanaProver.test.js test/package_dist.test.js`
+    (`124 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "substrate_sccp_runtime"`
+    (`2 passed, 75 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`77 passed`)
+  - `cargo test -p iroha_sccp substrate_submission_package_rejects_oversized_bundle_bytes -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_sccp native_recursive_submission_packages_reject_placeholder_proof_bytes -- --nocapture`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests.testSubstrate --disable-swift-testing`
+    (`4 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.SubstrateSccpProverTest`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:testClasses --console=plain && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests`
+    (`Substrate SCCP prover tests passed`)
+
+## 2026-05-31 Sumeragi fetch-block-body TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `fetch-block-body-handle-fast` and `fetch-block-body-handle-bug-*` modes so
+  the exact block-body fetch handler helper has independent TLC coverage for
+  canonical committed exact matches deferring instead of dispatching, exact
+  local created/proof responses dispatching through the plain-fallback helper,
+  identity mismatches and absent local blocks not being served, canonical
+  deferral stashing pending requesters, dispatch not stashing, pending-window
+  and frontier stashes staying separate, frontier matches beating the broader
+  pending window, dispatch removing the requester while deferral keeps it,
+  non-dispatch paths recording deferred handling, every path releasing the
+  dedup key exactly once, and dispatch-helper use matching actual dispatch.
+- Updated the formal docs, CI inventory, and roadmap to mark the exact
+  block-body fetch handler helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFetchBlockBodyHandleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fetch-block-body-handle-fast`
+  - sequential `fetch-block-body-handle-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP TRON live log-index binding
+
+- Hardened `scripts/sccp_tron_live_evidence.py` so matching TRON
+  source-event and route-canary transaction-info logs reject explicit
+  `logIndex`/`log_index` metadata that does not match the log's list position,
+  or that supplies both spellings. The bound log index is part of the
+  route-canary evidence hash, so inconsistent API metadata now fails before
+  production TOML or release evidence can be emitted.
+- Hardened source-event and route-canary `gettransactioninfobyid` and
+  `gettransactionbyid` parsing to reject conflicting `txID`/`txid`/`id`
+  aliases before trusting receipt logs, raw-data hashes, signature metadata, or
+  transaction-owner bindings. Raw `gettransactionbyid` readback now requires the
+  canonical `txID` field even when compatible `id` aliases are present.
+- Bound the same transaction-id alias rule to source-event block transaction
+  entries before deriving java-tron transaction Merkle leaves for the source
+  proof path.
+- Added TRON live-evidence regressions for source-event and
+  `MessageProofAccepted` route-canary log-index drift, snake-case `log_index`
+  metadata, duplicate alias rejection, expected/observed mismatch diagnostics,
+  conflicting transaction-info/readback transaction-id aliases, and conflicting
+  source-event block transaction-id aliases. The regressions now also cover
+  source-event and route-canary raw transaction readback that omits `txID`.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_live_evidence.py pytests/scripts/sccp_tron_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'without_txid_alias or block_conflicting_txid_aliases or info_conflicting_txid_aliases or txid_aliases or log_index'`
+    (`13 passed, 150 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py`
+    (`163 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`730 passed`)
+
+## 2026-05-31 Sumeragi fetch-response deferral TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `fetch-response-deferral-fast` and `fetch-response-deferral-bug-*` modes so
+  the canonical committed fetch/body response deferral helper has independent
+  TLC coverage for next-height and historical non-deferral, same-height hash
+  mismatches and unknown committed hashes not deferring, canonical
+  `BlockCreated` and bare `BlockSyncUpdate` deferral, commit-QC and
+  validator-checkpoint sidecars preventing deferral, and non-payload messages
+  not deferring.
+- Updated the formal docs, CI inventory, and roadmap to mark the canonical
+  committed fetch/body response deferral helper as a TLC-cross-checked
+  Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFetchResponseDeferralGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fetch-response-deferral-fast`
+  - sequential `fetch-response-deferral-bug-*` TLC runs for all 10 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP EVM/TRON request-bound submission guard
+
+- JavaScript and Python EVM-family/TRON contract-call submission builders now
+  reject standalone `bundleBytes` or `sourceProofBytes` unless the caller
+  supplies a wrapped `proofResult`, preventing raw Groth16 calldata packaging
+  from silently ignoring request-bound source-chain proof material that cannot
+  be tied back to the original request hash.
+- JavaScript and Python EVM-family, TRON, and Substrate-family submission
+  builders now reject explicit null proof-result values instead of treating
+  them as omitted, matching the Solana/TON wrapped-result requirement and the
+  presence-aware submission API documented for portal backends.
+- Regenerated the JavaScript `dist/` artifact, added package-dist regressions
+  for the published EVM/TRON/Substrate submission guards, and documented the
+  guard in the bridge-proof SDK notes.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `node --test --test-name-pattern "builds EVM-family and TRON Groth16 contract-call submissions" javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "test_builds_evm_and_tron_groth16_contract_call_submissions"`
+    (`1 passed, 76 deselected`)
+  - `node --test --test-name-pattern "builds EVM-family and TRON Groth16 contract-call submissions|builds Substrate SCCP runtime-call submissions" javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "test_builds_evm_and_tron_groth16_contract_call_submissions or test_builds_substrate_sccp_runtime_call_submission"`
+    (`2 passed, 75 deselected`)
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-05-31 SCCP source-proof payload gate
+
+- Bounded optional `sourceProofBytes`/`source_proof_bytes` at the existing
+  2 MiB source-proof corridor before request hashing, app-linked prover
+  invocation, proof-result wrapping, and TON submission packaging while keeping
+  omitted source proofs valid and non-empty all-zero proofs rejected.
+- Applied the guard through Rust SCCP request construction plus JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android SDK proof-request/prover paths so
+  portal and mobile UI provers cannot submit oversized source-chain proof
+  capsules on-chain. The mobile SDK parity path now covers EVM-family, TRON,
+  TON, and Substrate-family requests/proof results, not only TON.
+- Updated the bridge-proof docs and roadmap to record the user-prover payload
+  bound.
+- Validation:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `node --test --test-name-pattern "binds TON proof requests to relay context and source adapter deployment" javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding"`
+    (`1 passed, 76 deselected`)
+  - `cargo test -p iroha_sccp ton_proof_result_submission_requires_canonical_ui_result -- --nocapture`
+  - `cargo test -p iroha_sccp rust_evm_groth16_proof_request_wraps_ui_generated_proof -- --nocapture`
+  - `cargo test -p iroha_sccp rust_tron_groth16_proof_request_wraps_ui_generated_proof -- --nocapture`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testTonProofRequestBindsRelayContextAndSourceAdapterDeployment --disable-swift-testing`
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --rerun-tasks`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core:testClasses --console=plain --rerun-tasks`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.TonSccpProverTests`
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testSccpProofRequestsRejectAllZeroSourceProofBytes --disable-swift-testing`
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.TronSccpProverTest --tests org.hyperledger.iroha.sdk.sccp.SubstrateSccpProverTest --rerun-tasks`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.EvmSccpProverTests`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.TronSccpProverTests`
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests`
+
+## 2026-05-31 Sumeragi QC-insufficient warning TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `qc-insufficient-warning-fast` and `qc-insufficient-warning-bug-*` modes so
+  the QC-insufficient warning throttle helper has independent TLC coverage for
+  first-warning insertion, strict within-cooldown suppression,
+  cooldown-boundary emission, suppressed-count replay/reset,
+  per-kind/phase/hash/height/view key separation, zero-cooldown bypass, GC
+  boundary/expiry behavior, zero-cooldown GC floor, and `clear()` entry reset
+  semantics.
+- Added terminal stuttering to the bounded QC-insufficient warning TLA model
+  so TLC can complete the state graph after the last checked obligation.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  QC-insufficient warning throttle helper as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcInsufficientWarningThrottleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-insufficient-warning-fast`
+  - sequential `qc-insufficient-warning-bug-*` TLC runs for all 14 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync warning throttle TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-warning-throttle-fast` and `block-sync-warning-throttle-bug-*`
+  modes so the block-sync warning throttle helper has independent TLC
+  coverage for first-warning insertion, strict within-cooldown suppression,
+  cooldown-boundary emission, suppressed-count replay/reset,
+  per-kind/hash/height/view key separation, burst-cap suppression for new and
+  existing entries, burst-window reset/preservation, zero burst-cap and
+  zero-cooldown behavior, GC boundary/expiry behavior, zero-cooldown GC floor,
+  and `clear()` entry/burst reset semantics.
+- Added terminal stuttering to the bounded warning-throttle TLA model so TLC
+  can complete the state graph after the last checked obligation.
+- Updated the formal docs, CI inventory, and roadmap to mark the block-sync
+  warning throttle helper as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncWarningThrottleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-warning-throttle-fast`
+  - sequential `block-sync-warning-throttle-bug-*` TLC runs for all 21
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP release crypto source-gate evidence rows
+
+- Extended SCCP release-readiness cryptographic evidence rows with the
+  source-adapter gate required flag, gate hash, and named audit hash set so the
+  public Markdown/JSON release report surfaces the full source-gate material
+  that blocked or passed each lane.
+- Tightened public release-bundle verification so those source-gate crypto row
+  fields have canonical JSON shape, enforce empty values for non-required
+  gates, require non-empty gate/audit hashes when a gate is required, and bind
+  exactly back to the embedded all-lanes lane evidence.
+- Updated bridge-proof docs and roadmap notes so public reviewers know the
+  release crypto table now covers source-gate evidence in addition to source,
+  destination, route allowlist, and route canary material.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'crypto_evidence or markdown_report_drift'`
+    (`8 passed, 89 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'complete_evidence_and_corridor or json_tracks_corridor_phase_results'`
+    (`2 passed, 11 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`13 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`97 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`716 passed`)
+
+## 2026-05-31 Sumeragi block-sync commit-conflict TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-commit-conflict-fast` and `block-sync-commit-conflict-bug-*`
+  modes so the committed-height BlockSyncUpdate conflict/evidence gate has
+  independent TLC coverage for zero-height, absent-committed, and same-hash
+  fallthrough, conflicting no-QC and invalid-QC drops that clear the missing
+  request without evidence, conflicting valid-QC validation with the block
+  subject, epoch, consensus mode/tag, stake snapshot, and genesis-stub
+  allowance, `InvalidQc` evidence emission with the incoming certificate and
+  `commit_conflict_finality` reason, `Ok(())` drop returns, and evidence
+  broadcast errors not re-admitting conflicts.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  committed-height BlockSyncUpdate conflict/evidence gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncCommitConflictGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-commit-conflict-fast`
+  - sequential `block-sync-commit-conflict-bug-*` TLC runs for all 24
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP JS corridor dist transcript gate
+
+- Tightened `scripts/sccp_release_readiness_report.py` so a passed `js-sdk`
+  phase artifact must include the source SCCP test file, `package_dist.test.js`,
+  and package export tests inside the claimed phase block before release notes
+  can mark the web portal SDK corridor as evidenced.
+- Added a regression that forges a JS phase transcript without
+  `package_dist.test.js` and verifies the public readiness report remains
+  `NOT READY`, preventing release bundles from proving source-side tests while
+  omitting the generated `dist/` entrypoint surface.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "requires_js_package_dist_transcript or passes_for_complete_evidence_and_corridor"`
+    (`2 passed, 11 deselected`)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k "dry_run_matches_release_phase_fragments"`
+    (`1 passed, 10 deselected`)
+
+## 2026-05-31 Sumeragi block-sync stale-view TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-stale-view-fast` and `block-sync-stale-view-bug-*` modes so the
+  BlockSyncUpdate stale-view admission gate has independent TLC coverage for
+  fresh-view continuation, stale unrequested unknown updates without commit
+  evidence being recorded as `BlockSyncUpdate`/`Dropped`/`StaleView`, `Ok(())`
+  returns without missing-block cleanup, and requested, locally known,
+  incoming-QC, checkpoint, and commit-vote evidence cases continuing to later
+  block-sync gates.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  BlockSyncUpdate stale-view admission gate as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncStaleViewGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-stale-view-fast`
+  - sequential `block-sync-stale-view-bug-*` TLC runs for all 15 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP TON bundle payload gate
+
+- Hardened the Rust `iroha_sccp` TON proof-request canonicalization and
+  message-body packaging path so `bundle_bytes` must be non-empty, non-all-zero,
+  and no larger than the 2 MiB native recursive payload cap before a
+  `SccpTonProofRequestV1` or `TonInternalMessage` payload is emitted.
+- Mirrored the TON `bundleBytes` guard across JavaScript, Python, Swift,
+  Kotlin/JVM, and Java Android proof request/submission helpers, including
+  wrapped proof-result submission validation, and regenerated the tracked
+  JavaScript `dist/` artifact.
+- Updated bridge proof docs and roadmap notes so the portal/mobile proof
+  generation corridor covers both Solana wallet/RPC packages and TON
+  wallet/liteserver message-body submissions.
+- Validation:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `node --test --test-name-pattern "builds TON SCCP internal message BOC|binds TON proof requests to relay context and source adapter deployment|package dist entrypoint exports SCCP TON proof wrapper" javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/package_dist.test.js`
+    (`3 passed`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k "test_builds_ton_sccp_message_body_submission_boc or test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding"`
+    (`2 passed, 75 deselected`)
+  - `cargo test -p iroha_sccp ton_internal_message_submission_rejects_mismatched_context -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_sccp ton_proof_result_submission_requires_canonical_ui_result -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_sccp native_recursive_submission_packages_reject_placeholder_proof_bytes -- --nocapture`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBuildsTonMessageBodyBoc --disable-swift-testing`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testTonProofRequestBindsRelayContextAndSourceAdapterDeployment --disable-swift-testing`
+    (`1 passed`)
+  - `cd kotlin && env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --rerun-tasks`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=/Users/takemiyamakoto/Library/Android/sdk ANDROID_SDK_ROOT=/Users/takemiyamakoto/Library/Android/sdk PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core:testClasses --console=plain --rerun-tasks`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH java -ea -cp "core/build/classes/java/main:core/build/classes/java/test:core/build/resources/main:core/build/resources/test:../norito_java/build/libs/norito-java-0.1.0-SNAPSHOT.jar:/Users/takemiyamakoto/.gradle/caches/modules-2/files-2.1/org.bouncycastle/bcprov-jdk18on/1.78.1/39e9e45359e20998eb79c1828751f94a818d25f8/bcprov-jdk18on-1.78.1.jar" org.hyperledger.iroha.android.sccp.TonSccpProverTests`
+    (`[IrohaAndroid] TON SCCP prover tests passed.`)
+
+## 2026-05-31 Sumeragi block-sync selected QC cache TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-qc-cache-fast` and `block-sync-selected-qc-cache-bug-*`
+  modes so the selected-roster unknown-block QC cache gate has independent TLC
+  coverage for empty-topology recovery, shape mismatch ignores,
+  same-height/stale locked-QC drops, non-extending missing locked-payload
+  quarantine, non-extending drop/retain decisions, fresh signer tally
+  validation, transient missing-context quarantine versus final validation
+  drops, precommit signer and validated-tally recording, `process_precommit_qc`
+  calls with `block_known = false` and forwarded non-extending permission,
+  process-reject side-effect suppression, non-extending locked-QC realignment
+  and vote pruning, highest-QC preservation while the payload is missing,
+  quarantine removal, and commit-QC record/cache insertion.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate unknown-block QC cache gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedQcCacheGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-cache-fast`
+  - sequential `block-sync-selected-qc-cache-bug-*` TLC runs for all 33
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync selected QC process TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-qc-process-fast` and
+  `block-sync-selected-qc-process-bug-*` modes so the selected-roster
+  post-prefilter QC process gate has independent TLC coverage for cached tally
+  reuse versus fresh tally validation, no-QC no-tally handling, tally
+  validation-error recording, precommit signer recording, validated-tally
+  notes, `block_known_for_commit` and `allow_nonextending_qc` argument
+  forwarding, process rejection side effects, commit-QC record/cache insertion,
+  known-block commit application, runtime DA cleanup gating, commit-pipeline
+  requests, unknown pending-epoch observation, creation-error propagation, and
+  unknown-block QC cache handoff.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate post-prefilter QC process gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedQcProcessGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-process-fast`
+  - sequential `block-sync-selected-qc-process-bug-*` TLC runs for all 23
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync selected QC prefilter TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-qc-prefilter-fast` and
+  `block-sync-selected-qc-prefilter-bug-*` modes so the selected-roster
+  post-apply QC prefilter gate has independent TLC coverage for empty-topology
+  recovery without tallying, hash/height/epoch/phase shape mismatch ignores
+  and `Ok(())` returns, same-height locked-QC drop metrics/status without
+  tallying, recoverable same-height continuation, stale locked-QC drops and
+  status recording, non-extending missing locked-payload quarantine and status
+  recording, non-extending locked drops with or without lock context, allowed
+  non-extending retention, and extending/no-lock tally plus precommit
+  processing admission.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate post-apply QC prefilter gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedQcPrefilterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-prefilter-fast`
+  - sequential `block-sync-selected-qc-prefilter-bug-*` TLC runs for all 20
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Rust Solana bundle payload gate
+
+- Hardened the Rust `iroha_sccp` Solana counterparty submission package builder
+  so canonical `bundle_bytes` must stay inside the native recursive payload
+  corridor before a `SolanaProgramInstruction` artifact is emitted.
+- Added an oversized canonical-bundle fixture that remains a structurally valid
+  SCCP message bundle but is rejected before Solana verifier-program packaging.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp solana_submission_package -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_sccp native_recursive_submission_packages_reject_placeholder_proof_bytes -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`237 passed`)
+
+## 2026-05-31 Sumeragi block-sync selected apply TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-apply-fast` and `block-sync-selected-apply-bug-*`
+  modes so the selected-roster BlockSyncUpdate apply/recovery-mode gate has
+  independent TLC coverage for same-height and non-extending QC admission from
+  selected or incoming evidence, payload-mismatch preserve-flag projection,
+  authoritative frontier supersede from usable incoming QC, commit cert,
+  checkpoint, or non-conflicting signature quorum, commit-evidence versus
+  signed-quorum versus payload-only recovery-mode selection, observed epoch
+  projection, aborted-revival gating, signed-quorum commit-QC repair
+  activation and side effects, sparse next-height known-block commit-QC
+  recovery, readiness for QC application, payload-unapplied drop recording,
+  and commit-vote/QC application calls.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate apply/recovery-mode gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedApplyGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-apply-fast`
+  - sequential `block-sync-selected-apply-bug-*` TLC runs for all 35 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP JavaScript dist Solana bundle guard
+
+- Regenerated the JavaScript SDK `dist/` artifact after hardening Solana
+  `bundleBytes`, so the published web SDK entrypoint now rejects empty,
+  all-zero, and oversized verifier-program bundles the same way as
+  `src/sccp.js`.
+- Added a package-dist regression that exercises
+  `buildSolanaSccpSubmission` through `dist/index.js`, catching future source
+  and distributable drift before release.
+- Validation:
+  - `npm run build:dist` (from `javascript/iroha_js`)
+  - `node --test --test-name-pattern "package dist Solana submission rejects inert bundle bytes|package declarations require wrapped Solana submission proof results" test/package_dist.test.js`
+    (`2 passed`)
+  - `node --test test/sccpSolanaProver.test.js`
+    (`82 passed`)
+
+## 2026-05-31 Sumeragi block-sync recovery-mode TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-recovery-mode-fast` and `block-sync-recovery-mode-bug-*` modes
+  so stale BlockCreated and block-sync recovery-mode helpers have independent
+  TLC coverage for height-at-or-below stale detection, stale admission by
+  missing request, retained match, or recovery evidence, no-signal rejection,
+  authoritative frontier supersede permission for signed-quorum and
+  commit-evidence repair only, stale-without-request bypass for
+  requested-payload and commit-evidence repair only, aborted-pending revival
+  only for commit-evidence repair with the explicit flag, and observed
+  commit-QC epoch projection only from commit-evidence repair.
+- Updated the formal docs, CI inventory, and roadmap to mark stale
+  BlockCreated/recovery-mode helpers as TLC-cross-checked Sumeragi helpers.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRecoveryModeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-mode-fast`
+  - sequential `block-sync-recovery-mode-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP all-lanes source-gate preflight blockers
+
+- Hardened the SCCP all-lanes evidence preflight so source-adapter gate audit
+  hashes cannot replay source material, source-adapter deployment, destination
+  binding, route allowlist, route canary evidence, or sibling audit hash roles
+  before release-bundle review.
+- Required source-gate blockers are now promoted into the lane-level blockers,
+  so a lane cannot look production-ready while its Solana, TON, or TRON source
+  gate remains blocked.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'source_gate_audit_hash_role_reuse or validates_complete_all_lanes'`
+    (`1 passed, 123 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`124 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`715 passed`)
+
+## 2026-05-31 SCCP source-gate release audit role separation
+
+- Hardened public SCCP release-bundle verification so source-adapter gate audit
+  hashes cannot replay source material, source-adapter deployment, destination
+  binding, route allowlist, route canary evidence, or sibling audit hash roles
+  in either embedded all-lanes evidence view.
+- Updated bridge-proof docs and the roadmap to make the source-gate audit
+  role-separation requirement explicit for release reviewers.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_gate_audit_hash_role_reuse or required_source_gate_audit_key_drift'`
+    (`2 passed, 95 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`97 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`714 passed`)
+
+## 2026-05-31 Sumeragi block-sync selected quorum TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-quorum-fast` and `block-sync-selected-quorum-bug-*`
+  modes so the selected-roster BlockSyncUpdate quorum/missing-QC repair gate
+  has independent TLC coverage for QC evidence, commit-cert, block signature
+  quorum, checkpoint, explicit requested sparse frontier, and tracked sparse
+  frontier admission; zero-signer, commit-vote, non-frontier, and unrequested
+  sparse rejection; missing-QC request admission and request marking; NPoS
+  vote-only deferral; post-request quorum recomputation; exact body-repair
+  deferral; quorum-missing drop status/reason/metric/return handling;
+  invalid-QC short-circuit gating by block quorum or checkpoint evidence; and
+  no missing-block cleanup on invalid QC drops.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate quorum/missing-QC repair gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedQuorumGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-quorum-fast`
+  - sequential `block-sync-selected-quorum-bug-*` TLC runs for all 30
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP phase success transcript binding
+
+- Hardened strict SCCP release-readiness reports and public release-bundle
+  verification so every passed corridor phase log must include the expected
+  command fragments and phase-specific success markers inside the claimed phase
+  block, in addition to the phase marker and non-dry-run completion sentinel.
+- Added negative tests for command-only phase transcripts and kept the corridor
+  runner self-check aligned with the release report phase table.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase_log_without_success_marker or phase_log_without_expected_command or phase_command_outside_claimed_block or forged_phase_log'`
+    (`4 passed, 8 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'phase_log_without_success_marker or phase_log_without_expected_command or phase_command_outside_claimed_block or forged_phase_log'`
+    (`4 passed, 92 deselected`)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dry_run_matches_release_phase_fragments'`
+    (`1 passed, 10 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`108 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`713 passed`)
+
+## 2026-05-31 Sumeragi block-sync selected QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-qc-fast` and `block-sync-selected-qc-bug-*` modes so
+  the selected-roster BlockSyncUpdate QC candidate/evidence gate has
+  independent TLC coverage for incoming, selection, checkpoint-derived,
+  world-derived, and cached source precedence; height, hash, epoch, and
+  COMMIT-phase shape filtering; missing-context quarantine and final validation
+  drops; replaced-QC metrics; cached-QC recovery and aggregate fallback
+  acceptance; hard locked-QC conflict evidence stripping and status recording;
+  usable-QC caching and quarantine cleanup; selected commit-cert projection;
+  invalid-payload drop gating; `Ok(())` invalid-payload returns; and no
+  missing-block cleanup on invalid QC drops.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate QC candidate/evidence gate as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-fast`
+  - sequential `block-sync-selected-qc-bug-*` TLC runs for all 33 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync selected signatures TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-selected-signatures-fast` and
+  `block-sync-selected-signatures-bug-*` modes so the selected-roster
+  BlockSyncUpdate signature gate has independent TLC coverage for cache-hit
+  reuse without revalidation, validated-signer caching only with a cache key,
+  signer-set projection, missing-parent and gap deferral with effective
+  topology and selected-roster context, deferred status/reason recording,
+  payload-only recovery forwarding, roster-evidence continuation with empty
+  signers, invalid-signature status/metric/reason projection, `Ok(())`
+  returns for terminal paths, QC-candidate continuation, and no missing-block
+  cleanup on signature drops.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  selected-roster BlockSyncUpdate signature gate as a TLC-cross-checked
+  Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSelectedSignaturesGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-selected-signatures-fast`
+  - sequential `block-sync-selected-signatures-bug-*` TLC runs for all 29
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle route allowlist recompute
+
+- Hardened public SCCP release-bundle verification so each embedded all-lanes
+  route allowlist hash is recomputed from the source material record hash,
+  source-adapter deployment record hash, destination binding hash, lane domain,
+  chain, activation policy, and canonical route allowlist id before a release
+  attachment is accepted.
+- The verifier now also rejects replay among the governed route hash roles even
+  if the JSON claims `expected_route_allowlist_hash_matches = true`.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'recomputes_all_lanes_route_allowlist_hash or zero_governed_hashes'`
+    (`2 passed, 93 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'passes_for_complete_evidence_and_corridor or accepts_phase_evidence_dir'`
+    (`2 passed, 10 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`96 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`713 passed`)
+
+## 2026-05-31 Sumeragi block-sync known selected roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-known-selected-roster-fast` and
+  `block-sync-known-selected-roster-bug-*` modes so the selected-roster
+  known-block BlockSyncUpdate replay/cleanup model has independent TLC
+  coverage for source metrics, vote-roster caching, checkpoint recording,
+  commit-roster record preparation/persistence, checkpoint/stake projection,
+  known-vote processing, incoming/selection/checkpoint QC replay priority,
+  redundant replay suppression, work preparation, cached commit-QC cleanup,
+  missing-block cleanup, known `Ok(())` return, unknown-block continuation,
+  and unknown-path no-clear handling.
+- Updated the formal docs, CI inventory, and roadmap to mark selected-roster
+  known-block BlockSyncUpdate replay/cleanup as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncKnownSelectedRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-known-selected-roster-fast`
+  - sequential `block-sync-known-selected-roster-bug-*` TLC runs for all 29
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync known roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-known-roster-fast` and `block-sync-known-roster-bug-*` modes so
+  the selected-roster known-block terminal path has independent TLC coverage
+  for source metrics, vote-roster caching, checkpoint recording, commit-roster
+  preparation/persistence, checkpoint/stake projection, known-vote processing,
+  incoming/selection/checkpoint QC replay priority, redundant replay
+  suppression, work preparation, cached commit-QC cleanup, missing-block
+  cleanup, known `Ok(())` return, and unknown-block continuation.
+- Updated the formal docs, CI inventory, and roadmap to mark selected-roster
+  known-block terminal replay as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncKnownRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-known-roster-fast`
+  - sequential `block-sync-known-roster-bug-*` TLC runs for all 28 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Solana submission bundle payload gate
+
+- Hardened Solana `borsh_instruction_v1` submission builders across JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android so `bundleBytes` now shares the
+  native recursive proof-byte corridor: non-empty, non-all-zero, and capped at 2
+  MiB before wallet/RPC instruction bytes are emitted.
+- Updated bridge-proof docs and the roadmap to make the SDK-side Solana
+  verifier-program bundle gate explicit for web portal and mobile app proof
+  flows.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js` (`82 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k solana_sccp_program_instruction_submission`
+    (`1 passed, 76 deselected`)
+  - `swift test --filter SccpSolanaProverTests.testBuildsSolanaProgramInstructionSubmission --disable-swift-testing`
+    (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/bin:$PATH ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk --phase python-sdk`
+    (`js-sdk`: `129 passed`; `python-sdk`: `77 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk --phase kotlin-sdk --phase java-android`
+    (`swift-sdk`: `72 passed` plus bridge-submit payload test `1 passed`;
+    `kotlin-sdk` and `java-android`: `BUILD SUCCESSFUL` with OpenJDK 21 resolved
+    from Homebrew)
+  - `cd kotlin && env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.SolanaSccpProverTest --rerun-tasks`
+    (`BUILD SUCCESSFUL`, `7 actionable tasks: 7 executed`)
+  - `cd java/iroha_android && env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests --rerun-tasks`
+    (`BUILD SUCCESSFUL`, `7 actionable tasks: 7 executed`)
+
+## 2026-05-31 Sumeragi block-sync no-roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `block-sync-no-roster-fast`
+  and `block-sync-no-roster-bug-*` modes so the terminal no-verifiable-roster
+  BlockSyncUpdate branch has independent TLC coverage for known vote-only vote
+  processing and snapshot suppression, known hinted drop cleanup, effective
+  and trusted exact-frontier repair deferral, missing-QC request refresh and
+  sidecar failover, missing-roster drop status/reason/metrics,
+  `PayloadAvailable` cleanup, and `Ok(())` non-continuation.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  no-verifiable-roster BlockSyncUpdate branch as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncNoRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-no-roster-fast`
+  - sequential `block-sync-no-roster-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP route-allowlist evidence role separation
+
+- Hardened the canonical SCCP route-allowlist transcript so the source
+  material record hash, source-adapter deployment record hash, and destination
+  binding hash must be non-zero and pairwise distinct before Rust or all-lanes
+  evidence tooling accepts the route allowlist hash.
+- Updated bridge-proof docs and the roadmap to document the stricter governed
+  hash-role separation.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'route_allowlist_hash_matches_rust_vector or route_allowlist_hash_rejects_zero_or_replayed_roles'`
+    (`2 passed, 121 deselected`)
+  - `cargo test -p iroha_sccp route_allowlist_production_gate_rejects_incomplete_or_replayed_material -- --nocapture`
+    (`1 passed, 235 filtered out`)
+  - `cargo test -p iroha_sccp` (`236 passed`; doc-tests `0 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`710 passed`)
+
+## 2026-05-31 Sumeragi block-sync snapshot roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-snapshot-roster-fast` and `block-sync-snapshot-roster-bug-*`
+  modes so the known-block commit-roster snapshot roster-selection model has
+  independent TLC coverage for nonempty snapshot gating, journal source
+  projection, snapshot roster/QC/checkpoint/stake attachment, snapshot
+  cache-key insertion, snapshot preemption over persisted, cached, and fresh
+  sources, persisted/cache/fresh fallback ordering, fresh cache insertion
+  policy, and sidecar-quarantine propagation.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block
+  snapshot-roster selection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSnapshotRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-roster-fast`
+  - sequential `block-sync-snapshot-roster-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync snapshot hint TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-snapshot-hint-fast` and `block-sync-snapshot-hint-bug-*` modes so
+  the known-block commit-roster snapshot hint filter model has independent TLC
+  coverage for unknown/no-local snapshot preservation, matching QC
+  preservation, same-roster different-QC preservation with revalidation,
+  different-roster QC rejection, checkpoint and stake sidecar filtering,
+  all-hint matching/mismatch handling, and the
+  no-status/no-clear/no-deferral/no-early-return continuation contract.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block
+  snapshot-hint filtering as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncSnapshotHintGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-hint-fast`
+  - sequential `block-sync-snapshot-hint-bug-*` TLC runs for all 21 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP phase-block transcript binding
+
+- Tightened strict SCCP release evidence so required production-corridor
+  command fragments must appear inside the claimed phase block, not merely
+  somewhere in a shared or forged transcript.
+- Updated both `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py` to extract the claimed
+  `==> SCCP production corridor: <phase>` block before accepting hashed phase
+  evidence.
+- Added readiness-report and release-bundle regressions that place the expected
+  command under a different phase marker and verify the artifact is rejected.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase_log_without_expected_command or phase_command_outside_claimed_block or forged_phase_log'`
+    (`3 passed, 8 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'phase_log_without_expected_command or phase_command_outside_claimed_block or forged_phase_log'`
+    (`3 passed, 91 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`105 passed`)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dry_run_matches_release_phase_fragments or dry_run_prints_selected_phase_commands'`
+    (`2 passed, 9 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`709 passed`)
+
+## 2026-05-31 Sumeragi block-sync vote placeholder TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-vote-placeholder-fast` and
+  `block-sync-vote-placeholder-bug-*` modes so the frontier vote-placeholder
+  side-effect model has independent TLC coverage for valid vote placeholder
+  counting, invalid phase/hash/height/view/epoch vote filtering, mixed-vote
+  filtering, exact-frontier/known-local/requested-missing gates, commit-QC and
+  checkpoint sidecar exclusion, stake-sidecar allowance, vote-subject and empty
+  payload marker projection, and no-status/no-clear/no-deferral/no-early-return
+  continuation.
+- Updated the formal docs, CI inventory, and roadmap to mark frontier
+  vote-placeholder handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncVotePlaceholderGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-vote-placeholder-fast`
+  - sequential `block-sync-vote-placeholder-bug-*` TLC runs for all 20 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync implicit recovery TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-implicit-recovery-fast` and
+  `block-sync-implicit-recovery-bug-*` modes so the DA implicit
+  BlockSyncUpdate recovery flag model has independent TLC coverage for
+  already-requested preservation, DA-disabled/known-local/above-frontier/
+  implicit-disallowed rejection, same-height/next-height/saturated-boundary
+  request admission, and the no-status/no-clear/no-deferral/no-early-return
+  side-effect contract.
+- Updated the formal docs, CI inventory, and roadmap to mark DA implicit
+  BlockSyncUpdate recovery as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncImplicitRecoveryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-implicit-recovery-fast`
+  - sequential `block-sync-implicit-recovery-bug-*` TLC runs for all 12 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP EVM route-canary config admission binding
+
+- Threaded the EVM/BSC route-canary v2 transcript fields through
+  user/actual configuration, Core bridge-proof admission reconstruction, Torii
+  configured-route reconstruction, and SCCP all-lanes test config helpers.
+- Added the EVM calldata digest, payload hash, target domain, finality height,
+  finality block hash, proof version, and proof source domain to deterministic
+  ZK consensus policy sorting/hashing so configured admission commits to the
+  same transcript fields that `iroha_sccp` readiness validates.
+- Extended the focused ZK policy-hash regression to prove that changing the
+  EVM route-canary finality block hash changes the computed policy hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core state::tests::zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists -- --nocapture`
+    (`1 passed; 6711 filtered out`)
+  - `cargo test -p iroha_core configured_sccp_all_lanes_launch -- --nocapture`
+    (`12 passed; 6700 filtered out`)
+  - `cargo test -p iroha_torii configured_all_lanes_launch -- --nocapture`
+    (`13 passed; 1978 filtered out`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32 passed`)
+
+## 2026-05-31 Sumeragi block-sync known-hintless TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-known-hintless-fast` and `block-sync-known-hintless-bug-*` modes
+  so the already-known hintless BlockSyncUpdate fast-path model has independent
+  TLC coverage for known block skip admission, missing-request clearing with the
+  `PayloadAvailable` reason, no status recording, `Ok(())` return without
+  continuation, unknown-block continuation, and
+  commit-QC/checkpoint/stake/vote roster-hint preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark the already-known
+  hintless BlockSyncUpdate fast path as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncKnownHintlessGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-known-hintless-fast`
+  - sequential `block-sync-known-hintless-bug-*` TLC runs for all 12 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync vote deferral TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-vote-deferral-fast` and `block-sync-vote-deferral-bug-*` modes so
+  the BlockSyncUpdate embedded-vote filtering and deferral handoff model has
+  independent TLC coverage for valid commit-vote processing, invalid
+  phase/hash/height/view/epoch vote rejection, mixed-vote filtering,
+  missing-block request refresh and explicit request preservation, known-block
+  vote-only fast-path return/cleanup, QC-bearing known block deferral,
+  vote-stripped deferral ordering, QC/checkpoint/stake sidecar preservation,
+  and deferral reason forwarding.
+- Updated the formal docs, CI inventory, and roadmap to mark BlockSyncUpdate
+  embedded-vote filtering and deferral handoff as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncVoteDeferralGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-vote-deferral-fast`
+  - sequential `block-sync-vote-deferral-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync roster status TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-roster-status-fast` and `block-sync-roster-status-bug-*` modes so
+  the block-sync roster status model has independent TLC coverage for paired
+  commit-QC/checkpoint hints, individual source counters,
+  history/sidecar/journal counters, unknown-source no-op handling, missing and
+  unsolicited-share drop counters, repeated-counter accumulation, snapshot
+  projection, top-level snapshot inclusion, and reset clearing.
+- Added a terminal stutter step to
+  `docs/formal/sumeragi/SumeragiBlockSyncRosterStatusGate.tla` so TLC completes
+  the bounded 21-step accounting walk without a terminal deadlock.
+- Updated the formal docs, CI inventory, and roadmap to mark block-sync roster
+  source/drop status as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-status-fast`
+  - sequential `block-sync-roster-status-bug-*` TLC runs for all 24 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP phase transcript command binding
+
+- Hardened strict SCCP release evidence so hashed production-corridor phase
+  artifacts must contain the expected command fragments for their claimed phase,
+  not only the phase marker and completion sentinel.
+- Shared the phase-command contract between
+  `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py`, so both report generation and public
+  bundle verification reject marker-only forged transcripts.
+- Extended the corridor runner self-check so the release report's required
+  phase-command fragment table is compared against full `--dry-run` phase
+  output, preventing verifier expectations from drifting away from the actual
+  runner commands.
+- Updated synthetic release artifacts and regressions to cover missing-command
+  phase logs in both the readiness report and release-bundle verifier.
+- Updated the bridge-proof docs and roadmap to describe the stricter
+  phase-transcript evidence gate and runner/report sync check.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase_log_without_expected_command or forged_phase_log or accepts_phase_evidence_dir'`
+    (`3 passed, 7 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'phase_log_without_expected_command or forged_phase_log or requires_hashed_phase_evidence or recomputes_required_corridor_phases'`
+    (`4 passed, 89 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`103 passed`)
+  - `python3 -m py_compile pytests/scripts/check_sccp_production_corridor_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'dry_run_matches_release_phase_fragments or dry_run_prints_selected_phase_commands'`
+    (`2 passed, 9 deselected`)
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`11 passed`)
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`707 passed`)
+
+## 2026-05-31 Sumeragi block-sync roster TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `block-sync-roster-fast` and
+  `block-sync-roster-bug-*` modes so the uncertified block-sync roster
+  admission helper has independent TLC coverage for explicitly requested
+  missing blocks at stale, same, next, and future heights, unrequested
+  exact-next admission from zero and nonzero heights, Rust-style saturated
+  next-height admission, and unrequested stale/same/future rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark uncertified
+  block-sync roster admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-fast`
+  - sequential `block-sync-roster-bug-*` TLC runs for all 9 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi cached BlockSyncUpdate QCs TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `apply-cached-qcs-fast` and
+  `apply-cached-qcs-bug-*` modes so the cached BlockSyncUpdate proof/vote
+  attachment helper has independent TLC coverage for commit-QC source priority,
+  existing QC and checkpoint preservation, checkpoint synthesis from final QCs,
+  no spurious checkpoint creation, NPoS stake snapshot repair, permissioned
+  stake non-repair, record-stake cloning, cached vote attachment, existing vote
+  preservation, and wrong-context vote rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark cached
+  BlockSyncUpdate proof/vote attachment as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiApplyCachedQcsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh apply-cached-qcs-fast`
+  - sequential `apply-cached-qcs-bug-*` TLC runs for all 16 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi BlockSyncUpdate target selection TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-update-targets-fast` and `block-sync-update-targets-bug-*` modes
+  so the BlockSyncUpdate gossip target-selection helper has independent TLC
+  coverage for zero-limit and empty-peer outputs, local-peer exclusion,
+  registered/trusted stray priority, unregistered stray rejection,
+  trusted-stray admission, online world-peer preference, offline world
+  fallback, final fanout caps, and underfill prevention.
+- Updated the formal docs, CI inventory, and roadmap to mark BlockSyncUpdate
+  gossip target selection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncUpdateTargetsGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-targets-fast`
+  - sequential `block-sync-update-targets-bug-*` TLC runs for all 11 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi commit-QC-only fetch response TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `commit-qc-only-fetch-response-fast` and
+  `commit-qc-only-fetch-response-bug-*` modes so the commit-QC-only fetch
+  response dispatch model has independent TLC coverage for direct commit-QC
+  companion sends, certified-proof companion ordering, vote rebroadcast
+  suppression/admission, requester target inclusion and deduplication,
+  signed-quorum fallback dispatch, bypass flag projection, requester
+  roster-proof preservation, and return-value handling.
+- Updated the formal docs, CI inventory, and roadmap to mark the
+  commit-QC-only fetch response dispatch gate as a TLC-cross-checked Sumeragi
+  helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitQcOnlyFetchResponseGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-qc-only-fetch-response-fast`
+  - sequential `commit-qc-only-fetch-response-bug-*` TLC runs for all 16
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP Rust route-canary v2 binding
+
+- Aligned the Rust `iroha_sccp` EVM route-canary evidence hash with the
+  production v2 transcript used by the operator evidence scripts: calldata
+  SHA-256, payload hash, target domain, finality height, finality block hash,
+  proof version/source domain, and consumed-message state now participate in
+  the canonical Rust preimage.
+- Extended `SccpRouteAllowlistReadinessV1` EVM canary metadata so Rust
+  lane-readiness admission stores and recomputes the same v2 fields before
+  treating EVM route evidence as bound.
+- Hardened the Rust TRON route-canary helper to reject replay across
+  transaction id, calldata hash, message id, payload hash, statement hash,
+  commitment root, finality height, finality block hash, and signature
+  SHA-256 roles before deriving the governed canary hash.
+- Added Rust regression coverage proving the v2 layouts bind finality public
+  inputs and reject transcript role replay.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay -- --nocapture`
+    (`1 passed, 235 filtered out`)
+  - `cargo test -p iroha_sccp lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles -- --nocapture`
+    (`2 passed, 234 filtered out`)
+  - `cargo test -p iroha_sccp`
+    (`236 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`709 passed`)
+
+## 2026-05-31 Sumeragi signed-quorum fetch fallback TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `signed-quorum-fetch-fallback-fast` and `signed-quorum-fetch-fallback-bug-*`
+  modes so the committed signed-quorum fetch fallback model has independent TLC
+  coverage for committed-hash gating, primary roster versus fallback topology
+  selection, signer validation, permissioned quorum floors, NPoS state/cache
+  snapshot priority, signer-peer mapping, and stake-quorum rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark committed
+  signed-quorum fetch fallback admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSignedQuorumFetchFallbackGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh signed-quorum-fetch-fallback-fast`
+  - sequential `signed-quorum-fetch-fallback-bug-*` TLC runs for all 16 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP user-prover submission admission binding
+
+- Extended release-readiness `user_prover_submission_surfaces` rows with a
+  machine-readable `sdk_helper_symbols` list for every web/mobile proof path:
+  EVM/BSC, TRON, Solana, TON, and Substrate-family.
+- Added per-SDK `sdk_helper_symbols_by_sdk` maps for the same rows, keyed by the
+  JavaScript/web, Python, Swift, Kotlin/JVM, and Java Android corridor phases, so
+  release evidence names the concrete helper symbols each portal or mobile SDK
+  exposes for proof request, native source-proof, and submission packaging.
+- Tightened those rows so every user-side prover submission surface also
+  requires the `core-admission` corridor phase. EVM/BSC and TRON still require
+  contract-smoke coverage, but no portal/mobile proof path can be published as
+  validated until generated proofs are also accepted by the core bridge
+  admission surface.
+- Hardened `scripts/sccp_verify_release_bundle.py` so public release bundles
+  reject rows where the rendered `sdk_helpers` string no longer matches the
+  structured helper-symbol list, or where any per-SDK helper map diverges from
+  the generated readiness contract. This keeps portal/mobile SDK
+  proof-generation claims auditable in JSON instead of only in prose.
+- Added release-report and release-bundle regressions for structured helper
+  symbols, per-SDK helper maps, SDK source-presence checks, helper-string drift,
+  and blocked user-prover rows when `core-admission` is missing.
+- Updated the bridge-proof docs and roadmap to describe the structured
+  user-prover submission surface and its core-admission requirement.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols_exist or blocks_without_evidence'`
+    (`2 passed, 7 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface_field_type_drift or submission_surface_helper_symbol_drift or per_sdk_helper_symbol_drift or submission_surface_drift'`
+    (`4 passed, 88 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`101 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`704 passed`)
+
+## 2026-05-31 SCCP route-canary finality role separation
+
+- Hardened all-lanes evidence validation and public release-bundle verification
+  so EVM-family and TRON route-canary `finality_height` transcript words must
+  not reuse transaction, public-input, governed lane, or canary hash roles.
+- Added evidence-preflight and release-bundle regressions that replay finality
+  height from EVM/TRON transaction identifiers and require fail-closed
+  diagnostics in both embedded readiness evidence and standalone all-lanes
+  summary JSON.
+- Updated the bridge-proof docs and roadmap to call out finality-height replay
+  under the route-canary hash role gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py -k 'finality_height or route_canary_transcript_hash_reuse'`
+    (`4 passed, 208 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`221 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`701 passed`)
+
+## 2026-05-31 SCCP release-bundle destination binding field-shape gate
+
+- Hardened public release-bundle verification for all-lanes
+  `destination_binding` rows so EVM-family lanes must publish both
+  `destination_network_id` and `destination_bridge_address`, TRON lanes must
+  publish `destination_network_id` and must not publish an EVM bridge address,
+  and static Solana, TON, and Substrate-family lanes must not publish
+  network/bridge wrapper fields.
+- Added a release-bundle regression that mutates the embedded readiness evidence
+  and standalone all-lanes summary with missing EVM/TRON destination fields and
+  misplaced static-lane network/bridge fields.
+- Updated the bridge-proof docs and roadmap to call out the public lane-specific
+  destination binding field-shape gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'destination_binding_field_shape or all_lanes_nested_crypto_field_drift or all_lanes_zero_governed_hashes'`
+    (`3 passed, 87 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`98 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`701 passed`)
+
+## 2026-05-31 Sumeragi known-block QC drain TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `known-block-qc-drain-fast`
+  and `known-block-qc-drain-bug-*` modes so the known-block QC work queue drain
+  model has independent TLC coverage for empty-queue returns, initial and
+  mid-drain tick-budget stops, per-tick cap handling, remaining-work
+  preservation, progress return projection, processed counters, debug logging,
+  and remove-before-apply ordering.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block QC work
+  queue draining as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKnownBlockQcDrainGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-qc-drain-fast`
+  - sequential `known-block-qc-drain-bug-*` TLC runs for all 18 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi known-block QC work TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `known-block-qc-work-fast`
+  and `known-block-qc-work-bug-*` modes so the known-block QC work-preparation
+  model has independent TLC coverage for empty-topology recovery, QC/block
+  shape mismatch drops, same-height locked-QC deferral and drop side effects,
+  recoverable same-height work, stale-lock drops, non-extending retention,
+  extending/no-lock work admission, and work-field preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block QC work
+  preparation as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKnownBlockQcWorkGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-qc-work-fast`
+  - sequential `known-block-qc-work-bug-*` TLC runs for all 22 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi known-block QC enqueue TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `known-block-qc-enqueue-fast` and `known-block-qc-enqueue-bug-*` modes so the
+  known-block QC work enqueue model has independent TLC coverage for canonical
+  QC vote-key projection, duplicate suppression without overwrites, new-work
+  insertion and preservation, deferred aggregate-verification status fields,
+  queued debug and length observation, and wake-sender attempt/ignore
+  semantics.
+- Updated the formal docs, CI inventory, and roadmap to mark known-block QC work
+  enqueueing as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKnownBlockQcEnqueueGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-qc-enqueue-fast`
+  - sequential `known-block-qc-enqueue-bug-*` TLC runs for all 27 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync locked-QC TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-locked-qc-fast` and `block-sync-locked-qc-bug-*` modes so the
+  block-sync locked-QC helper model has independent TLC coverage for
+  locked-chain extension checks, missing locked-payload newer-view handling,
+  parent extension and rejection, same-height conflict view gates, same-height
+  recoverability gates, locked payload deferral/quarantine/drop side effects,
+  and stale-lock predicates.
+- Updated the formal docs, CI inventory, and roadmap to mark block-sync
+  locked-QC handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncLockedQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-locked-qc-fast`
+  - sequential `block-sync-locked-qc-bug-*` TLC runs for all 22 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync QC status TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-qc-status-fast` and `block-sync-qc-status-bug-*` modes so the
+  block-sync QC status accounting model has independent TLC coverage for
+  invalid-signature drops, QC replacement and derivation-failure counters,
+  locked-QC prefilter drops, quarantine and revalidation counters, final-drop
+  count/reason projection, snapshot projection, counter accumulation, and reset
+  clearing.
+- Added a terminal stutter step to
+  `docs/formal/sumeragi/SumeragiBlockSyncQcStatusGate.tla` so TLC can exhaust
+  the bounded 20-step status walk without reporting a terminal deadlock.
+- Updated the formal docs, CI inventory, and roadmap to mark block-sync QC
+  status accounting as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncQcStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-qc-status-fast`
+  - sequential `block-sync-qc-status-bug-*` TLC runs for all 24 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi block-sync QC fallback TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `block-sync-qc-fallback-fast` and `block-sync-qc-fallback-bug-*` modes so the
+  block-sync QC retry/fallback helper model has independent TLC coverage for
+  retryable missing-context QC errors, non-retryable malformed-certificate
+  errors, COMMIT-only aggregate fallback, nested highest-QC rejection,
+  aggregate and bitmap validity, permissioned quorum floors, and NPoS
+  snapshot/stake-quorum rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark block-sync QC
+  retry/fallback handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncQcFallbackGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-qc-fallback-fast`
+  - sequential `block-sync-qc-fallback-bug-*` TLC runs for all 19 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi QC validation reason TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `qc-validation-reason-fast` and `qc-validation-reason-bug-*` modes so the QC
+  validation reason projection model has independent TLC coverage for stable
+  telemetry labels on every QC validation error, hard failures emitting
+  evidence with the same label, and soft local-context/quorum failures retaining
+  telemetry labels without evidence.
+- Updated the formal docs, CI inventory, and roadmap to mark QC validation
+  reason/evidence label projection as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcValidationReasonGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-validation-reason-fast`
+  - sequential `qc-validation-reason-bug-*` TLC runs for all 17 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi QC validation evidence TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `qc-validation-evidence-fast` and `qc-validation-evidence-bug-*` modes so the
+  QC validation evidence mapping model has independent TLC coverage for hard
+  malformed-certificate errors that emit cloned `InvalidQc` evidence with the
+  original validation reason, soft local-context or quorum failures that must
+  not emit evidence, successful validation returning `Ok`, and validation
+  errors remaining errors.
+- Updated the formal docs, CI inventory, and roadmap to mark QC validation
+  evidence mapping as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcValidationEvidenceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-validation-evidence-fast`
+  - sequential `qc-validation-evidence-bug-*` TLC runs for all 24 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi invalid-QC-shape TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `invalid-qc-shape-fast` and
+  `invalid-qc-shape-bug-*` modes so the invalid-QC shape evidence constructor
+  model has independent TLC coverage for empty signer bitmaps, zero height/view
+  sentinel handling, height-zero or view-zero non-emitting cases, valid
+  nonempty QCs, evidence kind selection, certificate payload cloning, and fixed
+  diagnostic reason handling.
+- Updated the formal docs, CI inventory, and roadmap to mark invalid-QC shape
+  handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiInvalidQcShapeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh invalid-qc-shape-fast`
+  - sequential `invalid-qc-shape-bug-*` TLC runs for all 16 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi double-vote-recording TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `double-vote-recording-fast` and `double-vote-recording-bug-*` modes so the
+  double-vote detection and recording model has independent TLC coverage for
+  height, epoch, topology-resolved signer identity, block/root conflict
+  detection, phase-pair support, canonical evidence kind/key selection,
+  no-evidence side effects, store rejection, persistence calls, persistence
+  rejection, and duplicate handling.
+- Updated the formal docs, CI inventory, and roadmap to mark double-vote
+  detection/recording as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiDoubleVoteRecordingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh double-vote-recording-fast`
+  - sequential `double-vote-recording-bug-*` TLC runs for all 37 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi evidence-validation TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `evidence-validation-fast`
+  and `evidence-validation-bug-*` modes so the fail-closed evidence validation
+  model has independent TLC coverage for kind/payload matching, double-vote
+  signature, phase, height, epoch, signer, block/root conflict, and precedence
+  checks, invalid proposal height, parent, and view-reset handling, and
+  censorship receipt transaction, signer, signature, quorum, deduplication, and
+  precedence checks.
+- Updated the formal docs, CI inventory, and roadmap to mark evidence
+  validation as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEvidenceValidationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh evidence-validation-fast`
+  - sequential `evidence-validation-bug-*` TLC runs for all 39 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Kotodama production prelude helper scan
+
+- Fixed Rust and JavaScript Kotodama production compilation so first-release
+  prelude helper injection scans the production-visible program after
+  `#[test]` functions are stripped. Test-only calls no longer add helpers to
+  production artifacts, and stripped test definitions no longer shadow helpers
+  needed by real code.
+- Added matching Rust and JavaScript regressions for test-only
+  `require_authority` calls and stripped `require_authority` test definitions
+  alongside production `require_owner` usage.
+- Validation:
+  - `cargo test -p kotodama_lang production_prelude_scan_ignores_stripped_tests -- --nocapture`
+  - `node --test test/kotodamaCompiler.test.js --test-name-pattern "ignores stripped tests when injecting first-release prelude helpers"`
+  - `npm run build:dist`
+  - `git diff --check`
+
+## 2026-05-31 SCCP release-bundle artifact digest canonicalization
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so manifest artifacts and
+  readiness-report artifact references must carry canonical lowercase
+  64-character SHA-256 hex text before byte/hash equality checks run. This
+  rejects uppercase, short, non-string, or otherwise ambiguous digest fields
+  instead of letting public release notes carry noncanonical artifact bindings.
+- Added a release-bundle regression that mutates both a manifest artifact digest
+  and a readiness-report input artifact digest while keeping the rest of the
+  bundle structurally valid.
+- Updated the bridge-proof docs and roadmap to call out canonical artifact
+  digest binding for strict public release bundles.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'artifact_field_type_drift or artifact_digest_text_drift'`
+    (`2 passed, 87 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`89 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`699 passed`)
+
+## 2026-05-31 Sumeragi evidence-canonicalization TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `evidence-canonicalization-fast` and `evidence-canonicalization-bug-*` modes
+  so the evidence canonicalization/deduplication model has independent TLC
+  coverage for canonical keys, subject height/view extraction, block references,
+  valid/invalid store insertion, canonical storage keys, persistence defaults,
+  duplicate rejection, and unset penalty flags.
+- Updated the formal docs, CI inventory, and roadmap to mark evidence
+  canonicalization/deduplication as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEvidenceCanonicalizationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast`
+  - sequential `evidence-canonicalization-bug-*` TLC runs for all 37 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle domain roster gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes
+  `required_domains` and lane domains must exactly match the production remote
+  SCCP domain roster, and each lane's `chain` label must match that domain.
+  Unknown or relabeled lanes now fail before route-canary schema fallout.
+- Added a release-bundle regression that rewrites the first lane to domain `99`
+  and relabels the BSC lane as `eth` in both public all-lanes artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'unknown_domain_and_chain_drift or all_lanes_required_domain_drift or all_lanes_nested_crypto_field_drift'`
+    (`3 passed, 85 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`88 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`698 passed`)
+
+## 2026-05-31 Sumeragi evidence-horizon TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `evidence-horizon-fast` and
+  `evidence-horizon-bug-*` modes so the evidence freshness horizon model has
+  independent TLC coverage for zero-horizon disablement, missing-subject
+  defaulting, saturating lower-bound arithmetic, inclusive boundary handling,
+  stale rejection, and future evidence admission.
+- Updated the formal docs, CI inventory, and roadmap to mark evidence freshness
+  horizon filtering as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEvidenceHorizonGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast`
+  - sequential `evidence-horizon-bug-*` TLC runs for all 11 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle corridor blocker gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public readiness-report
+  corridor roots must keep `blockers = []`. The verifier now rejects blocked
+  corridor roots directly in schema validation instead of relying only on the
+  later phase-status recomputation path.
+- Added a release-bundle regression that injects a valid non-empty corridor
+  blocker while leaving top-level ready flags intact, proving the verifier emits
+  both the direct corridor blocker error and the production-corridor blocker
+  error.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'corridor_blockers or corridor_unknown_fields or all_lanes_list_scalar_type_drift'`
+    (`3 passed, 84 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`94 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`697 passed`)
+
+## 2026-05-31 Sumeragi vote duplicate-key TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vote-duplicate-key-fast` and
+  `vote-duplicate-key-bug-*` modes so the vote duplicate raw-key and identity
+  projection model has independent TLC coverage for raw key fields, public-key
+  exclusion from raw keys, identity-key public-key binding, block-hash
+  comparison, NEW_VIEW highest-QC matching, and non-NEW_VIEW highest-QC
+  ignoring.
+- Updated the formal docs, CI inventory, and roadmap to mark vote duplicate-key
+  handling as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteDuplicateKeyGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast`
+  - sequential `vote-duplicate-key-bug-*` TLC runs for all 15 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle required source-gate ready gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so required Solana, TON, and
+  TRON `source_adapter_gate` rows in public release bundles must have
+  `ready = true` and empty `blockers`. This closes the valid diagnostic state
+  where a required gate could be published as blocked while top-level release
+  flags remained ready.
+- Added a release-bundle regression that marks the Solana required source gate
+  not ready with a valid blocker in both public all-lanes artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'required_source_gate_not_ready or required_source_gate_ready_without_audits or source_gate_domain_policy_drift or zero_source_gate_hashes'`
+    (`4 passed, 82 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`86 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`696 passed`)
+
+## 2026-05-31 Sumeragi vote-admission TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vote-admission-fast` and
+  `vote-admission-bug-*` modes so the classic inbound vote-admission model has
+  independent TLC coverage for early height/view, lock, roster, duplicate,
+  chain-order, and signature gates; NEW_VIEW highest-QC validation;
+  conflict/defer/evidence handling; QC attempts; roster caching; new-view
+  tracking; pipeline requests; and progress touches.
+- Updated the formal docs, CI inventory, and roadmap to mark classic inbound
+  vote admission as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-admission-fast`
+  - sequential `vote-admission-bug-*` TLC runs for all 31 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-05-31 Sumeragi VRF penalties-report TLC cross-check
+
+- Added an explicit stutter step to `SumeragiVrfPenaltiesReportGate.tla` so TLC
+  can exhaust the bounded report-store case counter without a terminal-state
+  deadlock.
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-penalties-report-fast` and
+  `vrf-penalties-report-bug-*` modes so the VRF penalties report storage model
+  has independent TLC coverage for initial emptiness, update keying/latest-epoch
+  tracking, exact report fields, same-epoch replacement, multi-epoch
+  preservation, missing-get behavior, clear/reset semantics, post-clear updates,
+  and read side-effect freedom.
+- Updated the formal docs, CI inventory, and roadmap to mark VRF penalties
+  report storage as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfPenaltiesReportGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast`
+  - sequential `vrf-penalties-report-bug-*` TLC runs for all 17 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle submission-surface readiness gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public
+  `user_prover_submission_surfaces` rows must have
+  `validation_status = "passed"` and empty `validation_blockers`. This makes
+  blocked portal/mobile proof paths fail directly instead of relying only on the
+  broader corridor-derived table mismatch.
+- Added a release-bundle regression that marks the first submission surface
+  blocked with a valid blocker string and proves the verifier emits direct
+  status/blocker errors.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'blocked_submission_surface or submission_surface_field_type_drift or submission_surface_drift'`
+    (`3 passed, 82 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`85 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`695 passed`)
+
+## 2026-05-31 Sumeragi VRF local-state TLC cross-check
+
+- Added an explicit stutter step to `SumeragiVrfLocalStateGate.tla` so TLC can
+  exhaust the one-step local emission state model without a terminal-state
+  deadlock.
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-local-state-fast` and
+  `vrf-local-state-bug-*` modes so the local VRF emission state model has
+  independent TLC coverage for supported-mode state creation, unsupported-mode
+  preservation, epoch-switch material reset, same-epoch material preservation,
+  commit/reveal note mutation, and actor reset.
+- Updated the formal docs, CI inventory, and roadmap to mark local VRF emission
+  state as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfLocalStateGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast`
+  - sequential `vrf-local-state-bug-*` TLC runs for all 12 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle all-lanes root blocker gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so the public all-lanes
+  summary roots embedded in readiness reports and published standalone must keep
+  `blockers = []` when claiming launch readiness. This closes the remaining
+  valid-JSON path where root blockers could coexist with top-level ready flags.
+- Added a release-bundle regression that injects a manual root blocker into both
+  public all-lanes artifacts and proves the verifier emits root-specific blocker
+  failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'all_lanes_root_blockers or all_lanes_lane_not_ready or all_lanes_list_scalar_type_drift'`
+    (`3 passed, 81 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`91 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`695 passed`)
+
+## 2026-05-31 SCCP release-bundle nested readiness gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so ready public all-lanes
+  lane rows must carry `true` for every nested evidence record flag, and
+  release-checklist items must be ready and blocker-free. This closes the
+  fail-open path where a production bundle could keep top-level ready flags
+  while advertising a missing nested evidence record or blocked checklist row.
+- Added focused release-bundle regressions that flip all first-lane record flags
+  false and mark a release-checklist item blocked in both public artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'missing_record_flags or release_checklist_blocked_items or release_checklist_field_type_drift or release_checklist_boolean_type_drift'`
+    (`3 passed, 80 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`83 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`693 passed`)
+
+## 2026-05-31 Sumeragi VRF material-derivation TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `vrf-material-derivation-fast` and `vrf-material-derivation-bug-*` modes so
+  the local VRF material derivation model has independent TLC coverage for
+  required message inputs, big-endian epoch and signer encoding, field order,
+  private-key signature binding, reveal/commitment hash chain, return ordering,
+  and suppression of raw intermediate outputs.
+- Updated the formal docs, CI inventory, and roadmap to mark local VRF material
+  derivation as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfMaterialDerivationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast`
+  - sequential `vrf-material-derivation-bug-*` TLC runs for all 17 mutation
+    configs, all producing the expected invariant failure
+
+## 2026-05-31 Sumeragi VRF epoch-restore TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-epoch-restore-fast` and
+  `vrf-epoch-restore-bug-*` modes so the VRF epoch restore/snapshot/merge model
+  has independent TLC coverage for unfinalized and finalized record hydration,
+  parameter clamps, snapshot roster and input preservation, report clearing,
+  merge conflict handling, late-reveal hydration, and identity preservation.
+- Updated the formal docs, CI inventory, and roadmap to mark VRF epoch restore
+  as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfEpochRestoreGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast`
+  - sequential `vrf-epoch-restore-bug-*` TLC runs for all 22 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle cross-lane route-canary replay gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes
+  `route_canary.evidence_hash` values must be unique across lanes and cannot
+  reuse another lane's governed source material, source-adapter deployment,
+  destination binding, or route allowlist hashes. This mirrors the all-lanes
+  preflight's cross-lane route-canary replay gate in public bundle review.
+- Added a release-bundle regression that mutates embedded readiness evidence and
+  the standalone all-lanes summary to replay one lane's canary evidence hash and
+  another lane's source-adapter deployment hash, proving both public artifacts
+  fail with lane-specific errors.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'cross_lane_route_canary_evidence_replay or route_canary_evidence_hash_role_reuse'`
+    (`2 passed, 79 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`89 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`693 passed`)
+
+## 2026-05-31 Sumeragi VRF epoch-boundary TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-epoch-boundary-fast` and
+  `vrf-epoch-boundary-bug-*` modes so the VRF epoch-boundary finalization model
+  has independent TLC coverage for no-op boundaries, penalty calculation,
+  snapshot preservation, seed evolution, clear/advance/reset/take semantics,
+  roster canonicalization, and entropy ordering.
+- Updated the formal docs, CI inventory, and roadmap to mark VRF epoch-boundary
+  finalization as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfEpochBoundaryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast`
+  - sequential `vrf-epoch-boundary-bug-*` TLC runs for all 23 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle lane readiness gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so every published
+  all-lanes lane in the readiness report and standalone summary must have
+  `production_ready = true` and an empty `blockers` list. This makes a
+  non-ready or operator-blocked lane fail directly instead of relying only on
+  copied-evidence recomputation drift.
+- Added a release-bundle regression that marks the first lane not ready and
+  adds a manual blocker in both public all-lanes artifacts, proving the verifier
+  emits lane-specific ready/blocker failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'all_lanes_lane_not_ready or all_lanes_list_scalar_type_drift or all_lanes_root_shape_drift'`
+    (`2 passed, 77 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`79 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`690 passed`)
+
+## 2026-05-31 SCCP mobile corridor JDK fallback
+
+- Hardened `scripts/check_sccp_production_corridor.sh` so Kotlin and Java
+  Android phases do not continue with an empty `JAVA_HOME` when macOS
+  `/usr/libexec/java_home -v 21` is unavailable. The resolver now validates the
+  macOS path and falls back to Homebrew `openjdk@21` installations after the
+  explicit and repo-local JDK locations.
+- Added a corridor-runner regression that keeps the Homebrew JDK fallback and
+  improved diagnostic visible in the SCCP production corridor tests.
+- Revalidated the user-side proof-generation SDK corridor: JavaScript, Python,
+  Swift, Kotlin/JVM, and mirrored Java Android SCCP phases all pass locally with
+  the corrected resolver. The current focused SCCP corridor has also been
+  checked phase-by-phase through evidence scripts, EVM/TRON contract smoke, the
+  Rust verifier crate, and core bridge-proof admission.
+- Validation:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`10 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk --phase python-sdk`
+    (`js-sdk`: 129 Node tests passed; `python-sdk`: 77 pytest tests passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`SccpSolanaProverTests`: 72 tests passed; Torii submit-payload test passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (both Gradle invocations `BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`236 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`698 passed`)
+
+## 2026-05-31 Sumeragi VRF epoch-window TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-epoch-window-fast` and
+  `vrf-epoch-window-bug-*` modes so the VRF epoch-window arithmetic model has
+  independent TLC coverage for zero-length and offset clamping,
+  zero-height/one-based position and epoch mapping, commit/reveal window
+  boundaries, empty reveal windows, and outside-window rejection.
+- Updated the formal docs, CI inventory, and roadmap to mark VRF epoch-window
+  arithmetic as a TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfEpochWindowGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast`
+  - sequential `vrf-epoch-window-bug-*` TLC runs for all 17 mutation configs,
+    all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle route-canary evidence role gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes
+  `route_canary.evidence_hash` values cannot replay governed source material,
+  source-adapter deployment, destination binding, route allowlist, or
+  lane-specific canary transcript hashes. The public verifier now mirrors the
+  all-lanes route-canary role separation instead of relying only on copied
+  evidence recomputation.
+- Added a release-bundle regression that mutates embedded readiness evidence and
+  the standalone all-lanes summary across EVM, Solana, TON, and
+  Substrate-family lanes, proving replayed route-canary evidence hashes fail
+  with field-specific public verifier errors.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'route_canary_evidence_hash_role_reuse or all_lanes_route_canary_hash_drift'`
+    (`2 passed, 78 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`87 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`690 passed`)
+
+## 2026-05-31 Sumeragi VRF admission TLC cross-check
+
+- Extended `scripts/formal/sumeragi_tlc.sh` with `vrf-admission-fast` and
+  `vrf-admission-bug-*` modes so the existing VRF commit/reveal admission model
+  has independent TLC coverage for consensus-mode and epoch-manager gating,
+  signer/signature checks, commit/reveal window and duplicate handling, external
+  rebroadcast policy, local state updates, and late-reveal PRF refresh
+  suppression.
+- Updated the formal docs, CI inventory, and roadmap to mark VRF admission as a
+  TLC-cross-checked Sumeragi helper.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVrfMessageAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast`
+  - sequential `vrf-admission-bug-*` TLC runs for all 21 mutation configs, all
+    producing the expected invariant failure
+
+## 2026-05-31 SCCP cryptographic evidence zero-hash row gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public
+  `cryptographic_evidence` rows reject all-zero bytes32 hashes for source
+  verifier material, source-adapter deployment, destination binding, route
+  allowlist, and route-canary evidence instead of only checking canonical hex
+  shape.
+- Added a release-bundle regression that zeroes every governed hash in the
+  first public crypto row while leaving embedded lane evidence unchanged,
+  proving the verifier emits field-specific non-zero failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'crypto_evidence_zero_hashes or crypto_evidence_field_type_drift or crypto_evidence_field_binding_drift or crypto_evidence_hash_drift'`
+    (`4 passed, 74 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`78 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`687 passed`)
+
+## 2026-05-31 Sumeragi same-height no-proposal storm TLC cross-check
+
+- Strengthened `SumeragiSameHeightNoProposalStormGate.tla` with direct TLC
+  anchors over dependency-progress monotonicity, progress-triggered state
+  resets, timeout record/count behavior, bounded force-break admission and
+  cleanup, and active-pending idle timeout integration.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `same-height-no-proposal-storm-fast` and
+  `same-height-no-proposal-storm-bug-*` modes so the helper has independent TLC
+  coverage for the same thirty-six expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSameHeightNoProposalStormGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast`
+  - sequential `same-height-no-proposal-storm-bug-*` TLC runs for all 36
+    mutation configs, all producing the expected invariant failure
+
+## 2026-05-31 SCCP release-bundle destination bridge address gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so any published
+  `destination_binding.destination_bridge_address` in public all-lanes JSON
+  must be a non-zero canonical 20-byte hex address. This closes the remaining
+  placeholder bridge-wrapper path where an all-zero EVM destination address could
+  otherwise pass attachment review when the field shape was canonical.
+- Extended the governed-hash release-bundle regression to zero the destination
+  bridge address in both embedded readiness evidence and the standalone
+  all-lanes summary, proving both public artifacts fail with field-specific
+  non-zero address errors.
+- Updated the bridge-proof docs and roadmap to call out the public
+  release-bundle zero destination bridge-address gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'zero_governed_hashes or all_lanes_nested_crypto_field_drift'`
+    (`2 passed, 75 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`84 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`686 passed`)
+
+## 2026-05-31 Sumeragi frontier recovery advance TLC cross-check
+
+- Strengthened `SumeragiFrontierRecoveryAdvanceGate.tla` with direct TLC anchors
+  over reason-to-cause mapping, committed+1 gating, committed-edge and passive
+  catch-up preemption, same-height evidence seeding, exact-frontier event
+  routing, actionable dependency state updates, live-work/cooldown suppression,
+  catch-up range-pull and cleanup transitions, and rotate-armed view-change
+  behavior.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-recovery-advance-fast` and `frontier-recovery-advance-bug-*` modes
+  so contiguous-frontier recovery advance has independent TLC coverage for the
+  same thirty-six expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecoveryAdvanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast`
+  - sequential `frontier-recovery-advance-bug-*` TLC runs for all 36 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecoveryAdvanceGate.tla docs/formal/sumeragi/SumeragiFrontierRecoveryAdvanceGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP required source-gate release verifier
+
+- Wired the release-bundle verifier's source-adapter gate coherence checks into
+  public all-lanes lane validation. Required Solana/TON/TRON source gates now
+  fail release review when they are marked ready with an empty, zero, or
+  audit-unbacked `gate_hash`, missing/zero audit hashes, unexpected or missing
+  lane-specific audit keys, or non-empty blockers. Lanes without a source gate
+  now also fail closed if they carry gate hashes, audit hashes, blockers, or a
+  non-ready state.
+- Added release-bundle regressions that mutate both the embedded readiness
+  evidence and standalone all-lanes summary for ready-without-audits and
+  unbacked-gate-hash cases, plus domain-policy drift and required audit-key
+  drift.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_gate_domain_policy_drift or source_gate_audit_key_drift or required_source_gate_ready_without_audits or required_source_gate_unbacked_hash or zero_source_gate_hashes or all_lanes_nested_crypto_field_drift'`
+    (`6 passed, 71 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`77 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`686 passed`)
+
+## 2026-05-31 Sumeragi frontier repair view-change TLC cross-check
+
+- Strengthened `SumeragiFrontierRepairViewChangeGate.tla` with direct TLC
+  anchors over quorum/stake-quorum cause admission, committed+1 height gating,
+  committed-edge and passive catch-up precedence, direct-view and
+  authoritative-payload exits, exact-repair/missing-payload/reassembly
+  repair-source admission, recovery seeding, urgent body fetch emission, and
+  precedence ordering.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `frontier-repair-view-change-fast` and `frontier-repair-view-change-bug-*`
+  modes so contiguous-frontier repair view-change suppression has independent
+  TLC coverage for the same twenty-six expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRepairViewChangeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast`
+  - sequential `frontier-repair-view-change-bug-*` TLC runs for all 26 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRepairViewChangeGate.tla docs/formal/sumeragi/SumeragiFrontierRepairViewChangeGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Sumeragi canonical frontier reanchor TLC cross-check
+
+- Strengthened `SumeragiCanonicalFrontierReanchorGate.tla` with direct TLC
+  anchors over canonical reanchor reason admission, shared frontier-window key
+  collapse, window snapshot and dependency-progress watermarks, stride-based
+  suppression, deterministic range-pull fanout and cooldown handling,
+  successful-send marking, and quorum view-change suppression while reanchor
+  work remains unresolved.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `canonical-frontier-reanchor-fast` and `canonical-frontier-reanchor-bug-*`
+  modes so canonical contiguous-frontier reanchor gating has independent TLC
+  coverage for the same thirty-five expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCanonicalFrontierReanchorGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh canonical-frontier-reanchor-fast`
+  - sequential `canonical-frontier-reanchor-bug-*` TLC runs for all 35 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiCanonicalFrontierReanchorGate.tla docs/formal/sumeragi/SumeragiCanonicalFrontierReanchorGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 SCCP release-bundle governed lane hash gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes lane
+  summaries reject zero source verifier material hashes, source adapter
+  deployment hashes, destination binding hashes, expected destination binding
+  hashes, destination network ids, route allowlist hashes, and expected route
+  allowlist hashes instead of accepting canonical all-zero bytes32 text.
+- Added a release-bundle regression that zeroes those governed lane hashes in
+  both embedded readiness evidence and the standalone all-lanes summary,
+  proving the public verifier emits field-specific non-zero failures.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'all_lanes_zero_governed_hashes or all_lanes_nested_crypto_field_drift or evm_route_canary_governed_hash_reuse or tron_route_canary_governed_hash_reuse'`
+    (`4 passed, 67 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`72 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`681 passed`)
+
+## 2026-05-31 SCCP Substrate public runtime-canary hash gate
+
+- Extended `scripts/sccp_all_lanes_evidence.py` so Substrate-family
+  route-canary summaries publish `substrate_runtime_code_hash` alongside the
+  finalized head and runtime version metadata already bound into the canary
+  digest.
+- Hardened `scripts/sccp_verify_release_bundle.py` so public readiness and
+  all-lanes JSON reject missing/zero `substrate_runtime_code_hash` values and
+  reject Substrate route-canary finalized-head/runtime-code hashes that reuse
+  governed source, route, or destination hash roles.
+- Added all-lanes and release-bundle regressions for Substrate finalized-head
+  role reuse, zero runtime canary hashes, and public runtime-code hash role
+  reuse.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`7 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`122 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`72 passed`)
+
+## 2026-05-31 Sumeragi missing-QC stall range-pull TLC cross-check
+
+- Strengthened `SumeragiMissingQcStallRangePullGate.tla` with a finite TLC
+  stutter path plus direct anchors for same-height stall reanchor reason
+  admission, exact active/canonical height gating, already-emitted and
+  recovery-FSM suppression, empty-target suppression, deterministic cohort
+  fanout, sorted/deduplicated cooldown handling, stall-window cooldown
+  application, and successful-send marking.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-qc-stall-range-pull-fast` and
+  `missing-qc-stall-range-pull-bug-*` modes so same-height missing-QC stall
+  range-pull emission has independent TLC coverage for the same twenty-three
+  expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcStallRangePullGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-stall-range-pull-fast`
+  - sequential `missing-qc-stall-range-pull-bug-*` TLC runs for all 23 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiMissingQcStallRangePullGate.tla docs/formal/sumeragi/SumeragiMissingQcStallRangePullGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
+## 2026-05-31 Sumeragi missing-QC height stall TLC cross-check
+
+- Strengthened `SumeragiMissingQcHeightStallGate.tla` with a finite TLC stutter
+  path plus direct anchors for snapshot lifecycle, three-window activation,
+  active window advancement, dependency-progress and commit-progress reset,
+  dependency continuity across reclassification, rotation reservation and
+  availability, and range-pull/rotation marker height and mode gating.
+- Extended `scripts/formal/sumeragi_tlc.sh` with
+  `missing-qc-height-stall-fast` and `missing-qc-height-stall-bug-*` modes so
+  same-height missing-QC stall dampening has independent TLC coverage for the
+  same twenty-five expected-failure configs as Apalache.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcHeightStallGate.tla`
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" TLA2TOOLS_JAR=target/tla2tools/tla2tools-1.7.4.jar bash scripts/formal/sumeragi_tlc.sh missing-qc-height-stall-fast`
+  - sequential `missing-qc-height-stall-bug-*` TLC runs for all 25 mutation
+    configs, all producing the expected invariant failure
+  - `git diff --check -- docs/formal/sumeragi/SumeragiMissingQcHeightStallGate.tla docs/formal/sumeragi/SumeragiMissingQcHeightStallGate_fast.cfg scripts/formal/sumeragi_tlc.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+
 ## 2026-05-31 Kagemusha final MSM and verifier-key coverage
 
 - Resolved stale recursive-verifier TODO wording on the low-level non-native
@@ -1619,6 +6937,51 @@ Last updated: 2026-06-01
     (`76 passed`)
   - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
     (`677 passed`)
+
+## 2026-05-31 SCCP Solana release-bundle route-canary address gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so published Solana
+  route-canary `solana_programdata_address` fields must be non-zero canonical
+  32-byte base58 addresses, matching the ProgramData identity checks used by the
+  live ProgramData evidence preflight.
+- Added a release-bundle regression that replaces the Solana ProgramData
+  route-canary address with the canonical all-zero Solana pubkey in both
+  embedded readiness evidence and the standalone all-lanes summary, proving the
+  public verifier rejects both artifacts.
+- Updated the bridge-proof docs and roadmap to call out the public
+  release-bundle ProgramData address gate for Solana route canaries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'solana_route_canary_zero_programdata_address or all_lanes_route_canary_field_drift'`
+    (`2 passed, 70 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`79 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`681 passed`)
+
+## 2026-05-31 SCCP release-bundle source-adapter gate non-zero hash gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so public all-lanes
+  `source_adapter_gate.gate_hash` values must be empty or non-zero canonical
+  bytes32 values, and every published `source_adapter_gate.audit_hashes` value
+  must be a non-zero canonical bytes32 value. This mirrors the all-lanes
+  preflight's Solana, TON, and TRON source-adapter gate hash requirements.
+- Added a release-bundle regression that zeroes the Solana source-adapter gate
+  hash and all Solana full-light-client audit hashes in both embedded readiness
+  evidence and the standalone all-lanes summary, proving the public verifier
+  rejects both artifacts.
+- Updated the bridge-proof docs and roadmap to call out the public
+  release-bundle source-adapter gate hash rejection.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'zero_source_gate_hashes or zero_governed_hashes or all_lanes_nested_crypto_field_drift'`
+    (`3 passed, 70 deselected`)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`80 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`682 passed`)
 
 ## 2026-05-31 Sumeragi frontier parent-QC hint retarget TLC cross-check
 
@@ -9228,22 +14591,23 @@ Last updated: 2026-06-01
   checks the carried raw-data owner, visible owner, recovered signer, signature
   hash, and single-signature count before declaring a replayed live summary
   ready for offline production TOML rendering.
-- The canonical `sccp:tron-route-canary-evidence:v2` hash commits the
-  transaction owner, raw-data owner binding flag, signature SHA-256, recovered
-  signer address, recovery flag, exact `submitSccpMessageProof(...)` calldata
-  SHA-256, decoded payload hash, target-domain word, finality-height word,
-  finality block hash, proof version, and proof source domain. Direct TRON
+- The canonical `iroha:sccp:tron-route-canary-evidence:v3` hash commits the
+  transaction owner, transaction block number/timestamp, raw-data owner binding
+  flag, signature SHA-256, recovered signer address, recovery flag, exact
+  `submitSccpMessageProof(...)` calldata SHA-256, decoded payload hash,
+  target-domain word, finality-height word, finality block hash, proof version,
+  and proof source domain. Direct TRON
   TOML, live replay, all-lanes preflight, and Rust readiness now reject
   route-canary records whose call transcript drifts while the emitted
   `MessageProofAccepted` event tuple remains the same.
 - Runtime config, Torii conversion, core all-lanes validation helpers, bridge
-  proof fixtures, and ZK consensus policy hashing now carry the TRON v2 call
+  proof fixtures, and ZK consensus policy hashing now carry the TRON v3 call
   transcript fields as first-class `tron_route_canary_*` route records instead
   of dropping them after TOML parsing. The consensus policy hash now also
   commits the existing EVM route-canary transaction fields so governed launch
   material cannot drift outside the signed policy digest.
 - Rust builder coverage now also proves the TRON route-canary helper refuses to
-  attach evidence when the v2 transcript uses a zero calldata hash, zero payload
+  attach evidence when the v3 transcript uses a zero calldata hash, zero payload
   hash, wrong target domain, zero finality words, wrong proof version, or wrong
   proof source domain.
 - Saved live JSON summaries are revalidated before offline full-TOML rendering:

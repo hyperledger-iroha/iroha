@@ -352,4 +352,50 @@ SafetyFast ==
   /\ SeedAndFetchSafety
   /\ PrecedenceSafety
 
+CauseAnchors ==
+  /\ CauseSafety
+  /\ \A c \in CauseCases : ImplementationActions(c) = SpecActions(c)
+
+EarlyExitAnchors ==
+  /\ EarlyExitSafety
+  /\ ImplementationActions(NonFrontierHeight) = SpecActions(NonFrontierHeight)
+  /\ ImplementationActions(CommittedEdgeSuppression) = SpecActions(CommittedEdgeSuppression)
+  /\ ImplementationActions(PassiveCatchupSuppression) = SpecActions(PassiveCatchupSuppression)
+  /\ ImplementationActions(DirectAdvanceRequest) = SpecActions(DirectAdvanceRequest)
+  /\ ImplementationActions(AuthoritativePayload) = SpecActions(AuthoritativePayload)
+
+RepairSourceAnchors ==
+  /\ RepairSourceSafety
+  /\ ImplementationActions(NoRepairActive) = SpecActions(NoRepairActive)
+  /\ ImplementationActions(ExactRepairActive) = SpecActions(ExactRepairActive)
+  /\ ImplementationActions(ExactRepairViewMismatch) = SpecActions(ExactRepairViewMismatch)
+  /\ ImplementationActions(ExactRepairUnarmed) = SpecActions(ExactRepairUnarmed)
+  /\ ImplementationActions(ExactRepairBodyPresent) = SpecActions(ExactRepairBodyPresent)
+  /\ ImplementationActions(ExactRepairWrongMode) = SpecActions(ExactRepairWrongMode)
+  /\ ImplementationActions(MissingPayloadRecoveryActive) = SpecActions(MissingPayloadRecoveryActive)
+  /\ ImplementationActions(ReassemblyActive) = SpecActions(ReassemblyActive)
+  /\ ImplementationActions(MultipleRepairSources) = SpecActions(MultipleRepairSources)
+
+SeedAndFetchAnchors ==
+  /\ SeedAndFetchSafety
+  /\ ImplementationActions(RepairExistingFrontierSlotSeed) = SpecActions(RepairExistingFrontierSlotSeed)
+  /\ ImplementationActions(RepairNoSlotSeedFromEvidence) = SpecActions(RepairNoSlotSeedFromEvidence)
+  /\ ImplementationActions(RepairExistingRecoveryNoSeed) = SpecActions(RepairExistingRecoveryNoSeed)
+  /\ ImplementationActions(RepairNoEvidenceCreatesCatchup) = SpecActions(RepairNoEvidenceCreatesCatchup)
+
+PrecedenceAnchors ==
+  /\ PrecedenceSafety
+  /\ ImplementationActions(CommitEdgePreemptsDirectAdvance) = SpecActions(CommitEdgePreemptsDirectAdvance)
+  /\ ImplementationActions(PassivePreemptsAuthoritative) = SpecActions(PassivePreemptsAuthoritative)
+
+FrontierRepairViewChangeSafetyAnchors ==
+  /\ CauseAnchors
+  /\ EarlyExitAnchors
+  /\ RepairSourceAnchors
+  /\ SeedAndFetchAnchors
+  /\ PrecedenceAnchors
+
+Safety ==
+  FrontierRepairViewChangeSafetyAnchors
+
 ====

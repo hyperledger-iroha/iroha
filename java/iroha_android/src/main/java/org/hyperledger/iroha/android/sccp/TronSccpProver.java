@@ -18,6 +18,7 @@ public final class TronSccpProver {
   public static final int DOMAIN_TRON = SourceSccpProofs.DOMAIN_TRON;
   public static final String GROTH16_BN254_PROOF_BACKEND_V1 = "tron-groth16-bn254-v1";
   public static final int GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
+  public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   public static final String CONTRACT_CALL_ABI_TUPLE_V1 = "tron_abi_tuple_v1";
   public static final String SUBMIT_MESSAGE_PROOF_ABI_V1 =
       "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
@@ -25,6 +26,11 @@ public final class TronSccpProver {
 
   private static final String PROOF_REQUEST_PREFIX_V1 = "sccp:tron:groth16-proof-request:v1";
   private static final String PROOF_ENVELOPE_PREFIX_V1 = "sccp:tron:groth16-proof-envelope:v1";
+  private static final String ROUTE_CANARY_EVIDENCE_PREFIX_V3 =
+      "iroha:sccp:tron-route-canary-evidence:v3";
+  private static final String ROUTE_ALLOWLIST_PREFIX_V1 = "sccp:route-allowlist:lane-evidence:v1";
+  private static final String TRON_ROUTE_ALLOWLIST_ID_V1 =
+      "sccp:tron:route-allowlist:tron-mainnet:v1";
   private static final String STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
   private static final String SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 =
       "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)";
@@ -137,6 +143,179 @@ public final class TronSccpProver {
     return out.toByteArray();
   }
 
+  public static byte[] canonicalRouteCanaryEvidenceBytes(
+      final RouteCanaryEvidenceInput input) {
+    return normalizeRouteCanaryEvidence(input).payload();
+  }
+
+  public static String routeCanaryEvidenceHash(final RouteCanaryEvidenceInput input) {
+    final NormalizedRouteCanaryEvidence evidence = normalizeRouteCanaryEvidence(input);
+    final byte[] digest = hashBytes(ROUTE_CANARY_EVIDENCE_PREFIX_V3, evidence.payload());
+    if (Arrays.equals(digest, evidence.routeAllowlistHash())
+        || Arrays.equals(digest, evidence.destinationBindingHash())
+        || Arrays.equals(digest, evidence.sourceVerifierMaterialHash())
+        || Arrays.equals(digest, evidence.sourceAdapterEngineDeploymentHash())) {
+      throw new IllegalArgumentException(
+          "routeCanaryEvidenceHash must be distinct from routeAllowlistHash, "
+              + "destinationBindingHash, sourceVerifierMaterialHash, and "
+              + "sourceAdapterEngineDeploymentHash");
+    }
+    final String hash = "0x" + hexLower(digest);
+    if (input.routeCanaryEvidenceHash() != null
+        && !normalizeHex32(input.routeCanaryEvidenceHash(), "routeCanaryEvidenceHash")
+            .equals(hash)) {
+      throw new IllegalArgumentException("routeCanaryEvidenceHash must match transaction metadata");
+    }
+    return hash;
+  }
+
+  private static NormalizedRouteCanaryEvidence normalizeRouteCanaryEvidence(
+      final RouteCanaryEvidenceInput input) {
+    Objects.requireNonNull(input, "input");
+    final SourceSccpProofs.TronDestinationBinding destinationBinding =
+        SourceSccpProofs.tronDestinationBinding(
+            input.sourceDomain(),
+            input.targetDomain(),
+            input.networkId(),
+            input.verifierAddress(),
+            input.verifierCodeHash(),
+            input.verifierKeyHash());
+    final byte[] destinationBindingHash =
+        nonZeroHex32Bytes(input.destinationBindingHash(), "destinationBindingHash");
+    if (input.expectedDestinationBindingHash() != null
+        && !normalizeHex32(
+                input.expectedDestinationBindingHash(), "expectedDestinationBindingHash")
+            .equals(destinationBinding.hash)) {
+      throw new IllegalArgumentException(
+          "expectedDestinationBindingHash must match destinationBinding");
+    }
+    if (!("0x" + hexLower(destinationBindingHash)).equals(destinationBinding.hash)) {
+      throw new IllegalArgumentException("destinationBindingHash must match destinationBinding");
+    }
+    final byte[] routeAllowlistHash =
+        nonZeroHex32Bytes(input.routeAllowlistHash(), "routeAllowlistHash");
+    final byte[] sourceVerifierMaterialHash =
+        nonZeroHex32Bytes(input.sourceVerifierMaterialHash(), "sourceVerifierMaterialHash");
+    final byte[] sourceAdapterEngineDeploymentHash =
+        nonZeroHex32Bytes(
+            input.sourceAdapterEngineDeploymentHash(), "sourceAdapterEngineDeploymentHash");
+    final byte[] expectedRouteAllowlistHash =
+        routeAllowlistHashBytes(
+            sourceVerifierMaterialHash, sourceAdapterEngineDeploymentHash, destinationBindingHash);
+    if (!Arrays.equals(routeAllowlistHash, expectedRouteAllowlistHash)) {
+      throw new IllegalArgumentException(
+          "routeAllowlistHash must match canonical source, deployment, and destination evidence");
+    }
+    if (input.sourceDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException("sourceDomain must be SORA");
+    }
+    if (input.targetDomain() != DOMAIN_TRON) {
+      throw new IllegalArgumentException("targetDomain must be TRON");
+    }
+    if (input.sourceDomain() == input.targetDomain()) {
+      throw new IllegalArgumentException("sourceDomain and targetDomain must differ");
+    }
+    if (input.proofVersion() != 1) {
+      throw new IllegalArgumentException("proofVersion must be 1");
+    }
+    if (input.proofSourceDomain() != input.sourceDomain()) {
+      throw new IllegalArgumentException("proofSourceDomain must match sourceDomain");
+    }
+    if (!input.usedMessageProof()) {
+      throw new IllegalArgumentException("usedMessageProof must be true");
+    }
+    if (!input.rawDataOwnerMatchesTransaction()) {
+      throw new IllegalArgumentException("rawDataOwnerMatchesTransaction must be true");
+    }
+    if (!input.signatureRecoversToOwner()) {
+      throw new IllegalArgumentException("signatureRecoversToOwner must be true");
+    }
+
+    final byte[] verifierAddress =
+        SourceSccpProofs.tronBase58CheckPayload(
+            destinationBinding.verifierAddress, "verifierAddress");
+    final byte[] transactionOwnerAddress =
+        routeCanaryAddressPayload(input.transactionOwnerAddress(), "transactionOwnerAddress");
+    final byte[] signatureRecoveredAddress =
+        routeCanaryAddressPayload(input.signatureRecoveredAddress(), "signatureRecoveredAddress");
+    if (!Arrays.equals(signatureRecoveredAddress, transactionOwnerAddress)) {
+      throw new IllegalArgumentException(
+          "signatureRecoveredAddress must match transactionOwnerAddress");
+    }
+    final BigInteger blockNumber =
+        normalizeRouteCanaryU64(input.blockNumber(), "blockNumber", true);
+    final BigInteger blockTimestamp =
+        normalizeRouteCanaryU64(input.blockTimestamp(), "blockTimestamp", false);
+    final byte[] transactionId = nonZeroHex32Bytes(input.transactionId(), "transactionId");
+    final byte[] messageId = nonZeroHex32Bytes(input.messageId(), "messageId");
+    final byte[] callDataSha256 = nonZeroHex32Bytes(input.callDataSha256(), "callDataSha256");
+    final byte[] payloadHash = nonZeroHex32Bytes(input.payloadHash(), "payloadHash");
+    final byte[] commitmentRoot = nonZeroHex32Bytes(input.commitmentRoot(), "commitmentRoot");
+    final byte[] finalityHeight = nonZeroHex32Bytes(input.finalityHeight(), "finalityHeight");
+    final byte[] finalityBlockHash =
+        nonZeroHex32Bytes(input.finalityBlockHash(), "finalityBlockHash");
+    final byte[] statementHash = nonZeroHex32Bytes(input.statementHash(), "statementHash");
+    final byte[] signatureSha256 = nonZeroHex32Bytes(input.signatureSha256(), "signatureSha256");
+    requireRouteCanaryHashesDistinct(
+        new String[] {
+          "transactionId",
+          "messageId",
+          "callDataSha256",
+          "payloadHash",
+          "statementHash",
+          "commitmentRoot",
+          "finalityBlockHash",
+          "signatureSha256"
+        },
+        new byte[][] {
+          transactionId,
+          messageId,
+          callDataSha256,
+          payloadHash,
+          statementHash,
+          commitmentRoot,
+          finalityBlockHash,
+          signatureSha256
+        });
+    final byte[] networkId = nonZeroHex32Bytes(destinationBinding.networkId, "networkId");
+
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(3);
+    write(out, routeAllowlistHash);
+    write(out, verifierAddress);
+    write(out, transactionId);
+    write(out, transactionOwnerAddress);
+    writeU64Le(out, blockNumber);
+    writeU64Le(out, blockTimestamp);
+    writeU32Le(out, input.logIndex());
+    write(out, callDataSha256);
+    write(out, messageId);
+    writeU32Le(out, input.sourceDomain());
+    writeU32Le(out, input.targetDomain());
+    write(out, payloadHash);
+    write(out, commitmentRoot);
+    write(out, finalityHeight);
+    write(out, finalityBlockHash);
+    write(out, statementHash);
+    writeU32Le(out, input.proofVersion());
+    writeU32Le(out, input.proofSourceDomain());
+    write(out, destinationBindingHash);
+    write(out, keccak256(destinationBinding.verifierBackend.getBytes(StandardCharsets.UTF_8)));
+    write(out, keccak256(destinationBinding.proofFamily.getBytes(StandardCharsets.UTF_8)));
+    write(out, networkId);
+    out.write(1);
+    out.write(1);
+    write(out, signatureSha256);
+    write(out, signatureRecoveredAddress);
+    out.write(1);
+    return new NormalizedRouteCanaryEvidence(
+        out.toByteArray(),
+        routeAllowlistHash,
+        destinationBindingHash,
+        sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash);
+  }
+
   public static List<String> groth16Bn254PublicSignalWords(
       final PublicInputsInput publicInputs,
       final int sourceDomain,
@@ -194,8 +373,7 @@ public final class TronSccpProver {
       throw new IllegalArgumentException("bundleBytes must not be empty");
     }
     final byte[] sourceProofBytes =
-        Arrays.copyOf(input.sourceProofBytes(), input.sourceProofBytes().length);
-    requireOptionalNonZeroBytes(sourceProofBytes, "sourceProofBytes");
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
     final ByteArrayOutputStream preimage = new ByteArrayOutputStream();
     write(preimage, publicInputsBytes);
     writeU32Le(preimage, bundleBytes.length);
@@ -280,13 +458,15 @@ public final class TronSccpProver {
       throw new IllegalArgumentException(
           "proofResult.envelopeHash must match wrapped proof bytes");
     }
-    requireOptionalNonZeroBytes(proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
+    final byte[] sourceProofBytes =
+        requireOptionalSourceProofBytes(
+            proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
     final ProofRequest expectedRequest =
         buildProofRequest(
             new ProofRequestInput(
                 proofResult.publicInputs(),
                 proofResult.bundleBytes(),
-                proofResult.sourceProofBytes(),
+                sourceProofBytes,
                 proofResult.statementHash(),
                 proofResult.destinationBindingHash(),
                 proofResult.backend(),
@@ -461,6 +641,16 @@ public final class TronSccpProver {
       }
     }
     throw new IllegalArgumentException(label + " must not be all zero");
+  }
+
+  private static byte[] requireOptionalSourceProofBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length > SOURCE_STATE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + SOURCE_STATE_MAX_PROOF_BYTES + " bytes");
+    }
+    requireOptionalNonZeroBytes(copy, label);
+    return copy;
   }
 
   private static void requireNonEmptyNonZeroBytes(final byte[] bytes, final String label) {
@@ -753,7 +943,7 @@ public final class TronSccpProver {
     if (request.bundleBytes().length == 0) {
       throw new IllegalArgumentException("TRON SCCP proof request bundleBytes must not be empty");
     }
-    requireOptionalNonZeroBytes(
+    requireOptionalSourceProofBytes(
         request.sourceProofBytes(), "TRON SCCP proof request sourceProofBytes");
     requireProductionDestinationBinding(request);
   }
@@ -898,12 +1088,16 @@ public final class TronSccpProver {
     };
   }
 
-  private static String hashHex(final String prefix, final byte[] payload) {
+  private static byte[] hashBytes(final String prefix, final byte[] payload) {
     final byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
     final byte[] preimage = new byte[prefixBytes.length + payload.length];
     System.arraycopy(prefixBytes, 0, preimage, 0, prefixBytes.length);
     System.arraycopy(payload, 0, preimage, prefixBytes.length, payload.length);
-    return "0x" + hexLower(Blake2b.digest256(preimage));
+    return Blake2b.digest256(preimage);
+  }
+
+  private static String hashHex(final String prefix, final byte[] payload) {
+    return "0x" + hexLower(hashBytes(prefix, payload));
   }
 
   private static byte[] hex32Bytes(final String value, final String field) {
@@ -970,6 +1164,22 @@ public final class TronSccpProver {
     return numeric;
   }
 
+  private static BigInteger normalizeRouteCanaryU64(
+      final String value, final String field, final boolean positive) {
+    final String text = Objects.requireNonNull(value, field);
+    if (!isCanonicalDecimalText(text)) {
+      throw new IllegalArgumentException(field + " must be an unsigned integer");
+    }
+    final BigInteger numeric = new BigInteger(text);
+    if (numeric.compareTo(MAX_U64) > 0) {
+      throw new IllegalArgumentException(field + " must fit u64");
+    }
+    if (positive && numeric.signum() == 0) {
+      throw new IllegalArgumentException(field + " must be positive");
+    }
+    return numeric;
+  }
+
   private static boolean isCanonicalDecimalText(final String value) {
     if ("0".equals(value)) {
       return true;
@@ -1002,6 +1212,97 @@ public final class TronSccpProver {
       out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
       working = working.shiftRight(8);
     }
+  }
+
+  private static void writeVector(final ByteArrayOutputStream out, final byte[] value) {
+    writeU32Le(out, value.length);
+    write(out, value);
+  }
+
+  private static byte[] routeAllowlistHashBytes(
+      final byte[] sourceVerifierMaterialHash,
+      final byte[] sourceAdapterEngineDeploymentHash,
+      final byte[] destinationBindingHash) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(1);
+    writeU32Le(out, DOMAIN_TRON);
+    writeVector(out, "tron".getBytes(StandardCharsets.UTF_8));
+    writeVector(out, "GovernanceAllowlist".getBytes(StandardCharsets.UTF_8));
+    writeVector(out, TRON_ROUTE_ALLOWLIST_ID_V1.getBytes(StandardCharsets.UTF_8));
+    write(out, sourceVerifierMaterialHash);
+    write(out, sourceAdapterEngineDeploymentHash);
+    write(out, destinationBindingHash);
+    return hashBytes(ROUTE_ALLOWLIST_PREFIX_V1, out.toByteArray());
+  }
+
+  private static byte[] routeCanaryAddressPayload(final String value, final String field) {
+    String body = Objects.requireNonNull(value, field);
+    if (!body.trim().equals(body)) {
+      throw new IllegalArgumentException(field + " must be canonical hex or TRON Base58Check");
+    }
+    if (body.regionMatches(true, 0, "0x", 0, 2)) {
+      body = body.substring(2);
+    }
+    if (body.length() == 42 && isHex(body)) {
+      final byte[] out = new byte[21];
+      for (int i = 0; i < out.length; i++) {
+        out[i] = (byte) Integer.parseInt(body.substring(i * 2, i * 2 + 2), 16);
+      }
+      if (!isNonZeroTronAddress(out)) {
+        throw new IllegalArgumentException(
+            field + " must be a non-zero 0x41-prefixed TRON address");
+      }
+      return out;
+    }
+    return SourceSccpProofs.tronBase58CheckPayload(value, field);
+  }
+
+  private static boolean isHex(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      if (Character.digit(value.charAt(i), 16) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static boolean isNonZeroTronAddress(final byte[] value) {
+    if (value.length != 21 || value[0] != 0x41) {
+      return false;
+    }
+    for (int i = 1; i < value.length; i++) {
+      if (value[i] != 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static void requireRouteCanaryHashesDistinct(
+      final String[] fieldNames, final byte[][] fieldValues) {
+    for (int i = 0; i < fieldValues.length; i++) {
+      if (isZero(fieldValues[i])) {
+        continue;
+      }
+      for (int j = i + 1; j < fieldValues.length; j++) {
+        if (!isZero(fieldValues[j]) && Arrays.equals(fieldValues[i], fieldValues[j])) {
+          throw new IllegalArgumentException(
+              "TRON route canary transcript hashes must be distinct: "
+                  + fieldNames[j]
+                  + " matches "
+                  + fieldNames[i]);
+        }
+      }
+    }
+  }
+
+  private static boolean isZero(final byte[] value) {
+    for (final byte b : value) {
+      if (b != 0) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static byte[] toFixedBytes(final BigInteger value, final int length) {
@@ -1056,6 +1357,46 @@ public final class TronSccpProver {
           finalityBlockHash);
     }
   }
+
+  private record NormalizedRouteCanaryEvidence(
+      byte[] payload,
+      byte[] routeAllowlistHash,
+      byte[] destinationBindingHash,
+      byte[] sourceVerifierMaterialHash,
+      byte[] sourceAdapterEngineDeploymentHash) {}
+
+  public record RouteCanaryEvidenceInput(
+      String routeAllowlistHash,
+      String destinationBindingHash,
+      String expectedDestinationBindingHash,
+      String sourceVerifierMaterialHash,
+      String sourceAdapterEngineDeploymentHash,
+      String networkId,
+      String verifierAddress,
+      String verifierCodeHash,
+      String verifierKeyHash,
+      int sourceDomain,
+      int targetDomain,
+      String transactionId,
+      String transactionOwnerAddress,
+      String blockNumber,
+      String blockTimestamp,
+      int logIndex,
+      String messageId,
+      String callDataSha256,
+      String payloadHash,
+      String commitmentRoot,
+      String finalityHeight,
+      String finalityBlockHash,
+      String statementHash,
+      int proofVersion,
+      int proofSourceDomain,
+      boolean usedMessageProof,
+      boolean rawDataOwnerMatchesTransaction,
+      String signatureSha256,
+      String signatureRecoveredAddress,
+      boolean signatureRecoversToOwner,
+      String routeCanaryEvidenceHash) {}
 
   public record ProofRequestInput(
       PublicInputsInput publicInputs,

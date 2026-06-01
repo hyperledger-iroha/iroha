@@ -244,6 +244,24 @@ public final class TonSccpProverTests {
     }
     assert threw : "empty TON submission bundle bytes must be rejected";
 
+    boolean zeroBundleThrew = false;
+    try {
+      TonSccpProver.buildSubmission(sampleMessageBodyInput(new byte[] {0, 0}));
+    } catch (final IllegalArgumentException ex) {
+      zeroBundleThrew = ex.getMessage().contains("bundleBytes must not be all zero");
+    }
+    assert zeroBundleThrew : "all-zero TON submission bundle bytes must be rejected";
+
+    final byte[] oversizedBundle = new byte[TonSccpProver.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedBundle, (byte) 1);
+    boolean oversizedBundleThrew = false;
+    try {
+      TonSccpProver.buildSubmission(sampleMessageBodyInput(oversizedBundle));
+    } catch (final IllegalArgumentException ex) {
+      oversizedBundleThrew = ex.getMessage().contains("bundleBytes must be at most");
+    }
+    assert oversizedBundleThrew : "oversized TON submission bundle bytes must be rejected";
+
     boolean zeroProofThrew = false;
     try {
       TonSccpProver.buildSubmission(sampleMessageBodyInput(new byte[] {0, 0}, new byte[] {5, 6, 7}));
@@ -3374,6 +3392,49 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
+              new byte[] {0, 0},
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes must not be all zero");
+    }
+    assert threw : "all-zero TON bundle bytes must be rejected";
+
+    final byte[] oversizedRequestBundle =
+        new byte[TonSccpProver.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedRequestBundle, (byte) 1);
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              oversizedRequestBundle,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes must be at most");
+    }
+    assert threw : "oversized TON bundle bytes must be rejected";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
               new byte[] {5, 6, 7},
               new byte[] {0, 0},
               repeat("56", 32),
@@ -3388,6 +3449,29 @@ public final class TonSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must not be all zero");
     }
     assert threw : "all-zero TON source proof bytes must be rejected";
+
+    final byte[] oversizedSourceProof =
+        new byte[TonSccpProver.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedSourceProof, (byte) 1);
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          new TonSccpProver.ProofRequestInput(
+              samplePublicInputs(),
+              new byte[] {5, 6, 7},
+              oversizedSourceProof,
+              repeat("56", 32),
+              repeat("78", 32),
+              TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+              repeat("cc", 32),
+              repeat("aa", 32),
+              repeat("bb", 32),
+              TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+              TonSccpProver.DOMAIN_TON));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be at most");
+    }
+    assert threw : "oversized TON source proof bytes must be rejected";
     assert TonSccpProver.buildProofRequest(sampleProofRequestInput()).sourceProofBytes().length == 0
         : "empty optional TON source proof bytes must remain valid";
 

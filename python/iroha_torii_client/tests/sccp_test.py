@@ -150,6 +150,7 @@ from iroha_torii_client import (  # noqa: E402
     canonical_solana_sccp_accounts_lt_hash_commitment_bytes,
     canonical_solana_sccp_accounts_lt_hash_verification_context_bytes,
     canonical_ton_sccp_route_canary_evidence_bytes,
+    canonical_tron_sccp_route_canary_evidence_bytes,
     canonical_solana_sccp_message_proof_bytes,
     canonical_solana_sccp_transaction_status_leaf_bytes,
     canonical_solana_sccp_proof_context_bytes,
@@ -269,6 +270,7 @@ from iroha_torii_client import (  # noqa: E402
     solana_sccp_tower_replay_hash,
     solana_sccp_route_canary_evidence_hash,
     ton_sccp_route_canary_evidence_hash,
+    tron_sccp_route_canary_evidence_hash,
     substrate_authority_set_hash_from_payload,
     substrate_authority_set_payload_hash,
     substrate_authority_set_transition_justification_hash,
@@ -332,6 +334,18 @@ HEX32_E = "0x" + "ee" * 32
 HEX32_F = "0x" + "12" * 32
 HEX32_G = "0x" + "56" * 32
 HEX32_H = "0x" + "78" * 32
+TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
+    "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8"
+)
+TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
+    "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8"
+)
+TRON_ROUTE_ALLOWLIST_HASH_VECTOR = (
+    "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a"
+)
+TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR = (
+    "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
+)
 SOLANA_MAINNET_GENESIS_PUBLIC_INPUT = (
     "0x8dbaadfbc441ded0257a4700cd26d814b5a196be44b963454cff8dd9543f13b5"
 )
@@ -1034,6 +1048,52 @@ def sample_ton_route_canary_evidence(**overrides: Any) -> Dict[str, Any]:
     return value
 
 
+def sample_tron_route_canary_evidence(**overrides: Any) -> Dict[str, Any]:
+    destination_binding = sample_tron_destination_binding()
+    value = {
+        "route_allowlist_hash": TRON_ROUTE_ALLOWLIST_HASH_VECTOR,
+        "destination_binding_hash": destination_binding["binding_hash"],
+        "source_verifier_material_hash": TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR,
+        "source_adapter_engine_deployment_hash": (
+            TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+        ),
+        "network_id": destination_binding["network_id"],
+        "verifier_address": destination_binding["verifier_address"],
+        "verifier_code_hash": destination_binding["verifier_code_hash"],
+        "verifier_key_hash": destination_binding["verifier_key_hash"],
+        "source_domain": SCCP_DOMAIN_SORA,
+        "target_domain": SCCP_DOMAIN_TRON,
+        "transaction_id": "0x" + "fa" * 32,
+        "transaction_owner_address": (
+            "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        ),
+        "block_number": 234,
+        "block_timestamp": 567000,
+        "log_index": 0,
+        "message_id": "0x" + "dd" * 32,
+        "call_data_sha256": (
+            "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951"
+        ),
+        "payload_hash": "0x" + "ab" * 32,
+        "commitment_root": "0x" + "ee" * 32,
+        "finality_height": "0x" + "00" * 31 + "7b",
+        "finality_block_hash": "0x" + "cd" * 32,
+        "statement_hash": "0x" + "f1" * 32,
+        "proof_version": 1,
+        "proof_source_domain": SCCP_DOMAIN_SORA,
+        "used_message_proof": True,
+        "raw_data_owner_matches_transaction": True,
+        "signature_sha256": "0x" + "c4" * 32,
+        "signature_recovered_address": (
+            "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf"
+        ),
+        "signature_recovers_to_owner": True,
+        "route_canary_evidence_hash": TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR,
+    }
+    value.update(overrides)
+    return value
+
+
 def sample_solana_opened_accounts_lt_hash_input(**overrides: Any) -> Dict[str, Any]:
     vote_opening = {
         "address": "0x" + "31" * 32,
@@ -1167,6 +1227,65 @@ def test_ton_route_canary_evidence_binds_live_account_snapshot() -> None:
     with pytest.raises(TypeError, match="accountStatus must not use multiple aliases"):
         ton_sccp_route_canary_evidence_hash(
             sample_ton_route_canary_evidence(accountStatus="active")
+        )
+
+
+def test_tron_route_canary_evidence_binds_transaction_transcript() -> None:
+    evidence = sample_tron_route_canary_evidence()
+
+    assert len(canonical_tron_sccp_route_canary_evidence_bytes(evidence)) == 551
+    assert (
+        tron_sccp_route_canary_evidence_hash(evidence)
+        == TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR
+    )
+    assert (
+        iroha_torii_client_package.tron_sccp_route_canary_evidence_hash(evidence)
+        == TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR
+    )
+    with pytest.raises(TypeError, match="routeAllowlistHash must match canonical"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(route_allowlist_hash=HEX32_H)
+        )
+    with pytest.raises(
+        TypeError,
+        match=r"destinationBinding\.bindingHash must match destinationBinding",
+    ):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(destination_binding_hash=HEX32_H)
+        )
+    with pytest.raises(ValueError, match="targetDomain must be TRON"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(target_domain=SCCP_DOMAIN_ETH)
+        )
+    with pytest.raises(ValueError, match="blockNumber must be positive"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(block_number=0)
+        )
+    with pytest.raises(TypeError, match="usedMessageProof must be true"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(used_message_proof=False)
+        )
+    with pytest.raises(TypeError, match="rawDataOwnerMatchesTransaction must be true"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(raw_data_owner_matches_transaction=False)
+        )
+    with pytest.raises(TypeError, match="signatureRecoversToOwner must be true"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(signature_recovers_to_owner=False)
+        )
+    with pytest.raises(TypeError, match="signatureRecoveredAddress must match"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(
+                signature_recovered_address="0x41" + "12" * 20
+            )
+        )
+    with pytest.raises(TypeError, match="targetDomain must not use multiple aliases"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(targetDomain=SCCP_DOMAIN_TRON)
+        )
+    with pytest.raises(TypeError, match="routeCanaryEvidenceHash must match"):
+        tron_sccp_route_canary_evidence_hash(
+            sample_tron_route_canary_evidence(route_canary_evidence_hash=HEX32_H)
         )
 
 
@@ -5782,6 +5901,18 @@ def test_derives_ton_and_substrate_source_proof_transcripts_from_witness_materia
                 "validator_set_transition_proofs": [tampered_transition_proof],
             }
         )
+    with pytest.raises(TypeError, match="transitionSignatureHash must not use multiple aliases"):
+        build_ton_shard_state_proof_request(
+            {
+                **transition_bound_input,
+                "validator_set_transition_proofs": [
+                    {
+                        **ton_transition_proof,
+                        "transitionSignatureHash": TON_VALIDATOR_SET_TRANSITION_SIGNATURE_HASH,
+                    }
+                ],
+            }
+        )
     with pytest.raises(TypeError, match="TON template verifier hash"):
         build_ton_shard_state_proof_request(
             {
@@ -9051,6 +9182,16 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
 
     with pytest.raises(TypeError, match="bundleBytes must not be empty"):
         build_ton_sccp_submission(sample_ton_message_body_input_with_result(bundle_bytes=b""))
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_ton_sccp_submission(
+            sample_ton_message_body_input_with_result(bundle_bytes=b"\x00\x00")
+        )
+    with pytest.raises(TypeError, match="bundleBytes must be at most"):
+        build_ton_sccp_submission(
+            sample_ton_message_body_input_with_result(
+                bundle_bytes=bytes([1]) * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1)
+            )
+        )
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):
         build_ton_sccp_submission(sample_ton_message_body_input_with_result(proof_bytes=b"\x00\x00"))
 
@@ -9498,6 +9639,30 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
         build_ton_sccp_proof_request(
             sample_ton_request_input(
                 bundle_bytes=b"",
+                source_adapter_deployment_hash=HEX32_A,
+                source_adapter_deployment_receipt_hash=HEX32_B,
+            )
+        )
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_ton_sccp_proof_request(
+            sample_ton_request_input(
+                bundle_bytes=b"\x00\x00",
+                source_adapter_deployment_hash=HEX32_A,
+                source_adapter_deployment_receipt_hash=HEX32_B,
+            )
+        )
+    with pytest.raises(TypeError, match="bundleBytes must be at most"):
+        build_ton_sccp_proof_request(
+            sample_ton_request_input(
+                bundle_bytes=bytes([1]) * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1),
+                source_adapter_deployment_hash=HEX32_A,
+                source_adapter_deployment_receipt_hash=HEX32_B,
+            )
+        )
+    with pytest.raises(TypeError, match="sourceProofBytes must be at most"):
+        build_ton_sccp_proof_request(
+            sample_ton_request_input(
+                source_proof_bytes=bytes([1]) * (SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1),
                 source_adapter_deployment_hash=HEX32_A,
                 source_adapter_deployment_receipt_hash=HEX32_B,
             )
@@ -10037,6 +10202,16 @@ def test_builds_substrate_sccp_runtime_proof_request() -> None:
         )
     with pytest.raises(TypeError, match="bundleBytes must not be empty"):
         build_substrate_sccp_proof_request(sample_substrate_request_input(bundle_bytes=b""))
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_substrate_sccp_proof_request(
+            sample_substrate_request_input(bundle_bytes=b"\x00\x00")
+        )
+    with pytest.raises(TypeError, match="bundleBytes must be at most"):
+        build_substrate_sccp_proof_request(
+            sample_substrate_request_input(
+                bundle_bytes=b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1)
+            )
+        )
     with pytest.raises(TypeError, match="backend must be substrate-runtime-v1"):
         build_substrate_sccp_proof_request(
             sample_substrate_request_input(backend="debug-substrate-backend")
@@ -10093,6 +10268,21 @@ def test_builds_substrate_sccp_runtime_call_submission() -> None:
                 "proofResult": proof_result,
             }
         )
+    with pytest.raises(
+        TypeError,
+        match="proofResult must be a wrapped Substrate SCCP proof result",
+    ):
+        build_substrate_sccp_submission(
+            {
+                "proof_result": None,
+                "proof_bytes": bytes([1, 2, 3, 4]),
+                "public_inputs": sample_substrate_public_inputs(),
+                "bundle_bytes": bytes([5, 6, 7]),
+                "source_proof_bytes": bytes([9, 10]),
+                "statement_hash": "0x" + "55" * 32,
+                "destination_binding_hash": "0x" + "66" * 32,
+            }
+        )
     with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
         build_substrate_sccp_submission(
             {
@@ -10137,16 +10327,42 @@ def test_builds_substrate_sccp_runtime_call_submission() -> None:
             "proof_bytes": bytes([1, 2, 3, 4]),
             "public_inputs": sample_substrate_public_inputs(),
             "bundle_bytes": bytes([5, 6, 7]),
-            "source_proof_bytes": bytes([9, 10]),
+            "source_proof_bytes": b"",
             "statement_hash": "0x" + "55" * 32,
             "destination_binding_hash": "0x" + "66" * 32,
         }
     )
     assert explicit_submission["runtime_call"] == submission["runtime_call"]
 
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes requires proofResult for request-bound submission",
+    ):
+        build_substrate_sccp_submission(
+            {
+                "proof_bytes": bytes([1, 2, 3, 4]),
+                "public_inputs": sample_substrate_public_inputs(),
+                "bundle_bytes": bytes([5, 6, 7]),
+                "source_proof_bytes": bytes([9, 10]),
+                "statement_hash": "0x" + "55" * 32,
+                "destination_binding_hash": "0x" + "66" * 32,
+            }
+        )
+
     with pytest.raises(TypeError, match="bundleBytes must match proofResult.bundleBytes"):
         build_substrate_sccp_submission(
             {"proof_result": proof_result, "bundle_bytes": bytes([5, 6, 8])}
+        )
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_substrate_sccp_submission(
+            {
+                "proof_bytes": bytes([1, 2, 3, 4]),
+                "public_inputs": sample_substrate_public_inputs(),
+                "bundle_bytes": b"\x00\x00",
+                "source_proof_bytes": bytes([9, 10]),
+                "statement_hash": "0x" + "55" * 32,
+                "destination_binding_hash": "0x" + "66" * 32,
+            }
         )
     with pytest.raises(TypeError, match="envelopeHash must match request"):
         build_substrate_sccp_submission(
@@ -10739,6 +10955,30 @@ def test_builds_solana_sccp_program_instruction_submission_data() -> None:
                 "bundle_bytes": [2],
                 "statement_hash": HEX32_G,
                 "destination_binding_hash": HEX32_H,
+            }
+        )
+
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_solana_sccp_submission(
+            {
+                "public_inputs": submission["public_inputs"],
+                "proof_result": proof_result,
+                "proof_bytes": [1],
+                "bundle_bytes": [0, 0],
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": solana_destination_binding_hash,
+            }
+        )
+
+    with pytest.raises(TypeError, match="bundleBytes must be at most"):
+        build_solana_sccp_submission(
+            {
+                "public_inputs": submission["public_inputs"],
+                "proof_result": proof_result,
+                "proof_bytes": [1],
+                "bundle_bytes": b"\x01" * (SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1),
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": solana_destination_binding_hash,
             }
         )
 
@@ -11552,6 +11792,19 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
                 "proofResult": evm_result,
             }
         )
+    with pytest.raises(
+        TypeError,
+        match="proofResult must be a wrapped Groth16 SCCP proof result",
+    ):
+        build_evm_sccp_submission(
+            {
+                "proof_result": None,
+                "proof_bytes": GROTH16_PROOF_BYTES,
+                "public_inputs": sample_evm_public_inputs(),
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": HEX32_H,
+            }
+        )
     with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
         build_evm_sccp_submission(
             {
@@ -11744,6 +11997,32 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
     )
     assert omitted_tron_result["source_proof_bytes"] == b""
     assert omitted_tron_submission["proof_bytes"] == GROTH16_PROOF_BYTES
+    with pytest.raises(
+        TypeError,
+        match="bundleBytes requires proofResult for request-bound submission",
+    ):
+        build_evm_sccp_submission(
+            {
+                "proof_bytes": GROTH16_PROOF_BYTES,
+                "public_inputs": sample_evm_public_inputs(),
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": HEX32_H,
+                "bundle_bytes": bytes([5, 6, 7]),
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes requires proofResult for request-bound submission",
+    ):
+        build_tron_sccp_submission(
+            {
+                "proof_bytes": GROTH16_PROOF_BYTES,
+                "public_inputs": sample_tron_public_inputs(),
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": HEX32_H,
+                "source_proof_bytes": bytes([9, 10]),
+            }
+        )
     assert len(tron_submission["call_data"]) == 676
     assert tron_submission["call_data"][292:] == GROTH16_PROOF_BYTES
     with pytest.raises(TypeError, match=r"proofResult\.requestHash.*multiple aliases"):
@@ -11753,6 +12032,19 @@ def test_builds_evm_and_tron_groth16_contract_call_submissions() -> None:
                     **dict(tron_result),
                     "requestHash": tron_result["request_hash"],
                 },
+            }
+        )
+    with pytest.raises(
+        TypeError,
+        match="proofResult must be a wrapped Groth16 SCCP proof result",
+    ):
+        build_tron_sccp_submission(
+            {
+                "proof_result": None,
+                "proof_bytes": GROTH16_PROOF_BYTES,
+                "public_inputs": sample_tron_public_inputs(),
+                "statement_hash": HEX32_G,
+                "destination_binding_hash": HEX32_H,
             }
         )
 

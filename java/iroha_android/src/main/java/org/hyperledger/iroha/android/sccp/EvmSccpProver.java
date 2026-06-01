@@ -19,6 +19,7 @@ public final class EvmSccpProver {
   public static final int DOMAIN_BSC = SourceSccpProofs.DOMAIN_BSC;
   public static final String GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1";
   public static final int GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
+  public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
   public static final String CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1";
   public static final String SUBMIT_MESSAGE_PROOF_ABI_V1 =
       "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
@@ -186,11 +187,10 @@ public final class EvmSccpProver {
     }
     final byte[] bundleBytes = Arrays.copyOf(input.bundleBytes(), input.bundleBytes().length);
     final byte[] sourceProofBytes =
-        Arrays.copyOf(input.sourceProofBytes(), input.sourceProofBytes().length);
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
     if (bundleBytes.length == 0) {
       throw new IllegalArgumentException("bundleBytes must not be empty");
     }
-    requireOptionalNonZeroBytes(sourceProofBytes, "sourceProofBytes");
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
@@ -284,13 +284,15 @@ public final class EvmSccpProver {
       throw new IllegalArgumentException(
           "proofResult.envelopeHash must match wrapped proof bytes");
     }
-    requireOptionalNonZeroBytes(proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
+    final byte[] sourceProofBytes =
+        requireOptionalSourceProofBytes(
+            proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
     final ProofRequest expectedRequest =
         buildProofRequest(
             new ProofRequestInput(
                 proofResult.publicInputs(),
                 proofResult.bundleBytes(),
-                proofResult.sourceProofBytes(),
+                sourceProofBytes,
                 proofResult.statementHash(),
                 proofResult.destinationBindingHash(),
                 proofResult.backend(),
@@ -465,6 +467,16 @@ public final class EvmSccpProver {
       }
     }
     throw new IllegalArgumentException(label + " must not be all zero");
+  }
+
+  private static byte[] requireOptionalSourceProofBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length > SOURCE_STATE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + SOURCE_STATE_MAX_PROOF_BYTES + " bytes");
+    }
+    requireOptionalNonZeroBytes(copy, label);
+    return copy;
   }
 
   private static void requireNonEmptyNonZeroBytes(final byte[] bytes, final String label) {
@@ -758,7 +770,7 @@ public final class EvmSccpProver {
       throw new IllegalArgumentException(
           "EVM-family SCCP proof request bundleBytes must not be empty");
     }
-    requireOptionalNonZeroBytes(
+    requireOptionalSourceProofBytes(
         request.sourceProofBytes(), "EVM-family SCCP proof request sourceProofBytes");
     requireProductionDestinationBinding(request);
   }

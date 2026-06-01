@@ -6516,7 +6516,7 @@ private func sourceProofBase58Decode(_ value: String, field: String) throws -> D
     return Data(Array(repeating: UInt8(0), count: leadingZeroCount) + bytes)
 }
 
-private func sourceProofTronBase58CheckPayload(_ value: String, field: String) throws -> Data {
+func sourceProofTronBase58CheckPayload(_ value: String, field: String) throws -> Data {
     let decoded = try sourceProofBase58Decode(value, field: field)
     guard decoded.count == 25 else {
         throw SccpSourceProofHashError.invalidSourceMaterial(field)

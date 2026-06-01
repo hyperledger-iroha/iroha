@@ -16,6 +16,7 @@ object SccpSubstrate {
     const val SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: String = "SccpBridge.submit_message_proof"
     const val STARK_FRI_PROOF_FAMILY_V1: String = "stark-fri-v1"
     const val NATIVE_RECURSIVE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
+    const val SOURCE_STATE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
 
     private const val PROOF_REQUEST_PREFIX_V1: String = "sccp:substrate:runtime-proof-request:v1"
     private const val PROOF_ENVELOPE_PREFIX_V1: String = "sccp:substrate:runtime-proof-envelope:v1"
@@ -41,12 +42,8 @@ object SccpSubstrate {
     @JvmStatic
     fun buildProofRequest(input: SubstrateSccpProofRequestInput): SubstrateSccpProofRequest {
         require(input.backend == RUNTIME_PROOF_BACKEND_V1) { "backend must be substrate-runtime-v1" }
-        val bundleBytes = input.bundleBytes.copyOf()
-        val sourceProofBytes = input.sourceProofBytes.copyOf()
-        require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "sourceProofBytes must not be all zero"
-        }
+        val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
+        val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         require(input.sourceDomain == DOMAIN_SORA) { "sourceDomain must be SORA" }
         require(input.sourceDomain != input.publicInputs.targetDomain) {
             "sourceDomain and publicInputs.targetDomain must differ"
@@ -118,8 +115,11 @@ object SccpSubstrate {
             "proofBytes must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
         }
         require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
-        val bundleBytes = input.bundleBytes.copyOf()
-        val sourceProofBytes = input.sourceProofBytes.copyOf()
+        val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
+        val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
+        require(input.proofResult != null || sourceProofBytes.isEmpty()) {
+            "sourceProofBytes requires proofResult for request-bound submission"
+        }
         val request = buildProofRequest(
             SubstrateSccpProofRequestInput(
                 publicInputs = input.publicInputs,
@@ -228,13 +228,11 @@ object SccpSubstrate {
         ) {
             "Substrate SCCP production proofs must target a Substrate-family domain"
         }
-        require(request.bundleBytes.isNotEmpty()) {
-            "Substrate SCCP proof request bundleBytes must not be empty"
-        }
-        val sourceProofBytes = request.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "Substrate SCCP proof request sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        requireNativeRecursivePayloadBytes(request.bundleBytes, "Substrate SCCP proof request bundleBytes")
+        requireOptionalSourceProofBytes(
+            request.sourceProofBytes,
+            "Substrate SCCP proof request sourceProofBytes",
+        )
     }
 
     internal fun callbackRequestSnapshot(request: SubstrateSccpProofRequest): SubstrateSccpProofRequest =
@@ -242,6 +240,25 @@ object SccpSubstrate {
 
     private fun targetDomainIsSupported(value: Int): Boolean =
         value == DOMAIN_SORA_KUSAMA || value == DOMAIN_SORA_POLKADOT || value == DOMAIN_SORA2
+
+    private fun requireNativeRecursivePayloadBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.isNotEmpty()) { "$label must not be empty" }
+        require(copy.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+            "$label must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
+    }
+
+    private fun requireOptionalSourceProofBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.size <= SOURCE_STATE_MAX_PROOF_BYTES) {
+            "$label must be at most $SOURCE_STATE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.isEmpty() || copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
+    }
 
     private fun hashHex(prefix: String, payload: ByteArray): String {
         val prefixBytes = prefix.toByteArray(Charsets.UTF_8)

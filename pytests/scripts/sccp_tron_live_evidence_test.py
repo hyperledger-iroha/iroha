@@ -33,6 +33,11 @@ TRON_SOURCE_EVENT_CALL_DATA_VECTOR = (
     + TRON_SOURCE_EVENT_DIGEST_VECTOR
 )
 DEFAULT_SOURCE_RUNTIME_BYTECODE = object()
+DEFAULT_TRANSACTION_INFO_FIELD = object()
+
+
+def transaction_info_field(default, override):
+    return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
 
 def protobuf_varint(value):
@@ -726,6 +731,11 @@ def fake_opener_for(
     source_event_transaction_topics_extra=(),
     source_event_transaction_data="",
     source_event_transaction_duplicate_matching_log=False,
+    source_event_transaction_log_index_override=None,
+    source_event_transaction_log_index_fields=("logIndex",),
+    source_event_transaction_info_id_alias_overrides=None,
+    source_event_transaction_block_number=DEFAULT_TRANSACTION_INFO_FIELD,
+    source_event_transaction_block_timestamp=DEFAULT_TRANSACTION_INFO_FIELD,
     source_event_transaction_owner_override=None,
     source_event_transaction_contract_override=None,
     source_event_transaction_call_data_override=None,
@@ -736,6 +746,8 @@ def fake_opener_for(
     source_event_transaction_ret=None,
     source_event_transaction_raw_data_hex=TRON_SOURCE_EVENT_RAW_DATA_HEX_VECTOR,
     source_event_transaction_signatures=None,
+    source_event_transaction_include_txid=True,
+    source_event_transaction_id_alias_overrides=None,
     source_event_block_number=123,
     source_event_block_timestamp=456000,
     source_event_block_id_override=None,
@@ -748,6 +760,7 @@ def fake_opener_for(
     source_event_parent_block_tx_trie_root="00" * 32,
     source_event_block_account_state_root=None,
     source_event_parent_block_account_state_root=None,
+    source_event_block_transaction_id_alias_overrides=None,
     source_event_block_witness_signature_override=None,
     source_event_parent_block_witness_signature_override=None,
     source_event_ancestor_depth=0,
@@ -764,6 +777,11 @@ def fake_opener_for(
     route_canary_transaction_proof_family_hash_override=None,
     route_canary_transaction_network_id_override=None,
     route_canary_transaction_duplicate_matching_log=False,
+    route_canary_transaction_log_index_override=None,
+    route_canary_transaction_log_index_fields=("logIndex",),
+    route_canary_transaction_info_id_alias_overrides=None,
+    route_canary_transaction_block_number=DEFAULT_TRANSACTION_INFO_FIELD,
+    route_canary_transaction_block_timestamp=DEFAULT_TRANSACTION_INFO_FIELD,
     route_canary_used_message_proof=True,
     route_canary_used_message_proof_word_override=None,
     route_canary_transaction_owner_override=None,
@@ -776,6 +794,8 @@ def fake_opener_for(
     ),
     route_canary_transaction_raw_data_hex=TRON_ROUTE_CANARY_RAW_DATA_HEX_VECTOR,
     route_canary_transaction_signatures=None,
+    route_canary_transaction_include_txid=True,
+    route_canary_transaction_id_alias_overrides=None,
     route_canary_block_number=234,
     route_canary_block_timestamp=567000,
     expected_api_key=None,
@@ -878,8 +898,7 @@ def fake_opener_for(
             if source_event_transaction_signatures is not None
             else [TRON_SOURCE_EVENT_SIGNATURE_VECTOR]
         )
-        return {
-            "txID": source_event_transaction_id,
+        transaction = {
             "ret": ret,
             "raw_data_hex": source_event_transaction_raw_data_hex,
             "signature": signatures,
@@ -899,6 +918,11 @@ def fake_opener_for(
                 ]
             },
         }
+        if source_event_transaction_include_txid:
+            transaction["txID"] = source_event_transaction_id
+        if source_event_transaction_id_alias_overrides is not None:
+            transaction.update(source_event_transaction_id_alias_overrides)
+        return transaction
 
     def route_canary_transaction_info():
         assert route_canary_transaction_id is not None
@@ -949,16 +973,28 @@ def fake_opener_for(
             ],
             "data": data,
         }
+        if route_canary_transaction_log_index_override is not None:
+            for field in route_canary_transaction_log_index_fields:
+                event_log[field] = route_canary_transaction_log_index_override
         logs = [event_log]
         if route_canary_transaction_duplicate_matching_log:
             logs.append(dict(event_log))
-        return {
+        transaction_info = {
             "id": route_canary_transaction_id,
-            "blockNumber": route_canary_block_number,
-            "blockTimeStamp": route_canary_block_timestamp,
+            "blockNumber": transaction_info_field(
+                route_canary_block_number,
+                route_canary_transaction_block_number,
+            ),
+            "blockTimeStamp": transaction_info_field(
+                route_canary_block_timestamp,
+                route_canary_transaction_block_timestamp,
+            ),
             "receipt": {"result": route_canary_transaction_status},
             "log": logs,
         }
+        if route_canary_transaction_info_id_alias_overrides is not None:
+            transaction_info.update(route_canary_transaction_info_id_alias_overrides)
+        return transaction_info
 
     def route_canary_transaction_object():
         assert route_canary_transaction_id is not None
@@ -990,8 +1026,7 @@ def fake_opener_for(
             if route_canary_transaction_ret is not None
             else [{"contractRet": "SUCCESS"}]
         )
-        return {
-            "txID": route_canary_transaction_id,
+        transaction = {
             "ret": ret,
             "signature": signatures,
             "raw_data_hex": route_canary_transaction_raw_data_hex,
@@ -1011,6 +1046,11 @@ def fake_opener_for(
                 ]
             },
         }
+        if route_canary_transaction_include_txid:
+            transaction["txID"] = route_canary_transaction_id
+        if route_canary_transaction_id_alias_overrides is not None:
+            transaction.update(route_canary_transaction_id_alias_overrides)
+        return transaction
 
     def opener(request, timeout):
         del timeout
@@ -1089,18 +1129,28 @@ def fake_opener_for(
                 ],
                 "data": source_event_transaction_data,
             }
+            if source_event_transaction_log_index_override is not None:
+                for field in source_event_transaction_log_index_fields:
+                    event_log[field] = source_event_transaction_log_index_override
             logs = [event_log]
             if source_event_transaction_duplicate_matching_log:
                 logs.append(dict(event_log))
-            return FakeResponse(
-                {
-                    "id": source_event_transaction_id,
-                    "blockNumber": source_event_block_number,
-                    "blockTimeStamp": source_event_block_timestamp,
-                    "receipt": {"result": source_event_transaction_status},
-                    "log": logs,
-                }
-            )
+            transaction_info = {
+                "id": source_event_transaction_id,
+                "blockNumber": transaction_info_field(
+                    source_event_block_number,
+                    source_event_transaction_block_number,
+                ),
+                "blockTimeStamp": transaction_info_field(
+                    source_event_block_timestamp,
+                    source_event_transaction_block_timestamp,
+                ),
+                "receipt": {"result": source_event_transaction_status},
+                "log": logs,
+            }
+            if source_event_transaction_info_id_alias_overrides is not None:
+                transaction_info.update(source_event_transaction_info_id_alias_overrides)
+            return FakeResponse(transaction_info)
         if request.full_url.endswith(expected_transaction_by_id_endpoint):
             if (
                 route_canary_transaction_id is not None
@@ -1113,6 +1163,11 @@ def fake_opener_for(
         if request.full_url.endswith(expected_block_endpoint):
             assert source_event_transaction_id is not None
             target_transaction = source_event_transaction_object()
+            if source_event_block_transaction_id_alias_overrides is not None:
+                target_transaction = dict(target_transaction)
+                target_transaction.update(
+                    source_event_block_transaction_id_alias_overrides
+                )
             dummy_raw_data_hex = "01"
             dummy_transaction = {
                 "txID": hashlib.sha256(bytes.fromhex(dummy_raw_data_hex)).hexdigest(),
@@ -1931,6 +1986,185 @@ def test_live_evidence_verifies_source_event_transaction_readback():
     assert trigger_contract["call_matches"] is True
 
 
+def test_live_evidence_source_event_replay_requires_block_metadata_binding():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            tron_node_url="https://tron.example",
+            source_bridge_address=fake.bridge,
+            destination_verifier_address=None,
+            caller_address=None,
+            no_getcontract=False,
+            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+            source_event_transaction_id=bytes.fromhex(
+                TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+            ),
+            full_toml=False,
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    tampered = json.loads(json.dumps(summary))
+    tampered["source_event_transaction"].pop("block_timestamp")
+    assert module._offline_source_event_args(tampered) is None
+
+    tampered = json.loads(json.dumps(summary))
+    tampered["source_event_transaction"]["block_number"] = 0
+    assert module._offline_source_event_args(tampered) is None
+
+    tampered = json.loads(json.dumps(summary))
+    tampered["source_event_transaction"]["solid_block"]["block_timestamp"] += 1
+    assert module._offline_source_event_args(tampered) is None
+
+
+def test_live_evidence_rejects_source_event_explicit_log_index_mismatch():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_log_index_override=1,
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event log logIndex does not match log list index: "
+            "expected 0, got 1"
+        ) in str(exc)
+    else:
+        raise AssertionError("source event with mismatched explicit logIndex was accepted")
+
+
+def test_live_evidence_rejects_source_event_snake_log_index_mismatch():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_log_index_override=1,
+        source_event_transaction_log_index_fields=("log_index",),
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event log log_index does not match log list index: "
+            "expected 0, got 1"
+        ) in str(exc)
+    else:
+        raise AssertionError("source event with mismatched explicit log_index was accepted")
+
+
+def test_live_evidence_rejects_source_event_duplicate_log_index_aliases():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_log_index_override=0,
+        source_event_transaction_log_index_fields=("logIndex", "log_index"),
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "source-event log must not include both logIndex and log_index" in str(exc)
+    else:
+        raise AssertionError("source event with duplicate log-index aliases was accepted")
+
+
+def test_live_evidence_rejects_source_event_info_conflicting_txid_aliases():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_info_id_alias_overrides={"txID": "11" * 32},
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event transaction info returned conflicting transaction id aliases"
+            in str(exc)
+        )
+    else:
+        raise AssertionError(
+            "source-event transaction info with conflicting txID aliases was accepted"
+        )
+
+
 def test_live_evidence_source_event_replay_args_revalidate_transaction_summary():
     module = load_live_module()
     fake = fake_opener_for(
@@ -2043,6 +2277,75 @@ def test_live_evidence_rejects_boolean_source_event_block_number():
         assert "blockNumber must be a positive integer" in str(exc)
     else:
         raise AssertionError("boolean TRON source-event blockNumber was accepted")
+
+
+def test_live_evidence_rejects_missing_source_event_block_timestamp():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_block_timestamp=None,
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event transaction info blockTimeStamp must be a non-negative integer"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("missing TRON source-event blockTimeStamp was accepted")
+
+
+def test_live_evidence_rejects_source_event_transaction_info_timestamp_drift():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_block_timestamp=456001,
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "blockTimeStamp does not match block header timestamp" in str(exc)
+    else:
+        raise AssertionError(
+            "source-event transaction-info timestamp drift was accepted"
+        )
 
 
 def test_live_evidence_rejects_zero_block_witness_address_before_header_hashing():
@@ -4071,6 +4374,43 @@ def test_live_evidence_rejects_source_event_block_missing_transaction():
         raise AssertionError("source-event block missing transaction was accepted")
 
 
+def test_live_evidence_rejects_source_event_block_conflicting_txid_aliases():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_block_transaction_id_alias_overrides={"id": "11" * 32},
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event block transaction[1] returned conflicting "
+            "transaction id aliases"
+        ) in str(exc)
+    else:
+        raise AssertionError(
+            "source-event block transaction with conflicting id aliases was accepted"
+        )
+
+
 def test_live_evidence_source_event_transaction_readback_uses_solid_endpoint():
     module = load_live_module()
     fake = fake_opener_for(
@@ -4177,6 +4517,78 @@ def test_live_evidence_rejects_source_event_transaction_raw_data_hash_mismatch()
         assert "raw_data_hex" in str(exc)
     else:
         raise AssertionError("source-event transaction with wrong raw_data_hex was accepted")
+
+
+def test_live_evidence_rejects_source_event_conflicting_txid_aliases():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_id_alias_overrides={"id": "11" * 32},
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "source-event transaction returned conflicting transaction id aliases"
+            in str(exc)
+        )
+    else:
+        raise AssertionError(
+            "source-event transaction with conflicting txID aliases was accepted"
+        )
+
+
+def test_live_evidence_rejects_source_event_transaction_without_txid_alias():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+        source_event_transaction_include_txid=False,
+        source_event_transaction_id_alias_overrides={
+            "id": TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+        },
+    )
+
+    try:
+        module.collect_live_evidence(
+            SimpleNamespace(
+                tron_node_url="https://tron.example",
+                source_bridge_address=fake.bridge,
+                destination_verifier_address=None,
+                caller_address=None,
+                no_getcontract=False,
+                source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                source_event_transaction_id=bytes.fromhex(
+                    TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                ),
+                full_toml=False,
+                timeout=1.0,
+            ),
+            opener=fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "source-event transaction did not return txID" in str(exc)
+    else:
+        raise AssertionError("source-event transaction without txID was accepted")
 
 
 def test_live_evidence_rejects_source_event_transaction_raw_data_owner_mismatch():
@@ -5747,6 +6159,8 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args():
     assert "# sccp_tron_destination_proof_family_hash" in full_toml
     assert "# sccp_tron_route_canary_transaction_id" in full_toml
     assert "# sccp_tron_route_canary_transaction_owner_address" in full_toml
+    assert '# sccp_tron_route_canary_block_number = "234"' in full_toml
+    assert '# sccp_tron_route_canary_block_timestamp = "567000"' in full_toml
     assert "# sccp_tron_route_canary_statement_hash" in full_toml
     assert '# sccp_tron_route_canary_used_message_proof = "true"' in full_toml
     assert (
@@ -5787,6 +6201,8 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args():
         "# sccp_tron_destination_verifier_backend_hash = ",
         "# sccp_tron_destination_proof_family_hash = ",
         "# sccp_tron_route_canary_transaction_id = ",
+        "# sccp_tron_route_canary_block_number = ",
+        "# sccp_tron_route_canary_block_timestamp = ",
         "# sccp_tron_route_canary_log_index = ",
         "# sccp_tron_route_canary_message_id = ",
         "# sccp_tron_route_canary_statement_hash = ",
@@ -5901,6 +6317,8 @@ def test_live_evidence_derives_route_canary_from_verifier_transaction():
     assert route_canary["transaction"] == transaction
     assert route_canary["evidence_hash"] == transaction["route_canary_evidence_hash"]
     assert transaction["transaction_id"] == "0x" + route_canary_transaction_id
+    assert transaction["block_number"] == 234
+    assert transaction["block_timestamp"] == 567000
     assert transaction["trigger_contract"]["owner_address"] == (
         "0x41" + fake.owner20.hex()
     )
@@ -5949,6 +6367,44 @@ def test_live_evidence_derives_route_canary_from_verifier_transaction():
     )
     assert route_canary["evidence_hash"] in summary["offline_full_toml_args"]
     assert summary["full_toml_ready"] is True
+
+
+def test_live_evidence_full_toml_replay_requires_route_canary_block_metadata():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    for field, value in (
+        ("block_number", 0),
+        ("block_timestamp", None),
+    ):
+        tampered_summary = json.loads(json.dumps(summary))
+        tampered_summary["route_canary_transaction"][field] = value
+        tampered_summary["route_canary"]["transaction"][field] = value
+        assert module._route_canary_transaction_verified(tampered_summary) is False
+        assert module._offline_full_toml_args(tampered_summary) is None
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            assert "route-canary-transaction-id" in str(exc)
+        else:
+            raise AssertionError(
+                "TRON full TOML rendered without route-canary block metadata"
+            )
 
 
 def test_live_evidence_full_toml_requires_expected_tron_dpos_source_gate_hash():
@@ -6215,6 +6671,8 @@ def test_tron_route_canary_evidence_hash_rejects_invalid_transcript_fields():
         "route_allowlist_hash": bytes.fromhex("11" * 32),
         "transaction_id": bytes.fromhex("22" * 32),
         "transaction_owner_address": owner,
+        "block_number": 234,
+        "block_timestamp": 567000,
         "log_index": 0,
         "verifier_address20": bytes.fromhex("44" * 20),
         "call_data_sha256": bytes.fromhex("55" * 32),
@@ -6254,6 +6712,10 @@ def test_tron_route_canary_evidence_hash_rejects_invalid_transcript_fields():
         ("route_allowlist_hash", bytes(32), "route allowlist hash"),
         ("transaction_id", bytes(32), "transaction id"),
         ("transaction_owner_address", b"\x41" + bytes(20), "transaction owner"),
+        ("block_number", True, "block number"),
+        ("block_number", 0, "block number"),
+        ("block_timestamp", True, "block timestamp"),
+        ("block_timestamp", -1, "block timestamp"),
         ("log_index", True, "log index"),
         ("log_index", 0x1_0000_0000, "log index"),
         ("verifier_address20", bytes(20), "verifier address"),
@@ -6338,6 +6800,8 @@ def test_live_evidence_full_toml_revalidates_route_canary_destination_fields():
                 ),
                 transaction_id=parse_hex(transaction["transaction_id"]),
                 transaction_owner_address=parse_hex(trigger["owner_address"]),
+                block_number=transaction["block_number"],
+                block_timestamp=transaction["block_timestamp"],
                 log_index=transaction["log_index"],
                 verifier_address20=module.parse_tron_address_payload(
                     destination["address"],
@@ -6505,6 +6969,187 @@ def test_live_evidence_rejects_duplicate_route_canary_transaction_logs():
         raise AssertionError("route canary with duplicate logs was accepted")
 
 
+def test_live_evidence_rejects_route_canary_explicit_log_index_mismatch():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_log_index_override=1,
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary MessageProofAccepted log logIndex does not match "
+            "log list index: expected 0, got 1"
+        ) in str(exc)
+    else:
+        raise AssertionError(
+            "route canary with mismatched explicit logIndex was accepted"
+        )
+
+
+def test_live_evidence_rejects_route_canary_snake_log_index_mismatch():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_log_index_override=1,
+        route_canary_transaction_log_index_fields=("log_index",),
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary MessageProofAccepted log log_index does not match "
+            "log list index: expected 0, got 1"
+        ) in str(exc)
+    else:
+        raise AssertionError(
+            "route canary with mismatched explicit log_index was accepted"
+        )
+
+
+def test_live_evidence_rejects_route_canary_duplicate_log_index_aliases():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_log_index_override=0,
+        route_canary_transaction_log_index_fields=("logIndex", "log_index"),
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary MessageProofAccepted log must not include both "
+            "logIndex and log_index"
+        ) in str(exc)
+    else:
+        raise AssertionError(
+            "route canary with duplicate log-index aliases was accepted"
+        )
+
+
+def test_live_evidence_rejects_route_canary_info_conflicting_txid_aliases():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_info_id_alias_overrides={"txID": "11" * 32},
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary transaction info returned conflicting transaction id aliases"
+            in str(exc)
+        )
+    else:
+        raise AssertionError(
+            "route canary transaction info with conflicting id aliases was accepted"
+        )
+
+
+def test_live_evidence_rejects_route_canary_missing_block_number():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_block_number=None,
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "route-canary transaction info blockNumber must be a positive integer" in str(exc)
+    else:
+        raise AssertionError("missing TRON route-canary blockNumber was accepted")
+
+
+def test_live_evidence_rejects_route_canary_missing_block_timestamp():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_block_timestamp=None,
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary transaction info blockTimeStamp must be a non-negative integer"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("missing TRON route-canary blockTimeStamp was accepted")
+
+
 def test_live_evidence_rejects_route_canary_missing_used_message_state():
     module = load_live_module()
     setup = route_canary_full_rollout_setup(
@@ -6555,6 +7200,66 @@ def test_live_evidence_rejects_route_canary_raw_data_owner_mismatch():
         assert "owner_address does not match raw_data_hex owner_address" in str(exc)
     else:
         raise AssertionError("route canary with mismatched raw_data owner was accepted")
+
+
+def test_live_evidence_rejects_route_canary_conflicting_txid_aliases():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_id_alias_overrides={"id": "11" * 32},
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert (
+            "route-canary transaction returned conflicting transaction id aliases"
+            in str(exc)
+        )
+    else:
+        raise AssertionError(
+            "route canary with conflicting transaction id aliases was accepted"
+        )
+
+
+def test_live_evidence_rejects_route_canary_transaction_without_txid_alias():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        route_canary_transaction_include_txid=False,
+        route_canary_transaction_id_alias_overrides={
+            "id": TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+        },
+    )
+
+    try:
+        module.collect_live_evidence(
+            live_full_rollout_args(
+                setup.fake,
+                setup.expected,
+                source_code_hash=setup.source_code_hash,
+                route_canary_transaction_id=bytes.fromhex(
+                    TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                ),
+            ),
+            opener=setup.fake.opener,
+        )
+    except RuntimeError as exc:
+        assert "route-canary transaction did not return txID" in str(exc)
+    else:
+        raise AssertionError("route canary transaction without txID was accepted")
 
 
 def test_live_evidence_rejects_route_canary_multiple_signatures():

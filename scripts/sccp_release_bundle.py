@@ -17,6 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
+VERIFY_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
 
 
 def _load_module(name: str, path: Path) -> Any:
@@ -35,6 +36,10 @@ def _report_module() -> Any:
 
 def _all_lanes_module() -> Any:
     return _load_module("_sccp_all_lanes_evidence", ALL_LANES_SCRIPT)
+
+
+def _verify_module() -> Any:
+    return _load_module("_sccp_verify_release_bundle", VERIFY_SCRIPT)
 
 
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
@@ -186,6 +191,16 @@ def _release_notes_attachment(
 
 def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any]]:
     return [_artifact(path, output_dir) for path in paths]
+
+
+def _verify_generated_bundle(output_dir: Path) -> None:
+    summary = _verify_module().verify_bundle(output_dir)
+    if summary["verified"]:
+        return
+    errors = "\n".join(f"- {error}" for error in summary["errors"])
+    raise RuntimeError(
+        "generated SCCP release bundle failed strict verification:\n" + errors
+    )
 
 
 def _relative_to_bundle(output_dir: Path, path: Path) -> Path:
@@ -407,6 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             "artifacts": _bundle_artifacts(args.output_dir, all_artifact_paths),
         }
         _write_json(manifest_json, manifest)
+        if report["production_ready"]:
+            _verify_generated_bundle(args.output_dir)
     except (
         OSError,
         RuntimeError,
@@ -416,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
 
     print(f"Wrote SCCP release bundle to {args.output_dir}")
+    if report["production_ready"]:
+        print(f"Verified SCCP release bundle at {args.output_dir}")
     return 0
 
 

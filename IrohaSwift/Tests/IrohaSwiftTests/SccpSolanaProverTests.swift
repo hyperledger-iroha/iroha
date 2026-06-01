@@ -82,6 +82,57 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    func testTronRouteCanaryEvidenceBindsTransactionTranscript() throws {
+        let evidence = try Self.sampleTronRouteCanaryEvidence()
+
+        XCTAssertEqual(try canonicalTronSccpRouteCanaryEvidenceBytes(evidence).count, 551)
+        XCTAssertEqual(
+            try tronSccpRouteCanaryEvidenceHash(evidence),
+            "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
+        )
+
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(routeAllowlistHash: "0x" + String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("routeAllowlistHash"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(destinationBindingHash: "0x" + String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("destinationBindingHash"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(blockNumber: 0)
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("blockNumber"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(usedMessageProof: false)
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("usedMessageProof"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(rawDataOwnerMatchesTransaction: false)
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("rawDataOwnerMatchesTransaction"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(signatureRecoversToOwner: false)
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("signatureRecoversToOwner"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(signatureRecoveredAddress: "0x41" + String(repeating: "12", count: 20))
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("signatureRecoveredAddress"))
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(routeCanaryEvidenceHash: "0x" + String(repeating: "78", count: 32))
+        )) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("routeCanaryEvidenceHash"))
+        }
+    }
+
     private final class EvmSourceProofWitnessProvider: EvmSccpWitnessProvider {
         private(set) var resolveCount = 0
 
@@ -5148,6 +5199,28 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
             publicInputs: submissionPublicInputs,
             proofBytes: proofResult.proofBytes,
+            bundleBytes: Data([0, 0]),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofBytes: proofResult.proofBytes,
+            bundleBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1),
+            statementHash: proofResult.proofContext.statementHash,
+            destinationBindingHash: solanaDestinationBindingHash,
+            proofContextHash: proofResult.proofContextHash,
+            proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SolanaSccpProverError, .invalidString("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSolanaSccpSubmission(SolanaSccpSubmissionInput(
+            publicInputs: submissionPublicInputs,
+            proofBytes: proofResult.proofBytes,
             bundleBytes: Data([2]),
             statementHash: proofResult.proofContext.statementHash,
             destinationBindingHash: solanaDestinationBindingHash,
@@ -5345,6 +5418,14 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(submission.envelopeBytes, body)
         XCTAssertEqual(submission.envelopeHex, submission.messageBodyBocHex)
         XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(bundleBytes: Data()))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(bundleBytes: Data([0, 0])))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(
+            bundleBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1)
+        ))) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
         }
         XCTAssertThrowsError(try buildTonSccpSubmission(Self.sampleTonMessageBodyInput(proofBytes: Data([0, 0])))) { error in
@@ -7601,6 +7682,27 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
         }
         XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data([0, 0]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            sourceProofBytes: Data(repeating: 1, count: sccpSourceStateMaxProofBytes + 1),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
             sourceDomain: sccpDomainSolana
         ))) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidSourceDomain(sccpDomainSolana))
@@ -8795,6 +8897,16 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
         }
         XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            bundleBytes: Data([0, 0])
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            bundleBytes: Data(repeating: 1, count: sccpNativeRecursiveMaxProofBytes + 1)
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
             backend: "debug-substrate-backend"
         ))) { error in
             XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("backend"))
@@ -8837,11 +8949,22 @@ final class SccpSolanaProverTests: XCTestCase {
             publicInputs: Self.sampleSubstratePublicInputs(),
             proofBytes: Data([1, 2, 3, 4]),
             bundleBytes: Data([5, 6, 7]),
-            sourceProofBytes: Data([9, 10]),
+            sourceProofBytes: Data(),
             statementHash: String(repeating: "56", count: 32),
             destinationBindingHash: String(repeating: "78", count: 32)
         ))
         XCTAssertEqual(explicitSubmission.runtimeCall, submission.runtimeCall)
+
+        XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            publicInputs: Self.sampleSubstratePublicInputs(),
+            proofBytes: Data([1, 2, 3, 4]),
+            bundleBytes: Data([5, 6, 7]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
 
         XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
             publicInputs: proofResult.publicInputs,
@@ -8851,6 +8974,16 @@ final class SccpSolanaProverTests: XCTestCase {
             statementHash: proofResult.statementHash,
             destinationBindingHash: proofResult.destinationBindingHash,
             proofResult: proofResult
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpSubmission(SubstrateSccpSubmissionInput(
+            publicInputs: Self.sampleSubstratePublicInputs(),
+            proofBytes: Data([1, 2, 3, 4]),
+            bundleBytes: Data([0, 0]),
+            sourceProofBytes: Data([9, 10]),
+            statementHash: String(repeating: "56", count: 32),
+            destinationBindingHash: String(repeating: "78", count: 32)
         ))) { error in
             XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("bundleBytes"))
         }
@@ -8894,9 +9027,15 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testSccpProofRequestsRejectAllZeroSourceProofBytes() throws {
         let zeroSourceProofBytes = Data([0, 0, 0])
+        let oversizedSourceProofBytes = Data(repeating: 1, count: sccpSourceStateMaxProofBytes + 1)
 
         XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
             sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildEvmSccpProofRequest(Self.sampleEvmProofRequestInput(
+            sourceProofBytes: oversizedSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
@@ -8905,8 +9044,18 @@ final class SccpSolanaProverTests: XCTestCase {
         ))) { error in
             XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
+        XCTAssertThrowsError(try buildTronSccpProofRequest(Self.sampleTronProofRequestInput(
+            sourceProofBytes: oversizedSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
         XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
             sourceProofBytes: zeroSourceProofBytes
+        ))) { error in
+            XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceProofBytes"))
+        }
+        XCTAssertThrowsError(try buildSubstrateSccpProofRequest(Self.sampleSubstrateProofRequestInput(
+            sourceProofBytes: oversizedSourceProofBytes
         ))) { error in
             XCTAssertEqual(error as? SubstrateSccpProverError, .invalidPublicInputs("sourceProofBytes"))
         }
@@ -11202,6 +11351,58 @@ final class SccpSolanaProverTests: XCTestCase {
             lastTransactionLt: lastTransactionLt,
             lastTransactionHash: "0x" + String(repeating: "66", count: 32),
             verifierCodeBocRootHash: verifierCodeBocRootHash
+        )
+    }
+
+    private static func sampleTronRouteCanaryEvidence(
+        routeAllowlistHash: String =
+            "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+        destinationBindingHash: String? = nil,
+        blockNumber: UInt64 = 234,
+        usedMessageProof: Bool = true,
+        rawDataOwnerMatchesTransaction: Bool = true,
+        signatureRecoveredAddress: String =
+            "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        signatureRecoversToOwner: Bool = true,
+        routeCanaryEvidenceHash: String? =
+            "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
+    ) throws -> TronSccpRouteCanaryEvidenceInput {
+        let binding = try sccpTronDestinationBinding(
+            networkId: "0x" + String(repeating: "33", count: 32),
+            verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+            verifierCodeHash: "0x" + String(repeating: "bb", count: 32),
+            verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
+        )
+        return TronSccpRouteCanaryEvidenceInput(
+            routeAllowlistHash: routeAllowlistHash,
+            destinationBindingHash: destinationBindingHash ?? binding.hash,
+            sourceVerifierMaterialHash:
+                "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+            sourceAdapterEngineDeploymentHash:
+                "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+            networkId: binding.networkId,
+            verifierAddress: binding.verifierAddress,
+            verifierCodeHash: binding.verifierCodeHash,
+            verifierKeyHash: binding.verifierKeyHash,
+            transactionId: "0x" + String(repeating: "fa", count: 32),
+            transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            blockNumber: blockNumber,
+            blockTimestamp: 567000,
+            logIndex: 0,
+            messageId: "0x" + String(repeating: "dd", count: 32),
+            callDataSha256:
+                "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+            payloadHash: "0x" + String(repeating: "ab", count: 32),
+            commitmentRoot: "0x" + String(repeating: "ee", count: 32),
+            finalityHeight: "0x" + String(repeating: "00", count: 31) + "7b",
+            finalityBlockHash: "0x" + String(repeating: "cd", count: 32),
+            statementHash: "0x" + String(repeating: "f1", count: 32),
+            usedMessageProof: usedMessageProof,
+            rawDataOwnerMatchesTransaction: rawDataOwnerMatchesTransaction,
+            signatureSha256: "0x" + String(repeating: "c4", count: 32),
+            signatureRecoveredAddress: signatureRecoveredAddress,
+            signatureRecoversToOwner: signatureRecoversToOwner,
+            routeCanaryEvidenceHash: routeCanaryEvidenceHash
         )
     }
 

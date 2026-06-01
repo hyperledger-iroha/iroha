@@ -3642,13 +3642,34 @@ pub struct SccpRouteAllowlistReadinessV1 {
     pub evm_route_canary_log_index: Option<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
+    pub evm_route_canary_call_data_sha256: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
     pub evm_route_canary_message_id: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_payload_hash: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_target_domain: Option<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_statement_hash: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_commitment_root: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_finality_height: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_finality_block_hash: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_proof_version: Option<u32>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_proof_source_domain: Option<u32>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_used_message_proof: Option<bool>,
@@ -3658,6 +3679,12 @@ pub struct SccpRouteAllowlistReadinessV1 {
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_transaction_owner_address: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub tron_route_canary_block_number: Option<u64>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub tron_route_canary_block_timestamp: Option<u64>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_log_index: Option<u32>,
@@ -3736,12 +3763,21 @@ impl Default for SccpRouteAllowlistReadinessV1 {
             route_canary_destination_binding_hash: None,
             evm_route_canary_transaction_hash: None,
             evm_route_canary_log_index: None,
+            evm_route_canary_call_data_sha256: None,
             evm_route_canary_message_id: None,
+            evm_route_canary_payload_hash: None,
+            evm_route_canary_target_domain: None,
             evm_route_canary_statement_hash: None,
             evm_route_canary_commitment_root: None,
+            evm_route_canary_finality_height: None,
+            evm_route_canary_finality_block_hash: None,
+            evm_route_canary_proof_version: None,
+            evm_route_canary_proof_source_domain: None,
             evm_route_canary_used_message_proof: None,
             tron_route_canary_transaction_id: None,
             tron_route_canary_transaction_owner_address: None,
+            tron_route_canary_block_number: None,
+            tron_route_canary_block_timestamp: None,
             tron_route_canary_log_index: None,
             tron_route_canary_message_id: None,
             tron_route_canary_call_data_sha256: None,
@@ -5870,12 +5906,21 @@ pub fn sccp_route_allowlist_for_domain(domain: u32) -> Option<SccpRouteAllowlist
         route_canary_destination_binding_hash: None,
         evm_route_canary_transaction_hash: None,
         evm_route_canary_log_index: None,
+        evm_route_canary_call_data_sha256: None,
         evm_route_canary_message_id: None,
+        evm_route_canary_payload_hash: None,
+        evm_route_canary_target_domain: None,
         evm_route_canary_statement_hash: None,
         evm_route_canary_commitment_root: None,
+        evm_route_canary_finality_height: None,
+        evm_route_canary_finality_block_hash: None,
+        evm_route_canary_proof_version: None,
+        evm_route_canary_proof_source_domain: None,
         evm_route_canary_used_message_proof: None,
         tron_route_canary_transaction_id: None,
         tron_route_canary_transaction_owner_address: None,
+        tron_route_canary_block_number: None,
+        tron_route_canary_block_timestamp: None,
         tron_route_canary_log_index: None,
         tron_route_canary_message_id: None,
         tron_route_canary_call_data_sha256: None,
@@ -5919,6 +5964,18 @@ pub fn canonical_sccp_route_allowlist_evidence_bytes_v1(
     source_adapter_engine_deployment_hash: H256,
     destination_binding_hash: H256,
 ) -> Option<Vec<u8>> {
+    if !h256_is_nonzero(&source_verifier_material_hash)
+        || !h256_is_nonzero(&source_adapter_engine_deployment_hash)
+        || !h256_is_nonzero(&destination_binding_hash)
+        || !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+            destination_binding_hash,
+        ])
+    {
+        return None;
+    }
+
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, domain);
@@ -5965,20 +6022,48 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_hash: H256,
     log_index: u32,
+    call_data_sha256: H256,
     message_id: H256,
+    payload_hash: H256,
+    target_domain: u32,
     statement_hash: H256,
     commitment_root: H256,
+    finality_height: H256,
+    finality_block_hash: H256,
+    proof_version: u32,
+    proof_source_domain: u32,
+    used_message_proof: bool,
 ) -> Option<Vec<u8>> {
     if !matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
         || destination_rollout.domain != domain
+        || target_domain != domain
         || !h256_is_nonzero(&route_allowlist_hash)
         || !h256_is_nonzero(&destination_binding_hash)
         || !h256_is_nonzero(&transaction_hash)
+        || !h256_is_nonzero(&call_data_sha256)
         || !h256_is_nonzero(&message_id)
+        || !h256_is_nonzero(&payload_hash)
         || !h256_is_nonzero(&statement_hash)
         || !h256_is_nonzero(&commitment_root)
+        || !h256_is_nonzero(&finality_height)
+        || !h256_is_nonzero(&finality_block_hash)
+        || proof_version != 1
+        || proof_source_domain != SCCP_DOMAIN_SORA
+        || !used_message_proof
         || !sccp_destination_rollout_is_production_ready(domain, destination_rollout)
     {
+        return None;
+    }
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        transaction_hash,
+        call_data_sha256,
+        message_id,
+        payload_hash,
+        statement_hash,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+    ]) {
         return None;
     }
     if destination_binding_hash
@@ -6004,21 +6089,27 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     let proof_family_hash = keccak256_bytes(SCCP_STARK_FRI_PROOF_FAMILY_V1.as_bytes());
 
     let mut out = Vec::new();
-    push_u8(&mut out, 1);
+    push_u8(&mut out, 2);
     out.extend_from_slice(&route_allowlist_hash);
     out.extend_from_slice(&bridge_address);
     out.extend_from_slice(&transaction_hash);
     push_u32(&mut out, log_index);
+    out.extend_from_slice(&call_data_sha256);
     out.extend_from_slice(&message_id);
-    push_u32(&mut out, 1);
     push_u32(&mut out, SCCP_DOMAIN_SORA);
-    push_u32(&mut out, domain);
+    push_u32(&mut out, target_domain);
+    out.extend_from_slice(&payload_hash);
     out.extend_from_slice(&commitment_root);
+    out.extend_from_slice(&finality_height);
+    out.extend_from_slice(&finality_block_hash);
     out.extend_from_slice(&statement_hash);
+    push_u32(&mut out, proof_version);
+    push_u32(&mut out, proof_source_domain);
     out.extend_from_slice(&destination_binding_hash);
     out.extend_from_slice(&verifier_backend_hash);
     out.extend_from_slice(&proof_family_hash);
     out.extend_from_slice(&network_id);
+    push_u8(&mut out, u8::from(used_message_proof));
     Some(out)
 }
 
@@ -6030,12 +6121,20 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_hash: H256,
     log_index: u32,
+    call_data_sha256: H256,
     message_id: H256,
+    payload_hash: H256,
+    target_domain: u32,
     statement_hash: H256,
     commitment_root: H256,
+    finality_height: H256,
+    finality_block_hash: H256,
+    proof_version: u32,
+    proof_source_domain: u32,
+    used_message_proof: bool,
 ) -> Option<H256> {
     Some(prefixed_blake2b(
-        b"iroha:sccp:evm-route-canary-evidence:v1",
+        b"iroha:sccp:evm-route-canary-evidence:v2",
         &canonical_sccp_evm_route_canary_evidence_bytes_v1(
             domain,
             route_allowlist_hash,
@@ -6043,9 +6142,17 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
             destination_rollout,
             transaction_hash,
             log_index,
+            call_data_sha256,
             message_id,
+            payload_hash,
+            target_domain,
             statement_hash,
             commitment_root,
+            finality_height,
+            finality_block_hash,
+            proof_version,
+            proof_source_domain,
+            used_message_proof,
         )?,
     ))
 }
@@ -6057,6 +6164,8 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_id: H256,
     transaction_owner_address: [u8; 21],
+    block_number: u64,
+    block_timestamp: u64,
     log_index: u32,
     message_id: H256,
     call_data_sha256: H256,
@@ -6082,6 +6191,7 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
             .iter()
             .copied()
             .any(|byte| byte != 0)
+        || block_number == 0
         || !h256_is_nonzero(&message_id)
         || !h256_is_nonzero(&call_data_sha256)
         || !h256_is_nonzero(&payload_hash)
@@ -6104,6 +6214,19 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
         || transaction_owner_address != signature_recovered_address
         || !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_TRON, destination_rollout)
     {
+        return None;
+    }
+    if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        transaction_id,
+        call_data_sha256,
+        message_id,
+        payload_hash,
+        statement_hash,
+        commitment_root,
+        finality_height,
+        finality_block_hash,
+        signature_sha256,
+    ]) {
         return None;
     }
     if destination_binding_hash
@@ -6129,11 +6252,13 @@ pub fn canonical_sccp_tron_route_canary_evidence_bytes_v1(
     let proof_family_hash = keccak256_bytes(SCCP_STARK_FRI_PROOF_FAMILY_V1.as_bytes());
 
     let mut out = Vec::new();
-    push_u8(&mut out, 2);
+    push_u8(&mut out, 3);
     out.extend_from_slice(&route_allowlist_hash);
     out.extend_from_slice(&verifier_address_payload);
     out.extend_from_slice(&transaction_id);
     out.extend_from_slice(&transaction_owner_address);
+    push_u64(&mut out, block_number);
+    push_u64(&mut out, block_timestamp);
     push_u32(&mut out, log_index);
     out.extend_from_slice(&call_data_sha256);
     out.extend_from_slice(&message_id);
@@ -6165,6 +6290,8 @@ pub fn sccp_tron_route_canary_evidence_hash_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_id: H256,
     transaction_owner_address: [u8; 21],
+    block_number: u64,
+    block_timestamp: u64,
     log_index: u32,
     message_id: H256,
     call_data_sha256: H256,
@@ -6183,13 +6310,15 @@ pub fn sccp_tron_route_canary_evidence_hash_v1(
     signature_recovers_to_owner: bool,
 ) -> Option<H256> {
     Some(prefixed_blake2b(
-        b"iroha:sccp:tron-route-canary-evidence:v2",
+        b"iroha:sccp:tron-route-canary-evidence:v3",
         &canonical_sccp_tron_route_canary_evidence_bytes_v1(
             route_allowlist_hash,
             destination_binding_hash,
             destination_rollout,
             transaction_id,
             transaction_owner_address,
+            block_number,
+            block_timestamp,
             log_index,
             message_id,
             call_data_sha256,
@@ -6579,13 +6708,21 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     source_adapter_engine_deployment_hash: H256,
     transaction_hash: H256,
     log_index: u32,
+    call_data_sha256: H256,
     message_id: H256,
+    payload_hash: H256,
+    target_domain: u32,
     statement_hash: H256,
     commitment_root: H256,
+    finality_height: H256,
+    finality_block_hash: H256,
+    proof_version: u32,
+    proof_source_domain: u32,
     used_message_proof: bool,
 ) -> Option<SccpRouteAllowlistReadinessV1> {
     if !matches!(allowlist.domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
         || destination_rollout.domain != allowlist.domain
+        || target_domain != allowlist.domain
         || !used_message_proof
     {
         return None;
@@ -6599,9 +6736,17 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
         destination_rollout,
         transaction_hash,
         log_index,
+        call_data_sha256,
         message_id,
+        payload_hash,
+        target_domain,
         statement_hash,
         commitment_root,
+        finality_height,
+        finality_block_hash,
+        proof_version,
+        proof_source_domain,
+        used_message_proof,
     )?;
     let mut allowlist = sccp_route_allowlist_with_lane_canary_evidence_v1(
         allowlist,
@@ -6612,9 +6757,17 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     )?;
     allowlist.evm_route_canary_transaction_hash = Some(encode_0x_lower_hex(&transaction_hash));
     allowlist.evm_route_canary_log_index = Some(log_index);
+    allowlist.evm_route_canary_call_data_sha256 = Some(encode_0x_lower_hex(&call_data_sha256));
     allowlist.evm_route_canary_message_id = Some(encode_0x_lower_hex(&message_id));
+    allowlist.evm_route_canary_payload_hash = Some(encode_0x_lower_hex(&payload_hash));
+    allowlist.evm_route_canary_target_domain = Some(target_domain);
     allowlist.evm_route_canary_statement_hash = Some(encode_0x_lower_hex(&statement_hash));
     allowlist.evm_route_canary_commitment_root = Some(encode_0x_lower_hex(&commitment_root));
+    allowlist.evm_route_canary_finality_height = Some(encode_0x_lower_hex(&finality_height));
+    allowlist.evm_route_canary_finality_block_hash =
+        Some(encode_0x_lower_hex(&finality_block_hash));
+    allowlist.evm_route_canary_proof_version = Some(proof_version);
+    allowlist.evm_route_canary_proof_source_domain = Some(proof_source_domain);
     allowlist.evm_route_canary_used_message_proof = Some(true);
     Some(allowlist)
 }
@@ -6628,6 +6781,8 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
     source_adapter_engine_deployment_hash: H256,
     transaction_id: H256,
     transaction_owner_address: [u8; 21],
+    block_number: u64,
+    block_timestamp: u64,
     log_index: u32,
     message_id: H256,
     call_data_sha256: H256,
@@ -6651,6 +6806,7 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
         || !raw_data_owner_matches_transaction
         || !signature_recovers_to_owner
         || !h256_is_nonzero(&signature_sha256)
+        || block_number == 0
         || transaction_owner_address[0] != 0x41
         || !transaction_owner_address[1..]
             .iter()
@@ -6673,6 +6829,8 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
         destination_rollout,
         transaction_id,
         transaction_owner_address,
+        block_number,
+        block_timestamp,
         log_index,
         message_id,
         call_data_sha256,
@@ -6700,6 +6858,8 @@ pub fn sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
     allowlist.tron_route_canary_transaction_id = Some(encode_0x_lower_hex(&transaction_id));
     allowlist.tron_route_canary_transaction_owner_address =
         Some(encode_0x_lower_hex(&transaction_owner_address));
+    allowlist.tron_route_canary_block_number = Some(block_number);
+    allowlist.tron_route_canary_block_timestamp = Some(block_timestamp);
     allowlist.tron_route_canary_log_index = Some(log_index);
     allowlist.tron_route_canary_message_id = Some(encode_0x_lower_hex(&message_id));
     allowlist.tron_route_canary_call_data_sha256 = Some(encode_0x_lower_hex(&call_data_sha256));
@@ -6862,9 +7022,16 @@ fn sccp_route_allowlist_evm_canary_fields_absent(
 ) -> bool {
     allowlist.evm_route_canary_transaction_hash.is_none()
         && allowlist.evm_route_canary_log_index.is_none()
+        && allowlist.evm_route_canary_call_data_sha256.is_none()
         && allowlist.evm_route_canary_message_id.is_none()
+        && allowlist.evm_route_canary_payload_hash.is_none()
+        && allowlist.evm_route_canary_target_domain.is_none()
         && allowlist.evm_route_canary_statement_hash.is_none()
         && allowlist.evm_route_canary_commitment_root.is_none()
+        && allowlist.evm_route_canary_finality_height.is_none()
+        && allowlist.evm_route_canary_finality_block_hash.is_none()
+        && allowlist.evm_route_canary_proof_version.is_none()
+        && allowlist.evm_route_canary_proof_source_domain.is_none()
         && allowlist.evm_route_canary_used_message_proof.is_none()
 }
 
@@ -6883,6 +7050,8 @@ fn sccp_route_allowlist_tron_canary_fields_absent(
         && allowlist
             .tron_route_canary_transaction_owner_address
             .is_none()
+        && allowlist.tron_route_canary_block_number.is_none()
+        && allowlist.tron_route_canary_block_timestamp.is_none()
         && allowlist.tron_route_canary_log_index.is_none()
         && allowlist.tron_route_canary_message_id.is_none()
         && allowlist.tron_route_canary_call_data_sha256.is_none()
@@ -6923,9 +7092,22 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     let Some(log_index) = allowlist.evm_route_canary_log_index else {
         return false;
     };
+    let Some(call_data_sha256) = required_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_call_data_sha256.as_deref(),
+    ) else {
+        return false;
+    };
     let Some(message_id) =
         required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_message_id.as_deref())
     else {
+        return false;
+    };
+    let Some(payload_hash) =
+        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_payload_hash.as_deref())
+    else {
+        return false;
+    };
+    let Some(target_domain) = allowlist.evm_route_canary_target_domain else {
         return false;
     };
     let Some(statement_hash) =
@@ -6938,6 +7120,22 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     else {
         return false;
     };
+    let Some(finality_height) =
+        required_hex_string_is_nonzero::<32>(allowlist.evm_route_canary_finality_height.as_deref())
+    else {
+        return false;
+    };
+    let Some(finality_block_hash) = required_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_finality_block_hash.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(proof_version) = allowlist.evm_route_canary_proof_version else {
+        return false;
+    };
+    let Some(proof_source_domain) = allowlist.evm_route_canary_proof_source_domain else {
+        return false;
+    };
     if allowlist.evm_route_canary_used_message_proof != Some(true) {
         return false;
     }
@@ -6948,9 +7146,17 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
         destination_rollout,
         transaction_hash,
         log_index,
+        call_data_sha256,
         message_id,
+        payload_hash,
+        target_domain,
         statement_hash,
         commitment_root,
+        finality_height,
+        finality_block_hash,
+        proof_version,
+        proof_source_domain,
+        true,
     )
     .as_ref()
         == Some(route_canary_evidence_hash)
@@ -6981,6 +7187,15 @@ fn sccp_route_allowlist_tron_canary_evidence_is_bound(
             .copied()
             .any(|byte| byte != 0)
     {
+        return false;
+    }
+    let Some(block_number) = allowlist.tron_route_canary_block_number else {
+        return false;
+    };
+    let Some(block_timestamp) = allowlist.tron_route_canary_block_timestamp else {
+        return false;
+    };
+    if block_number == 0 {
         return false;
     }
     let Some(log_index) = allowlist.tron_route_canary_log_index else {
@@ -7071,6 +7286,8 @@ fn sccp_route_allowlist_tron_canary_evidence_is_bound(
         destination_rollout,
         transaction_id,
         transaction_owner_address,
+        block_number,
+        block_timestamp,
         log_index,
         message_id,
         call_data_sha256,
@@ -9012,6 +9229,7 @@ fn sccp_source_adapter_deployment_has_solana_full_light_client_audit(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> bool {
     deployment.source_domain == SCCP_DOMAIN_SOL
+        && deployment.target_domain == SCCP_DOMAIN_SORA
         && sccp_source_adapter_deployment_solana_full_light_client_audit_nonzero_count(deployment)
             == 3
 }
@@ -9023,6 +9241,7 @@ fn sccp_source_adapter_deployment_solana_full_light_client_audit_shape_is_valid(
         sccp_source_adapter_deployment_solana_full_light_client_audit_nonzero_count(deployment);
     nonzero_count == 0
         || (deployment.source_domain == SCCP_DOMAIN_SOL
+            && deployment.target_domain == SCCP_DOMAIN_SORA
             && nonzero_count == 3
             && sccp_solana_full_light_client_audit_hashes_are_role_separated(
                 deployment,
@@ -9105,6 +9324,7 @@ fn sccp_source_adapter_deployment_has_ton_full_light_client_audit(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> bool {
     deployment.source_domain == SCCP_DOMAIN_TON
+        && deployment.target_domain == SCCP_DOMAIN_SORA
         && sccp_source_adapter_deployment_ton_full_light_client_audit_nonzero_count(deployment) == 3
 }
 
@@ -9115,6 +9335,7 @@ fn sccp_source_adapter_deployment_ton_full_light_client_audit_shape_is_valid(
         sccp_source_adapter_deployment_ton_full_light_client_audit_nonzero_count(deployment);
     nonzero_count == 0
         || (deployment.source_domain == SCCP_DOMAIN_TON
+            && deployment.target_domain == SCCP_DOMAIN_SORA
             && nonzero_count == 3
             && sccp_ton_full_light_client_audit_hashes_are_role_separated(
                 deployment,
@@ -14827,7 +15048,7 @@ pub fn build_sccp_ton_proof_request(
 ) -> Option<SccpTonProofRequestV1> {
     let source_proof_bytes = source_proof_bytes.unwrap_or_default();
     if !sccp_ton_proof_request_public_inputs_are_valid(public_inputs)
-        || bundle_bytes.is_empty()
+        || !sccp_native_recursive_payload_bytes_are_packagable(bundle_bytes)
         || !sccp_optional_source_proof_bytes_are_packagable(source_proof_bytes)
         || !h256_is_nonzero(&statement_hash)
         || !h256_is_nonzero(&destination_binding_hash)
@@ -14885,7 +15106,7 @@ fn sccp_ton_proof_request_is_canonical(request: &SccpTonProofRequestV1) -> bool 
         || request.target_domain != SCCP_DOMAIN_TON
         || !sccp_ton_proof_request_public_inputs_are_valid(&request.public_inputs)
         || request.public_inputs.target_domain != request.target_domain
-        || request.bundle_bytes.is_empty()
+        || !sccp_native_recursive_payload_bytes_are_packagable(&request.bundle_bytes)
         || !sccp_optional_source_proof_bytes_are_packagable(&request.source_proof_bytes)
         || request.proof_context.version != 1
         || request.proof_context.statement_hash != request.statement_hash
@@ -15071,7 +15292,7 @@ fn sccp_ton_submission_context_is_valid(
         && sccp_transparent_public_inputs_match_manifest(manifest, public_inputs)
         && h256_is_nonzero(&statement_hash)
         && sccp_transparent_proof_bytes_are_packagable(proof_bytes)
-        && !bundle_bytes.is_empty()
+        && sccp_native_recursive_payload_bytes_are_packagable(bundle_bytes)
 }
 
 pub fn build_sccp_ton_message_body_boc(
@@ -15528,7 +15749,9 @@ fn sccp_transparent_public_inputs_match_manifest(
 }
 
 fn sccp_optional_source_proof_bytes_are_packagable(source_proof_bytes: &[u8]) -> bool {
-    source_proof_bytes.is_empty() || source_proof_bytes.iter().any(|byte| *byte != 0)
+    source_proof_bytes.is_empty()
+        || (source_proof_bytes.len() <= SCCP_SOURCE_STATE_MAX_PROOF_BYTES
+            && source_proof_bytes.iter().any(|byte| *byte != 0))
 }
 
 fn sccp_groth16_bn254_proof_request_hash(
@@ -16548,6 +16771,10 @@ fn sccp_transparent_proof_bytes_are_packagable(proof_bytes: &[u8]) -> bool {
         && proof_bytes.iter().any(|byte| *byte != 0)
 }
 
+fn sccp_native_recursive_payload_bytes_are_packagable(bytes: &[u8]) -> bool {
+    sccp_transparent_proof_bytes_are_packagable(bytes)
+}
+
 fn build_sccp_platform_submission_payload(
     manifest: &SccpProofManifestV1,
     native_proof_bytes: &[u8],
@@ -16617,7 +16844,9 @@ fn build_sccp_platform_submission_payload(
             )?,
         ),
         SccpProofVerifierTargetV1::SolanaProgram => {
-            if !sccp_transparent_proof_bytes_are_packagable(native_proof_bytes) {
+            if !sccp_transparent_proof_bytes_are_packagable(native_proof_bytes)
+                || !sccp_native_recursive_payload_bytes_are_packagable(&canonical_bundle)
+            {
                 return None;
             }
             let destination_binding = destination_binding.unwrap_or(&manifest.destination_binding);
@@ -16661,7 +16890,9 @@ fn build_sccp_platform_submission_payload(
             )
         }
         SccpProofVerifierTargetV1::SubstrateRuntime => {
-            if !sccp_transparent_proof_bytes_are_packagable(native_proof_bytes) {
+            if !sccp_transparent_proof_bytes_are_packagable(native_proof_bytes)
+                || !sccp_native_recursive_payload_bytes_are_packagable(&canonical_bundle)
+            {
                 return None;
             }
             SccpPlatformSubmissionPayloadV1::SubstrateRuntimeCall(
@@ -53128,6 +53359,31 @@ mod tests {
             .is_none(),
             "TON message body must include the canonical SCCP bundle bytes"
         );
+        assert!(
+            build_sccp_ton_message_body_boc(
+                &manifest,
+                &manifest.destination_binding,
+                &public_inputs,
+                &proof_bytes,
+                &[0, 0],
+                inner.statement_hash,
+            )
+            .is_none(),
+            "TON message body must reject all-zero bundle bytes"
+        );
+        let oversized_bundle_bytes = vec![0xAA; SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+        assert!(
+            build_sccp_ton_message_body_boc(
+                &manifest,
+                &manifest.destination_binding,
+                &public_inputs,
+                &proof_bytes,
+                &oversized_bundle_bytes,
+                inner.statement_hash,
+            )
+            .is_none(),
+            "TON message body must keep bundle bytes inside the native recursive payload corridor"
+        );
     }
 
     #[test]
@@ -53341,6 +53597,47 @@ mod tests {
             )
             .is_none(),
             "TON proof requests must reject all-zero source proof bytes"
+        );
+        let oversized_source_proof_bytes = vec![0xAA; SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1];
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                Some(&oversized_source_proof_bytes),
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must keep source proof bytes inside the source-state proof corridor"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &[0, 0],
+                Some(&source_proof_bytes),
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject all-zero bundle bytes before UI proving"
+        );
+        let oversized_bundle_bytes = vec![0xAA; SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &oversized_bundle_bytes,
+                Some(&source_proof_bytes),
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must keep bundle bytes inside the native recursive payload corridor"
         );
         assert!(
             build_sccp_ton_proof_request(
@@ -53784,6 +54081,33 @@ mod tests {
             )
             .expect("route allowlist vector")
         );
+        assert!(
+            sccp_route_allowlist_hash_for_lane_evidence_v1(
+                SCCP_DOMAIN_ETH,
+                [0x00; 32],
+                [0x22; 32],
+                [0x33; 32],
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_route_allowlist_hash_for_lane_evidence_v1(
+                SCCP_DOMAIN_ETH,
+                [0x11; 32],
+                [0x11; 32],
+                [0x33; 32],
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_route_allowlist_hash_for_lane_evidence_v1(
+                SCCP_DOMAIN_ETH,
+                [0x11; 32],
+                [0x22; 32],
+                [0x11; 32],
+            )
+            .is_none()
+        );
     }
 
     fn route_allowlist_with_test_canary(
@@ -53902,9 +54226,17 @@ mod tests {
             &destination_rollout,
             [0xea; 32],
             3,
+            [0xeb; 32],
             [0xdd; 32],
+            [0xdc; 32],
+            SCCP_DOMAIN_ETH,
             [0xf1; 32],
             [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
         )
         .expect("EVM route canary hash");
         let route_canary_bytes = canonical_sccp_evm_route_canary_evidence_bytes_v1(
@@ -53920,29 +54252,90 @@ mod tests {
             &destination_rollout,
             [0xea; 32],
             3,
+            [0xeb; 32],
             [0xdd; 32],
+            [0xdc; 32],
+            SCCP_DOMAIN_ETH,
             [0xf1; 32],
             [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
+            true,
         )
         .expect("EVM route canary bytes");
         assert_eq!(
-            &route_canary_bytes[121..125],
-            &1u32.to_le_bytes(),
-            "EVM canary transcript must bind Groth16 proof ABI version"
+            route_canary_bytes[0], 2,
+            "EVM canary transcript must use the v2 public-input layout"
         );
         assert_eq!(
-            &route_canary_bytes[125..129],
+            &route_canary_bytes[153..157],
             &SCCP_DOMAIN_SORA.to_le_bytes(),
             "EVM canary transcript must bind the SORA proof source-domain word"
         );
         assert_eq!(
-            &route_canary_bytes[129..133],
+            &route_canary_bytes[157..161],
             &SCCP_DOMAIN_ETH.to_le_bytes(),
             "EVM canary transcript must bind the target EVM-family lane"
+        );
+        assert_eq!(
+            &route_canary_bytes[225..257],
+            &[0xed; 32],
+            "EVM canary transcript must bind the finality height public input"
+        );
+        assert_eq!(
+            &route_canary_bytes[257..289],
+            &[0xec; 32],
+            "EVM canary transcript must bind the finality block hash public input"
+        );
+        assert_eq!(
+            &route_canary_bytes[321..325],
+            &1u32.to_le_bytes(),
+            "EVM canary transcript must bind Groth16 proof ABI version"
+        );
+        assert_eq!(
+            &route_canary_bytes[325..329],
+            &SCCP_DOMAIN_SORA.to_le_bytes(),
+            "EVM canary transcript must bind the SORA proof source-domain word"
+        );
+        assert_eq!(
+            *route_canary_bytes.last().expect("used-message proof flag"),
+            1,
+            "EVM canary transcript must bind the consumed-message flag"
         );
         assert!(h256_is_nonzero(&route_canary_hash));
         assert_ne!(route_canary_hash, source_material_hash);
         assert_ne!(route_canary_hash, source_deployment_hash);
+        assert!(
+            sccp_evm_route_canary_evidence_hash_v1(
+                SCCP_DOMAIN_ETH,
+                decode_fixed_hex_bytes::<32>(
+                    route_allowlist
+                        .route_allowlist_hash
+                        .as_deref()
+                        .expect("route allowlist hash"),
+                )
+                .expect("decode route allowlist hash"),
+                destination_binding_hash,
+                &destination_rollout,
+                [0xea; 32],
+                3,
+                [0xeb; 32],
+                [0xdd; 32],
+                [0xdc; 32],
+                SCCP_DOMAIN_ETH,
+                [0xf1; 32],
+                [0xee; 32],
+                [0xea; 32],
+                [0xec; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+            )
+            .is_none(),
+            "EVM canary transcript roles must reject transaction/finality replay"
+        );
         let allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
             route_allowlist,
             &destination_rollout,
@@ -53951,9 +54344,16 @@ mod tests {
             source_deployment_hash,
             [0xea; 32],
             3,
+            [0xeb; 32],
             [0xdd; 32],
+            [0xdc; 32],
+            SCCP_DOMAIN_ETH,
             [0xf1; 32],
             [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
             true,
         )
         .expect("EVM transaction-bound canary evidence");
@@ -53966,6 +54366,31 @@ mod tests {
             Some(encode_0x_lower_hex(&[0xea; 32]).as_str())
         );
         assert_eq!(allowlist.evm_route_canary_log_index, Some(3));
+        assert_eq!(
+            allowlist.evm_route_canary_call_data_sha256.as_deref(),
+            Some(encode_0x_lower_hex(&[0xeb; 32]).as_str())
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_payload_hash.as_deref(),
+            Some(encode_0x_lower_hex(&[0xdc; 32]).as_str())
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_target_domain,
+            Some(SCCP_DOMAIN_ETH)
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_finality_height.as_deref(),
+            Some(encode_0x_lower_hex(&[0xed; 32]).as_str())
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_finality_block_hash.as_deref(),
+            Some(encode_0x_lower_hex(&[0xec; 32]).as_str())
+        );
+        assert_eq!(allowlist.evm_route_canary_proof_version, Some(1));
+        assert_eq!(
+            allowlist.evm_route_canary_proof_source_domain,
+            Some(SCCP_DOMAIN_SORA)
+        );
         assert_eq!(allowlist.evm_route_canary_used_message_proof, Some(true));
         assert!(sccp_route_allowlist_canary_evidence_is_bound(
             SCCP_DOMAIN_ETH,
@@ -54378,9 +54803,16 @@ mod tests {
             source_deployment_hash,
             [0xea; 32],
             0,
+            [0xeb; 32],
             [0xdd; 32],
+            [0xdc; 32],
+            SCCP_DOMAIN_ETH,
             [0xf1; 32],
             [0xee; 32],
+            [0xed; 32],
+            [0xec; 32],
+            1,
+            SCCP_DOMAIN_SORA,
             true,
         )
         .expect("EVM transaction-bound canary route allowlist");
@@ -54765,6 +55197,8 @@ mod tests {
                 [0xfa; 32],
                 decode_fixed_hex_bytes::<21>("417e5f4552091a69125d5dfcb7b8c2659029395bdf")
                     .expect("TRON route canary transaction owner vector"),
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 decode_fixed_hex_bytes::<32>(
@@ -54791,7 +55225,7 @@ mod tests {
             ),
             Some(
                 decode_fixed_hex_bytes::<32>(
-                    "0fcd46001b9b68604a190377fc77bd64e77dcea6021aee4232be99f855958662",
+                    "e0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
                 )
                 .expect("TRON route canary vector")
             )
@@ -54893,6 +55327,8 @@ mod tests {
             source_deployment_hash,
             [0xfa; 32],
             [0x41; 21],
+            234,
+            567_000,
             0,
             [0xdd; 32],
             [0xa1; 32],
@@ -54926,6 +55362,8 @@ mod tests {
                 &destination_rollout,
                 [0xfa; 32],
                 [0x41; 21],
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 [0xa1; 32],
@@ -54956,6 +55394,11 @@ mod tests {
                 .as_deref(),
             Some(expected_transaction_owner_address.as_str())
         );
+        assert_eq!(route_allowlist.tron_route_canary_block_number, Some(234));
+        assert_eq!(
+            route_allowlist.tron_route_canary_block_timestamp,
+            Some(567_000)
+        );
         assert_eq!(route_allowlist.tron_route_canary_log_index, Some(0));
         assert_eq!(
             route_allowlist.tron_route_canary_used_message_proof,
@@ -54981,6 +55424,34 @@ mod tests {
         assert!(readiness.production_ready);
         assert!(readiness.blockers.is_empty());
 
+        let assert_drift_closes_lane = |label: &str, drifted_allowlist| {
+            let drifted_readiness =
+                sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                    SCCP_DOMAIN_TRON,
+                    &source_material,
+                    &source_deployment,
+                    &destination_rollout,
+                    &drifted_allowlist,
+                )
+                .unwrap_or_else(|| panic!("{label} readiness must be computable"));
+            assert!(
+                !drifted_readiness.routes_allowlisted,
+                "{label} must close route allowlisting"
+            );
+            assert!(
+                !drifted_readiness.production_ready,
+                "{label} must close TRON production readiness"
+            );
+            assert!(
+                drifted_readiness
+                    .blockers
+                    .iter()
+                    .any(|blocker| blocker.contains("route canary evidence is not bound")),
+                "{label} must close the lane with a route canary blocker: {:?}",
+                drifted_readiness.blockers
+            );
+        };
+
         let mut drifted_message_id = route_allowlist.clone();
         drifted_message_id.tron_route_canary_message_id = Some(format!("0x{}", "de".repeat(32)));
         let drifted_message_readiness =
@@ -55002,6 +55473,14 @@ mod tests {
             "drifted TRON message id must close the lane: {:?}",
             drifted_message_readiness.blockers
         );
+
+        let mut drifted_block_number = route_allowlist.clone();
+        drifted_block_number.tron_route_canary_block_number = Some(235);
+        assert_drift_closes_lane("drifted TRON block number", drifted_block_number);
+
+        let mut drifted_block_timestamp = route_allowlist.clone();
+        drifted_block_timestamp.tron_route_canary_block_timestamp = Some(567_001);
+        assert_drift_closes_lane("drifted TRON block timestamp", drifted_block_timestamp);
 
         let mut drifted_call_data_hash = route_allowlist.clone();
         drifted_call_data_hash.tron_route_canary_call_data_sha256 =
@@ -55047,34 +55526,6 @@ mod tests {
             "drifted TRON target-domain word must close the lane: {:?}",
             drifted_target_readiness.blockers
         );
-
-        let assert_drift_closes_lane = |label: &str, drifted_allowlist| {
-            let drifted_readiness =
-                sccp_lane_production_readiness_with_deployment_materials_for_domain(
-                    SCCP_DOMAIN_TRON,
-                    &source_material,
-                    &source_deployment,
-                    &destination_rollout,
-                    &drifted_allowlist,
-                )
-                .unwrap_or_else(|| panic!("{label} readiness must be computable"));
-            assert!(
-                !drifted_readiness.routes_allowlisted,
-                "{label} must close route allowlisting"
-            );
-            assert!(
-                !drifted_readiness.production_ready,
-                "{label} must close TRON production readiness"
-            );
-            assert!(
-                drifted_readiness
-                    .blockers
-                    .iter()
-                    .any(|blocker| blocker.contains("route canary evidence is not bound")),
-                "{label} must close the lane with a route canary blocker: {:?}",
-                drifted_readiness.blockers
-            );
-        };
 
         let mut drifted_payload_hash = route_allowlist.clone();
         drifted_payload_hash.tron_route_canary_payload_hash =
@@ -55264,6 +55715,8 @@ mod tests {
                 source_deployment_hash,
                 [0xfa; 32],
                 [0x41; 21],
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 [0xa1; 32],
@@ -55328,6 +55781,16 @@ mod tests {
                 [0xa1; 32],
                 [0xab; 32],
                 SCCP_DOMAIN_TRON,
+                [0xa1; 32],
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                "replayed finality height",
+            ),
+            (
+                [0xa1; 32],
+                [0xab; 32],
+                SCCP_DOMAIN_TRON,
                 [0x00; 32],
                 [0xcd; 32],
                 1,
@@ -55374,6 +55837,8 @@ mod tests {
                     source_deployment_hash,
                     [0xfa; 32],
                     [0x41; 21],
+                    234,
+                    567_000,
                     0,
                     [0xdd; 32],
                     call_data_sha256,
@@ -55404,6 +55869,8 @@ mod tests {
                 source_deployment_hash,
                 [0xfa; 32],
                 [0x41; 21],
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 [0xa1; 32],
@@ -55433,6 +55900,8 @@ mod tests {
                 source_deployment_hash,
                 [0xfa; 32],
                 [0x41; 21],
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 [0xa1; 32],
@@ -55462,6 +55931,8 @@ mod tests {
                 source_deployment_hash,
                 [0xfa; 32],
                 [0x41; 21],
+                234,
+                567_000,
                 0,
                 [0xdd; 32],
                 [0xa1; 32],
@@ -55481,6 +55952,37 @@ mod tests {
             )
             .is_none(),
             "TRON canary builder must reject signatures recovered to a non-owner"
+        );
+        assert!(
+            sccp_tron_route_allowlist_with_lane_canary_evidence_v1(
+                route_allowlist.clone(),
+                &destination_rollout,
+                destination_binding_hash,
+                source_material_hash,
+                source_deployment_hash,
+                [0xfa; 32],
+                [0x41; 21],
+                234,
+                567_000,
+                0,
+                [0xdd; 32],
+                [0xa1; 32],
+                [0xab; 32],
+                SCCP_DOMAIN_TRON,
+                [0xf1; 32],
+                [0xee; 32],
+                [0xa2; 32],
+                [0xcd; 32],
+                1,
+                SCCP_DOMAIN_SORA,
+                true,
+                true,
+                [0xfa; 32],
+                [0x41; 21],
+                true,
+            )
+            .is_none(),
+            "TRON canary builder must reject transaction/signature hash role replay"
         );
 
         assert!(
@@ -58513,6 +59015,22 @@ mod tests {
             &material,
             &audited_deployment,
         ));
+        let mut foreign_target_audit_deployment = audited_deployment.clone();
+        foreign_target_audit_deployment.target_domain = SCCP_DOMAIN_ETH;
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &material,
+                &foreign_target_audit_deployment,
+            ),
+            "Solana full-light-client audit fields are only valid on SORA-bound source-adapter deployments"
+        );
+        assert!(
+            sccp_solana_full_light_client_gate_hash_from_deployment_v1(
+                &material,
+                &foreign_target_audit_deployment,
+            )
+            .is_none()
+        );
         let audited_readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
                 SCCP_DOMAIN_SOL,
@@ -59425,6 +59943,22 @@ mod tests {
             &material,
             &audited_deployment,
         ));
+        let mut foreign_target_audit_deployment = audited_deployment.clone();
+        foreign_target_audit_deployment.target_domain = SCCP_DOMAIN_ETH;
+        assert!(
+            !sccp_source_adapter_engine_deployment_matches_material(
+                &material,
+                &foreign_target_audit_deployment,
+            ),
+            "TON full-light-client audit fields are only valid on SORA-bound source-adapter deployments"
+        );
+        assert!(
+            sccp_ton_full_light_client_gate_hash_from_deployment_v1(
+                &material,
+                &foreign_target_audit_deployment,
+            )
+            .is_none()
+        );
         let audited_readiness =
             sccp_source_adapter_engine_readiness_with_material_and_deployment_for_domain(
                 SCCP_DOMAIN_TON,
@@ -63017,6 +63551,19 @@ mod tests {
             .is_none(),
             "explicit all-zero source proof bytes must fail before UI proving"
         );
+        let oversized_source_proof_bytes = vec![0xAA; SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1];
+        assert!(
+            build_sccp_evm_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&oversized_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "EVM proof requests must bound source proof bytes before UI proving"
+        );
         assert!(
             build_sccp_evm_groth16_bn254_proof_request(
                 &manifest,
@@ -63909,6 +64456,19 @@ mod tests {
             .is_none(),
             "TRON proof requests must reject explicit all-zero source proof bytes"
         );
+        let oversized_source_proof_bytes = vec![0xAA; SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1];
+        assert!(
+            build_sccp_tron_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&oversized_source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "TRON proof requests must bound source proof bytes before UI proving"
+        );
 
         let mut stale_request_hash = request.clone();
         stale_request_hash.request_hash[0] ^= 0x01;
@@ -64169,6 +64729,65 @@ mod tests {
                 &wrong_context,
                 true,
             )
+        );
+    }
+
+    #[test]
+    fn solana_submission_package_rejects_oversized_bundle_bytes() {
+        let SccpPayloadV1::Transfer(mut payload) =
+            sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SOL, 65).payload
+        else {
+            panic!("expected transfer payload");
+        };
+        payload.asset_id = vec![b'a'; SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(payload));
+        assert!(verify_message_bundle_structure(&bundle));
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes(&bundle).len()
+                > SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
+            "test fixture must exceed the native recursive payload corridor",
+        );
+
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_SOL).expect("sol manifest");
+        assert!(
+            build_sccp_counterparty_submission_package_allow_unready(
+                &bundle,
+                &manifest,
+                &[0xAA, 0xBB],
+                true,
+            )
+            .is_none(),
+            "Solana verifier-program bundle bytes must use the native recursive payload corridor",
+        );
+    }
+
+    #[test]
+    fn substrate_submission_package_rejects_oversized_bundle_bytes() {
+        let SccpPayloadV1::Transfer(mut payload) =
+            sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_SORA2, 66).payload
+        else {
+            panic!("expected transfer payload");
+        };
+        payload.asset_id = vec![b'a'; SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(payload));
+        assert!(verify_message_bundle_structure(&bundle));
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes(&bundle).len()
+                > SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES,
+            "test fixture must exceed the native recursive payload corridor",
+        );
+
+        let manifest =
+            sccp_proof_manifest_for_domain(SCCP_DOMAIN_SORA2).expect("substrate manifest");
+        assert!(
+            build_sccp_counterparty_submission_package_allow_unready(
+                &bundle,
+                &manifest,
+                &[0xAA, 0xBB],
+                true,
+            )
+            .is_none(),
+            "Substrate runtime-call bundle bytes must use the native recursive payload corridor",
         );
     }
 

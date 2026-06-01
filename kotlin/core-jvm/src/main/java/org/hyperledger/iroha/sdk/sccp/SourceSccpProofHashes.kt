@@ -4205,7 +4205,7 @@ object SccpSourceProofs {
         return out
     }
 
-    private fun tronBase58CheckPayload(value: String, field: String): ByteArray {
+    internal fun tronBase58CheckPayload(value: String, field: String): ByteArray {
         require(value.isNotEmpty()) { "$field must not be empty" }
         require(value.trim() == value) { "$field must be a canonical Base58Check address" }
         val decoded = base58Decode(value, field)

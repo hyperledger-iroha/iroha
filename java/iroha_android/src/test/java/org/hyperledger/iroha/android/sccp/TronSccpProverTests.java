@@ -8,6 +8,7 @@ public final class TronSccpProverTests {
   private TronSccpProverTests() {}
 
   public static void main(final String[] args) {
+    derivesTronRouteCanaryEvidenceHash();
     derivesGroth16PublicSignalWords();
     proofRequestBindsPublicSignalsAndRelayContext();
     proverRequiresLinkedProofEngine();
@@ -16,6 +17,61 @@ public final class TronSccpProverTests {
     rejectsMalformedGroth16ProofTuple();
     buildsContractCallSubmission();
     System.out.println("[IrohaAndroid] TRON SCCP prover tests passed.");
+  }
+
+  private static void derivesTronRouteCanaryEvidenceHash() {
+    final TronSccpProver.RouteCanaryEvidenceInput evidence = sampleTronRouteCanaryEvidence();
+
+    assert TronSccpProver.canonicalRouteCanaryEvidenceBytes(evidence).length == 551
+        : "TRON route canary transcript length must match Rust";
+    assert TronSccpProver.routeCanaryEvidenceHash(evidence)
+        .equals("0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56")
+        : "TRON route canary hash must match Rust/script vector";
+
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(
+                    "0x" + repeat("78", 32), null, null, true, true, null, true, null)),
+        "routeAllowlistHash");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(
+                    null, "0x" + repeat("78", 32), null, true, true, null, true, null)),
+        "destinationBindingHash");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(null, null, "0", true, true, null, true, null)),
+        "blockNumber");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(null, null, null, false, true, null, true, null)),
+        "usedMessageProof");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(null, null, null, true, false, null, true, null)),
+        "rawDataOwnerMatchesTransaction");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(null, null, null, true, true, null, false, null)),
+        "signatureRecoversToOwner");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(
+                    null, null, null, true, true, "0x41" + repeat("12", 20), true, null)),
+        "signatureRecoveredAddress");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidence(
+                    null, null, null, true, true, null, true, "0x" + repeat("78", 32))),
+        "routeCanaryEvidenceHash");
   }
 
   private static void derivesGroth16PublicSignalWords() {
@@ -223,6 +279,18 @@ public final class TronSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must not be all zero");
     }
     assert threw : "all-zero TRON source proof bytes must be rejected";
+
+    final byte[] oversizedSourceProof =
+        new byte[TronSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedSourceProof, (byte) 1);
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          sampleProofRequestInput(oversizedSourceProof, repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be at most");
+    }
+    assert threw : "oversized TRON source proof bytes must be rejected";
     assert TronSccpProver.buildProofRequest(sampleProofRequestInput(new byte[0], repeat("56", 32)))
         .sourceProofBytes()
         .length == 0 : "empty optional TRON source proof bytes must remain valid";
@@ -1020,6 +1088,61 @@ public final class TronSccpProverTests {
         "0x" + repeat("cc", 32));
   }
 
+  private static TronSccpProver.RouteCanaryEvidenceInput sampleTronRouteCanaryEvidence() {
+    return sampleTronRouteCanaryEvidence(null, null, null, true, true, null, true, null);
+  }
+
+  private static TronSccpProver.RouteCanaryEvidenceInput sampleTronRouteCanaryEvidence(
+      final String routeAllowlistHash,
+      final String destinationBindingHash,
+      final String blockNumber,
+      final boolean usedMessageProof,
+      final boolean rawDataOwnerMatchesTransaction,
+      final String signatureRecoveredAddress,
+      final boolean signatureRecoversToOwner,
+      final String routeCanaryEvidenceHash) {
+    final SourceSccpProofs.TronDestinationBinding binding =
+        sampleDestinationBinding(samplePublicInputs());
+    return new TronSccpProver.RouteCanaryEvidenceInput(
+        routeAllowlistHash == null
+            ? "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a"
+            : routeAllowlistHash,
+        destinationBindingHash == null ? binding.hash : destinationBindingHash,
+        null,
+        "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+        "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+        binding.networkId,
+        binding.verifierAddress,
+        binding.verifierCodeHash,
+        binding.verifierKeyHash,
+        TronSccpProver.DOMAIN_SORA,
+        TronSccpProver.DOMAIN_TRON,
+        "0x" + repeat("fa", 32),
+        "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        blockNumber == null ? "234" : blockNumber,
+        "567000",
+        0,
+        "0x" + repeat("dd", 32),
+        "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+        "0x" + repeat("ab", 32),
+        "0x" + repeat("ee", 32),
+        "0x" + repeat("00", 31) + "7b",
+        "0x" + repeat("cd", 32),
+        "0x" + repeat("f1", 32),
+        1,
+        TronSccpProver.DOMAIN_SORA,
+        usedMessageProof,
+        rawDataOwnerMatchesTransaction,
+        "0x" + repeat("c4", 32),
+        signatureRecoveredAddress == null
+            ? "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf"
+            : signatureRecoveredAddress,
+        signatureRecoversToOwner,
+        routeCanaryEvidenceHash == null
+            ? "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
+            : routeCanaryEvidenceHash);
+  }
+
   private static TronSccpProver.PublicInputsInput samplePublicInputs() {
     return samplePublicInputs(repeat("22", 32), TronSccpProver.DOMAIN_TRON);
   }
@@ -1051,5 +1174,15 @@ public final class TronSccpProverTests {
       out.append(value);
     }
     return out.toString();
+  }
+
+  private static void assertThrows(final Runnable operation, final String messageFragment) {
+    boolean threw = false;
+    try {
+      operation.run();
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains(messageFragment);
+    }
+    assert threw : "expected exception containing " + messageFragment;
   }
 }

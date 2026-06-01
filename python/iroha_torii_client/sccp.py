@@ -142,6 +142,11 @@ _SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1 = (
 _SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1 = (
     b"iroha:sccp:ton-route-canary-live-account:v1"
 )
+_SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3 = (
+    b"iroha:sccp:tron-route-canary-evidence:v3"
+)
+_SCCP_ROUTE_ALLOWLIST_LABEL_V1 = b"sccp:route-allowlist:lane-evidence:v1"
+_SCCP_TRON_ROUTE_ALLOWLIST_ID_V1 = "sccp:tron:route-allowlist:tron-mainnet:v1"
 _SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000
 _SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 _SOLANA_BASE58_INDEX = {
@@ -9925,6 +9930,87 @@ def _normalize_ton_validator_set_transition_for_source_state(
     value: Any,
 ) -> Dict[str, Any]:
     transition = _require_mapping(value, "TON validator-set transition proof")
+    _reject_ton_transcript_aliases(transition, "sourceDomain", "sourceDomain", "source_domain")
+    _reject_ton_transcript_aliases(
+        transition,
+        "fromValidatorSetSeqno",
+        "fromValidatorSetSeqno",
+        "from_validator_set_seqno",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "toValidatorSetSeqno",
+        "toValidatorSetSeqno",
+        "to_validator_set_seqno",
+    )
+    _reject_ton_transcript_aliases(transition, "masterchainSeqno", "masterchainSeqno", "masterchain_seqno")
+    _reject_ton_transcript_aliases(
+        transition,
+        "masterchainWorkchainId",
+        "masterchainWorkchainId",
+        "masterchain_workchain_id",
+    )
+    _reject_ton_transcript_aliases(transition, "masterchainShard", "masterchainShard", "masterchain_shard")
+    _reject_ton_transcript_aliases(
+        transition,
+        "masterchainBlockHash",
+        "masterchainBlockHash",
+        "masterchain_block_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "masterchainFileHash",
+        "masterchainFileHash",
+        "masterchain_file_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "parentValidatorSetHash",
+        "parentValidatorSetHash",
+        "parent_validator_set_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "nextValidatorSetHash",
+        "nextValidatorSetHash",
+        "next_validator_set_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "nextValidatorSetPayload",
+        "nextValidatorSetPayload",
+        "next_validator_set_payload",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "nextValidatorSetPayloadHash",
+        "nextValidatorSetPayloadHash",
+        "next_validator_set_payload_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "nextValidatorSetConfigHash",
+        "nextValidatorSetConfigHash",
+        "next_validator_set_config_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "transitionMessageHash",
+        "transitionMessageHash",
+        "transition_message_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "transitionSignatureHash",
+        "transitionSignatureHash",
+        "transition_signature_hash",
+    )
+    _reject_ton_transcript_aliases(
+        transition,
+        "validatorSignatureProof",
+        "validatorSignatureProof",
+        "validator_signature_proof",
+    )
     source_domain = _normalize_u32(
         _mapping_value(transition, "sourceDomain", "source_domain"),
         "sourceDomain",
@@ -17865,6 +17951,484 @@ def ton_sccp_route_canary_evidence_hash(input_value: Any) -> str:
     )
 
 
+def _tron_route_canary_address_payload(value: Any, label: str) -> bytes:
+    if isinstance(value, str):
+        text = value.strip()
+        hex_text = text[2:] if text.lower().startswith("0x") else text
+        if len(hex_text) != 42 or any(
+            symbol not in "0123456789abcdefABCDEF" for symbol in hex_text
+        ):
+            return _tron_base58check_payload(value, label)
+    raw = _to_bytes(value, label)
+    if not _is_nonzero_tron_address(raw):
+        raise TypeError(f"{label} must be a non-zero 0x41-prefixed TRON address")
+    return raw
+
+
+def _require_tron_route_canary_true(value: Any, label: str) -> None:
+    if value is not True:
+        raise TypeError(f"{label} must be true")
+
+
+def _tron_sccp_route_allowlist_hash(
+    *,
+    source_verifier_material_hash: bytes,
+    source_adapter_engine_deployment_hash: bytes,
+    destination_binding_hash: bytes,
+) -> bytes:
+    payload = b"".join(
+        (
+            _write_u8(1),
+            _write_u32_le(SCCP_DOMAIN_TRON),
+            _write_bytes(b"tron"),
+            _write_bytes(b"GovernanceAllowlist"),
+            _write_bytes(_SCCP_TRON_ROUTE_ALLOWLIST_ID_V1.encode("utf-8")),
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+            destination_binding_hash,
+        )
+    )
+    return _prefixed_blake2b(_SCCP_ROUTE_ALLOWLIST_LABEL_V1, payload)
+
+
+def _require_tron_route_canary_hashes_distinct(fields: Mapping[str, bytes]) -> None:
+    seen: Dict[bytes, str] = {}
+    for label, raw in fields.items():
+        if not any(raw):
+            continue
+        previous_label = seen.get(raw)
+        if previous_label is not None:
+            raise TypeError(
+                "TRON route canary transcript hashes must be distinct: "
+                f"{label} matches {previous_label}"
+            )
+        seen[raw] = label
+
+
+def _normalize_tron_sccp_route_canary_evidence(input_value: Any) -> Dict[str, bytes]:
+    value = _require_mapping(input_value, "TRON route canary evidence")
+    destination_binding = tron_sccp_destination_binding(value)
+    destination_binding_hash = _nonzero_hex32_to_bytes(
+        _destination_binding_hash_from_mapping(value),
+        "destinationBindingHash",
+    )
+    expected_destination_binding_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "expectedDestinationBindingHash",
+        "expectedDestinationBindingHash",
+        "expected_destination_binding_hash",
+    )
+    if expected_destination_binding_hash_input is not _MISSING:
+        expected_destination_binding_hash = _normalize_nonzero_hex32(
+            expected_destination_binding_hash_input,
+            "expectedDestinationBindingHash",
+        )
+        if expected_destination_binding_hash != destination_binding["binding_hash"]:
+            raise TypeError("expectedDestinationBindingHash must match destinationBinding")
+    if _bytes_to_hex(destination_binding_hash) != destination_binding["binding_hash"]:
+        raise TypeError("destinationBindingHash must match destinationBinding")
+
+    route_allowlist_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value, "routeAllowlistHash", "routeAllowlistHash", "route_allowlist_hash"
+        ),
+        "routeAllowlistHash",
+    )
+    source_verifier_material_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceVerifierMaterialHash",
+            "sourceVerifierMaterialHash",
+            "source_verifier_material_hash",
+        ),
+        "sourceVerifierMaterialHash",
+    )
+    source_adapter_engine_deployment_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "sourceAdapterEngineDeploymentHash",
+            "sourceAdapterEngineDeploymentHash",
+            "source_adapter_engine_deployment_hash",
+        ),
+        "sourceAdapterEngineDeploymentHash",
+    )
+    expected_route_allowlist_hash = _tron_sccp_route_allowlist_hash(
+        source_verifier_material_hash=source_verifier_material_hash,
+        source_adapter_engine_deployment_hash=source_adapter_engine_deployment_hash,
+        destination_binding_hash=destination_binding_hash,
+    )
+    if route_allowlist_hash != expected_route_allowlist_hash:
+        raise TypeError(
+            "routeAllowlistHash must match canonical source, deployment, "
+            "and destination evidence"
+        )
+    expected_route_allowlist_hash_input = _mapping_optional_value_without_aliases(
+        value,
+        "expectedRouteAllowlistHash",
+        "expectedRouteAllowlistHash",
+        "expected_route_allowlist_hash",
+    )
+    if expected_route_allowlist_hash_input is not _MISSING:
+        supplied_expected_route_allowlist_hash = _nonzero_hex32_to_bytes(
+            expected_route_allowlist_hash_input,
+            "expectedRouteAllowlistHash",
+        )
+        if supplied_expected_route_allowlist_hash != expected_route_allowlist_hash:
+            raise TypeError("expectedRouteAllowlistHash must match canonical evidence")
+
+    source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "sourceDomain",
+        SCCP_DOMAIN_SORA,
+        "sourceDomain",
+        "source_domain",
+        "destinationSourceDomain",
+        "destination_source_domain",
+    )
+    if source_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("sourceDomain must be SORA")
+    target_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "targetDomain",
+        SCCP_DOMAIN_TRON,
+        "targetDomain",
+        "target_domain",
+        "destinationTargetDomain",
+        "destination_target_domain",
+        "routeCanaryTargetDomain",
+        "route_canary_target_domain",
+    )
+    if target_domain != SCCP_DOMAIN_TRON:
+        raise ValueError("targetDomain must be TRON")
+    if source_domain == target_domain:
+        raise ValueError("sourceDomain and targetDomain must differ")
+
+    proof_version = _normalize_u32(
+        _mapping_value_or_default_without_aliases(
+            value,
+            "proofVersion",
+            1,
+            "proofVersion",
+            "proof_version",
+            "routeCanaryProofVersion",
+            "route_canary_proof_version",
+        ),
+        "proofVersion",
+    )
+    if proof_version != 1:
+        raise ValueError("proofVersion must be 1")
+    proof_source_domain = _normalize_optional_u32_without_aliases(
+        value,
+        "proofSourceDomain",
+        SCCP_DOMAIN_SORA,
+        "proofSourceDomain",
+        "proof_source_domain",
+        "routeCanaryProofSourceDomain",
+        "route_canary_proof_source_domain",
+    )
+    if proof_source_domain != source_domain:
+        raise ValueError("proofSourceDomain must match sourceDomain")
+
+    used_message_proof = _mapping_value_without_aliases(
+        value,
+        "usedMessageProof",
+        "usedMessageProof",
+        "used_message_proof",
+        "routeCanaryUsedMessageProof",
+        "route_canary_used_message_proof",
+    )
+    _require_tron_route_canary_true(used_message_proof, "usedMessageProof")
+    raw_data_owner_matches_transaction = _mapping_value_without_aliases(
+        value,
+        "rawDataOwnerMatchesTransaction",
+        "rawDataOwnerMatchesTransaction",
+        "raw_data_owner_matches_transaction",
+        "routeCanaryRawDataOwnerMatchesTransaction",
+        "route_canary_raw_data_owner_matches_transaction",
+    )
+    _require_tron_route_canary_true(
+        raw_data_owner_matches_transaction,
+        "rawDataOwnerMatchesTransaction",
+    )
+    signature_recovers_to_owner = _mapping_value_without_aliases(
+        value,
+        "signatureRecoversToOwner",
+        "signatureRecoversToOwner",
+        "signature_recovers_to_owner",
+        "routeCanarySignatureRecoversToOwner",
+        "route_canary_signature_recovers_to_owner",
+    )
+    _require_tron_route_canary_true(
+        signature_recovers_to_owner,
+        "signatureRecoversToOwner",
+    )
+
+    transaction_owner_address = _tron_route_canary_address_payload(
+        _mapping_value_without_aliases(
+            value,
+            "transactionOwnerAddress",
+            "transactionOwnerAddress",
+            "transaction_owner_address",
+            "routeCanaryTransactionOwnerAddress",
+            "route_canary_transaction_owner_address",
+        ),
+        "transactionOwnerAddress",
+    )
+    signature_recovered_address = _tron_route_canary_address_payload(
+        _mapping_value_without_aliases(
+            value,
+            "signatureRecoveredAddress",
+            "signatureRecoveredAddress",
+            "signature_recovered_address",
+            "routeCanarySignatureRecoveredAddress",
+            "route_canary_signature_recovered_address",
+        ),
+        "signatureRecoveredAddress",
+    )
+    if signature_recovered_address != transaction_owner_address:
+        raise TypeError("signatureRecoveredAddress must match transactionOwnerAddress")
+
+    block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "blockNumber",
+            "blockNumber",
+            "block_number",
+            "routeCanaryBlockNumber",
+            "route_canary_block_number",
+        ),
+        "blockNumber",
+    )
+    if block_number == 0:
+        raise ValueError("blockNumber must be positive")
+    block_timestamp = _normalize_u64(
+        _mapping_value_without_aliases(
+            value,
+            "blockTimestamp",
+            "blockTimestamp",
+            "block_timestamp",
+            "routeCanaryBlockTimestamp",
+            "route_canary_block_timestamp",
+        ),
+        "blockTimestamp",
+    )
+    log_index = _normalize_u32(
+        _mapping_value_without_aliases(
+            value,
+            "logIndex",
+            "logIndex",
+            "log_index",
+            "routeCanaryLogIndex",
+            "route_canary_log_index",
+        ),
+        "logIndex",
+    )
+    transaction_id = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "transactionId",
+            "transactionId",
+            "transaction_id",
+            "routeCanaryTransactionId",
+            "route_canary_transaction_id",
+        ),
+        "transactionId",
+    )
+    message_id = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "messageId",
+            "messageId",
+            "message_id",
+            "routeCanaryMessageId",
+            "route_canary_message_id",
+        ),
+        "messageId",
+    )
+    call_data_sha256 = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "callDataSha256",
+            "callDataSha256",
+            "call_data_sha256",
+            "routeCanaryCallDataSha256",
+            "route_canary_call_data_sha256",
+        ),
+        "callDataSha256",
+    )
+    payload_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "payloadHash",
+            "payloadHash",
+            "payload_hash",
+            "routeCanaryPayloadHash",
+            "route_canary_payload_hash",
+        ),
+        "payloadHash",
+    )
+    statement_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "statementHash",
+            "statementHash",
+            "statement_hash",
+            "routeCanaryStatementHash",
+            "route_canary_statement_hash",
+        ),
+        "statementHash",
+    )
+    commitment_root = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "commitmentRoot",
+            "commitmentRoot",
+            "commitment_root",
+            "routeCanaryCommitmentRoot",
+            "route_canary_commitment_root",
+        ),
+        "commitmentRoot",
+    )
+    finality_height = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "finalityHeight",
+            "finalityHeight",
+            "finality_height",
+            "routeCanaryFinalityHeight",
+            "route_canary_finality_height",
+        ),
+        "finalityHeight",
+    )
+    finality_block_hash = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "finalityBlockHash",
+            "finalityBlockHash",
+            "finality_block_hash",
+            "routeCanaryFinalityBlockHash",
+            "route_canary_finality_block_hash",
+        ),
+        "finalityBlockHash",
+    )
+    signature_sha256 = _nonzero_hex32_to_bytes(
+        _mapping_value_without_aliases(
+            value,
+            "signatureSha256",
+            "signatureSha256",
+            "signature_sha256",
+            "routeCanarySignatureSha256",
+            "route_canary_signature_sha256",
+        ),
+        "signatureSha256",
+    )
+    _require_tron_route_canary_hashes_distinct(
+        {
+            "transactionId": transaction_id,
+            "messageId": message_id,
+            "callDataSha256": call_data_sha256,
+            "payloadHash": payload_hash,
+            "statementHash": statement_hash,
+            "commitmentRoot": commitment_root,
+            "finalityBlockHash": finality_block_hash,
+            "signatureSha256": signature_sha256,
+        }
+    )
+
+    verifier_address = _tron_base58check_payload(
+        destination_binding["verifier_address"],
+        "destinationBinding.verifierAddress",
+    )
+    verifier_backend = destination_binding["verifier_backend"]
+    proof_family = destination_binding["proof_family"]
+    network_id = _nonzero_hex32_to_bytes(
+        destination_binding["network_id"],
+        "destinationBinding.networkId",
+    )
+    payload = b"".join(
+        (
+            _write_u8(3),
+            route_allowlist_hash,
+            verifier_address,
+            transaction_id,
+            transaction_owner_address,
+            _write_u64_le(block_number),
+            _write_u64_le(block_timestamp),
+            _write_u32_le(log_index),
+            call_data_sha256,
+            message_id,
+            _write_u32_le(source_domain),
+            _write_u32_le(target_domain),
+            payload_hash,
+            commitment_root,
+            finality_height,
+            finality_block_hash,
+            statement_hash,
+            _write_u32_le(proof_version),
+            _write_u32_le(proof_source_domain),
+            destination_binding_hash,
+            _keccak_256(verifier_backend.encode("utf-8")),
+            _keccak_256(proof_family.encode("utf-8")),
+            network_id,
+            _write_u8(1),
+            _write_u8(1),
+            signature_sha256,
+            signature_recovered_address,
+            _write_u8(1),
+        )
+    )
+    return {
+        "payload": payload,
+        "route_allowlist_hash": route_allowlist_hash,
+        "destination_binding_hash": destination_binding_hash,
+        "source_verifier_material_hash": source_verifier_material_hash,
+        "source_adapter_engine_deployment_hash": source_adapter_engine_deployment_hash,
+    }
+
+
+def canonical_tron_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes:
+    """Return Rust's SORA -> TRON transaction route-canary transcript bytes."""
+
+    return _normalize_tron_sccp_route_canary_evidence(input_value)["payload"]
+
+
+def tron_sccp_route_canary_evidence_hash(input_value: Any) -> str:
+    """Return Rust's SORA -> TRON transaction route-canary evidence hash."""
+
+    evidence = _normalize_tron_sccp_route_canary_evidence(input_value)
+    digest = _prefixed_blake2b(
+        _SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3,
+        evidence["payload"],
+    )
+    if digest in (
+        evidence["route_allowlist_hash"],
+        evidence["destination_binding_hash"],
+        evidence["source_verifier_material_hash"],
+        evidence["source_adapter_engine_deployment_hash"],
+    ):
+        raise TypeError(
+            "routeCanaryEvidenceHash must be distinct from routeAllowlistHash, "
+            "destinationBindingHash, sourceVerifierMaterialHash, and "
+            "sourceAdapterEngineDeploymentHash"
+        )
+    expected_hash_input = _mapping_optional_value_without_aliases(
+        _require_mapping(input_value, "TRON route canary evidence"),
+        "routeCanaryEvidenceHash",
+        "routeCanaryEvidenceHash",
+        "route_canary_evidence_hash",
+        "expectedRouteCanaryEvidenceHash",
+        "expected_route_canary_evidence_hash",
+    )
+    if expected_hash_input is not _MISSING:
+        expected_hash = _normalize_nonzero_hex32(
+            expected_hash_input,
+            "routeCanaryEvidenceHash",
+        )
+        if expected_hash != _bytes_to_hex(digest):
+            raise TypeError("routeCanaryEvidenceHash must match transaction metadata")
+    return _bytes_to_hex(digest)
+
+
 def _normalize_destination_binding_version(value: Mapping[str, Any], label: str) -> int:
     version = _mapping_optional_value(value, "version")
     if version is _MISSING:
@@ -20375,10 +20939,11 @@ def build_ton_sccp_message_body_boc(input_value: Any) -> bytes:
                 "proofResult.sourceAdapterDeploymentBindingHash must match "
                 "sourceAdapterDeploymentBinding"
             )
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         input_field("bundleBytes", "bundleBytes", "bundle_bytes"),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     if proof_result_value is not None:
         result_bundle_input = result_optional(
             "proofResult.bundleBytes",
@@ -20386,8 +20951,12 @@ def build_ton_sccp_message_body_boc(input_value: Any) -> bytes:
             "bundle_bytes",
         )
         if result_bundle_input is not _MISSING:
-            result_bundle_bytes = _require_non_empty_bytes(
+            result_bundle_bytes = _to_bytes(
                 result_bundle_input,
+                "proofResult.bundleBytes",
+            )
+            _require_native_recursive_proof_bytes(
+                result_bundle_bytes,
                 "proofResult.bundleBytes",
             )
             if bundle_bytes != result_bundle_bytes:
@@ -20609,10 +21178,11 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
     if public_inputs["target_domain"] != SCCP_DOMAIN_TON:
         raise TypeError("publicInputs.targetDomain must be TON")
     public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         request_value("bundleBytes", "bundleBytes", "bundle_bytes"),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     source_proof_input = request_optional_value(
         "sourceProofBytes",
         "sourceProofBytes",
@@ -21137,10 +21707,11 @@ def build_tron_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
     )
     public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     source_proof_input = _mapping_optional_value_without_aliases(
         value,
         "sourceProofBytes",
@@ -21311,10 +21882,11 @@ def build_substrate_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         _mapping_value_without_aliases(value, "publicInputs", "publicInputs", "public_inputs")
     )
     public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs)
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         _mapping_value_without_aliases(value, "bundleBytes", "bundleBytes", "bundle_bytes"),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     source_proof_input = _mapping_optional_value_without_aliases(
         value,
         "sourceProofBytes",
@@ -21517,6 +22089,10 @@ def _require_optional_nonzero_bytes(value: Any, label: str) -> bytes:
     raw = _to_bytes(value, label)
     if raw and all(byte == 0 for byte in raw):
         raise TypeError(f"{label} must not be all zero")
+    if len(raw) > SCCP_SOURCE_STATE_MAX_PROOF_BYTES:
+        raise TypeError(
+            f"{label} must be at most {SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes"
+        )
     return raw
 
 
@@ -22005,7 +22581,7 @@ def build_solana_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         )
     proof_bytes = _to_bytes(proof_bytes_input, "proofBytes")
     _require_native_recursive_proof_bytes(proof_bytes)
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         _mapping_value_without_aliases(
             value,
             "bundleBytes",
@@ -22014,6 +22590,7 @@ def build_solana_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         ),
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
 
     proof_context_source = _mapping_optional_value_without_aliases(
         value,
@@ -22402,11 +22979,11 @@ def wrap_ton_sccp_proof_result(
     return _normalize_ton_proof_result({"proof_bytes": proof_bytes}, request)
 
 
-def _require_nonzero_proof_bytes(proof_bytes: bytes) -> None:
+def _require_nonzero_proof_bytes(proof_bytes: bytes, label: str = "proofBytes") -> None:
     if not proof_bytes:
-        raise TypeError("proofBytes must not be empty")
+        raise TypeError(f"{label} must not be empty")
     if not any(proof_bytes):
-        raise TypeError("proofBytes must not be all zero")
+        raise TypeError(f"{label} must not be all zero")
 
 
 def _require_source_state_proof_bytes(proof_bytes: bytes) -> None:
@@ -22427,7 +23004,7 @@ def _require_source_state_proof_label(value: str, label: str) -> None:
 def _require_native_recursive_proof_bytes(
     proof_bytes: bytes, label: str = "proofBytes"
 ) -> None:
-    _require_nonzero_proof_bytes(proof_bytes)
+    _require_nonzero_proof_bytes(proof_bytes, label)
     if len(proof_bytes) > SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES:
         raise TypeError(
             f"{label} must be at most {SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES} bytes"
@@ -23073,7 +23650,7 @@ def _require_production_substrate_proof_request(request: Mapping[str, Any]) -> N
         raise TypeError(
             "Substrate SCCP production proofs must target a Substrate-family domain"
         )
-    _require_non_empty_bytes(request["bundle_bytes"], "bundleBytes")
+    _require_native_recursive_proof_bytes(request["bundle_bytes"], "bundleBytes")
     _require_optional_nonzero_bytes(request["source_proof_bytes"], "sourceProofBytes")
 
 
@@ -23707,6 +24284,8 @@ def _normalize_groth16_contract_submission_input(
         "proofResult",
         "proof_result",
     )
+    if proof_result_value is None:
+        raise TypeError("proofResult must be a wrapped Groth16 SCCP proof result")
     proof_result = None if proof_result_value is _MISSING else proof_result_value
 
     def input_optional(label: str, *keys: str) -> Any:
@@ -23729,6 +24308,18 @@ def _normalize_groth16_contract_submission_input(
         )
         if _mapping_value(proof_result, "backend") != backend:
             raise TypeError(f"proofResult.backend must be {backend}")
+    else:
+        if input_optional("bundleBytes", "bundleBytes", "bundle_bytes") is not _MISSING:
+            raise TypeError(
+                "bundleBytes requires proofResult for request-bound submission"
+            )
+        if (
+            input_optional("sourceProofBytes", "sourceProofBytes", "source_proof_bytes")
+            is not _MISSING
+        ):
+            raise TypeError(
+                "sourceProofBytes requires proofResult for request-bound submission"
+            )
 
     public_inputs_value = input_optional("publicInputs", "publicInputs", "public_inputs")
     if public_inputs_value is _MISSING and proof_result is not None:
@@ -24129,8 +24720,10 @@ def build_substrate_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         "proofResult",
         "proof_result",
     )
+    if proof_result_value is None:
+        raise TypeError("proofResult must be a wrapped Substrate SCCP proof result")
     proof_result = None
-    if proof_result_value is not _MISSING and proof_result_value is not None:
+    if proof_result_value is not _MISSING:
         proof_result = _require_mapping(
             proof_result_value,
             "Substrate SCCP proof result",
@@ -24195,12 +24788,13 @@ def build_substrate_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         if proof_result is None
         else result_optional("proofResult.bundleBytes", "bundleBytes", "bundle_bytes")
     )
-    bundle_bytes = _require_non_empty_bytes(
+    bundle_bytes = _to_bytes(
         bundle_bytes_value
         if bundle_bytes_value is not _MISSING
         else result_bundle_bytes_value,
         "bundleBytes",
     )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
     if (
         result_bundle_bytes_value is not _MISSING
         and _to_bytes(result_bundle_bytes_value, "proofResult.bundleBytes")
@@ -24236,6 +24830,14 @@ def build_substrate_sccp_submission(input_value: Any) -> Mapping[str, Any]:
         != source_proof_bytes
     ):
         raise TypeError("sourceProofBytes must match proofResult.sourceProofBytes")
+    if (
+        proof_result is None
+        and source_proof_value is not _MISSING
+        and len(source_proof_bytes) > 0
+    ):
+        raise TypeError(
+            "sourceProofBytes requires proofResult for request-bound submission"
+        )
 
     source_domain = _normalize_optional_u32_without_aliases(
         value,

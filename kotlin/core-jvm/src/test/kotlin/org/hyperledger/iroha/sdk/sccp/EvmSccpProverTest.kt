@@ -144,6 +144,14 @@ class EvmSccpProverTest {
             SccpEvm.buildProofRequest(sampleProofRequestInput(sourceProofBytes = byteArrayOf(0, 0)))
         }
         assertTrue(zeroSourceProof.message?.contains("sourceProofBytes must not be all zero") == true)
+        val oversizedSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpEvm.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceProofBytes = ByteArray(SccpEvm.SOURCE_STATE_MAX_PROOF_BYTES + 1) { 1 },
+                ),
+            )
+        }
+        assertTrue(oversizedSourceProof.message?.contains("sourceProofBytes must be at most") == true)
         assertContentEquals(
             ByteArray(0),
             SccpEvm.buildProofRequest(sampleProofRequestInput(sourceProofBytes = ByteArray(0))).sourceProofBytes,

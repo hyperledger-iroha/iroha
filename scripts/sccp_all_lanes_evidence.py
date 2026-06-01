@@ -74,6 +74,7 @@ class LaneProfile:
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
+    substrate_runtime_storage_gate_required: bool = False
 
 
 LANE_PROFILES: dict[int, LaneProfile] = {
@@ -199,6 +200,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         source_state_verifier_id=(
             "sccp:sora-kusama:source-state-verifier:runtime-storage-proof:v1"
         ),
+        substrate_runtime_storage_gate_required=True,
     ),
     SCCP_DOMAIN_SORA_POLKADOT: LaneProfile(
         domain=SCCP_DOMAIN_SORA_POLKADOT,
@@ -221,6 +223,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         source_state_verifier_id=(
             "sccp:sora-polkadot:source-state-verifier:runtime-storage-proof:v1"
         ),
+        substrate_runtime_storage_gate_required=True,
     ),
     SCCP_DOMAIN_SORA2: LaneProfile(
         domain=SCCP_DOMAIN_SORA2,
@@ -239,6 +242,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         source_state_verifier_id=(
             "sccp:sora2:source-state-verifier:runtime-storage-proof:v1"
         ),
+        substrate_runtime_storage_gate_required=True,
     ),
 }
 
@@ -262,6 +266,7 @@ TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS = (
     "ton_full_light_client_gate_hash",
 )
 TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
+SUBSTRATE_RUNTIME_STORAGE_GATE_FIELDS = ("substrate_runtime_storage_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
     "_comment_evm_source_bridge_address",
@@ -441,6 +446,7 @@ SOURCE_DEPLOYMENT_FIELDS = frozenset(
         "adapter_verifier_vk_hash",
         "deployment_receipt_hash",
         "_comment_source_adapter_engine_deployment_hash",
+        "_comment_substrate_runtime_storage_gate_hash",
         *SOLANA_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS,
         *TRON_DPOS_SOURCE_GATE_FIELDS,
@@ -565,6 +571,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "evm_route_canary_used_message_proof",
         "tron_route_canary_transaction_id",
         "tron_route_canary_transaction_owner_address",
+        "tron_route_canary_block_number",
+        "tron_route_canary_block_timestamp",
         "tron_route_canary_log_index",
         "tron_route_canary_message_id",
         "tron_route_canary_call_data_sha256",
@@ -608,6 +616,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "_comment_ton_route_canary_last_transaction_hash",
         "_comment_tron_route_canary_transaction_id",
         "_comment_tron_route_canary_transaction_owner_address",
+        "_comment_tron_route_canary_block_number",
+        "_comment_tron_route_canary_block_timestamp",
         "_comment_tron_route_canary_log_index",
         "_comment_tron_route_canary_message_id",
         "_comment_tron_route_canary_call_data_sha256",
@@ -781,6 +791,9 @@ SOURCE_DEPLOYMENT_COMMENT_KEYS = {
     "sccp_substrate_source_adapter_engine_deployment_hash": (
         "_comment_source_adapter_engine_deployment_hash"
     ),
+    "sccp_substrate_runtime_storage_gate_hash": (
+        "_comment_substrate_runtime_storage_gate_hash"
+    ),
 }
 
 ROUTE_ALLOWLIST_COMMENT_KEYS = {
@@ -837,6 +850,12 @@ ROUTE_ALLOWLIST_COMMENT_KEYS = {
     ),
     "sccp_tron_route_canary_transaction_owner_address": (
         "_comment_tron_route_canary_transaction_owner_address"
+    ),
+    "sccp_tron_route_canary_block_number": (
+        "_comment_tron_route_canary_block_number"
+    ),
+    "sccp_tron_route_canary_block_timestamp": (
+        "_comment_tron_route_canary_block_timestamp"
     ),
     "sccp_tron_route_canary_log_index": "_comment_tron_route_canary_log_index",
     "sccp_tron_route_canary_message_id": "_comment_tron_route_canary_message_id",
@@ -906,6 +925,10 @@ def _push_u8(out: bytearray, value: int) -> None:
 
 def _push_u32(out: bytearray, value: int) -> None:
     out.extend(value.to_bytes(4, "little"))
+
+
+def _push_u64(out: bytearray, value: int) -> None:
+    out.extend(value.to_bytes(8, "little"))
 
 
 def _push_vec(out: bytearray, value: bytes) -> None:
@@ -1835,6 +1858,15 @@ def _check_deployment(
     else:
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_empty_hex_or_absent(errors, record, field)
+
+    if (
+        not profile.substrate_runtime_storage_gate_required
+        and record.get("_comment_substrate_runtime_storage_gate_hash") not in (None, "")
+    ):
+        errors.append(
+            "sccp_substrate_runtime_storage_gate_hash metadata is only valid "
+            "for Substrate-family source adapter deployments"
+        )
     deployment_role_hash_fields = SOURCE_ADAPTER_DEPLOYMENT_ROLE_HASH_FIELDS
     if profile.solana_full_light_client_audit_required:
         deployment_role_hash_fields += SOLANA_FULL_LIGHT_CLIENT_AUDIT_ROLE_HASH_FIELDS
@@ -2244,6 +2276,22 @@ def route_allowlist_hash_for_lane_evidence(
     ):
         if len(value) != 32 or not any(value):
             raise ValueError(f"{label} must be a non-zero 32-byte value")
+    seen_hash_roles: dict[bytes, str] = {}
+    for label, value in (
+        ("source_verifier_material_hash", source_verifier_material_hash),
+        (
+            "source_adapter_engine_deployment_hash",
+            source_adapter_engine_deployment_hash,
+        ),
+        ("destination_binding_hash", destination_binding_hash),
+    ):
+        previous = seen_hash_roles.get(value)
+        if previous is not None:
+            raise ValueError(
+                "route allowlist evidence hashes must be distinct: "
+                f"{label} matches {previous}"
+            )
+        seen_hash_roles[value] = label
 
     payload = bytearray()
     _push_u8(payload, 1)
@@ -2392,10 +2440,27 @@ def _check_tron_dpos_source_gate(
     return []
 
 
+def _substrate_runtime_storage_gate_hash(
+    material: dict[str, Any],
+    deployment: dict[str, Any],
+) -> tuple[str | None, list[str]]:
+    try:
+        module = _load_sibling_module("sccp_substrate_source_evidence.py")
+        args = _substrate_source_args(material, deployment)
+        gate_hash = module.substrate_runtime_storage_gate_hash(args)
+    except (SystemExit, ValueError, RuntimeError) as exc:
+        return None, [f"Substrate runtime storage gate cannot be recomputed: {exc}"]
+    return _hex(gate_hash), []
+
+
 def _source_adapter_gate_summary(
     profile: LaneProfile,
     material: dict[str, Any] | None,
     deployment: dict[str, Any] | None,
+    route_record: dict[str, Any] | None,
+    source_record_hashes: dict[str, str],
+    destination_binding: dict[str, Any],
+    route_allowlist_summary: dict[str, Any],
 ) -> dict[str, Any]:
     required_fields: tuple[str, ...]
     gate_field: str
@@ -2412,6 +2477,10 @@ def _source_adapter_gate_summary(
         required_fields = TRON_DPOS_SOURCE_GATE_FIELDS
         gate_field = "tron_dpos_source_gate_hash"
         gate_checker = _check_tron_dpos_source_gate
+    elif profile.substrate_runtime_storage_gate_required:
+        required_fields = ()
+        gate_field = "substrate_runtime_storage_gate_hash"
+        gate_checker = lambda _material, _deployment: []
     else:
         return {
             "required": False,
@@ -2439,8 +2508,103 @@ def _source_adapter_gate_summary(
         blockers.append("missing source verifier material")
     if deployment is None:
         blockers.append("missing source adapter deployment")
-    if material is not None and deployment is not None and not blockers:
-        blockers.extend(gate_checker(material, deployment))
+    if material is not None and deployment is not None:
+        if profile.substrate_runtime_storage_gate_required:
+            pinned_gate_hash_raw = deployment.get(
+                "_comment_substrate_runtime_storage_gate_hash"
+            )
+            pinned_gate_hash = _hex_bytes(pinned_gate_hash_raw, byte_length=32)
+            if pinned_gate_hash is None or not any(pinned_gate_hash):
+                blockers.append(
+                    "sccp_substrate_runtime_storage_gate_hash metadata must be "
+                    "a non-zero 32-byte hex value"
+                )
+            else:
+                gate_hash = _hex(pinned_gate_hash)
+                audit_hashes[gate_field] = gate_hash
+            derived_gate_hash, gate_blockers = _substrate_runtime_storage_gate_hash(
+                material,
+                deployment,
+            )
+            blockers.extend(gate_blockers)
+            if (
+                pinned_gate_hash is not None
+                and any(pinned_gate_hash)
+                and derived_gate_hash is not None
+                and _hex(pinned_gate_hash) != derived_gate_hash
+            ):
+                blockers.append(
+                    "sccp_substrate_runtime_storage_gate_hash metadata does not "
+                    "match source and deployment material"
+                )
+            if pinned_gate_hash is None and derived_gate_hash is not None:
+                gate_hash = derived_gate_hash
+        elif not blockers:
+            blockers.extend(gate_checker(material, deployment))
+    source_material_hash = source_record_hashes.get("source_verifier_material_hash")
+    if source_material_hash is None and material is not None:
+        source_material_hash = material.get("_comment_source_verifier_material_hash")
+    source_deployment_hash = source_record_hashes.get(
+        "source_adapter_engine_deployment_hash"
+    )
+    if source_deployment_hash is None and deployment is not None:
+        source_deployment_hash = deployment.get(
+            "_comment_source_adapter_engine_deployment_hash"
+        )
+    route_canary_evidence_hash = route_allowlist_summary.get("route_canary", {}).get(
+        "evidence_hash"
+    )
+    if route_canary_evidence_hash is None and route_record is not None:
+        route_canary_evidence_hash = route_record.get(
+            "route_canary_evidence_hash",
+            route_record.get("_comment_route_canary_evidence_hash"),
+        )
+    role_fields: list[tuple[str, bytes | None]] = [
+        (
+            "source_verifier_material_hash",
+            _hex_bytes(
+                source_material_hash,
+                byte_length=32,
+            ),
+        ),
+        (
+            "source_adapter_engine_deployment_hash",
+            _hex_bytes(
+                source_deployment_hash,
+                byte_length=32,
+            ),
+        ),
+        (
+            "destination_binding_hash",
+            _hex_bytes(
+                destination_binding.get("destination_binding_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "route_allowlist_hash",
+            _hex_bytes(
+                route_allowlist_summary.get("route_allowlist_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "route_canary_evidence_hash",
+            _hex_bytes(
+                route_canary_evidence_hash,
+                byte_length=32,
+            ),
+        ),
+    ]
+    role_fields.extend(
+        (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
+        for field, value in sorted(audit_hashes.items())
+    )
+    _expect_distinct_byte_values(
+        blockers,
+        tuple(role_fields),
+        label="source_adapter_gate hash role",
+    )
 
     return {
         "required": True,
@@ -3923,6 +4087,41 @@ def _canonical_route_canary_log_index(value: Any) -> int | None:
     return parsed
 
 
+def _canonical_decimal_int(value: Any, *, positive: bool) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0 or (positive and value == 0):
+            return None
+        return value
+    if not _is_canonical_decimal_text(value, positive=positive):
+        return None
+    return int(value, 10)
+
+
+def _check_route_canary_decimal_comment_matches_record(
+    errors: list[str],
+    record: dict[str, Any],
+    field: str,
+    comment_field: str,
+    *,
+    label: str,
+    positive: bool,
+) -> None:
+    value = record.get(field)
+    comment = record.get(comment_field)
+    if value in (None, "") or comment in (None, ""):
+        return
+
+    parsed = _canonical_decimal_int(value, positive=positive)
+    if parsed is None:
+        return
+    comment_parsed = _canonical_decimal_int(comment, positive=positive)
+    if comment_parsed is None:
+        qualifier = "positive " if positive else ""
+        errors.append(f"{label} comment must be a canonical {qualifier}decimal")
+    elif comment_parsed != parsed:
+        errors.append(f"{label} comment must match {field}")
+
+
 def _route_canary_used_message_proof_value(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -4256,6 +4455,7 @@ def _check_evm_route_canary_transaction_evidence(
             ("evm_route_canary_payload_hash", payload_hash),
             ("evm_route_canary_statement_hash", statement_hash),
             ("evm_route_canary_commitment_root", commitment_root),
+            ("evm_route_canary_finality_height", finality_height),
             ("evm_route_canary_finality_block_hash", finality_block_hash),
         ),
         label="EVM route canary transcript hash",
@@ -4287,6 +4487,7 @@ def _check_evm_route_canary_transaction_evidence(
             ("evm_route_canary_payload_hash", payload_hash),
             ("evm_route_canary_statement_hash", statement_hash),
             ("evm_route_canary_commitment_root", commitment_root),
+            ("evm_route_canary_finality_height", finality_height),
             ("evm_route_canary_finality_block_hash", finality_block_hash),
         ),
         label="EVM route canary hash role",
@@ -4416,6 +4617,8 @@ def _check_tron_route_canary_transaction_evidence(
     fields = (
         "tron_route_canary_transaction_id",
         "tron_route_canary_transaction_owner_address",
+        "tron_route_canary_block_number",
+        "tron_route_canary_block_timestamp",
         "tron_route_canary_log_index",
         "tron_route_canary_message_id",
         "tron_route_canary_call_data_sha256",
@@ -4434,6 +4637,8 @@ def _check_tron_route_canary_transaction_evidence(
         "tron_route_canary_signature_recovers_to_owner",
         "_comment_tron_route_canary_transaction_id",
         "_comment_tron_route_canary_transaction_owner_address",
+        "_comment_tron_route_canary_block_number",
+        "_comment_tron_route_canary_block_timestamp",
         "_comment_tron_route_canary_log_index",
         "_comment_tron_route_canary_message_id",
         "_comment_tron_route_canary_call_data_sha256",
@@ -4471,6 +4676,22 @@ def _check_tron_route_canary_transaction_evidence(
         "_comment_tron_route_canary_transaction_owner_address",
         label="TRON route canary transaction owner address",
         byte_length=21,
+    )
+    _check_route_canary_decimal_comment_matches_record(
+        errors,
+        record,
+        "tron_route_canary_block_number",
+        "_comment_tron_route_canary_block_number",
+        label="TRON route canary block number",
+        positive=True,
+    )
+    _check_route_canary_decimal_comment_matches_record(
+        errors,
+        record,
+        "tron_route_canary_block_timestamp",
+        "_comment_tron_route_canary_block_timestamp",
+        label="TRON route canary block timestamp",
+        positive=False,
     )
     _check_route_canary_log_index_comment_matches_record(
         errors,
@@ -4598,6 +4819,30 @@ def _check_tron_route_canary_transaction_evidence(
         errors.append(
             "TRON route canary transaction owner address metadata must be a "
             "non-zero 0x41-prefixed TRON address"
+        )
+    block_number = _canonical_decimal_int(
+        _first_record_value(
+            record,
+            "tron_route_canary_block_number",
+            "_comment_tron_route_canary_block_number",
+        ),
+        positive=True,
+    )
+    if block_number is None:
+        errors.append(
+            "TRON route canary block number metadata must be a canonical positive decimal"
+        )
+    block_timestamp = _canonical_decimal_int(
+        _first_record_value(
+            record,
+            "tron_route_canary_block_timestamp",
+            "_comment_tron_route_canary_block_timestamp",
+        ),
+        positive=False,
+    )
+    if block_timestamp is None:
+        errors.append(
+            "TRON route canary block timestamp metadata must be a canonical decimal"
         )
     log_index = _canonical_route_canary_log_index(
         _first_record_value(
@@ -4798,6 +5043,7 @@ def _check_tron_route_canary_transaction_evidence(
             ("tron_route_canary_payload_hash", payload_hash),
             ("tron_route_canary_statement_hash", statement_hash),
             ("tron_route_canary_commitment_root", commitment_root),
+            ("tron_route_canary_finality_height", finality_height),
             ("tron_route_canary_finality_block_hash", finality_block_hash),
             ("tron_route_canary_signature_sha256", signature_sha256),
         ),
@@ -4834,6 +5080,7 @@ def _check_tron_route_canary_transaction_evidence(
             ("tron_route_canary_payload_hash", payload_hash),
             ("tron_route_canary_statement_hash", statement_hash),
             ("tron_route_canary_commitment_root", commitment_root),
+            ("tron_route_canary_finality_height", finality_height),
             ("tron_route_canary_finality_block_hash", finality_block_hash),
             ("tron_route_canary_signature_sha256", signature_sha256),
         ),
@@ -4883,6 +5130,8 @@ def _check_tron_route_canary_transaction_evidence(
         return errors
     assert transaction_id is not None
     assert transaction_owner_address is not None
+    assert block_number is not None
+    assert block_timestamp is not None
     assert log_index is not None
     assert verifier_address is not None
     assert message_id is not None
@@ -4906,11 +5155,13 @@ def _check_tron_route_canary_transaction_evidence(
     assert proof_family_hash is not None
     assert network_id is not None
     payload = bytearray()
-    _push_u8(payload, 2)
+    _push_u8(payload, 3)
     payload.extend(route_allowlist_hash)
     payload.extend(b"\x41" + verifier_address)
     payload.extend(transaction_id)
     payload.extend(transaction_owner_address)
+    _push_u64(payload, block_number)
+    _push_u64(payload, block_timestamp)
     _push_u32(payload, log_index)
     payload.extend(call_data_sha256)
     payload.extend(message_id)
@@ -4933,7 +5184,7 @@ def _check_tron_route_canary_transaction_evidence(
     payload.extend(signature_recovered_address)
     _push_u8(payload, 1 if signature_recovers_to_owner is True else 0)
     expected_hash = _prefixed_blake2b(
-        b"iroha:sccp:tron-route-canary-evidence:v2",
+        b"iroha:sccp:tron-route-canary-evidence:v3",
         payload,
     )
     if evidence_hash != expected_hash:
@@ -4945,6 +5196,8 @@ def _check_tron_route_canary_transaction_evidence(
         canary["evidence_source"] = "tron_message_proof_accepted_transaction"
         canary["transaction_id"] = _hex(transaction_id)
         canary["transaction_owner_address"] = _hex(transaction_owner_address)
+        canary["block_number"] = block_number
+        canary["block_timestamp"] = block_timestamp
         canary["log_index"] = log_index
         canary["message_id"] = _hex(message_id)
         canary["call_data_sha256"] = _hex(call_data_sha256)
@@ -5466,6 +5719,7 @@ def _check_substrate_route_canary_finalized_runtime_evidence(
             ("source_verifier_material_hash", source_material_hash),
             ("source_adapter_engine_deployment_hash", source_deployment_hash),
             ("verifier_code_hash", verifier_code_hash),
+            ("substrate_finalized_head", finalized_head),
         ),
         label="Substrate route canary hash role",
     )
@@ -5512,6 +5766,7 @@ def _check_substrate_route_canary_finalized_runtime_evidence(
     else:
         canary["evidence_source"] = "substrate_finalized_runtime_snapshot"
         canary["substrate_finalized_head"] = _hex(finalized_head)
+        canary["substrate_runtime_code_hash"] = _hex(verifier_code_hash)
         canary["substrate_runtime_spec_version"] = spec_version
         canary["substrate_runtime_transaction_version"] = transaction_version
     return errors
@@ -6145,7 +6400,15 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
             profile,
             material,
             deployment,
+            route,
+            source_record_hashes,
+            destination_binding,
+            route_allowlist_summary,
         )
+        if source_adapter_gate.get("required") is True:
+            for gate_blocker in source_adapter_gate.get("blockers", []):
+                if gate_blocker not in blockers:
+                    blockers.append(gate_blocker)
         lanes.append(
             {
                 "domain": domain,

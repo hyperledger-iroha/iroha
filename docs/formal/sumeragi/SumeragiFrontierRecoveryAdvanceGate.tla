@@ -493,4 +493,81 @@ SafetyFast ==
   /\ CatchUpSafety
   /\ RotateSafety
 
+CauseAnchors ==
+  /\ CauseSafety
+  /\ \A c \in CauseCases : ImplementationActions(c) = SpecActions(c)
+
+EarlyGateAnchors ==
+  /\ EarlyGateSafety
+  /\ ImplementationActions(NonFrontierHeight) = SpecActions(NonFrontierHeight)
+  /\ ImplementationActions(CommittedEdgeBlocks) = SpecActions(CommittedEdgeBlocks)
+  /\ ImplementationActions(PassiveCatchupBlocks) = SpecActions(PassiveCatchupBlocks)
+  /\ ImplementationActions(SeedNonExactNonHardCap) = SpecActions(SeedNonExactNonHardCap)
+  /\ ImplementationActions(NoSeedForHardCap) = SpecActions(NoSeedForHardCap)
+
+ExactFrontierAnchors ==
+  /\ ExactFrontierSafety
+  /\ ImplementationActions(ExactLagExpiredRoutesEvent) = SpecActions(ExactLagExpiredRoutesEvent)
+  /\ ImplementationActions(ExactLiveWorkSuppress) = SpecActions(ExactLiveWorkSuppress)
+  /\ ImplementationActions(ExactHardCapBypassesLiveWork) = SpecActions(ExactHardCapBypassesLiveWork)
+  /\ ImplementationActions(ExactQuorumNoRotationNoSlotSeeds) = SpecActions(ExactQuorumNoRotationNoSlotSeeds)
+  /\ ImplementationActions(ExactQuorumNoRotationRebroadcastedSuppress) =
+       SpecActions(ExactQuorumNoRotationRebroadcastedSuppress)
+  /\ ImplementationActions(ExactQuorumAllowsEvent) = SpecActions(ExactQuorumAllowsEvent)
+  /\ ImplementationActions(ExactFetchRetryReturns) = SpecActions(ExactFetchRetryReturns)
+  /\ ImplementationActions(ExactFetchRetryFallsThroughViewAdvance) =
+       SpecActions(ExactFetchRetryFallsThroughViewAdvance)
+  /\ ImplementationActions(ExactNoAllowRotationSuppress) = SpecActions(ExactNoAllowRotationSuppress)
+
+ActionableStateAnchors ==
+  /\ ActionableStateSafety
+  /\ ImplementationActions(NoActionableClearsState) = SpecActions(NoActionableClearsState)
+  /\ ImplementationActions(ReservedRecoveryWindowActionable) =
+       SpecActions(ReservedRecoveryWindowActionable)
+  /\ ImplementationActions(ActionableCreatesState) = SpecActions(ActionableCreatesState)
+  /\ ImplementationActions(LastViewMax) = SpecActions(LastViewMax)
+  /\ ImplementationActions(DependencyProgressMax) = SpecActions(DependencyProgressMax)
+  /\ ImplementationActions(WindowZeroStoresOnly) = SpecActions(WindowZeroStoresOnly)
+
+SuppressionAnchors ==
+  /\ SuppressionSafety
+  /\ ImplementationActions(SameSlotIngressRecentSuppress) =
+       SpecActions(SameSlotIngressRecentSuppress)
+  /\ ImplementationActions(RotateArmedIngressGraceSuppress) =
+       SpecActions(RotateArmedIngressGraceSuppress)
+  /\ ImplementationActions(SameHeightBacklogSuppress) = SpecActions(SameHeightBacklogSuppress)
+  /\ ImplementationActions(ActionCooldownSuppress) = SpecActions(ActionCooldownSuppress)
+
+CatchUpAnchors ==
+  /\ CatchUpSafety
+  /\ ImplementationActions(CatchUpWindowOneRangePull) = SpecActions(CatchUpWindowOneRangePull)
+  /\ ImplementationActions(CatchUpWindowTwoCleanupArms) = SpecActions(CatchUpWindowTwoCleanupArms)
+  /\ ImplementationActions(CatchUpWindowTwoNoEmitStillCleanup) =
+       SpecActions(CatchUpWindowTwoNoEmitStillCleanup)
+  /\ ImplementationActions(CatchUpNoEmitNoCleanupNone) = SpecActions(CatchUpNoEmitNoCleanupNone)
+
+RotateAnchors ==
+  /\ RotateSafety
+  /\ ImplementationActions(RotateArmedNoAllowSuppress) = SpecActions(RotateArmedNoAllowSuppress)
+  /\ ImplementationActions(RotateArmedSameViewSuppress) = SpecActions(RotateArmedSameViewSuppress)
+  /\ ImplementationActions(RotateArmedGraceSuppress) = SpecActions(RotateArmedGraceSuppress)
+  /\ ImplementationActions(RotateArmedWindowElapsedRotates) =
+       SpecActions(RotateArmedWindowElapsedRotates)
+  /\ ImplementationActions(RotateArmedLowWindowsDirectTrigger) =
+       SpecActions(RotateArmedLowWindowsDirectTrigger)
+  /\ ImplementationActions(RotateAfterRotateResetsCatchup) =
+       SpecActions(RotateAfterRotateResetsCatchup)
+
+FrontierRecoveryAdvanceSafetyAnchors ==
+  /\ CauseAnchors
+  /\ EarlyGateAnchors
+  /\ ExactFrontierAnchors
+  /\ ActionableStateAnchors
+  /\ SuppressionAnchors
+  /\ CatchUpAnchors
+  /\ RotateAnchors
+
+Safety ==
+  FrontierRecoveryAdvanceSafetyAnchors
+
 ====

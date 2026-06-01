@@ -489,13 +489,10 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
     guard !input.bundleBytes.isEmpty else {
         throw EvmSccpProverError.invalidPublicInputs("bundleBytes")
     }
-    guard UInt64(input.bundleBytes.count) <= UInt64(UInt32.max),
-          UInt64(input.sourceProofBytes.count) <= UInt64(UInt32.max) else {
+    guard UInt64(input.bundleBytes.count) <= UInt64(UInt32.max) else {
         throw EvmSccpProverError.invalidPublicInputs("proof byte length")
     }
-    guard input.sourceProofBytes.isEmpty || input.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw EvmSccpProverError.invalidPublicInputs("sourceProofBytes")
-    }
+    let sourceProofBytes = try requireEvmOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
     let publicInputsBytes = try canonicalEvmSccpPublicInputsBytes(input.publicInputs)
     let proofContext = try normalizeEvmSccpProofContext(
         statementHash: input.statementHash,
@@ -511,8 +508,8 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
     preimage.append(publicInputsBytes)
     evmAppendU32Le(UInt32(input.bundleBytes.count), to: &preimage)
     preimage.append(input.bundleBytes)
-    evmAppendU32Le(UInt32(input.sourceProofBytes.count), to: &preimage)
-    preimage.append(input.sourceProofBytes)
+    evmAppendU32Le(UInt32(sourceProofBytes.count), to: &preimage)
+    preimage.append(sourceProofBytes)
     try preimage.append(evmBytesFromHex32(proofContext.statementHash, field: "statementHash"))
     try preimage.append(evmBytesFromHex32(proofContext.destinationBindingHash, field: "destinationBindingHash"))
     for signal in publicSignalWords {
@@ -527,7 +524,7 @@ public func buildEvmSccpProofRequest(_ input: EvmSccpProofRequestInput) throws -
         publicInputsBytes: publicInputsBytes,
         publicSignalWords: publicSignalWords,
         bundleBytes: input.bundleBytes,
-        sourceProofBytes: input.sourceProofBytes,
+        sourceProofBytes: sourceProofBytes,
         proofContext: proofContext,
         statementHash: proofContext.statementHash,
         destinationBindingHash: proofContext.destinationBindingHash,
@@ -597,13 +594,14 @@ private func requireWrappedEvmProofResultForSubmission(
     guard envelopeHash == evmHashHex(prefix: "sccp:evm:groth16-proof-envelope:v1", payload: envelopePayload) else {
         throw EvmSccpProverError.invalidPublicInputs("proofResult.envelopeHash")
     }
-    guard proofResult.sourceProofBytes.isEmpty || proofResult.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw EvmSccpProverError.invalidPublicInputs("proofResult.sourceProofBytes")
-    }
+    let sourceProofBytes = try requireEvmOptionalSourceProofBytes(
+        proofResult.sourceProofBytes,
+        field: "proofResult.sourceProofBytes"
+    )
     let expectedRequest = try buildEvmSccpProofRequest(EvmSccpProofRequestInput(
         publicInputs: proofResult.publicInputs,
         bundleBytes: proofResult.bundleBytes,
-        sourceProofBytes: proofResult.sourceProofBytes,
+        sourceProofBytes: sourceProofBytes,
         statementHash: proofResult.statementHash,
         destinationBindingHash: proofResult.destinationBindingHash,
         backend: proofResult.backend,
@@ -785,10 +783,19 @@ private func requireProductionEvmSccpProofRequest(_ request: EvmSccpProofRequest
     guard !request.bundleBytes.isEmpty else {
         throw EvmSccpProverError.invalidPublicInputs("request.bundleBytes")
     }
-    guard request.sourceProofBytes.isEmpty || request.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw EvmSccpProverError.invalidPublicInputs("request.sourceProofBytes")
-    }
+    try requireEvmOptionalSourceProofBytes(request.sourceProofBytes, field: "request.sourceProofBytes")
     try requireProductionEvmDestinationBinding(request)
+}
+
+@discardableResult
+private func requireEvmOptionalSourceProofBytes(_ bytes: Data, field: String) throws -> Data {
+    guard bytes.count <= sccpSourceStateMaxProofBytes else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    guard bytes.isEmpty || bytes.contains(where: { $0 != 0 }) else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    return bytes
 }
 
 private func requireProductionEvmDestinationBinding(_ request: EvmSccpProofRequest) throws {

@@ -24903,8 +24903,6 @@ mod kagemusha_folded_real_prover_tests {
     fn recursive_aggregation_fp_public_inputs(
         bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
     ) -> Vec<halo2_proofs::halo2curves::pasta::Fp> {
-        use ff::PrimeField as _;
-
         recursive_aggregation_public_inputs(bundle)
             .into_iter()
             .map(|bytes| {
@@ -24945,6 +24943,20 @@ mod kagemusha_folded_real_prover_tests {
             ZK_BACKEND_HALO2_IPA.into(),
             norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
         );
+    }
+
+    fn rewrite_zk1_open_verify_envelope_instances(
+        envelope: &mut OpenVerifyEnvelope,
+        columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+    ) {
+        let (proof_payload, _) =
+            zkparse::proof_and_instances(&envelope.proof_bytes).expect("ZK1 proof instances");
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &proof_payload);
+        let column_refs: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
+            columns.iter().map(|column| column.as_slice()).collect();
+        zk1::wrap_append_instances_pasta_fp_cols(&column_refs, &mut proof_bytes);
+        envelope.proof_bytes = proof_bytes;
     }
 
     #[test]

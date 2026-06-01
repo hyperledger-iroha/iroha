@@ -68,6 +68,9 @@ const LITERAL_SHIFT_REG: u8 = 26;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
 const STATE_WILDCARD_KEY: &str = "state:*";
+const HINT_SKIP_DYNAMIC_STATE_PATH: &str = "dynamic state path is not compiler-resolved";
+const HINT_SKIP_CONTRACT_CALL_TARGET: &str = "contract call target is not compiler-resolved";
+const HINT_SKIP_OPAQUE_ISI: &str = "opaque ISI access is not compiler-resolved";
 const ACCOUNT_WILDCARD_KEY: &str = "account:*";
 const ASSET_WILDCARD_KEY: &str = "asset:*";
 const ASSET_DEF_WILDCARD_KEY: &str = "asset_def:*";
@@ -737,9 +740,10 @@ mod tests {
 
     use super::{
         AUTHORITY_ACCOUNT_KEY, Compiler, CompilerMode, CompilerOptions, ContractFeature,
-        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, NFT_COARSE_KEY, WIDE_IMM_MAX, emit_addi,
-        emit_load64, emit_store64, patch_pointer_literal_stub, pointer_type_for_kind,
-        reserve_pointer_literal_stub, retain_taira_supported_access_key, stack_slot_offset_bytes,
+        DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET, NFT_COARSE_KEY,
+        WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64, patch_pointer_literal_stub,
+        pointer_type_for_kind, reserve_pointer_literal_stub, retain_taira_supported_access_key,
+        stack_slot_offset_bytes,
     };
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
@@ -6338,7 +6342,7 @@ fn main() {{
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
-            query::asset::FindAssetById,
+            query::asset::{FindAssetById, FindAssetDefinitionById},
             query::{QueryRequest, SingularQueryBox},
         };
 
@@ -6400,6 +6404,33 @@ fn main() {{
             .expect("main entrypoint");
         assert_eq!(main.access_hints_complete, Some(true));
         assert!(main.access_hints_skipped.is_empty());
+
+        let definition_request = QueryRequest::Singular(SingularQueryBox::FindAssetDefinitionById(
+            FindAssetDefinitionById::new(asset_def.clone()),
+        ));
+        let definition_bytes = norito::to_bytes(&definition_request).expect("encode QueryRequest");
+        let definition_hex_payload = format!("0x{}", hex::encode(definition_bytes));
+        let definition_src =
+            format!("fn main() {{ execute_query(norito_bytes(\"{definition_hex_payload}\")); }}");
+
+        let (_bytes, definition_manifest) = compiler
+            .compile_source_with_manifest(&definition_src)
+            .expect("compile asset definition query manifest");
+        let definition_hints = definition_manifest
+            .access_set_hints
+            .expect("expected asset definition access_set_hints");
+        assert_eq!(
+            definition_hints.read_keys,
+            vec![format!("asset_def:{asset_def}")]
+        );
+        assert!(definition_hints.write_keys.is_empty());
+        assert!(
+            !definition_hints
+                .read_keys
+                .iter()
+                .any(|key| key.starts_with("domain:")),
+            "opaque canonical asset definition query should not synthesize a domain access hint",
+        );
     }
 
     #[test]
@@ -8068,6 +8099,33 @@ seiyaku Test {
     }
 
     #[test]
+    fn production_accepts_call_contract_access_fallback() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn relay(target: bytes, payload: Json) -> bytes permission(Admin) {
+    return call_contract(target, "settle", payload);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("call_contract fallback should be deployable in production");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let relay = entrypoints
+            .iter()
+            .find(|entry| entry.name == "relay")
+            .expect("relay entrypoint");
+        assert_taira_supported_access_keys(&relay.read_keys);
+        assert_taira_supported_access_keys(&relay.write_keys);
+        assert_eq!(relay.access_hints_complete, Some(false));
+        assert_eq!(
+            relay.access_hints_skipped,
+            vec![HINT_SKIP_CONTRACT_CALL_TARGET.to_string()]
+        );
+    }
+
+    #[test]
     fn production_accepts_dynamic_asset_definition_transfer_with_stripped_coarse_hints() {
         let src = r#"
 seiyaku Test {
@@ -8575,6 +8633,60 @@ mod test_mode_tests {
     }
 
     #[test]
+    fn production_prelude_scan_ignores_stripped_tests() {
+        let test_only_call_src = r#"
+        seiyaku Demo {
+            kotoage fn run() permission(Admin) {
+                info("run");
+            }
+
+            #[test]
+            fn smoke() {
+                let expected: AccountId = authority();
+                require_authority(expected);
+            }
+        }
+        "#;
+        let shadowed_helper_src = r#"
+        seiyaku Demo {
+            kotoage fn run(owner: AccountId) permission(Admin) {
+                require_owner(owner);
+            }
+
+            #[test]
+            fn require_authority() {}
+        }
+        "#;
+
+        let production = Compiler::new_with_options(CompilerOptions::default());
+        let (_code, _manifest, report) = production
+            .compile_source_with_manifest_and_report(test_only_call_src)
+            .expect("compile production with test-only prelude call");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .all(|entry| entry.function_name != "require_authority")
+        );
+
+        let (_code, _manifest, report) = production
+            .compile_source_with_manifest_and_report(shadowed_helper_src)
+            .expect("compile production with test shadowing prelude helper");
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "require_authority")
+        );
+        assert!(
+            report
+                .source_map
+                .iter()
+                .any(|entry| entry.function_name == "require_owner")
+        );
+    }
+
+    #[test]
     fn test_mode_helpers_emit_private_scallx_syscalls() {
         let src = r#"
         seiyaku Demo {
@@ -8724,11 +8836,11 @@ impl Compiler {
     }
 
     fn compile_program(&self, program: &Program) -> Result<CompilationArtifacts, String> {
-        let prelude_program = program_with_first_release_prelude(program)?;
-        let compiled_program = match self.opts.mode {
-            CompilerMode::Production => prelude_program.stripped_for_production(),
-            CompilerMode::Test => prelude_program,
+        let mode_program = match self.opts.mode {
+            CompilerMode::Production => program.stripped_for_production(),
+            CompilerMode::Test => program.clone(),
         };
+        let compiled_program = program_with_first_release_prelude(&mode_program)?;
         let typed = semantic::analyze(&compiled_program)
             .map_err(|e| i18n::translate(self.lang, Message::SemanticError(&e.message)))?;
         if self.opts.enforce_on_chain_profile
@@ -14988,10 +15100,10 @@ impl Compiler {
             &entrypoint_start_offsets,
         )?;
         if self.opts.mode == CompilerMode::Production {
-            if let Some(entrypoint) = entrypoint_descriptors
-                .iter()
-                .find(|entrypoint| entrypoint.access_hints_complete == Some(false))
-            {
+            if let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
+                entrypoint.access_hints_complete == Some(false)
+                    && !production_allows_incomplete_access_hints(&entrypoint.access_hints_skipped)
+            }) {
                 let reasons = if entrypoint.access_hints_skipped.is_empty() {
                     "no reason recorded".to_owned()
                 } else {
@@ -15855,6 +15967,13 @@ fn record_hint_skip(skips: &mut IndexSet<String>, reason: &str) {
     skips.insert(reason.to_owned());
 }
 
+fn production_allows_incomplete_access_hints(skipped_reasons: &[String]) -> bool {
+    !skipped_reasons.is_empty()
+        && skipped_reasons
+            .iter()
+            .all(|reason| reason == HINT_SKIP_CONTRACT_CALL_TARGET)
+}
+
 fn derive_state_access_hints(
     ir_prog: &ir::Program,
     state_path_hints: &HashMap<(usize, ir::Temp), StatePathHint>,
@@ -15878,7 +15997,7 @@ fn derive_state_access_hints(
                                 hint_diagnostics.state_wildcards.saturating_add(1);
                             record_hint_skip(
                                 &mut hint_skips[func_idx],
-                                "dynamic state path is not compiler-resolved",
+                                HINT_SKIP_DYNAMIC_STATE_PATH,
                             );
                             access_sets[func_idx]
                                 .reads
@@ -15898,7 +16017,7 @@ fn derive_state_access_hints(
                                 hint_diagnostics.state_wildcards.saturating_add(1);
                             record_hint_skip(
                                 &mut hint_skips[func_idx],
-                                "dynamic state path is not compiler-resolved",
+                                HINT_SKIP_DYNAMIC_STATE_PATH,
                             );
                             access_sets[func_idx]
                                 .reads
@@ -15918,7 +16037,7 @@ fn derive_state_access_hints(
                                 hint_diagnostics.state_wildcards.saturating_add(1);
                             record_hint_skip(
                                 &mut hint_skips[func_idx],
-                                "dynamic state path is not compiler-resolved",
+                                HINT_SKIP_DYNAMIC_STATE_PATH,
                             );
                             access_sets[func_idx]
                                 .reads
@@ -15931,10 +16050,7 @@ fn derive_state_access_hints(
                     ir::Instr::CallContract { .. } => {
                         hint_diagnostics.state_wildcards =
                             hint_diagnostics.state_wildcards.saturating_add(1);
-                        record_hint_skip(
-                            &mut hint_skips[func_idx],
-                            "contract call target is not compiler-resolved",
-                        );
+                        record_hint_skip(&mut hint_skips[func_idx], HINT_SKIP_CONTRACT_CALL_TARGET);
                         access_sets[func_idx]
                             .reads
                             .insert(STATE_WILDCARD_KEY.to_string());
@@ -15963,7 +16079,7 @@ fn record_isi_access(
 ) {
     let mut apply_fallback =
         |access_set: &mut AccessSets, hint_diagnostics: &mut AccessHintDiagnostics| {
-            record_hint_skip(hint_skips, "opaque ISI access is not compiler-resolved");
+            record_hint_skip(hint_skips, HINT_SKIP_OPAQUE_ISI);
             hint_diagnostics.isi_wildcards = hint_diagnostics.isi_wildcards.saturating_add(1);
             access_set.reads.insert(GLOBAL_WILDCARD_KEY.to_string());
             access_set.writes.insert(GLOBAL_WILDCARD_KEY.to_string());
@@ -15973,6 +16089,7 @@ fn record_isi_access(
         ir::Instr::TransferBatchApply { .. } => {
             apply_fallback(access_set, hint_diagnostics);
         }
+        ir::Instr::CallContract { .. } => {}
         ir::Instr::EscrowOpenOffer { .. }
         | ir::Instr::EscrowAccept { .. }
         | ir::Instr::EscrowMarkPaymentSent { .. }
@@ -17011,6 +17128,10 @@ fn record_singular_query_access(
     match query {
         SingularQueryBox::FindAssetById(q) => {
             add_asset_r(access_set, q.asset_id());
+            Some(())
+        }
+        SingularQueryBox::FindAssetDefinitionById(q) => {
+            add_asset_def_r(access_set, q.asset_definition_id());
             Some(())
         }
         _ => None,

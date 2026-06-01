@@ -95,11 +95,31 @@ class SubstrateSccpProverTest {
             SccpSubstrate.buildProofRequest(sampleProofRequestInput(bundleBytes = byteArrayOf()))
         }
         assertTrue(emptyBundle.message?.contains("bundleBytes") == true)
+        val zeroBundle = assertFailsWith<IllegalArgumentException> {
+            SccpSubstrate.buildProofRequest(sampleProofRequestInput(bundleBytes = byteArrayOf(0, 0)))
+        }
+        assertTrue(zeroBundle.message?.contains("all zero") == true)
+        val oversizedBundle = assertFailsWith<IllegalArgumentException> {
+            SccpSubstrate.buildProofRequest(
+                sampleProofRequestInput(
+                    bundleBytes = ByteArray(SccpSubstrate.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1) { 1 },
+                ),
+            )
+        }
+        assertTrue(oversizedBundle.message?.contains("at most") == true)
 
         val zeroSourceProof = assertFailsWith<IllegalArgumentException> {
             SccpSubstrate.buildProofRequest(sampleProofRequestInput(sourceProofBytes = byteArrayOf(0, 0)))
         }
         assertTrue(zeroSourceProof.message?.contains("sourceProofBytes must not be all zero") == true)
+        val oversizedSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpSubstrate.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceProofBytes = ByteArray(SccpSubstrate.SOURCE_STATE_MAX_PROOF_BYTES + 1) { 1 },
+                ),
+            )
+        }
+        assertTrue(oversizedSourceProof.message?.contains("sourceProofBytes must be at most") == true)
         assertContentEquals(
             ByteArray(0),
             SccpSubstrate.buildProofRequest(sampleProofRequestInput(sourceProofBytes = ByteArray(0))).sourceProofBytes,
@@ -166,12 +186,26 @@ class SubstrateSccpProverTest {
                 publicInputs = samplePublicInputs(),
                 proofBytes = byteArrayOf(1, 2, 3, 4),
                 bundleBytes = byteArrayOf(5, 6, 7),
-                sourceProofBytes = byteArrayOf(9, 10),
+                sourceProofBytes = ByteArray(0),
                 statementHash = "56".repeat(32),
                 destinationBindingHash = "78".repeat(32),
             ),
         )
         assertContentEquals(submission.runtimeCall, explicitSubmission.runtimeCall)
+
+        val rawSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpSubstrate.buildSubmission(
+                SubstrateSccpSubmissionInput(
+                    publicInputs = samplePublicInputs(),
+                    proofBytes = byteArrayOf(1, 2, 3, 4),
+                    bundleBytes = byteArrayOf(5, 6, 7),
+                    sourceProofBytes = byteArrayOf(9, 10),
+                    statementHash = "56".repeat(32),
+                    destinationBindingHash = "78".repeat(32),
+                ),
+            )
+        }
+        assertTrue(rawSourceProof.message?.contains("sourceProofBytes requires proofResult") == true)
 
         val wrongBundle = assertFailsWith<IllegalArgumentException> {
             SccpSubstrate.buildSubmission(
@@ -187,6 +221,20 @@ class SubstrateSccpProverTest {
             )
         }
         assertTrue(wrongBundle.message?.contains("bundleBytes") == true)
+
+        val zeroBundle = assertFailsWith<IllegalArgumentException> {
+            SccpSubstrate.buildSubmission(
+                SubstrateSccpSubmissionInput(
+                    publicInputs = samplePublicInputs(),
+                    proofBytes = byteArrayOf(1, 2, 3, 4),
+                    bundleBytes = byteArrayOf(0, 0),
+                    sourceProofBytes = byteArrayOf(9, 10),
+                    statementHash = "56".repeat(32),
+                    destinationBindingHash = "78".repeat(32),
+                ),
+            )
+        }
+        assertTrue(zeroBundle.message?.contains("all zero") == true)
 
         val wrongEnvelope = assertFailsWith<IllegalArgumentException> {
             SccpSubstrate.buildSubmission(

@@ -7957,14 +7957,25 @@ pub mod isi {
                 .clone(),
             evm_route_canary_transaction_hash: configured.evm_route_canary_transaction_hash.clone(),
             evm_route_canary_log_index: configured.evm_route_canary_log_index,
+            evm_route_canary_call_data_sha256: configured.evm_route_canary_call_data_sha256.clone(),
             evm_route_canary_message_id: configured.evm_route_canary_message_id.clone(),
+            evm_route_canary_payload_hash: configured.evm_route_canary_payload_hash.clone(),
+            evm_route_canary_target_domain: configured.evm_route_canary_target_domain,
             evm_route_canary_statement_hash: configured.evm_route_canary_statement_hash.clone(),
             evm_route_canary_commitment_root: configured.evm_route_canary_commitment_root.clone(),
+            evm_route_canary_finality_height: configured.evm_route_canary_finality_height.clone(),
+            evm_route_canary_finality_block_hash: configured
+                .evm_route_canary_finality_block_hash
+                .clone(),
+            evm_route_canary_proof_version: configured.evm_route_canary_proof_version,
+            evm_route_canary_proof_source_domain: configured.evm_route_canary_proof_source_domain,
             evm_route_canary_used_message_proof: configured.evm_route_canary_used_message_proof,
             tron_route_canary_transaction_id: configured.tron_route_canary_transaction_id.clone(),
             tron_route_canary_transaction_owner_address: configured
                 .tron_route_canary_transaction_owner_address
                 .clone(),
+            tron_route_canary_block_number: configured.tron_route_canary_block_number,
+            tron_route_canary_block_timestamp: configured.tron_route_canary_block_timestamp,
             tron_route_canary_log_index: configured.tron_route_canary_log_index,
             tron_route_canary_message_id: configured.tron_route_canary_message_id.clone(),
             tron_route_canary_call_data_sha256: configured
@@ -15554,9 +15565,16 @@ pub mod isi {
                     iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
                     [0xe0 | (domain as u8); 32],
                     0,
-                    [0xd0 | (domain as u8); 32],
+                    [0xd0u8.wrapping_add(domain as u8); 32],
+                    [0xd1u8.wrapping_add(domain as u8); 32],
+                    [0xd2u8.wrapping_add(domain as u8); 32],
+                    domain,
                     [0xf0 | (domain as u8); 32],
                     [0xc0 | (domain as u8); 32],
+                    [0xd3u8.wrapping_add(domain as u8); 32],
+                    [0xd4u8.wrapping_add(domain as u8); 32],
+                    1,
+                    iroha_sccp::SCCP_DOMAIN_SORA,
                     true,
                 )
                 .expect("EVM route canary evidence");
@@ -15570,6 +15588,8 @@ pub mod isi {
                     iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
                     [0xfa; 32],
                     [0x41; 21],
+                    234,
+                    567_000,
                     0,
                     [0xdd; 32],
                     [0xa1; 32],
@@ -15810,11 +15830,25 @@ pub mod isi {
                     .evm_route_canary_transaction_hash
                     .clone(),
                 evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
+                evm_route_canary_call_data_sha256: allowlist
+                    .evm_route_canary_call_data_sha256
+                    .clone(),
                 evm_route_canary_message_id: allowlist.evm_route_canary_message_id.clone(),
+                evm_route_canary_payload_hash: allowlist.evm_route_canary_payload_hash.clone(),
+                evm_route_canary_target_domain: allowlist.evm_route_canary_target_domain,
                 evm_route_canary_statement_hash: allowlist.evm_route_canary_statement_hash.clone(),
                 evm_route_canary_commitment_root: allowlist
                     .evm_route_canary_commitment_root
                     .clone(),
+                evm_route_canary_finality_height: allowlist
+                    .evm_route_canary_finality_height
+                    .clone(),
+                evm_route_canary_finality_block_hash: allowlist
+                    .evm_route_canary_finality_block_hash
+                    .clone(),
+                evm_route_canary_proof_version: allowlist.evm_route_canary_proof_version,
+                evm_route_canary_proof_source_domain: allowlist
+                    .evm_route_canary_proof_source_domain,
                 evm_route_canary_used_message_proof: allowlist.evm_route_canary_used_message_proof,
                 tron_route_canary_transaction_id: allowlist
                     .tron_route_canary_transaction_id
@@ -15822,6 +15856,8 @@ pub mod isi {
                 tron_route_canary_transaction_owner_address: allowlist
                     .tron_route_canary_transaction_owner_address
                     .clone(),
+                tron_route_canary_block_number: allowlist.tron_route_canary_block_number,
+                tron_route_canary_block_timestamp: allowlist.tron_route_canary_block_timestamp,
                 tron_route_canary_log_index: allowlist.tron_route_canary_log_index,
                 tron_route_canary_message_id: allowlist.tron_route_canary_message_id.clone(),
                 tron_route_canary_call_data_sha256: allowlist
@@ -15938,12 +15974,27 @@ pub mod isi {
                 .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
                 .expect("configured ETH route");
             assert_eq!(eth_route.evm_route_canary_log_index, Some(0));
+            assert!(eth_route.evm_route_canary_call_data_sha256.is_some());
+            assert!(eth_route.evm_route_canary_payload_hash.is_some());
+            assert_eq!(
+                eth_route.evm_route_canary_target_domain,
+                Some(iroha_sccp::SCCP_DOMAIN_ETH)
+            );
+            assert!(eth_route.evm_route_canary_finality_height.is_some());
+            assert!(eth_route.evm_route_canary_finality_block_hash.is_some());
+            assert_eq!(eth_route.evm_route_canary_proof_version, Some(1));
+            assert_eq!(
+                eth_route.evm_route_canary_proof_source_domain,
+                Some(iroha_sccp::SCCP_DOMAIN_SORA)
+            );
             assert_eq!(eth_route.evm_route_canary_used_message_proof, Some(true));
             let tron_route = zk
                 .sccp_route_allowlists
                 .iter()
                 .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
                 .expect("configured TRON route");
+            assert_eq!(tron_route.tron_route_canary_block_number, Some(234));
+            assert_eq!(tron_route.tron_route_canary_block_timestamp, Some(567_000));
             assert!(tron_route.tron_route_canary_call_data_sha256.is_some());
             assert!(tron_route.tron_route_canary_payload_hash.is_some());
             assert_eq!(
@@ -15982,9 +16033,16 @@ pub mod isi {
                 .expect("configured ETH route");
             eth_route.evm_route_canary_transaction_hash = None;
             eth_route.evm_route_canary_log_index = None;
+            eth_route.evm_route_canary_call_data_sha256 = None;
             eth_route.evm_route_canary_message_id = None;
+            eth_route.evm_route_canary_payload_hash = None;
+            eth_route.evm_route_canary_target_domain = None;
             eth_route.evm_route_canary_statement_hash = None;
             eth_route.evm_route_canary_commitment_root = None;
+            eth_route.evm_route_canary_finality_height = None;
+            eth_route.evm_route_canary_finality_block_hash = None;
+            eth_route.evm_route_canary_proof_version = None;
+            eth_route.evm_route_canary_proof_source_domain = None;
             eth_route.evm_route_canary_used_message_proof = None;
 
             let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
@@ -16018,8 +16076,7 @@ pub mod isi {
                 .expect_err("EVM route must reject TRON route canary transcript fields");
             let err = format!("{err:?}");
             assert!(
-                err.contains("production-ready lane material for domain 1")
-                    && err.contains("route canary evidence is not bound"),
+                err.contains("route allowlist for domain 1 is not production-ready"),
                 "unexpected error: {err}",
             );
         }
@@ -16081,6 +16138,43 @@ pub mod isi {
                 err.contains("production-ready lane material for domain 5")
                     && err.contains("route canary evidence is not bound"),
                 "unexpected error: {err}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_all_lanes_launch_rejects_tron_without_transaction_block_metadata() {
+            let assert_missing_block_metadata_rejected = |mut zk: iroha_config::parameters::actual::Zk,
+                                                          mutate: fn(
+                &mut iroha_config::parameters::actual::SccpRouteAllowlist,
+            )| {
+                let tron_route = zk
+                    .sccp_route_allowlists
+                    .iter_mut()
+                    .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_TRON)
+                    .expect("configured TRON route");
+                mutate(tron_route);
+
+                let err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                    .expect_err("TRON route canary must preserve transaction block metadata");
+                let err = format!("{err:?}");
+                assert!(
+                    err.contains("production-ready lane material for domain 5")
+                        && err.contains("route canary evidence is not bound"),
+                    "unexpected error: {err}",
+                );
+            };
+
+            assert_missing_block_metadata_rejected(
+                test_configured_sccp_all_lanes_zk_config(),
+                |route| {
+                    route.tron_route_canary_block_number = None;
+                },
+            );
+            assert_missing_block_metadata_rejected(
+                test_configured_sccp_all_lanes_zk_config(),
+                |route| {
+                    route.tron_route_canary_block_timestamp = None;
+                },
             );
         }
 

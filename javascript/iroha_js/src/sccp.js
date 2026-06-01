@@ -228,6 +228,10 @@ const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1 =
   "iroha:sccp:solana-route-canary-live-program:v1";
 const SCCP_TON_ROUTE_CANARY_LIVE_ACCOUNT_LABEL_V1 =
   "iroha:sccp:ton-route-canary-live-account:v1";
+const SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3 =
+  "iroha:sccp:tron-route-canary-evidence:v3";
+const SCCP_ROUTE_ALLOWLIST_LABEL_V1 = "sccp:route-allowlist:lane-evidence:v1";
+const SCCP_TRON_ROUTE_ALLOWLIST_ID_V1 = "sccp:tron:route-allowlist:tron-mainnet:v1";
 const SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000n;
 const SCCP_SOLANA_STAKE_STATE_V2_STAKE_ACCOUNT_DATA_LEN = 200;
 const SCCP_SOLANA_VOTE_STATE_ACCOUNT_DATA_LEN = 3_762;
@@ -3525,7 +3529,7 @@ export const buildSccpTonMessageBodyBoc = (input) => {
       );
     }
   }
-  const bundleBytes = requireNonEmptyBytes(
+  const bundleBytes = requireNativeRecursiveProofBytes(
     toBytes(strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
     "bundleBytes",
   );
@@ -3537,7 +3541,7 @@ export const buildSccpTonMessageBodyBoc = (input) => {
       "bundle_bytes",
     );
     if (resultBundleInput !== SCCP_OPTIONAL_FIELD_MISSING) {
-      const resultBundleBytes = requireNonEmptyBytes(
+      const resultBundleBytes = requireNativeRecursiveProofBytes(
         toBytes(resultBundleInput, "proofResult.bundleBytes"),
         "proofResult.bundleBytes",
       );
@@ -3832,7 +3836,7 @@ export const buildTonSccpProofRequest = (input) => {
     throw new TypeError("publicInputs.targetDomain must be TON");
   }
   const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
-  const bundleBytes = requireNonEmptyBytes(
+  const bundleBytes = requireNativeRecursiveProofBytes(
     toBytes(inputField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
     "bundleBytes",
   );
@@ -4304,7 +4308,7 @@ const requireProductionTonProofRequest = (request) => {
   if (request.backend !== SCCP_TON_CONTRACT_PROOF_BACKEND_V1) {
     throw new TypeError("TON SCCP proof request backend must be ton-contract-v1");
   }
-  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireNativeRecursiveProofBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
   requireOptionalNonZeroBytes(
     toBytes(request.sourceProofBytes, "sourceProofBytes"),
     "sourceProofBytes",
@@ -4874,8 +4878,11 @@ const normalizeGroth16SubmissionInput = (
     throw new TypeError(`${targetDomainLabel} SCCP submission input must be an object`);
   }
   const proofResultInput = strictOptionalResultField(input, "proofResult", "proofResult", "proof_result");
+  if (proofResultInput === null) {
+    throw new TypeError("proofResult must be a wrapped Groth16 SCCP proof result");
+  }
   const proofResult =
-    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING || proofResultInput === null
+    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING
       ? null
       : proofResultInput;
   if (
@@ -4886,6 +4893,28 @@ const normalizeGroth16SubmissionInput = (
   }
   if (proofResult !== null) {
     requireOptionalResultBackendMatches(proofResult.backend, backend);
+  } else {
+    if (
+      strictOptionalResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes") !==
+      SCCP_OPTIONAL_FIELD_MISSING
+    ) {
+      throw new TypeError(
+        "bundleBytes requires proofResult for request-bound submission",
+      );
+    }
+    if (
+      strictOptionalResultField(
+        input,
+        "sourceProofBytes",
+        "sourceProofBytes",
+        "source_proof_bytes",
+      ) !==
+      SCCP_OPTIONAL_FIELD_MISSING
+    ) {
+      throw new TypeError(
+        "sourceProofBytes requires proofResult for request-bound submission",
+      );
+    }
   }
 
   const inputPublicInputs = strictOptionalResultField(input, "publicInputs", "publicInputs", "public_inputs");
@@ -5536,7 +5565,7 @@ const normalizeSubstrateRuntimeProofRequest = (input) => {
     requestField("publicInputs", "publicInputs", "public_inputs"),
   );
   const publicInputsBytes = canonicalSccpMessageTransparentPublicInputsBytes(publicInputs);
-  const bundleBytes = requireNonEmptyBytes(
+  const bundleBytes = requireNativeRecursiveProofBytes(
     toBytes(requestField("bundleBytes", "bundleBytes", "bundle_bytes"), "bundleBytes"),
     "bundleBytes",
   );
@@ -5710,7 +5739,7 @@ const requireProductionSubstrateProofRequest = (request) => {
       "Substrate SCCP production proofs must target a Substrate-family domain",
     );
   }
-  requireNonEmptyBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
+  requireNativeRecursiveProofBytes(toBytes(request.bundleBytes, "bundleBytes"), "bundleBytes");
   requireOptionalNonZeroBytes(
     toBytes(request.sourceProofBytes, "sourceProofBytes"),
     "sourceProofBytes",
@@ -5779,8 +5808,11 @@ export function buildSubstrateSccpSubmission(input) {
     throw new TypeError("Substrate SCCP submission input must be an object");
   }
   const proofResultInput = strictOptionalResultField(input, "proofResult", "proofResult", "proof_result");
+  if (proofResultInput === null) {
+    throw new TypeError("proofResult must be a wrapped Substrate SCCP proof result");
+  }
   const proofResult =
-    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING || proofResultInput === null
+    proofResultInput === SCCP_OPTIONAL_FIELD_MISSING
       ? null
       : proofResultInput;
   if (
@@ -5843,7 +5875,7 @@ export function buildSubstrateSccpSubmission(input) {
     proofResult === null
       ? SCCP_OPTIONAL_FIELD_MISSING
       : strictOptionalResultField(proofResult, "proofResult.bundleBytes", "bundleBytes", "bundle_bytes");
-  const bundleBytes = requireNonEmptyBytes(
+  const bundleBytes = requireNativeRecursiveProofBytes(
     toBytes(
       inputBundle !== SCCP_OPTIONAL_FIELD_MISSING ? inputBundle : resultBundle,
       "bundleBytes",
@@ -5888,6 +5920,13 @@ export function buildSubstrateSccpSubmission(input) {
     )
   ) {
     throw new TypeError("sourceProofBytes must match proofResult.sourceProofBytes");
+  }
+  if (
+    proofResult === null &&
+    inputSourceProof !== SCCP_OPTIONAL_FIELD_MISSING &&
+    sourceProofBytes.length > 0
+  ) {
+    throw new TypeError("sourceProofBytes requires proofResult for request-bound submission");
   }
 
   const sourceDomainInput = strictOptionalResultField(input, "sourceDomain", "sourceDomain", "source_domain");
@@ -13622,6 +13661,25 @@ const normalizeTonValidatorSetTransitionForSourceState = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("TON validator-set transition proof must be an object");
   }
+  const rejectTransitionAliases = (label, ...names) => {
+    strictOptionalResultField(input, label, ...names);
+  };
+  rejectTransitionAliases("sourceDomain", "sourceDomain", "source_domain");
+  rejectTransitionAliases("fromValidatorSetSeqno", "fromValidatorSetSeqno", "from_validator_set_seqno");
+  rejectTransitionAliases("toValidatorSetSeqno", "toValidatorSetSeqno", "to_validator_set_seqno");
+  rejectTransitionAliases("masterchainSeqno", "masterchainSeqno", "masterchain_seqno");
+  rejectTransitionAliases("masterchainWorkchainId", "masterchainWorkchainId", "masterchain_workchain_id");
+  rejectTransitionAliases("masterchainShard", "masterchainShard", "masterchain_shard");
+  rejectTransitionAliases("masterchainBlockHash", "masterchainBlockHash", "masterchain_block_hash");
+  rejectTransitionAliases("masterchainFileHash", "masterchainFileHash", "masterchain_file_hash");
+  rejectTransitionAliases("parentValidatorSetHash", "parentValidatorSetHash", "parent_validator_set_hash");
+  rejectTransitionAliases("nextValidatorSetHash", "nextValidatorSetHash", "next_validator_set_hash");
+  rejectTransitionAliases("nextValidatorSetPayload", "nextValidatorSetPayload", "next_validator_set_payload");
+  rejectTransitionAliases("nextValidatorSetPayloadHash", "nextValidatorSetPayloadHash", "next_validator_set_payload_hash");
+  rejectTransitionAliases("nextValidatorSetConfigHash", "nextValidatorSetConfigHash", "next_validator_set_config_hash");
+  rejectTransitionAliases("transitionMessageHash", "transitionMessageHash", "transition_message_hash");
+  rejectTransitionAliases("transitionSignatureHash", "transitionSignatureHash", "transition_signature_hash");
+  rejectTransitionAliases("validatorSignatureProof", "validatorSignatureProof", "validator_signature_proof");
   const sourceDomain = normalizeSccpDomainId(input.sourceDomain ?? input.source_domain, "sourceDomain");
   if (sourceDomain !== SCCP_DOMAIN_TON) throw new TypeError("sourceDomain must be TON");
   const masterchainWorkchainId = normalizeSignedI32(
@@ -19497,6 +19555,494 @@ export function tonSccpRouteCanaryEvidenceHash(input) {
   );
 }
 
+const normalizeTronRouteCanaryAddressPayload = (value, label) => {
+  if (typeof value === "string") {
+    const text = value.trim();
+    const hexText = text.replace(/^0x/i, "");
+    if (hexText.length !== 42 || /[^0-9a-fA-F]/u.test(hexText)) {
+      return decodeTronBase58CheckPayload(value, label);
+    }
+  }
+  const payload = toBytes(value, label);
+  if (!isNonZeroTronAddress(payload)) {
+    throw new TypeError(`${label} must be a non-zero 0x41-prefixed TRON address`);
+  }
+  return payload;
+};
+
+const requireTronRouteCanaryTrue = (value, label) => {
+  if (value !== true) {
+    throw new TypeError(`${label} must be true`);
+  }
+};
+
+const tronSccpRouteAllowlistHashBytes = ({
+  sourceVerifierMaterialHash,
+  sourceAdapterEngineDeploymentHash,
+  destinationBindingHash,
+}) => {
+  let payload = new Uint8Array();
+  payload = writeU8(payload, 1);
+  payload = writeU32Le(payload, SCCP_DOMAIN_TRON);
+  payload = writeBytes(payload, textEncoder.encode("tron"));
+  payload = writeBytes(payload, textEncoder.encode("GovernanceAllowlist"));
+  payload = writeBytes(payload, textEncoder.encode(SCCP_TRON_ROUTE_ALLOWLIST_ID_V1));
+  payload = concatBytes(
+    payload,
+    sourceVerifierMaterialHash,
+    sourceAdapterEngineDeploymentHash,
+    destinationBindingHash,
+  );
+  return prefixedBlake2b(SCCP_ROUTE_ALLOWLIST_LABEL_V1, payload);
+};
+
+const requireTronRouteCanaryHashesDistinct = (fields) => {
+  const seen = new Map();
+  for (const [label, bytes] of fields) {
+    if (!bytes.some((byte) => byte !== 0)) continue;
+    const encoded = bytesToHex(bytes, false);
+    const previousLabel = seen.get(encoded);
+    if (previousLabel) {
+      throw new TypeError(
+        `TRON route canary transcript hashes must be distinct: ${label} matches ${previousLabel}`,
+      );
+    }
+    seen.set(encoded, label);
+  }
+};
+
+const normalizeTronSccpRouteCanaryEvidence = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TRON route canary evidence must be an object");
+  }
+  const value = input;
+  const destinationBinding = tronSccpDestinationBinding(value);
+  const destinationBindingHash = nonZeroHex32Bytes(
+    destinationBindingHashFromInput(value),
+    "destinationBindingHash",
+  );
+  const expectedDestinationBindingHashInput = strictOptionalResultField(
+    value,
+    "expectedDestinationBindingHash",
+    "expectedDestinationBindingHash",
+    "expected_destination_binding_hash",
+  );
+  if (expectedDestinationBindingHashInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const expectedDestinationBindingHash = normalizeNonZeroHex32(
+      expectedDestinationBindingHashInput,
+      "expectedDestinationBindingHash",
+    );
+    if (expectedDestinationBindingHash !== destinationBinding.bindingHash) {
+      throw new TypeError("expectedDestinationBindingHash must match destinationBinding");
+    }
+  }
+  if (bytesToHex(destinationBindingHash) !== destinationBinding.bindingHash) {
+    throw new TypeError("destinationBindingHash must match destinationBinding");
+  }
+
+  const routeAllowlistHash = nonZeroHex32Bytes(
+    strictResultField(value, "routeAllowlistHash", "routeAllowlistHash", "route_allowlist_hash"),
+    "routeAllowlistHash",
+  );
+  const sourceVerifierMaterialHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "sourceVerifierMaterialHash",
+      "sourceVerifierMaterialHash",
+      "source_verifier_material_hash",
+    ),
+    "sourceVerifierMaterialHash",
+  );
+  const sourceAdapterEngineDeploymentHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "sourceAdapterEngineDeploymentHash",
+      "sourceAdapterEngineDeploymentHash",
+      "source_adapter_engine_deployment_hash",
+    ),
+    "sourceAdapterEngineDeploymentHash",
+  );
+  const expectedRouteAllowlistHash = tronSccpRouteAllowlistHashBytes({
+    sourceVerifierMaterialHash,
+    sourceAdapterEngineDeploymentHash,
+    destinationBindingHash,
+  });
+  if (!bytesEqual(routeAllowlistHash, expectedRouteAllowlistHash)) {
+    throw new TypeError(
+      "routeAllowlistHash must match canonical source, deployment, and destination evidence",
+    );
+  }
+  const expectedRouteAllowlistHashInput = strictOptionalResultField(
+    value,
+    "expectedRouteAllowlistHash",
+    "expectedRouteAllowlistHash",
+    "expected_route_allowlist_hash",
+  );
+  if (expectedRouteAllowlistHashInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const suppliedExpectedRouteAllowlistHash = nonZeroHex32Bytes(
+      expectedRouteAllowlistHashInput,
+      "expectedRouteAllowlistHash",
+    );
+    if (!bytesEqual(suppliedExpectedRouteAllowlistHash, expectedRouteAllowlistHash)) {
+      throw new TypeError("expectedRouteAllowlistHash must match canonical evidence");
+    }
+  }
+
+  const routeCanaryDomain = (label, fallback, ...names) => {
+    const selected = strictOptionalResultField(value, label, ...names);
+    if (selected === SCCP_OPTIONAL_FIELD_MISSING) {
+      return normalizeSccpDomainId(fallback, label);
+    }
+    if (selected === null || selected === undefined) {
+      throw new TypeError(`${label} must be a u32 domain id`);
+    }
+    return normalizeSccpDomainId(selected, label);
+  };
+  const sourceDomain = routeCanaryDomain(
+    "sourceDomain",
+    SCCP_DOMAIN_SORA,
+    "sourceDomain",
+    "source_domain",
+    "destinationSourceDomain",
+    "destination_source_domain",
+  );
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("sourceDomain must be SORA");
+  }
+  const targetDomain = routeCanaryDomain(
+    "targetDomain",
+    SCCP_DOMAIN_TRON,
+    "targetDomain",
+    "target_domain",
+    "destinationTargetDomain",
+    "destination_target_domain",
+    "routeCanaryTargetDomain",
+    "route_canary_target_domain",
+  );
+  if (targetDomain !== SCCP_DOMAIN_TRON) {
+    throw new RangeError("targetDomain must be TRON");
+  }
+  if (sourceDomain === targetDomain) {
+    throw new RangeError("sourceDomain and targetDomain must differ");
+  }
+  const proofVersionInput = strictOptionalResultField(
+    value,
+    "proofVersion",
+    "proofVersion",
+    "proof_version",
+    "routeCanaryProofVersion",
+    "route_canary_proof_version",
+  );
+  const proofVersion = normalizeSccpDomainId(
+    proofVersionInput === SCCP_OPTIONAL_FIELD_MISSING ? 1 : proofVersionInput,
+    "proofVersion",
+  );
+  if (proofVersion !== 1) {
+    throw new RangeError("proofVersion must be 1");
+  }
+  const proofSourceDomain = routeCanaryDomain(
+    "proofSourceDomain",
+    SCCP_DOMAIN_SORA,
+    "proofSourceDomain",
+    "proof_source_domain",
+    "routeCanaryProofSourceDomain",
+    "route_canary_proof_source_domain",
+  );
+  if (proofSourceDomain !== sourceDomain) {
+    throw new RangeError("proofSourceDomain must match sourceDomain");
+  }
+
+  const usedMessageProof = strictResultField(
+    value,
+    "usedMessageProof",
+    "usedMessageProof",
+    "used_message_proof",
+    "routeCanaryUsedMessageProof",
+    "route_canary_used_message_proof",
+  );
+  requireTronRouteCanaryTrue(usedMessageProof, "usedMessageProof");
+  const rawDataOwnerMatchesTransaction = strictResultField(
+    value,
+    "rawDataOwnerMatchesTransaction",
+    "rawDataOwnerMatchesTransaction",
+    "raw_data_owner_matches_transaction",
+    "routeCanaryRawDataOwnerMatchesTransaction",
+    "route_canary_raw_data_owner_matches_transaction",
+  );
+  requireTronRouteCanaryTrue(
+    rawDataOwnerMatchesTransaction,
+    "rawDataOwnerMatchesTransaction",
+  );
+  const signatureRecoversToOwner = strictResultField(
+    value,
+    "signatureRecoversToOwner",
+    "signatureRecoversToOwner",
+    "signature_recovers_to_owner",
+    "routeCanarySignatureRecoversToOwner",
+    "route_canary_signature_recovers_to_owner",
+  );
+  requireTronRouteCanaryTrue(signatureRecoversToOwner, "signatureRecoversToOwner");
+
+  const transactionOwnerAddress = normalizeTronRouteCanaryAddressPayload(
+    strictResultField(
+      value,
+      "transactionOwnerAddress",
+      "transactionOwnerAddress",
+      "transaction_owner_address",
+      "routeCanaryTransactionOwnerAddress",
+      "route_canary_transaction_owner_address",
+    ),
+    "transactionOwnerAddress",
+  );
+  const signatureRecoveredAddress = normalizeTronRouteCanaryAddressPayload(
+    strictResultField(
+      value,
+      "signatureRecoveredAddress",
+      "signatureRecoveredAddress",
+      "signature_recovered_address",
+      "routeCanarySignatureRecoveredAddress",
+      "route_canary_signature_recovered_address",
+    ),
+    "signatureRecoveredAddress",
+  );
+  if (!bytesEqual(signatureRecoveredAddress, transactionOwnerAddress)) {
+    throw new TypeError("signatureRecoveredAddress must match transactionOwnerAddress");
+  }
+
+  const blockNumber = normalizeUnsignedBigInt(
+    strictResultField(
+      value,
+      "blockNumber",
+      "blockNumber",
+      "block_number",
+      "routeCanaryBlockNumber",
+      "route_canary_block_number",
+    ),
+    "blockNumber",
+  );
+  if (blockNumber === 0n) {
+    throw new RangeError("blockNumber must be positive");
+  }
+  const blockTimestamp = normalizeUnsignedBigInt(
+    strictResultField(
+      value,
+      "blockTimestamp",
+      "blockTimestamp",
+      "block_timestamp",
+      "routeCanaryBlockTimestamp",
+      "route_canary_block_timestamp",
+    ),
+    "blockTimestamp",
+  );
+  const logIndex = normalizeSccpDomainId(
+    strictResultField(
+      value,
+      "logIndex",
+      "logIndex",
+      "log_index",
+      "routeCanaryLogIndex",
+      "route_canary_log_index",
+    ),
+    "logIndex",
+  );
+
+  const transactionId = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "transactionId",
+      "transactionId",
+      "transaction_id",
+      "routeCanaryTransactionId",
+      "route_canary_transaction_id",
+    ),
+    "transactionId",
+  );
+  const messageId = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "messageId",
+      "messageId",
+      "message_id",
+      "routeCanaryMessageId",
+      "route_canary_message_id",
+    ),
+    "messageId",
+  );
+  const callDataSha256 = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "callDataSha256",
+      "callDataSha256",
+      "call_data_sha256",
+      "routeCanaryCallDataSha256",
+      "route_canary_call_data_sha256",
+    ),
+    "callDataSha256",
+  );
+  const payloadHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "payloadHash",
+      "payloadHash",
+      "payload_hash",
+      "routeCanaryPayloadHash",
+      "route_canary_payload_hash",
+    ),
+    "payloadHash",
+  );
+  const statementHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "statementHash",
+      "statementHash",
+      "statement_hash",
+      "routeCanaryStatementHash",
+      "route_canary_statement_hash",
+    ),
+    "statementHash",
+  );
+  const commitmentRoot = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+      "routeCanaryCommitmentRoot",
+      "route_canary_commitment_root",
+    ),
+    "commitmentRoot",
+  );
+  const finalityHeight = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "finalityHeight",
+      "finalityHeight",
+      "finality_height",
+      "routeCanaryFinalityHeight",
+      "route_canary_finality_height",
+    ),
+    "finalityHeight",
+  );
+  const finalityBlockHash = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "finalityBlockHash",
+      "finalityBlockHash",
+      "finality_block_hash",
+      "routeCanaryFinalityBlockHash",
+      "route_canary_finality_block_hash",
+    ),
+    "finalityBlockHash",
+  );
+  const signatureSha256 = nonZeroHex32Bytes(
+    strictResultField(
+      value,
+      "signatureSha256",
+      "signatureSha256",
+      "signature_sha256",
+      "routeCanarySignatureSha256",
+      "route_canary_signature_sha256",
+    ),
+    "signatureSha256",
+  );
+  requireTronRouteCanaryHashesDistinct([
+    ["transactionId", transactionId],
+    ["messageId", messageId],
+    ["callDataSha256", callDataSha256],
+    ["payloadHash", payloadHash],
+    ["statementHash", statementHash],
+    ["commitmentRoot", commitmentRoot],
+    ["finalityBlockHash", finalityBlockHash],
+    ["signatureSha256", signatureSha256],
+  ]);
+
+  const verifierAddress = decodeTronBase58CheckPayload(
+    destinationBinding.verifierAddress,
+    "destinationBinding.verifierAddress",
+  );
+  const verifierBackend = destinationBinding.verifierBackend;
+  const proofFamily = destinationBinding.proofFamily;
+  const networkId = nonZeroHex32Bytes(
+    destinationBinding.networkId,
+    "destinationBinding.networkId",
+  );
+  let payload = new Uint8Array();
+  payload = writeU8(payload, 3);
+  payload = concatBytes(payload, routeAllowlistHash, verifierAddress, transactionId);
+  payload = concatBytes(payload, transactionOwnerAddress);
+  payload = writeU64Le(payload, blockNumber);
+  payload = writeU64Le(payload, blockTimestamp);
+  payload = writeU32Le(payload, logIndex);
+  payload = concatBytes(payload, callDataSha256, messageId);
+  payload = writeU32Le(payload, sourceDomain);
+  payload = writeU32Le(payload, targetDomain);
+  payload = concatBytes(
+    payload,
+    payloadHash,
+    commitmentRoot,
+    finalityHeight,
+    finalityBlockHash,
+    statementHash,
+  );
+  payload = writeU32Le(payload, proofVersion);
+  payload = writeU32Le(payload, proofSourceDomain);
+  payload = concatBytes(
+    payload,
+    destinationBindingHash,
+    keccak_256(textEncoder.encode(verifierBackend)),
+    keccak_256(textEncoder.encode(proofFamily)),
+    networkId,
+  );
+  payload = writeU8(payload, 1);
+  payload = writeU8(payload, 1);
+  payload = concatBytes(payload, signatureSha256, signatureRecoveredAddress);
+  payload = writeU8(payload, 1);
+
+  return {
+    payload,
+    routeAllowlistHash,
+    destinationBindingHash,
+    sourceVerifierMaterialHash,
+    sourceAdapterEngineDeploymentHash,
+  };
+};
+
+export function canonicalTronSccpRouteCanaryEvidenceBytes(input) {
+  return normalizeTronSccpRouteCanaryEvidence(input).payload;
+}
+
+export function tronSccpRouteCanaryEvidenceHash(input) {
+  const evidence = normalizeTronSccpRouteCanaryEvidence(input);
+  const digest = prefixedBlake2b(SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3, evidence.payload);
+  if (
+    bytesEqual(digest, evidence.routeAllowlistHash) ||
+    bytesEqual(digest, evidence.destinationBindingHash) ||
+    bytesEqual(digest, evidence.sourceVerifierMaterialHash) ||
+    bytesEqual(digest, evidence.sourceAdapterEngineDeploymentHash)
+  ) {
+    throw new TypeError(
+      "routeCanaryEvidenceHash must be distinct from routeAllowlistHash, " +
+        "destinationBindingHash, sourceVerifierMaterialHash, and " +
+        "sourceAdapterEngineDeploymentHash",
+    );
+  }
+  const expectedHashInput = strictOptionalResultField(
+    input,
+    "routeCanaryEvidenceHash",
+    "routeCanaryEvidenceHash",
+    "route_canary_evidence_hash",
+    "expectedRouteCanaryEvidenceHash",
+    "expected_route_canary_evidence_hash",
+  );
+  if (expectedHashInput !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const expectedHash = normalizeNonZeroHex32(expectedHashInput, "routeCanaryEvidenceHash");
+    if (expectedHash !== bytesToHex(digest)) {
+      throw new TypeError("routeCanaryEvidenceHash must match transaction metadata");
+    }
+  }
+  return bytesToHex(digest);
+}
+
 const normalizeDestinationBindingVersion = (input, label) => {
   const versionInput = optionalResultField(input, "version");
   if (versionInput === SCCP_OPTIONAL_FIELD_MISSING) return 1;
@@ -21244,6 +21790,11 @@ const requireOptionalNonZeroBytes = (bytes, label) => {
   if (bytes.length > 0 && bytes.every((byte) => byte === 0)) {
     throw new TypeError(`${label} must not be all zero`);
   }
+  if (bytes.length > SCCP_SOURCE_STATE_MAX_PROOF_BYTES) {
+    throw new TypeError(
+      `${label} must be at most ${SCCP_SOURCE_STATE_MAX_PROOF_BYTES} bytes`,
+    );
+  }
   return bytes;
 };
 
@@ -22098,7 +22649,7 @@ export function buildSolanaSccpSubmission(input) {
     ),
     "proofBytes",
   );
-  const bundleBytes = requireNonEmptyBytes(
+  const bundleBytes = requireNativeRecursiveProofBytes(
     toBytes(
       strictResultField(input, "bundleBytes", "bundleBytes", "bundle_bytes"),
       "bundleBytes",

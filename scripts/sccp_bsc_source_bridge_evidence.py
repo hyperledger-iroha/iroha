@@ -625,6 +625,26 @@ def _toml_receipt_metadata_ready(args: argparse.Namespace) -> bool:
     return True
 
 
+def _require_toml_runtime_bytecode_metadata(
+    args: argparse.Namespace,
+    *,
+    output: str,
+) -> None:
+    if getattr(args, "source_bridge_runtime_bytecode_hex_text", None) is None:
+        raise ValueError(
+            f"--{output} requires --source-bridge-runtime-bytecode-hex or "
+            "--source-bridge-runtime-bytecode-file"
+        )
+
+
+def _toml_runtime_bytecode_metadata_ready(args: argparse.Namespace) -> bool:
+    try:
+        _require_toml_runtime_bytecode_metadata(args, output="toml")
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_bsc_source_evidence_args(args: argparse.Namespace) -> None:
     _require_bsc_sora_lane(args)
     _require_live_component_hashes(args)
@@ -765,6 +785,7 @@ def render_toml(args: argparse.Namespace) -> str:
     deployment_hash = bsc_source_adapter_engine_deployment_record_hash(args)
     _require_expected_record_hashes(args, output="toml")
     _require_toml_receipt_metadata(args, output="toml")
+    _require_toml_runtime_bytecode_metadata(args, output="toml")
     comments = [
         "# sccp_evm_source_rpc_chain_id = " + json.dumps(str(BSC_RPC_CHAIN_ID)),
         "# sccp_evm_source_bridge_address = "
@@ -823,6 +844,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         == deployment_hash
     )
     toml_metadata_ready = _toml_receipt_metadata_ready(args)
+    runtime_bytecode_ready = _toml_runtime_bytecode_metadata_ready(args)
     summary = {
         "source_domain": args.source_domain,
         "target_domain": args.target_domain,
@@ -844,6 +866,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
             expected_material_matches
             and expected_deployment_matches
             and toml_metadata_ready
+            and runtime_bytecode_ready
         ),
     }
     runtime_bytecode_hex = getattr(

@@ -309,11 +309,14 @@ Init ==
   checked = 0
 
 Next ==
-  UNCHANGED vars
+  \/ /\ checked < 25
+     /\ checked' = checked + 1
+  \/ /\ checked = 25
+     /\ UNCHANGED vars
 
 TypeInvariant ==
   /\ Bug \in Bugs
-  /\ checked = 0
+  /\ checked \in 0..25
   /\ \A c \in Cases:
        /\ SpecActions(c) \subseteq ActionUniverse
        /\ ImplementationActions(c) \subseteq ActionUniverse
@@ -372,5 +375,58 @@ SafetyFast ==
   /\ DependencyContinuitySafety
   /\ ReservationWindowSafety
   /\ MarkerHeightModeSafety
+
+SpecComparisonAnchors ==
+  /\ SnapshotMatchesSpec
+  /\ ReservationMatchesSpec
+  /\ MarkerMatchesSpec
+
+SnapshotLifecycleAnchors ==
+  /\ SnapshotLifecycleSafety
+  /\ StateCleared \in ImplementationActions(WrongActiveHeight)
+  /\ StateCleared \in ImplementationActions(NoDependency)
+  /\ StateStored \in ImplementationActions(InitialDependency)
+  /\ ModeInactive \in ImplementationActions(BeforeActivationTwo)
+  /\ ModeActive \in ImplementationActions(ActivateAtThree)
+  /\ Window0 \in ImplementationActions(ActivateAtThree)
+  /\ Window1 \in ImplementationActions(ActiveNextWindow)
+  /\ Windows0 \in ImplementationActions(ProgressResetActive)
+  /\ ModeInactive \in ImplementationActions(ProgressResetActive)
+  /\ StateCleared \in ImplementationActions(CommittedHeightAdvanced)
+
+DependencyContinuityAnchors ==
+  /\ DependencyContinuitySafety
+  /\ DependencyExisting \in ImplementationActions(KeepExistingDependency)
+  /\ DependencyNew \in ImplementationActions(SwitchToNewDependency)
+  /\ DependencyNew \in ImplementationActions(InitialDependency)
+
+ReservationWindowAnchors ==
+  /\ ReservationWindowSafety
+  /\ ReserveAllowed \in ImplementationActions(ReserveNoSnapshot)
+  /\ ReserveAllowed \in ImplementationActions(ReserveInactive)
+  /\ RotationMarked \in ImplementationActions(ReserveActiveFirst)
+  /\ ReserveRejected \in ImplementationActions(ReserveActiveDuplicate)
+  /\ AvailableFalse \in ImplementationActions(AvailableInactive)
+  /\ AvailableFalse \in ImplementationActions(AvailableActiveDuplicate)
+  /\ AvailableTrue \in ImplementationActions(AvailableActiveFirst)
+
+MarkerHeightModeAnchors ==
+  /\ MarkerHeightModeSafety
+  /\ ReacquireMarked \in ImplementationActions(MarkRangeActiveMatching)
+  /\ ReacquireUnchanged \in ImplementationActions(MarkRangeWrongHeight)
+  /\ ReacquireUnchanged \in ImplementationActions(MarkRangeInactive)
+  /\ RotationMarked \in ImplementationActions(MarkRotationActiveMatching)
+  /\ RotationUnchanged \in ImplementationActions(MarkRotationWrongHeight)
+  /\ RotationUnchanged \in ImplementationActions(MarkRotationInactive)
+
+MissingQcHeightStallSafetyAnchors ==
+  /\ SpecComparisonAnchors
+  /\ SnapshotLifecycleAnchors
+  /\ DependencyContinuityAnchors
+  /\ ReservationWindowAnchors
+  /\ MarkerHeightModeAnchors
+
+Safety ==
+  MissingQcHeightStallSafetyAnchors
 
 ====

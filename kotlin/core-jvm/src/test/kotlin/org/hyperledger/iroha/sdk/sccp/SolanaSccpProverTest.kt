@@ -3919,6 +3919,34 @@ class SolanaSccpProverTest {
             )
         }
         assertTrue(wrongBinding.message?.contains("destinationBindingHash") == true)
+        val zeroBundle = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.buildSubmission(
+                SolanaSccpSubmissionInput(
+                    publicInputs = canonicalPublicInputs,
+                    proofBytes = canonicalProofResult.proofBytes,
+                    bundleBytes = byteArrayOf(0, 0),
+                    statementHash = canonicalProofResult.proofContext.statementHash,
+                    destinationBindingHash = solanaDestinationBindingHash,
+                    proofContextHash = canonicalProofResult.proofContextHash,
+                    proofResult = canonicalProofResult,
+                ),
+            )
+        }
+        assertTrue(zeroBundle.message?.contains("bundleBytes must not be all zero") == true)
+        val oversizedBundle = assertFailsWith<IllegalArgumentException> {
+            SccpSolana.buildSubmission(
+                SolanaSccpSubmissionInput(
+                    publicInputs = canonicalPublicInputs,
+                    proofBytes = canonicalProofResult.proofBytes,
+                    bundleBytes = ByteArray(SccpSolana.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1) { 1 },
+                    statementHash = canonicalProofResult.proofContext.statementHash,
+                    destinationBindingHash = solanaDestinationBindingHash,
+                    proofContextHash = canonicalProofResult.proofContextHash,
+                    proofResult = canonicalProofResult,
+                ),
+            )
+        }
+        assertTrue(oversizedBundle.message?.contains("bundleBytes must be at most") == true)
         val error = assertFailsWith<IllegalArgumentException> {
             SccpSolana.buildSubmission(
                 SolanaSccpSubmissionInput(

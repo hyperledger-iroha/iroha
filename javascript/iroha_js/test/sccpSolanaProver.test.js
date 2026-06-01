@@ -136,6 +136,7 @@ import {
   canonicalSolanaSccpBankForkBytes,
   canonicalSolanaSccpRouteCanaryEvidenceBytes,
   canonicalTonSccpRouteCanaryEvidenceBytes,
+  canonicalTronSccpRouteCanaryEvidenceBytes,
   canonicalSolanaSccpAccountsLtHashProofPublicInputsBytes,
   canonicalSolanaSccpAccountsLtHashCommitmentBytes,
   canonicalSolanaSccpAccountsLtHashVerificationContextBytes,
@@ -251,6 +252,7 @@ import {
   solanaSccpProofContextHash,
   solanaSccpRouteCanaryEvidenceHash,
   tonSccpRouteCanaryEvidenceHash,
+  tronSccpRouteCanaryEvidenceHash,
   substrateAuthoritySetHashFromPayload,
   substrateAuthoritySetPayloadHash,
   substrateAuthoritySetTransitionJustificationHash,
@@ -304,6 +306,14 @@ const HEX32_E = `0x${"ee".repeat(32)}`;
 const HEX32_F = `0x${"12".repeat(32)}`;
 const HEX32_G = `0x${"56".repeat(32)}`;
 const HEX32_H = `0x${"78".repeat(32)}`;
+const TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR =
+  "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8";
+const TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR =
+  "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8";
+const TRON_ROUTE_ALLOWLIST_HASH_VECTOR =
+  "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a";
+const TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR =
+  "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56";
 const SOLANA_MAINNET_GENESIS_PUBLIC_INPUT =
   "0x8dbaadfbc441ded0257a4700cd26d814b5a196be44b963454cff8dd9543f13b5";
 
@@ -372,6 +382,44 @@ const sampleTonRouteCanaryEvidence = (overrides = {}) => ({
   verifierCodeBocRootHash: `0x${"44".repeat(32)}`,
   ...overrides,
 });
+
+const sampleTronRouteCanaryEvidence = (overrides = {}) => {
+  const destinationBinding = sampleTronDestinationBinding();
+  return {
+    routeAllowlistHash: TRON_ROUTE_ALLOWLIST_HASH_VECTOR,
+    destinationBindingHash: destinationBinding.bindingHash,
+    sourceVerifierMaterialHash: TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR,
+    sourceAdapterEngineDeploymentHash: TRON_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR,
+    networkId: destinationBinding.networkId,
+    verifierAddress: destinationBinding.verifierAddress,
+    verifierCodeHash: destinationBinding.verifierCodeHash,
+    verifierKeyHash: destinationBinding.verifierKeyHash,
+    sourceDomain: SCCP_DOMAIN_SORA,
+    targetDomain: SCCP_DOMAIN_TRON,
+    transactionId: `0x${"fa".repeat(32)}`,
+    transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    blockNumber: 234n,
+    blockTimestamp: 567000n,
+    logIndex: 0,
+    messageId: `0x${"dd".repeat(32)}`,
+    callDataSha256:
+      "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+    payloadHash: `0x${"ab".repeat(32)}`,
+    commitmentRoot: `0x${"ee".repeat(32)}`,
+    finalityHeight: `0x${"00".repeat(31)}7b`,
+    finalityBlockHash: `0x${"cd".repeat(32)}`,
+    statementHash: `0x${"f1".repeat(32)}`,
+    proofVersion: 1,
+    proofSourceDomain: SCCP_DOMAIN_SORA,
+    usedMessageProof: true,
+    rawDataOwnerMatchesTransaction: true,
+    signatureSha256: `0x${"c4".repeat(32)}`,
+    signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    signatureRecoversToOwner: true,
+    routeCanaryEvidenceHash: TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR,
+    ...overrides,
+  };
+};
 
 const assertImmutableFastpqProofRequest = (request, byteFields) => {
   assert.equal(Object.isFrozen(request), true);
@@ -488,6 +536,76 @@ test("derives TON live-account route canary evidence hash", () => {
         sampleTonRouteCanaryEvidence({ accountStatus: "active", account_status: "active" }),
       ),
     /accountStatus must not use multiple aliases/,
+  );
+});
+
+test("derives TRON transaction route canary evidence hash", () => {
+  const evidence = sampleTronRouteCanaryEvidence();
+  assert.equal(canonicalTronSccpRouteCanaryEvidenceBytes(evidence).length, 551);
+  assert.equal(tronSccpRouteCanaryEvidenceHash(evidence), TRON_ROUTE_CANARY_EVIDENCE_HASH_VECTOR);
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ routeAllowlistHash: HEX32_H }),
+      ),
+    /routeAllowlistHash must match canonical/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ destinationBindingHash: HEX32_H }),
+      ),
+    /destinationBinding\.bindingHash must match destinationBinding/,
+  );
+  assert.throws(
+    () => tronSccpRouteCanaryEvidenceHash(sampleTronRouteCanaryEvidence({ targetDomain: SCCP_DOMAIN_ETH })),
+    /targetDomain must be TRON/,
+  );
+  assert.throws(
+    () => tronSccpRouteCanaryEvidenceHash(sampleTronRouteCanaryEvidence({ blockNumber: 0 })),
+    /blockNumber must be positive/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ usedMessageProof: false }),
+      ),
+    /usedMessageProof must be true/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ rawDataOwnerMatchesTransaction: false }),
+      ),
+    /rawDataOwnerMatchesTransaction must be true/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ signatureRecoversToOwner: false }),
+      ),
+    /signatureRecoversToOwner must be true/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ signatureRecoveredAddress: `0x41${"12".repeat(20)}` }),
+      ),
+    /signatureRecoveredAddress must match/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ targetDomain: SCCP_DOMAIN_TRON, target_domain: SCCP_DOMAIN_TRON }),
+      ),
+    /targetDomain must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        sampleTronRouteCanaryEvidence({ routeCanaryEvidenceHash: HEX32_H }),
+      ),
+    /routeCanaryEvidenceHash must match/,
   );
 });
 
@@ -5337,6 +5455,17 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.throws(
     () =>
       buildEvmSccpSubmission({
+        proofResult: null,
+        proofBytes: GROTH16_PROOF_BYTES,
+        publicInputs: sampleEvmPublicInputs,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /proofResult must be a wrapped Groth16 SCCP proof result/,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpSubmission({
         proofResult: { ...proofResult, request_hash: proofResult.requestHash },
       }),
     /proofResult\.requestHash must not use multiple aliases/u,
@@ -5439,6 +5568,17 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
       }),
     /proofResult\.requestHash must not use multiple aliases/u,
   );
+  assert.throws(
+    () =>
+      buildTronSccpSubmission({
+        proof_result: null,
+        proofBytes: GROTH16_PROOF_BYTES,
+        publicInputs: sampleTronPublicInputs,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /proofResult must be a wrapped Groth16 SCCP proof result/,
+  );
   assert.equal(tronSubmission.callDataHex.startsWith(SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1), true);
   assert.equal(tronSubmission.callData.length, 676);
   assert.deepEqual(
@@ -5464,6 +5604,28 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   });
   assert.equal(omittedTronSourceProofResult.sourceProofBytes.length, 0);
   assert.deepEqual(Array.from(omittedTronSourceSubmission.proofBytes), Array.from(GROTH16_PROOF_BYTES));
+  assert.throws(
+    () =>
+      buildEvmSccpSubmission({
+        proofBytes: GROTH16_PROOF_BYTES,
+        publicInputs: sampleEvmPublicInputs,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        bundleBytes: [5, 6, 7],
+      }),
+    /bundleBytes requires proofResult for request-bound submission/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpSubmission({
+        proofBytes: GROTH16_PROOF_BYTES,
+        publicInputs: sampleTronPublicInputs,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceProofBytes: [9, 10],
+      }),
+    /sourceProofBytes requires proofResult for request-bound submission/,
+  );
 
   const changedProof = Uint8Array.from(GROTH16_PROOF_BYTES);
   changedProof.set(
@@ -5730,6 +5892,28 @@ test("binds Substrate runtime proof requests to relay context", () => {
     () =>
       buildSubstrateSccpProofRequest({
         publicInputs: sampleSubstratePublicInputs,
+        bundleBytes: [0, 0],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpProofRequest({
+        publicInputs: sampleSubstratePublicInputs,
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /bundleBytes must be at most/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpProofRequest({
+        publicInputs: sampleSubstratePublicInputs,
         bundleBytes: [5, 6, 7],
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: HEX32_G,
@@ -5791,6 +5975,32 @@ test("builds Substrate SCCP runtime-call submissions", () => {
   assert.throws(
     () =>
       buildSubstrateSccpSubmission({
+        proofResult: null,
+        proofBytes: [1, 2, 3, 4],
+        publicInputs: sampleSubstratePublicInputs,
+        bundleBytes: [5, 6, 7],
+        sourceProofBytes: [9, 10],
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /proofResult must be a wrapped Substrate SCCP proof result/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
+        proofBytes: [1, 2, 3, 4],
+        publicInputs: sampleSubstratePublicInputs,
+        bundleBytes: [5, 6, 7],
+        sourceProofBytes: [9, 10],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /sourceProofBytes requires proofResult for request-bound submission/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
         proofResult: { ...proofResult, request_hash: proofResult.requestHash },
       }),
     /proofResult\.requestHash must not use multiple aliases/u,
@@ -5828,6 +6038,18 @@ test("builds Substrate SCCP runtime-call submissions", () => {
   assert.throws(
     () => buildSubstrateSccpSubmission({ proofResult, bundleBytes: [5, 6, 8] }),
     /bundleBytes must match proofResult\.bundleBytes/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
+        publicInputs: sampleSubstratePublicInputs,
+        proofBytes: [1, 2, 3, 4],
+        bundleBytes: [0, 0],
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+      }),
+    /bundleBytes must not be all zero/,
   );
   assert.throws(
     () =>
@@ -7751,6 +7973,30 @@ test("builds Solana SCCP program instruction submission data", () => {
         publicInputs: submission.publicInputs,
         proofResult,
         proofBytes: [1],
+        bundleBytes: [0, 0],
+        statementHash: HEX32_G,
+        destinationBindingHash: solanaDestinationBindingHash,
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildSolanaSccpSubmission({
+        publicInputs: submission.publicInputs,
+        proofResult,
+        proofBytes: [1],
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        statementHash: HEX32_G,
+        destinationBindingHash: solanaDestinationBindingHash,
+      }),
+    /bundleBytes must be at most/,
+  );
+  assert.throws(
+    () =>
+      buildSolanaSccpSubmission({
+        publicInputs: submission.publicInputs,
+        proofResult,
+        proofBytes: [1],
         bundleBytes: [2],
         statementHash: HEX32_G,
         destinationBindingHash: solanaDestinationBindingHash,
@@ -8375,6 +8621,22 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
+        bundleBytes: Uint8Array.from([0, 0]),
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpSubmission({
+        proofResult,
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+      }),
+    /bundleBytes must be at most/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpSubmission({
+        proofResult,
         proofBytes: Uint8Array.from([0, 0]),
         bundleBytes: Uint8Array.from([5, 6, 7]),
       }),
@@ -8677,6 +8939,46 @@ test("binds TON proof requests to relay context and source adapter deployment", 
         sourceAdapterDeploymentReceiptHash: HEX32_B,
       }),
     /bundleBytes must not be empty/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        publicInputs: sampleTonPublicInputs,
+        bundleBytes: [0, 0],
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceStateVerifierHash: HEX32_C,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        publicInputs: sampleTonPublicInputs,
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceStateVerifierHash: HEX32_C,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /bundleBytes must be at most/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest({
+        publicInputs: sampleTonPublicInputs,
+        bundleBytes: [5, 6, 7],
+        sourceProofBytes: new Uint8Array(SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1).fill(1),
+        statementHash: HEX32_G,
+        destinationBindingHash: HEX32_H,
+        sourceStateVerifierHash: HEX32_C,
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+      }),
+    /sourceProofBytes must be at most/,
   );
   assert.throws(
     () =>
@@ -9173,6 +9475,18 @@ test("derives TON SCCP shard proof hashes from branch witness material", () => {
       ],
     }),
     /transitionSignatureHash/,
+  );
+  assert.throws(
+    () => buildTonShardStateProofRequest({
+      ...transitionBoundInput,
+      validatorSetTransitionProofs: [
+        {
+          ...transitionProof,
+          transition_signature_hash: TON_VALIDATOR_SET_TRANSITION_SIGNATURE_HASH,
+        },
+      ],
+    }),
+    /transitionSignatureHash must not use multiple aliases/,
   );
   assert.throws(
     () =>

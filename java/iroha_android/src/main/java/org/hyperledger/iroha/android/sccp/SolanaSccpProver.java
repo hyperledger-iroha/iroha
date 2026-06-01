@@ -4289,9 +4289,7 @@ public final class SolanaSccpProver {
 
   public static Submission buildSubmission(final SubmissionInput input) {
     Objects.requireNonNull(input, "input");
-    if (input.bundleBytes().length == 0) {
-      throw new IllegalArgumentException("bundleBytes must not be empty");
-    }
+    final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
     if (input.publicInputs().version() != 1) {
       throw new IllegalArgumentException("publicInputs.version must be 1");
     }
@@ -4341,7 +4339,6 @@ public final class SolanaSccpProver {
         hex32Bytes(proofContextDestinationBindingHash, "destinationBindingHash");
     final byte[] proofContextHashBytes =
         hex32Bytes(expectedProofContextHash, "proofContextHash");
-    final byte[] bundleBytes = input.bundleBytes();
     final List<SubmissionArgumentBytes> argumentBytes = new ArrayList<>();
     argumentBytes.add(new SubmissionArgumentBytes("proof_bytes", proofBytes));
     argumentBytes.add(new SubmissionArgumentBytes("public_inputs", publicInputsBytes));
@@ -4372,6 +4369,22 @@ public final class SolanaSccpProver {
         "0x" + hexLower(instructionData),
         instructionData,
         "0x" + hexLower(instructionData));
+  }
+
+  private static byte[] requireNativeRecursivePayloadBytes(
+      final byte[] bytes, final String label) {
+    Objects.requireNonNull(bytes, label);
+    if (bytes.length == 0) {
+      throw new IllegalArgumentException(label + " must not be empty");
+    }
+    if (bytes.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+    }
+    if (!anyNonZero(bytes)) {
+      throw new IllegalArgumentException(label + " must not be all zero");
+    }
+    return Arrays.copyOf(bytes, bytes.length);
   }
 
   public static ProofResult wrapProofResult(final byte[] proofBytes, final ProofRequest request) {

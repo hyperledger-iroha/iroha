@@ -182,11 +182,49 @@ public final class SubstrateSccpProverTests {
     threw = false;
     try {
       SubstrateSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs(),
+              new byte[] {0, 0},
+              new byte[0],
+              SubstrateSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("all zero");
+    }
+    assert threw : "all-zero Substrate bundle bytes must be rejected";
+
+    final byte[] oversizedBundle =
+        new byte[SubstrateSccpProver.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedBundle, (byte) 1);
+    threw = false;
+    try {
+      SubstrateSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs(), oversizedBundle, new byte[0], SubstrateSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("at most");
+    }
+    assert threw : "oversized Substrate bundle bytes must be rejected";
+
+    threw = false;
+    try {
+      SubstrateSccpProver.buildProofRequest(
           sampleProofRequestInput(samplePublicInputs(), new byte[] {0, 0}));
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("sourceProofBytes must not be all zero");
     }
     assert threw : "all-zero Substrate source proof bytes must be rejected";
+
+    final byte[] oversizedSourceProof =
+        new byte[SubstrateSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedSourceProof, (byte) 1);
+    threw = false;
+    try {
+      SubstrateSccpProver.buildProofRequest(
+          sampleProofRequestInput(samplePublicInputs(), oversizedSourceProof));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be at most");
+    }
+    assert threw : "oversized Substrate source proof bytes must be rejected";
     assert SubstrateSccpProver.buildProofRequest(
             sampleProofRequestInput(samplePublicInputs(), new byte[0]))
         .sourceProofBytes()
@@ -267,7 +305,7 @@ public final class SubstrateSccpProverTests {
                 samplePublicInputs(),
                 new byte[] {1, 2, 3, 4},
                 new byte[] {5, 6, 7},
-                new byte[] {9, 10},
+                new byte[0],
                 repeat("56", 32),
                 repeat("78", 32),
                 SubstrateSccpProver.DOMAIN_SORA,
@@ -276,6 +314,23 @@ public final class SubstrateSccpProverTests {
         : "explicit and wrapped submissions must encode the same runtime call";
 
     boolean threw = false;
+    try {
+      SubstrateSccpProver.buildSubmission(
+          new SubstrateSccpProver.SubmissionInput(
+              samplePublicInputs(),
+              new byte[] {1, 2, 3, 4},
+              new byte[] {5, 6, 7},
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              SubstrateSccpProver.DOMAIN_SORA,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes requires proofResult");
+    }
+    assert threw : "raw Substrate source proof bytes must require a wrapped proof result";
+
+    threw = false;
     try {
       SubstrateSccpProver.buildSubmission(
           new SubstrateSccpProver.SubmissionInput(
@@ -291,6 +346,23 @@ public final class SubstrateSccpProverTests {
       threw = ex.getMessage().contains("bundleBytes");
     }
     assert threw : "mismatched wrapped bundle bytes must be rejected";
+
+    threw = false;
+    try {
+      SubstrateSccpProver.buildSubmission(
+          new SubstrateSccpProver.SubmissionInput(
+              samplePublicInputs(),
+              new byte[] {1, 2, 3, 4},
+              new byte[] {0, 0},
+              new byte[] {9, 10},
+              repeat("56", 32),
+              repeat("78", 32),
+              SubstrateSccpProver.DOMAIN_SORA,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("all zero");
+    }
+    assert threw : "all-zero explicit Substrate submission bundle bytes must be rejected";
 
     threw = false;
     try {

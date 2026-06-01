@@ -56,6 +56,7 @@ import {
   bscValidatorSetStorageValueHash,
   bscValidatorSetTransitionMessageHash,
   buildEvmSccpProofRequest,
+  buildEvmSccpSubmission,
   evmSccpDestinationBinding,
   wrapEvmSccpProofResult,
   buildSolanaSccpAccountsLtHashProofRequest,
@@ -64,6 +65,7 @@ import {
   buildSolanaSccpFullAccountsdbLatticeProofRequest,
   buildSolanaSccpBankForkChoiceProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequests,
+  buildSolanaSccpSubmission,
   wrapSolanaSccpSourceStateVerificationProof,
   buildSubstrateSccpProofRequest,
   buildSubstrateSccpSubmission,
@@ -74,6 +76,7 @@ import {
   buildTonSccpFullLightClientAuditProofRequest,
   buildTonSccpFullLightClientAuditProofRequests,
   buildTronSccpProofRequest,
+  buildTronSccpSubmission,
   tronSccpDestinationBinding,
   wrapTonSccpProofResult,
   wrapTronSccpProofResult,
@@ -119,6 +122,7 @@ import {
   canonicalTonShardStateWitnessCommitmentBytes,
   canonicalTonSccpSourceStateVerificationProofBytes,
   canonicalTonSccpRouteCanaryEvidenceBytes,
+  canonicalTronSccpRouteCanaryEvidenceBytes,
   canonicalTonSccpFullLightClientAuditStatementBytes,
   canonicalTonMasterchainBlockMessageBytes,
   canonicalTonMasterchainConfigLeafBytes,
@@ -145,6 +149,7 @@ import {
   sccpDestinationBindingKey,
   solanaSccpRouteCanaryEvidenceHash,
   tonSccpRouteCanaryEvidenceHash,
+  tronSccpRouteCanaryEvidenceHash,
   sccpSourceAdapterEngineDeploymentHash,
   sccpSourceAdapterVerifierVkHash,
   sccpSolanaFullLightClientGateHash,
@@ -842,6 +847,40 @@ test("package declarations require wrapped Solana submission proof results", () 
   );
 });
 
+test("package dist Solana submission rejects inert bundle bytes", () => {
+  const publicInputs = {
+    version: 1,
+    message_id: `0x${"11".repeat(32)}`,
+    payload_hash: `0x${"22".repeat(32)}`,
+    target_domain: SCCP_DOMAIN_SOL,
+    commitment_root: `0x${"33".repeat(32)}`,
+    finality_height: "42",
+    finality_block_hash: `0x${"44".repeat(32)}`,
+  };
+  const baseSubmission = {
+    publicInputs,
+    proofResult: {},
+    proofBytes: new Uint8Array([1]),
+  };
+
+  assert.throws(
+    () =>
+      buildSolanaSccpSubmission({
+        ...baseSubmission,
+        bundleBytes: new Uint8Array([0, 0]),
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildSolanaSccpSubmission({
+        ...baseSubmission,
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+      }),
+    /bundleBytes must be at most/,
+  );
+});
+
 test("package dist entrypoint exports SCCP portal constants", () => {
   assert.equal(SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN, 141);
   assert.equal(SCCP_SOLANA_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1, "submit_sccp_message_proof");
@@ -898,6 +937,8 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
     solanaSccpRouteCanaryEvidenceHash,
     canonicalTonSccpRouteCanaryEvidenceBytes,
     tonSccpRouteCanaryEvidenceHash,
+    canonicalTronSccpRouteCanaryEvidenceBytes,
+    tronSccpRouteCanaryEvidenceHash,
   ]) {
     assert.equal(typeof helper, "function");
   }
@@ -949,6 +990,76 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
     }),
     "0xf128e8405017b9ca7733bb10d43eeaf783e38d39740a3455aa353c76655c6942",
   );
+  assert.equal(
+    canonicalTronSccpRouteCanaryEvidenceBytes({
+      routeAllowlistHash: "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+      destinationBindingHash:
+        "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
+      sourceVerifierMaterialHash:
+        "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+      sourceAdapterEngineDeploymentHash:
+        "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+      networkId: `0x${"33".repeat(32)}`,
+      verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+      verifierCodeHash: `0x${"bb".repeat(32)}`,
+      verifierKeyHash: `0x${"cc".repeat(32)}`,
+      transactionId: `0x${"fa".repeat(32)}`,
+      transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      blockNumber: 234n,
+      blockTimestamp: 567000n,
+      logIndex: 0,
+      messageId: `0x${"dd".repeat(32)}`,
+      callDataSha256:
+        "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+      payloadHash: `0x${"ab".repeat(32)}`,
+      commitmentRoot: `0x${"ee".repeat(32)}`,
+      finalityHeight: `0x${"00".repeat(31)}7b`,
+      finalityBlockHash: `0x${"cd".repeat(32)}`,
+      statementHash: `0x${"f1".repeat(32)}`,
+      usedMessageProof: true,
+      rawDataOwnerMatchesTransaction: true,
+      signatureSha256: `0x${"c4".repeat(32)}`,
+      signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      signatureRecoversToOwner: true,
+    }).length,
+    551,
+  );
+  assert.equal(
+    tronSccpRouteCanaryEvidenceHash({
+      routeAllowlistHash: "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+      destinationBindingHash:
+        "0x17c953ad5b8c9a2b6f7102aca993fa7c427d018505cf4f58fac35ea454caba7f",
+      sourceVerifierMaterialHash:
+        "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+      sourceAdapterEngineDeploymentHash:
+        "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+      networkId: `0x${"33".repeat(32)}`,
+      verifierAddress: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+      verifierCodeHash: `0x${"bb".repeat(32)}`,
+      verifierKeyHash: `0x${"cc".repeat(32)}`,
+      transactionId: `0x${"fa".repeat(32)}`,
+      transactionOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      blockNumber: 234n,
+      blockTimestamp: 567000n,
+      logIndex: 0,
+      messageId: `0x${"dd".repeat(32)}`,
+      callDataSha256:
+        "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+      payloadHash: `0x${"ab".repeat(32)}`,
+      commitmentRoot: `0x${"ee".repeat(32)}`,
+      finalityHeight: `0x${"00".repeat(31)}7b`,
+      finalityBlockHash: `0x${"cd".repeat(32)}`,
+      statementHash: `0x${"f1".repeat(32)}`,
+      usedMessageProof: true,
+      rawDataOwnerMatchesTransaction: true,
+      signatureSha256: `0x${"c4".repeat(32)}`,
+      signatureRecoveredAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      signatureRecoversToOwner: true,
+      routeCanaryEvidenceHash:
+        "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
+    }),
+    "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
+  );
   assert.match(
     DECLARATIONS_TEXT,
     /wrapSolanaSccpSourceStateVerificationProof\(\s+proofBytes: BinaryLike \| number\[\],[\s\S]*request: SolanaSccpAccountsLtHashProofRequest \| SolanaSccpFullLightClientAuditProofRequest,/,
@@ -960,6 +1071,10 @@ test("package dist entrypoint exports Solana source-state helpers", () => {
   assert.match(
     DECLARATIONS_TEXT,
     /export function tonSccpRouteCanaryEvidenceHash\([\s\S]*TonSccpRouteCanaryEvidenceInput/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function tronSccpRouteCanaryEvidenceHash\([\s\S]*TronSccpRouteCanaryEvidenceInput/,
   );
 
   const rawDataHash = solanaSccpAccountRawDataHash(new Uint8Array([1, 2, 3, 4]));
@@ -1443,7 +1558,30 @@ test("package dist entrypoint exports SCCP TRON Groth16 helpers", () => {
     request.requestHash,
     "0x53d48d1d2005df00f1a4060ef9396b4ca2aa8ecc405dee439729c061693a44e5",
   );
-  assert.equal(wrapTronSccpProofResult(proofBytes, request).requestHash, request.requestHash);
+  const proofResult = wrapTronSccpProofResult(proofBytes, request);
+  assert.equal(proofResult.requestHash, request.requestHash);
+  assert.throws(
+    () =>
+      buildTronSccpSubmission({
+        proofResult: null,
+        proofBytes,
+        publicInputs,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: destinationBinding.bindingHash,
+      }),
+    /proofResult must be a wrapped Groth16 SCCP proof result/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpSubmission({
+        proofBytes,
+        publicInputs,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: destinationBinding.bindingHash,
+        sourceProofBytes: new Uint8Array([9, 10]),
+      }),
+    /sourceProofBytes requires proofResult for request-bound submission/,
+  );
   const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
   assert.equal(publicInputWords.length, 6);
   assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}05`);
@@ -1555,7 +1693,30 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", () => {
     request.requestHash,
     "0x4a7c71c3c1838f5d30e1641a32984999a71f9c6cfdff9151ac7d77ca60b64d5e",
   );
-  assert.equal(wrapEvmSccpProofResult(proofBytes, request).requestHash, request.requestHash);
+  const proofResult = wrapEvmSccpProofResult(proofBytes, request);
+  assert.equal(proofResult.requestHash, request.requestHash);
+  assert.throws(
+    () =>
+      buildEvmSccpSubmission({
+        proofResult: null,
+        proofBytes,
+        publicInputs,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: destinationBinding.bindingHash,
+      }),
+    /proofResult must be a wrapped Groth16 SCCP proof result/,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpSubmission({
+        proofBytes,
+        publicInputs,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: destinationBinding.bindingHash,
+        bundleBytes: new Uint8Array([5, 6, 7]),
+      }),
+    /bundleBytes requires proofResult for request-bound submission/,
+  );
   const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
   assert.equal(publicInputWords.length, 6);
   assert.equal(Buffer.from(publicInputWords[2]).toString("hex"), `${"00".repeat(31)}01`);
@@ -1665,6 +1826,22 @@ test("package dist entrypoint exports SCCP Substrate runtime proof helpers", asy
       bundle_bytes: new Uint8Array([5, 6, 7, 9]),
     }).requestHash,
   );
+  assert.throws(
+    () =>
+      buildSubstrateSccpProofRequest({
+        ...input,
+        bundle_bytes: new Uint8Array([0, 0]),
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpProofRequest({
+        ...input,
+        bundle_bytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+      }),
+    /bundleBytes must be at most/,
+  );
 
   const prover = new SubstrateSccpProver({
     prove: (callbackRequest) => {
@@ -1680,6 +1857,33 @@ test("package dist entrypoint exports SCCP Substrate runtime proof helpers", asy
   assert.equal(wrapSubstrateSccpProofResult([1, 2, 3], request).requestHash, request.requestHash);
   assert.throws(
     () =>
+      buildSubstrateSccpSubmission({
+        proofResult: null,
+        proofBytes: new Uint8Array([1, 2, 3]),
+        publicInputs,
+        bundleBytes: new Uint8Array([5, 6, 7]),
+        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
+    /proofResult must be a wrapped Substrate SCCP proof result/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
+        proofBytes: new Uint8Array([1, 2, 3]),
+        publicInputs,
+        bundleBytes: new Uint8Array([5, 6, 7]),
+        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
+    /sourceProofBytes requires proofResult for request-bound submission/,
+  );
+  assert.throws(
+    () =>
       wrapSubstrateSccpProofResult(
         new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
         request,
@@ -1692,12 +1896,25 @@ test("package dist entrypoint exports SCCP Substrate runtime proof helpers", asy
         publicInputs,
         proofBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
         bundleBytes: new Uint8Array([5, 6, 7]),
-        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceProofBytes: new Uint8Array(),
         sourceDomain: SCCP_DOMAIN_SORA,
         statementHash: `0x${"55".repeat(32)}`,
         destinationBindingHash: `0x${"66".repeat(32)}`,
       }),
     /at most/,
+  );
+  assert.throws(
+    () =>
+      buildSubstrateSccpSubmission({
+        publicInputs,
+        proofBytes: new Uint8Array([1]),
+        bundleBytes: new Uint8Array([0, 0]),
+        sourceProofBytes: new Uint8Array([9, 10]),
+        sourceDomain: SCCP_DOMAIN_SORA,
+        statementHash: `0x${"55".repeat(32)}`,
+        destinationBindingHash: `0x${"66".repeat(32)}`,
+      }),
+    /bundleBytes must not be all zero/,
   );
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/u);
   const exposedProofBytes = result.proofBytes;
@@ -1734,6 +1951,22 @@ test("package dist entrypoint exports SCCP TON proof wrapper", () => {
   assert.equal(request.targetDomain, SCCP_DOMAIN_TON);
   assert.equal(result.requestHash, request.requestHash);
   assert.equal(submission.envelopeEncoding, SCCP_TON_MESSAGE_BODY_BOC_V1);
+  assert.throws(
+    () =>
+      buildTonSccpSubmission({
+        proofResult: result,
+        bundleBytes: new Uint8Array([0, 0]),
+      }),
+    /bundleBytes must not be all zero/,
+  );
+  assert.throws(
+    () =>
+      buildTonSccpSubmission({
+        proofResult: result,
+        bundleBytes: new Uint8Array(SCCP_NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1).fill(1),
+      }),
+    /bundleBytes must be at most/,
+  );
   assert.throws(
     () =>
       wrapTonSccpProofResult(

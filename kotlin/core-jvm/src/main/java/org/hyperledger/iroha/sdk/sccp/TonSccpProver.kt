@@ -2041,14 +2041,13 @@ object SccpTon {
         val destinationBindingHash =
             nonZeroHex32Bytes(input.destinationBindingHash, "destinationBindingHash")
         val proofBytes = input.proofBytes
-        val bundleBytes = input.bundleBytes
+        val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
         val metadataBytes = input.metadataBytes
         require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
         require(proofBytes.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
             "proofBytes must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
         }
         require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
-        require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
         val rootData = ByteArrayOutputStream()
         writeU32Be(rootData, SUBMIT_OP_V1)
         writeU64Be(rootData, normalizeU64(input.queryId ?: submissionQueryId(input.publicInputs), "queryId"))
@@ -2096,12 +2095,8 @@ object SccpTon {
         require(input.publicInputs.targetDomain == DOMAIN_TON) {
             "publicInputs.targetDomain must be TON"
         }
-        val bundleBytes = input.bundleBytes.copyOf()
-        val sourceProofBytes = input.sourceProofBytes.copyOf()
-        require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "sourceProofBytes must not be all zero"
-        }
+        val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
+        val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val sourceStateVerifierId = normalizeNonEmpty(input.sourceStateVerifierId, "sourceStateVerifierId")
@@ -2285,9 +2280,8 @@ object SccpTon {
             "proofResult.envelopeHash must match wrapped proof bytes"
         }
         val sourceProofBytes = proofResult.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "proofResult.sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        requireOptionalSourceProofBytes(sourceProofBytes, "proofResult.sourceProofBytes")
+        requireNativeRecursivePayloadBytes(proofResult.bundleBytes, "proofResult.bundleBytes")
         val expectedRequest = buildProofRequest(
             TonSccpProofRequestInput(
                 publicInputs = proofResult.publicInputs,
@@ -2307,6 +2301,25 @@ object SccpTon {
             "proofResult.requestHash must match bundleBytes and sourceProofBytes"
         }
         return proofResult
+    }
+
+    private fun requireNativeRecursivePayloadBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.isNotEmpty()) { "$label must not be empty" }
+        require(copy.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+            "$label must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
+    }
+
+    private fun requireOptionalSourceProofBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+            "$label must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.isEmpty() || copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
     }
 
     private fun requireCanonicalProofRequest(request: TonSccpProofRequest) {
@@ -2362,13 +2375,11 @@ object SccpTon {
         require(request.backend == CONTRACT_PROOF_BACKEND_V1) {
             "TON SCCP proof request backend must be ton-contract-v1"
         }
-        require(request.bundleBytes.isNotEmpty()) {
-            "TON SCCP proof request bundleBytes must not be empty"
-        }
-        val sourceProofBytes = request.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "TON SCCP proof request sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        requireNativeRecursivePayloadBytes(request.bundleBytes, "TON SCCP proof request bundleBytes")
+        requireOptionalSourceProofBytes(
+            request.sourceProofBytes,
+            "TON SCCP proof request sourceProofBytes",
+        )
         require(request.sourceStateVerifierId == MAINNET_SHARD_STATE_VERIFIER_ID_V1) {
             "sourceStateVerifierId must match TON shard-state verifier profile"
         }

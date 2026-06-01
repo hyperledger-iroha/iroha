@@ -19,6 +19,7 @@ REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
 SCHEMA = "sccp-release-bundle-v1"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
+CORRIDOR_PHASE_MARKER_PREFIX = "==> SCCP production corridor: "
 SCCP_DOMAIN_SORA = 0
 SCCP_DOMAIN_ETH = 1
 SCCP_DOMAIN_BSC = 2
@@ -28,6 +29,40 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
+ALL_LANES_REQUIRED_DOMAINS = (
+    SCCP_DOMAIN_ETH,
+    SCCP_DOMAIN_BSC,
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_TRON,
+    SCCP_DOMAIN_SORA_KUSAMA,
+    SCCP_DOMAIN_SORA_POLKADOT,
+    SCCP_DOMAIN_SORA2,
+)
+ALL_LANES_CHAIN_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: "eth",
+    SCCP_DOMAIN_BSC: "bsc",
+    SCCP_DOMAIN_SOL: "sol",
+    SCCP_DOMAIN_TON: "ton",
+    SCCP_DOMAIN_TRON: "tron",
+    SCCP_DOMAIN_SORA_KUSAMA: "sora-kusama",
+    SCCP_DOMAIN_SORA_POLKADOT: "sora-polkadot",
+    SCCP_DOMAIN_SORA2: "sora2",
+}
+ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
+    SCCP_DOMAIN_ETH: "sccp:eth:route-allowlist:ethereum-mainnet:v1",
+    SCCP_DOMAIN_BSC: "sccp:bsc:route-allowlist:bsc-mainnet:v1",
+    SCCP_DOMAIN_SOL: "sccp:sol:route-allowlist:solana-mainnet-beta:v1",
+    SCCP_DOMAIN_TON: "sccp:ton:route-allowlist:ton-mainnet:v1",
+    SCCP_DOMAIN_TRON: "sccp:tron:route-allowlist:tron-mainnet:v1",
+    SCCP_DOMAIN_SORA_KUSAMA: "sccp:sora-kusama:route-allowlist:runtime:v1",
+    SCCP_DOMAIN_SORA_POLKADOT: "sccp:sora-polkadot:route-allowlist:runtime:v1",
+    SCCP_DOMAIN_SORA2: "sccp:sora2:route-allowlist:runtime:v1",
+}
+SOLANA_BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+SOLANA_BASE58_INDEX = {
+    symbol: index for index, symbol in enumerate(SOLANA_BASE58_ALPHABET)
+}
 REQUIRED_ARTIFACT_PATHS = (
     "sccp-release-readiness.md",
     "sccp-release-readiness.json",
@@ -64,15 +99,29 @@ CRYPTOGRAPHIC_EVIDENCE_KEYS = {
     "route_canary_evidence_hash",
     "route_canary_evidence_source",
     "route_canary_evidence_bound",
+    "route_canary_block_number",
+    "route_canary_block_timestamp",
+    "source_adapter_gate_required",
+    "source_adapter_gate_hash",
+    "source_adapter_gate_audit_hashes",
 }
 USER_PROVER_SUBMISSION_SURFACE_KEYS = {
     "lanes",
     "proof_backend",
+    "sdk_helper_symbols",
+    "sdk_helper_symbols_by_sdk",
     "sdk_helpers",
     "on_chain_submission",
     "required_phases",
     "validation_status",
     "validation_blockers",
+}
+USER_PROVER_SDK_HOOK_MARKERS = {
+    "js-sdk": ("witnessProvider", "proveFn"),
+    "python-sdk": ("witness_provider", "prove"),
+    "swift-sdk": ("WitnessProvider", "ProveFunction"),
+    "kotlin-sdk": ("WitnessProvider", "ProofEngine"),
+    "java-android": ("WitnessProvider", "ProofEngine"),
 }
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
@@ -118,6 +167,32 @@ ALL_LANES_SOURCE_ADAPTER_GATE_KEYS = {
     "audit_hashes",
     "blockers",
 }
+ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
+    SCCP_DOMAIN_SOL: {
+        "solana_tower_replay_verifier_hash",
+        "solana_full_accountsdb_lattice_verifier_hash",
+        "solana_bank_fork_choice_verifier_hash",
+        "solana_full_light_client_gate_hash",
+    },
+    SCCP_DOMAIN_TON: {
+        "ton_masterchain_config_verifier_hash",
+        "ton_validator_set_transition_verifier_hash",
+        "ton_shard_accounts_dictionary_verifier_hash",
+        "ton_full_light_client_gate_hash",
+    },
+    SCCP_DOMAIN_TRON: {"tron_dpos_source_gate_hash"},
+    SCCP_DOMAIN_SORA_KUSAMA: {"substrate_runtime_storage_gate_hash"},
+    SCCP_DOMAIN_SORA_POLKADOT: {"substrate_runtime_storage_gate_hash"},
+    SCCP_DOMAIN_SORA2: {"substrate_runtime_storage_gate_hash"},
+}
+ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
+    SCCP_DOMAIN_SOL: "solana_full_light_client_gate_hash",
+    SCCP_DOMAIN_TON: "ton_full_light_client_gate_hash",
+    SCCP_DOMAIN_TRON: "tron_dpos_source_gate_hash",
+    SCCP_DOMAIN_SORA_KUSAMA: "substrate_runtime_storage_gate_hash",
+    SCCP_DOMAIN_SORA_POLKADOT: "substrate_runtime_storage_gate_hash",
+    SCCP_DOMAIN_SORA2: "substrate_runtime_storage_gate_hash",
+}
 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS = {
     "destination_binding_hash",
     "destination_binding_key",
@@ -133,6 +208,14 @@ ALL_LANES_DESTINATION_BINDING_KEYS = (
     ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS
     | ALL_LANES_DESTINATION_BINDING_OPTIONAL_KEYS
 )
+ALL_LANES_EVM_DESTINATION_DOMAINS = {SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC}
+ALL_LANES_STATIC_DESTINATION_DOMAINS = {
+    SCCP_DOMAIN_SOL,
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA_KUSAMA,
+    SCCP_DOMAIN_SORA_POLKADOT,
+    SCCP_DOMAIN_SORA2,
+}
 ALL_LANES_ROUTE_ALLOWLIST_KEYS = {
     "route_allowlist_hash",
     "expected_route_allowlist_hash",
@@ -165,6 +248,8 @@ ALL_LANES_EVM_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
 ALL_LANES_TRON_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
     "transaction_id",
     "transaction_owner_address",
+    "block_number",
+    "block_timestamp",
     "log_index",
     "message_id",
     "call_data_sha256",
@@ -193,6 +278,7 @@ ALL_LANES_TON_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
 }
 ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
     "substrate_finalized_head",
+    "substrate_runtime_code_hash",
     "substrate_runtime_spec_version",
     "substrate_runtime_transaction_version",
 }
@@ -258,6 +344,14 @@ def _canonical_json_file_errors(label: str, path: Path, payload: Any) -> list[st
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _is_canonical_sha256_text(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(symbol in "0123456789abcdef" for symbol in value)
+    )
 
 
 def _load_module(name: str, path: Path) -> Any:
@@ -370,8 +464,8 @@ def _artifact_errors(bundle_dir: Path, artifact: dict[str, Any]) -> list[str]:
         errors.append(
             f"{artifact_path} byte length mismatch: expected {expected_bytes}, got {actual_bytes}"
         )
-    if not isinstance(expected_hash, str):
-        errors.append(f"{artifact_path} sha256 must be a string")
+    if not _is_canonical_sha256_text(expected_hash):
+        errors.append(f"{artifact_path} sha256 must be a canonical SHA-256 hex string")
     elif expected_hash != actual_hash:
         errors.append(
             f"{artifact_path} sha256 mismatch: expected {expected_hash}, got {actual_hash}"
@@ -451,8 +545,11 @@ def _check_report_artifact(
             f"{label} artifact bytes must be a non-negative integer for {artifact_path}"
         )
     expected_hash = artifact.get("sha256")
-    if not isinstance(expected_hash, str):
-        errors.append(f"{label} artifact sha256 must be a string for {artifact_path}")
+    if not _is_canonical_sha256_text(expected_hash):
+        errors.append(
+            f"{label} artifact sha256 must be a canonical SHA-256 hex string "
+            f"for {artifact_path}"
+        )
     path_errors = _canonical_report_artifact_path_errors(label, artifact_path)
     if path_errors:
         errors.extend(path_errors)
@@ -492,13 +589,13 @@ def _phase_transcript_errors(
         return [
             f"readiness report phase {phase} evidence artifact cannot be read: {exc}"
         ]
-    phase_marker = f"==> SCCP production corridor: {phase}"
+    phase_block = _phase_transcript_block(phase, transcript)
     errors: list[str] = []
     if CORRIDOR_DRY_RUN_SENTINEL in transcript:
         errors.append(
             f"readiness report phase {phase} evidence artifact is a dry-run transcript"
         )
-    if phase_marker not in transcript:
+    if phase_block is None:
         errors.append(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
@@ -507,7 +604,46 @@ def _phase_transcript_errors(
             "readiness report phase "
             f"{phase} evidence artifact is missing the completion sentinel"
         )
+    required_fragments = _report_module().PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
+    if required_fragments is None:
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact has no expected command fragment configured"
+        )
+    elif phase_block is not None:
+        for fragment in required_fragments:
+            if fragment not in phase_block:
+                errors.append(
+                    "readiness report phase "
+                    f"{phase} evidence artifact is missing expected "
+                    f"phase-block command: {fragment}"
+                )
+    success_fragments = _report_module().PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
+    if success_fragments is None:
+        errors.append(
+            "readiness report phase "
+            f"{phase} evidence artifact has no expected success fragment configured"
+        )
+    elif phase_block is not None:
+        for fragment in success_fragments:
+            if fragment not in phase_block:
+                errors.append(
+                    "readiness report phase "
+                    f"{phase} evidence artifact is missing expected "
+                    f"phase-block success marker: {fragment}"
+                )
     return errors
+
+
+def _phase_transcript_block(phase: str, transcript: str) -> str | None:
+    marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    start = transcript.find(marker)
+    if start < 0:
+        return None
+    next_start = transcript.find(CORRIDOR_PHASE_MARKER_PREFIX, start + len(marker))
+    if next_start < 0:
+        next_start = len(transcript)
+    return transcript[start:next_start]
 
 
 def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
@@ -527,6 +663,12 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
         route_canary = route_allowlist.get("route_canary")
         if not isinstance(route_canary, dict):
             route_canary = {}
+        source_gate = lane.get("source_adapter_gate")
+        if not isinstance(source_gate, dict):
+            source_gate = {}
+        source_gate_audit_hashes = source_gate.get("audit_hashes")
+        if not isinstance(source_gate_audit_hashes, dict):
+            source_gate_audit_hashes = {}
         rows.append(
             {
                 "domain": lane.get("domain"),
@@ -544,6 +686,13 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
                 "route_canary_evidence_hash": route_canary.get("evidence_hash"),
                 "route_canary_evidence_source": route_canary.get("evidence_source"),
                 "route_canary_evidence_bound": bool(route_canary.get("evidence_bound")),
+                "route_canary_block_number": route_canary.get("block_number"),
+                "route_canary_block_timestamp": route_canary.get("block_timestamp"),
+                "source_adapter_gate_required": bool(source_gate.get("required")),
+                "source_adapter_gate_hash": source_gate.get("gate_hash") or "",
+                "source_adapter_gate_audit_hashes": dict(
+                    sorted(source_gate_audit_hashes.items())
+                ),
             }
         )
     return rows
@@ -726,6 +875,71 @@ def _is_canonical_hex32_text(value: Any) -> bool:
     return _is_canonical_fixed_hex_text(value, byte_length=32)
 
 
+def _canonical_fixed_hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
+    if not _is_canonical_fixed_hex_text(value, byte_length=byte_length):
+        return None
+    assert isinstance(value, str)
+    raw = bytes.fromhex(value[2:])
+    if not any(raw):
+        return None
+    return raw
+
+
+def _push_u8(out: bytearray, value: int) -> None:
+    out.append(value)
+
+
+def _push_u32(out: bytearray, value: int) -> None:
+    out.extend(value.to_bytes(4, "little"))
+
+
+def _push_vec(out: bytearray, value: bytes) -> None:
+    _push_u32(out, len(value))
+    out.extend(value)
+
+
+def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
+    digest = hashlib.blake2b(digest_size=32)
+    digest.update(prefix)
+    digest.update(payload)
+    return digest.digest()
+
+
+def _canonical_route_allowlist_hash(
+    *,
+    domain: int,
+    source_verifier_material_hash: bytes,
+    source_adapter_engine_deployment_hash: bytes,
+    destination_binding_hash: bytes,
+) -> str | None:
+    chain = ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+    route_allowlist_id = ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN.get(domain)
+    if chain is None or route_allowlist_id is None:
+        return None
+    if len(
+        {
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+            destination_binding_hash,
+        }
+    ) != 3:
+        return None
+
+    payload = bytearray()
+    _push_u8(payload, 1)
+    _push_u32(payload, domain)
+    _push_vec(payload, chain.encode("utf-8"))
+    _push_vec(payload, b"GovernanceAllowlist")
+    _push_vec(payload, route_allowlist_id.encode("utf-8"))
+    payload.extend(source_verifier_material_hash)
+    payload.extend(source_adapter_engine_deployment_hash)
+    payload.extend(destination_binding_hash)
+    return "0x" + _prefixed_blake2b(
+        b"sccp:route-allowlist:lane-evidence:v1",
+        bytes(payload),
+    ).hex()
+
+
 def _is_canonical_decimal_text(value: Any, *, positive: bool) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -748,6 +962,22 @@ def _u32_field_errors(
     value = payload.get(field)
     if type(value) is not int or value < 0 or value > 0xFFFF_FFFF:
         return [f"{label} {field} must be a u32 integer"]
+    return []
+
+
+def _integer_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    positive: bool,
+) -> list[str]:
+    if field not in payload:
+        return []
+    value = payload.get(field)
+    if type(value) is not int or value < 0 or (positive and value == 0):
+        qualifier = "positive " if positive else "non-negative "
+        return [f"{label} {field} must be a {qualifier}integer"]
     return []
 
 
@@ -798,11 +1028,15 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
         "route_allowlist_hash",
         "route_canary_evidence_hash",
     ):
-        if field in row and not _is_canonical_hex32_text(row.get(field)):
-            errors.append(
-                "readiness report cryptographic evidence row "
-                f"{field} must be a canonical bytes32 hex string"
+        errors.extend(
+            _nonzero_fixed_hex_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                field,
+                byte_length=32,
+                type_label="bytes32",
             )
+        )
     if "route_canary_evidence_source" in row and (
         not isinstance(row.get("route_canary_evidence_source"), str)
         or not row.get("route_canary_evidence_source")
@@ -818,6 +1052,124 @@ def _cryptographic_evidence_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "readiness report cryptographic evidence row "
             "route_canary_evidence_bound must be a boolean"
         )
+    if row.get("domain") == SCCP_DOMAIN_TRON:
+        errors.extend(
+            _integer_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_block_number",
+                positive=True,
+            )
+        )
+        errors.extend(
+            _integer_field_errors(
+                "readiness report cryptographic evidence row",
+                row,
+                "route_canary_block_timestamp",
+                positive=False,
+            )
+        )
+    else:
+        for field in ("route_canary_block_number", "route_canary_block_timestamp"):
+            if field in row and row.get(field) is not None:
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    f"{field} must be null for non-TRON lanes"
+                )
+    if "source_adapter_gate_required" in row and (
+        type(row.get("source_adapter_gate_required")) is not bool
+    ):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate_required must be a boolean"
+        )
+    errors.extend(
+        _empty_or_nonzero_fixed_hex_field_errors(
+            "readiness report cryptographic evidence row",
+            row,
+            "source_adapter_gate_hash",
+            byte_length=32,
+            type_label="bytes32",
+        )
+    )
+    audit_hashes = row.get("source_adapter_gate_audit_hashes")
+    if "source_adapter_gate_audit_hashes" in row and not isinstance(audit_hashes, dict):
+        errors.append(
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate_audit_hashes must be an object"
+        )
+        audit_hashes = {}
+    if isinstance(audit_hashes, dict):
+        for field, value in sorted(audit_hashes.items()):
+            if not isinstance(field, str) or not field:
+                errors.append(
+                    "readiness report cryptographic evidence row "
+                    "source_adapter_gate_audit_hashes contains an empty key"
+                )
+                continue
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    "readiness report cryptographic evidence row "
+                    "source_adapter_gate_audit_hashes",
+                    audit_hashes,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
+            )
+    if row.get("source_adapter_gate_required") is True:
+        gate_hash = row.get("source_adapter_gate_hash")
+        if not gate_hash:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must not be empty when required"
+            )
+        if not audit_hashes:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_audit_hashes must not be empty when required"
+            )
+        if (
+            _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+            and isinstance(audit_hashes, dict)
+            and audit_hashes
+            and gate_hash not in set(audit_hashes.values())
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must match one "
+                "source_adapter_gate_audit_hashes value"
+            )
+        expected_gate_key = ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(
+            row.get("domain")
+        )
+        expected_gate_hash = (
+            audit_hashes.get(expected_gate_key)
+            if expected_gate_key is not None and isinstance(audit_hashes, dict)
+            else None
+        )
+        if (
+            expected_gate_key is not None
+            and _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+            and _is_canonical_fixed_hex_text(expected_gate_hash, byte_length=32)
+            and gate_hash != expected_gate_hash
+        ):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must match "
+                f"source_adapter_gate_audit_hashes.{expected_gate_key}"
+            )
+    elif row.get("source_adapter_gate_required") is False:
+        if row.get("source_adapter_gate_hash") not in (None, ""):
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_hash must be empty when gate is not required"
+            )
+        if audit_hashes:
+            errors.append(
+                "readiness report cryptographic evidence row "
+                "source_adapter_gate_audit_hashes must be empty when gate is not required"
+            )
     return errors
 
 
@@ -884,6 +1236,20 @@ def _cryptographic_evidence_lane_binding_errors(
             (
                 "route_canary_evidence_bound",
                 ("route_allowlist", "route_canary", "evidence_bound"),
+            ),
+            (
+                "route_canary_block_number",
+                ("route_allowlist", "route_canary", "block_number"),
+            ),
+            (
+                "route_canary_block_timestamp",
+                ("route_allowlist", "route_canary", "block_timestamp"),
+            ),
+            ("source_adapter_gate_required", ("source_adapter_gate", "required")),
+            ("source_adapter_gate_hash", ("source_adapter_gate", "gate_hash")),
+            (
+                "source_adapter_gate_audit_hashes",
+                ("source_adapter_gate", "audit_hashes"),
             ),
         )
         for field, lane_path in field_bindings:
@@ -956,6 +1322,72 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
     for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):
         errors.extend(_non_empty_string_field_errors(label, row, field))
     errors.extend(
+        _string_list_field_errors(label, row, "sdk_helper_symbols", allow_empty=False)
+    )
+    helper_symbols = row.get("sdk_helper_symbols")
+    if isinstance(helper_symbols, list) and all(
+        isinstance(item, str) and item for item in helper_symbols
+    ):
+        if len(helper_symbols) != len(set(helper_symbols)):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "sdk_helper_symbols contains duplicate symbols"
+            )
+        expected_helpers = ", ".join(helper_symbols)
+        if row.get("sdk_helpers") != expected_helpers:
+            errors.append(
+                "readiness report user prover submission surface row "
+                "sdk_helpers must match sdk_helper_symbols"
+            )
+    helper_sets = row.get("sdk_helper_symbols_by_sdk")
+    if not isinstance(helper_sets, dict):
+        errors.append(
+            "readiness report user prover submission surface row "
+            "sdk_helper_symbols_by_sdk must be an object"
+        )
+    else:
+        expected_sdks = set(_report_module().USER_PROVER_SDK_PHASES)
+        for sdk in sorted(set(helper_sets) - expected_sdks):
+            errors.append(
+                "readiness report user prover submission surface row "
+                f"sdk_helper_symbols_by_sdk contains unknown SDK: {sdk}"
+            )
+        for sdk in _report_module().USER_PROVER_SDK_PHASES:
+            helpers = helper_sets.get(sdk)
+            if (
+                not isinstance(helpers, list)
+                or not helpers
+                or any(not isinstance(item, str) or not item for item in helpers)
+            ):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
+                    "non-empty strings"
+                )
+                continue
+            if len(helpers) != len(set(helpers)):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] contains duplicate symbols"
+                )
+            for marker in USER_PROVER_SDK_HOOK_MARKERS.get(sdk, ()):
+                if not any(marker in helper for helper in helpers):
+                    errors.append(
+                        "readiness report user prover submission surface row "
+                        f"sdk_helper_symbols_by_sdk[{sdk}] missing UI-owned "
+                        f"hook marker: {marker}"
+                    )
+        js_helpers = helper_sets.get("js-sdk")
+        if (
+            isinstance(js_helpers, list)
+            and isinstance(helper_symbols, list)
+            and js_helpers != helper_symbols
+        ):
+            errors.append(
+                "readiness report user prover submission surface row "
+                "sdk_helper_symbols_by_sdk[js-sdk] must match sdk_helper_symbols"
+            )
+    errors.extend(
         _string_list_field_errors(label, row, "required_phases", allow_empty=False)
     )
     if "validation_status" in row and row.get("validation_status") not in {
@@ -966,9 +1398,20 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             "readiness report user prover submission surface row "
             "validation_status must be passed or blocked"
         )
+    if row.get("validation_status") == "blocked":
+        errors.append(
+            "readiness report user prover submission surface row "
+            "validation_status must be passed"
+        )
     errors.extend(
         _string_list_field_errors(label, row, "validation_blockers", allow_empty=True)
     )
+    blockers = row.get("validation_blockers")
+    if isinstance(blockers, list) and blockers:
+        errors.append(
+            "readiness report user prover submission surface row "
+            "validation_blockers must be empty"
+        )
     return errors
 
 
@@ -1025,6 +1468,153 @@ def _nonzero_fixed_hex_field_errors(
     return []
 
 
+def _empty_or_nonzero_fixed_hex_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+    *,
+    byte_length: int,
+    type_label: str,
+) -> list[str]:
+    if field not in payload:
+        return []
+    if payload.get(field) == "":
+        return []
+    errors = _nonzero_fixed_hex_field_errors(
+        label,
+        payload,
+        field,
+        byte_length=byte_length,
+        type_label=type_label,
+    )
+    if errors:
+        return [
+            f"{label} {field} must be empty or a non-zero canonical "
+            f"{type_label} hex string"
+        ]
+    return []
+
+
+def _source_adapter_gate_coherence_errors(
+    label: str,
+    lane: dict[str, Any],
+    source_gate: dict[str, Any],
+) -> list[str]:
+    domain = lane.get("domain")
+    required = source_gate.get("required")
+    ready = source_gate.get("ready")
+    gate_hash = source_gate.get("gate_hash")
+    audit_hashes = source_gate.get("audit_hashes")
+    blockers = source_gate.get("blockers")
+
+    if type(required) is not bool:
+        return []
+    errors: list[str] = []
+    expected_audit_keys = (
+        ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(domain)
+        if type(domain) is int
+        else None
+    )
+    if expected_audit_keys is None:
+        if required:
+            errors.append(f"{label} required must be false for this lane domain")
+            return errors
+        if ready is not True:
+            errors.append(f"{label} ready must be true when gate is not required")
+        if isinstance(audit_hashes, dict) and audit_hashes:
+            errors.append(
+                f"{label} audit_hashes must be empty when gate is not required"
+            )
+        if gate_hash not in (None, ""):
+            errors.append(f"{label} gate_hash must be empty when gate is not required")
+        if isinstance(blockers, list) and blockers:
+            errors.append(f"{label} blockers must be empty when gate is not required")
+        return errors
+
+    if not required:
+        errors.append(f"{label} required must be true for this lane domain")
+        return errors
+
+    expected_gate_key = (
+        ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN.get(domain)
+        if type(domain) is int
+        else None
+    )
+    if isinstance(audit_hashes, dict):
+        for key in sorted(set(audit_hashes) - expected_audit_keys):
+            errors.append(f"{label} audit_hashes contains unexpected field: {key}")
+        for key in sorted(expected_audit_keys - set(audit_hashes)):
+            errors.append(f"{label} audit_hashes missing field: {key}")
+        expected_gate_hash = (
+            audit_hashes.get(expected_gate_key)
+            if expected_gate_key is not None
+            else None
+        )
+        if (
+            expected_gate_key is not None
+            and _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+            and _is_canonical_fixed_hex_text(expected_gate_hash, byte_length=32)
+            and gate_hash != expected_gate_hash
+        ):
+            errors.append(
+                f"{label} gate_hash must match audit_hashes.{expected_gate_key}"
+            )
+        role_fields: list[tuple[str, Any]] = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            role_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        destination_binding = lane.get("destination_binding")
+        if isinstance(destination_binding, dict):
+            role_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        route_allowlist = lane.get("route_allowlist")
+        if isinstance(route_allowlist, dict):
+            role_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+            route_canary = route_allowlist.get("route_canary")
+            if isinstance(route_canary, dict):
+                role_fields.append(
+                    (
+                        "route_canary_evidence_hash",
+                        route_canary.get("evidence_hash"),
+                    )
+                )
+        role_fields.extend(
+            (f"audit_hashes.{field}", value)
+            for field, value in sorted(audit_hashes.items())
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} hash role",
+                tuple(role_fields),
+                byte_length=32,
+            )
+        )
+
+    if type(ready) is not bool:
+        return errors
+    if not isinstance(blockers, list):
+        return errors
+    if not ready:
+        errors.append(f"{label} ready must be true when gate is required")
+    if blockers:
+        errors.append(f"{label} blockers must be empty when gate is required")
+    return errors
+
+
 def _distinct_nonzero_hex_field_errors(
     label: str,
     fields: tuple[tuple[str, Any], ...],
@@ -1079,6 +1669,43 @@ def _tron_address_field_errors(
     return []
 
 
+def _solana_pubkey_field_errors(
+    label: str,
+    payload: dict[str, Any],
+    field: str,
+) -> list[str]:
+    if field not in payload:
+        return []
+    value = payload.get(field)
+    if not isinstance(value, str):
+        return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
+    try:
+        raw = _decode_solana_base58(value)
+    except ValueError:
+        return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
+    if len(raw) != 32 or not any(raw):
+        return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
+    return []
+
+
+def _decode_solana_base58(value: str) -> bytes:
+    if value != value.strip() or not value:
+        raise ValueError("not canonical base58")
+    numeric = 0
+    for symbol in value:
+        digit = SOLANA_BASE58_INDEX.get(symbol)
+        if digit is None:
+            raise ValueError("not canonical base58")
+        numeric = numeric * 58 + digit
+    leading_zeros = len(value) - len(value.lstrip("1"))
+    payload = (
+        b""
+        if numeric == 0
+        else numeric.to_bytes((numeric.bit_length() + 7) // 8, "big")
+    )
+    return (b"\x00" * leading_zeros) + payload
+
+
 def _is_canonical_tron_address_text(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -1102,6 +1729,214 @@ def _matching_text_field_errors(
     if payload.get(field) != expected:
         return [f"{label} {field} must match {expected_field}"]
     return []
+
+
+def _canonical_nonzero_fixed_hex_value(value: Any, *, byte_length: int) -> str | None:
+    if not _is_canonical_fixed_hex_text(value, byte_length=byte_length):
+        return None
+    assert isinstance(value, str)
+    if all(char == "0" for char in value[2:]):
+        return None
+    return value
+
+
+def _route_canary_common_hash_role_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_canary: dict[str, Any],
+) -> list[str]:
+    source_hashes = lane.get("source_record_hashes")
+    route_allowlist = lane.get("route_allowlist")
+    destination_binding = lane.get("destination_binding")
+    fields: list[tuple[str, Any]] = []
+    if isinstance(source_hashes, dict):
+        fields.extend(
+            (
+                (field, source_hashes.get(field))
+                for field in (
+                    "source_verifier_material_hash",
+                    "source_adapter_engine_deployment_hash",
+                )
+            )
+        )
+    if isinstance(route_allowlist, dict):
+        fields.append(
+            ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+        )
+    if isinstance(destination_binding, dict):
+        fields.append(
+            (
+                "destination_binding_hash",
+                destination_binding.get("destination_binding_hash"),
+            )
+        )
+    fields.append(("evidence_hash", route_canary.get("evidence_hash")))
+    return _distinct_nonzero_hex_field_errors(
+        f"{label} hash role",
+        tuple(fields),
+        byte_length=32,
+    )
+
+
+def _route_allowlist_recompute_errors(
+    label: str,
+    lane: dict[str, Any],
+    route_allowlist: dict[str, Any],
+) -> list[str]:
+    source_hashes = lane.get("source_record_hashes")
+    destination_binding = lane.get("destination_binding")
+    if not isinstance(source_hashes, dict) or not isinstance(destination_binding, dict):
+        return []
+
+    fields = (
+        (
+            "source_verifier_material_hash",
+            source_hashes.get("source_verifier_material_hash"),
+        ),
+        (
+            "source_adapter_engine_deployment_hash",
+            source_hashes.get("source_adapter_engine_deployment_hash"),
+        ),
+        (
+            "destination_binding_hash",
+            destination_binding.get("destination_binding_hash"),
+        ),
+        ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash")),
+    )
+    errors = _distinct_nonzero_hex_field_errors(
+        f"{label} governed hash role",
+        fields,
+        byte_length=32,
+    )
+
+    source_verifier_material_hash = _canonical_fixed_hex_bytes(
+        source_hashes.get("source_verifier_material_hash"),
+        byte_length=32,
+    )
+    source_adapter_engine_deployment_hash = _canonical_fixed_hex_bytes(
+        source_hashes.get("source_adapter_engine_deployment_hash"),
+        byte_length=32,
+    )
+    destination_binding_hash = _canonical_fixed_hex_bytes(
+        destination_binding.get("destination_binding_hash"),
+        byte_length=32,
+    )
+    route_allowlist_hash = _canonical_fixed_hex_bytes(
+        route_allowlist.get("route_allowlist_hash"),
+        byte_length=32,
+    )
+    if (
+        source_verifier_material_hash is None
+        or source_adapter_engine_deployment_hash is None
+        or destination_binding_hash is None
+        or route_allowlist_hash is None
+    ):
+        return errors
+    expected = _canonical_route_allowlist_hash(
+        domain=lane.get("domain"),
+        source_verifier_material_hash=source_verifier_material_hash,
+        source_adapter_engine_deployment_hash=source_adapter_engine_deployment_hash,
+        destination_binding_hash=destination_binding_hash,
+    )
+    if expected is not None and expected != route_allowlist.get("route_allowlist_hash"):
+        errors.append(
+            f"{label} route_allowlist_hash must recompute from source material, "
+            "source adapter deployment, and destination binding hashes"
+        )
+    return errors
+
+
+def _all_lanes_lane_label(label: str, index: int, lane: dict[str, Any]) -> str:
+    domain = lane.get("domain")
+    if type(domain) is int:
+        return f"{label} lane domain {domain}"
+    if isinstance(lane.get("chain"), str) and lane.get("chain"):
+        return f"{label} lane {lane['chain']}"
+    return f"{label} lane {index}"
+
+
+def _all_lanes_route_canary_cross_lane_errors(
+    label: str,
+    lanes: Any,
+) -> list[str]:
+    if not isinstance(lanes, list):
+        return []
+
+    errors: list[str] = []
+    governed_hashes: dict[str, tuple[str, str]] = {}
+    for index, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            continue
+        lane_label = _all_lanes_lane_label(label, index, lane)
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            for field in (
+                "source_verifier_material_hash",
+                "source_adapter_engine_deployment_hash",
+            ):
+                value = _canonical_nonzero_fixed_hex_value(
+                    source_hashes.get(field),
+                    byte_length=32,
+                )
+                if value is not None:
+                    governed_hashes.setdefault(value, (lane_label, field))
+        destination_binding = lane.get("destination_binding")
+        if isinstance(destination_binding, dict):
+            value = _canonical_nonzero_fixed_hex_value(
+                destination_binding.get("destination_binding_hash"),
+                byte_length=32,
+            )
+            if value is not None:
+                governed_hashes.setdefault(
+                    value,
+                    (lane_label, "destination_binding_hash"),
+                )
+        route_allowlist = lane.get("route_allowlist")
+        if isinstance(route_allowlist, dict):
+            value = _canonical_nonzero_fixed_hex_value(
+                route_allowlist.get("route_allowlist_hash"),
+                byte_length=32,
+            )
+            if value is not None:
+                governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
+
+    seen_canaries: dict[str, str] = {}
+    for index, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            continue
+        lane_label = _all_lanes_lane_label(label, index, lane)
+        route_allowlist = lane.get("route_allowlist")
+        if not isinstance(route_allowlist, dict):
+            continue
+        route_canary = route_allowlist.get("route_canary")
+        if not isinstance(route_canary, dict):
+            continue
+        evidence_hash = _canonical_nonzero_fixed_hex_value(
+            route_canary.get("evidence_hash"),
+            byte_length=32,
+        )
+        if evidence_hash is None:
+            continue
+        canary_label = f"{lane_label} route_allowlist route_canary"
+        previous_canary_label = seen_canaries.get(evidence_hash)
+        if previous_canary_label is not None:
+            errors.append(
+                f"{canary_label} evidence_hash must be distinct from "
+                f"{previous_canary_label} route_canary evidence_hash"
+            )
+        else:
+            seen_canaries[evidence_hash] = f"{lane_label} route_allowlist"
+        governed = governed_hashes.get(evidence_hash)
+        if governed is None:
+            continue
+        governed_lane_label, governed_field = governed
+        if governed_lane_label == lane_label:
+            continue
+        errors.append(
+            f"{canary_label} evidence_hash must not reuse {governed_field} "
+            f"from {governed_lane_label}"
+        )
+    return errors
 
 
 def _all_lanes_route_canary_schema_errors(
@@ -1168,6 +2003,7 @@ def _all_lanes_route_canary_schema_errors(
                 f"{label} destination_binding_hash must match lane "
                 "destination_binding_hash"
             )
+    errors.extend(_route_canary_common_hash_role_errors(label, lane, route_canary))
 
     if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
         for field in (
@@ -1196,7 +2032,9 @@ def _all_lanes_route_canary_schema_errors(
             "payload_hash",
             "statement_hash",
             "commitment_root",
+            "finality_height",
             "finality_block_hash",
+            "evidence_hash",
         )
         errors.extend(
             _distinct_nonzero_hex_field_errors(
@@ -1311,8 +2149,10 @@ def _all_lanes_route_canary_schema_errors(
             "payload_hash",
             "statement_hash",
             "commitment_root",
+            "finality_height",
             "finality_block_hash",
             "signature_sha256",
+            "evidence_hash",
         )
         errors.extend(
             _distinct_nonzero_hex_field_errors(
@@ -1357,6 +2197,22 @@ def _all_lanes_route_canary_schema_errors(
                 byte_length=32,
             )
         )
+        errors.extend(
+            _integer_field_errors(
+                label,
+                route_canary,
+                "block_number",
+                positive=True,
+            )
+        )
+        errors.extend(
+            _integer_field_errors(
+                label,
+                route_canary,
+                "block_timestamp",
+                positive=False,
+            )
+        )
         errors.extend(_u32_field_errors(label, route_canary, "log_index"))
         errors.extend(
             _expected_u32_field_errors(
@@ -1393,7 +2249,7 @@ def _all_lanes_route_canary_schema_errors(
             errors.extend(_true_field_errors(label, route_canary, field))
     elif domain == SCCP_DOMAIN_SOL:
         errors.extend(
-            _non_empty_string_field_errors(
+            _solana_pubkey_field_errors(
                 label,
                 route_canary,
                 "solana_programdata_address",
@@ -1429,6 +2285,7 @@ def _all_lanes_route_canary_schema_errors(
         ton_hash_fields = (
             "ton_account_state_hash",
             "ton_last_transaction_hash",
+            "evidence_hash",
         )
         governed_hash_fields = []
         source_hashes = lane.get("source_record_hashes")
@@ -1468,15 +2325,16 @@ def _all_lanes_route_canary_schema_errors(
         SCCP_DOMAIN_SORA_POLKADOT,
         SCCP_DOMAIN_SORA2,
     ):
-        errors.extend(
-            _nonzero_fixed_hex_field_errors(
-                label,
-                route_canary,
-                "substrate_finalized_head",
-                byte_length=32,
-                type_label="bytes32",
+        for field in ("substrate_finalized_head", "substrate_runtime_code_hash"):
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    label,
+                    route_canary,
+                    field,
+                    byte_length=32,
+                    type_label="bytes32",
+                )
             )
-        )
         for field in (
             "substrate_runtime_spec_version",
             "substrate_runtime_transaction_version",
@@ -1489,6 +2347,44 @@ def _all_lanes_route_canary_schema_errors(
                     positive=False,
                 )
             )
+        substrate_hash_fields = (
+            "substrate_finalized_head",
+            "substrate_runtime_code_hash",
+            "evidence_hash",
+        )
+        governed_hash_fields = []
+        source_hashes = lane.get("source_record_hashes")
+        if isinstance(source_hashes, dict):
+            governed_hash_fields.extend(
+                (
+                    (field, source_hashes.get(field))
+                    for field in (
+                        "source_verifier_material_hash",
+                        "source_adapter_engine_deployment_hash",
+                    )
+                )
+            )
+        if isinstance(route_allowlist, dict):
+            governed_hash_fields.append(
+                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
+            )
+        if isinstance(destination_binding, dict):
+            governed_hash_fields.append(
+                (
+                    "destination_binding_hash",
+                    destination_binding.get("destination_binding_hash"),
+                )
+            )
+        governed_hash_fields.extend(
+            (field, route_canary.get(field)) for field in substrate_hash_fields
+        )
+        errors.extend(
+            _distinct_nonzero_hex_field_errors(
+                f"{label} hash role",
+                tuple(governed_hash_fields),
+                byte_length=32,
+            )
+        )
     return errors
 
 
@@ -1500,24 +2396,28 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if not isinstance(lane, dict):
             errors.append(f"{label} lane {index} is not an object")
             continue
-        domain = lane.get("domain")
-        if type(domain) is int:
-            lane_label = f"{label} lane domain {domain}"
-        elif isinstance(lane.get("chain"), str) and lane.get("chain"):
-            lane_label = f"{label} lane {lane['chain']}"
-        else:
-            lane_label = f"{label} lane {index}"
+        lane_label = _all_lanes_lane_label(label, index, lane)
         for key in sorted(set(lane) - ALL_LANES_LANE_KEYS):
             errors.append(f"{lane_label} contains unknown field: {key}")
         for key in sorted(ALL_LANES_LANE_KEYS - set(lane)):
             errors.append(f"{lane_label} missing field: {key}")
         if "domain" in lane and type(lane.get("domain")) is not int:
             errors.append(f"{lane_label} domain must be an integer")
+        domain = lane.get("domain")
+        expected_chain = (
+            ALL_LANES_CHAIN_BY_DOMAIN.get(domain)
+            if type(domain) is int
+            else None
+        )
+        if type(domain) is int and expected_chain is None:
+            errors.append(f"{lane_label} domain must be a production remote domain")
         if "chain" in lane and (
             not isinstance(lane.get("chain"), str) or not lane.get("chain")
         ):
             errors.append(f"{lane_label} chain must be a non-empty string")
-        errors.extend(_boolean_field_errors(lane_label, lane, "production_ready"))
+        elif expected_chain is not None and lane.get("chain") != expected_chain:
+            errors.append(f"{lane_label} chain must be {expected_chain}")
+        errors.extend(_true_field_errors(lane_label, lane, "production_ready"))
         for field in (
             "records",
             "source_record_hashes",
@@ -1530,6 +2430,9 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         errors.extend(
             _string_list_field_errors(lane_label, lane, "blockers", allow_empty=True)
         )
+        blockers = lane.get("blockers")
+        if isinstance(blockers, list) and blockers:
+            errors.append(f"{lane_label} blockers must be empty")
         records = lane.get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
@@ -1542,7 +2445,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             )
             for field in ALL_LANES_RECORD_KEYS:
                 if field in records:
-                    errors.extend(_boolean_field_errors(records_label, records, field))
+                    errors.extend(_true_field_errors(records_label, records, field))
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -1554,13 +2457,15 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
             for field in ALL_LANES_SOURCE_RECORD_HASH_KEYS:
-                if field in source_hashes and not _is_canonical_hex32_text(
-                    source_hashes.get(field)
-                ):
-                    errors.append(
-                        f"{source_hashes_label} {field} must be a canonical "
-                        "bytes32 hex string"
+                errors.extend(
+                    _nonzero_fixed_hex_field_errors(
+                        source_hashes_label,
+                        source_hashes,
+                        field,
+                        byte_length=32,
+                        type_label="bytes32",
                     )
+                )
         source_gate = lane.get("source_adapter_gate")
         if isinstance(source_gate, dict):
             source_gate_label = f"{lane_label} source_adapter_gate"
@@ -1577,14 +2482,16 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             errors.extend(
                 _boolean_field_errors(source_gate_label, source_gate, "ready")
             )
-            gate_hash = source_gate.get("gate_hash")
-            if "gate_hash" in source_gate and gate_hash != "" and not (
-                _is_canonical_hex32_text(gate_hash)
-            ):
-                errors.append(
-                    f"{source_gate_label} gate_hash must be empty or a canonical "
-                    "bytes32 hex string"
+            errors.extend(
+                _empty_or_nonzero_fixed_hex_field_errors(
+                    source_gate_label,
+                    source_gate,
+                    "gate_hash",
+                    byte_length=32,
+                    type_label="bytes32",
                 )
+            )
+            gate_hash = source_gate.get("gate_hash")
             audit_hashes = source_gate.get("audit_hashes")
             if "audit_hashes" in source_gate and not isinstance(
                 audit_hashes,
@@ -1597,10 +2504,42 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         errors.append(
                             f"{source_gate_label} audit_hashes contains an empty key"
                         )
-                    elif not _is_canonical_hex32_text(value):
+                    elif not _is_canonical_fixed_hex_text(value, byte_length=32) or (
+                        isinstance(value, str) and all(char == "0" for char in value[2:])
+                    ):
                         errors.append(
                             f"{source_gate_label} audit_hashes {field} must be a "
-                            "canonical bytes32 hex string"
+                            "non-zero canonical bytes32 hex string"
+                        )
+            if source_gate.get("required") is True:
+                if (
+                    not _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+                    or (
+                        isinstance(gate_hash, str)
+                        and all(char == "0" for char in gate_hash[2:])
+                    )
+                ):
+                    errors.append(
+                        f"{source_gate_label} gate_hash must be a non-zero "
+                        "canonical bytes32 hex string when required"
+                    )
+                if isinstance(audit_hashes, dict):
+                    if not audit_hashes:
+                        errors.append(
+                            f"{source_gate_label} audit_hashes must not be empty "
+                            "when required"
+                        )
+                    elif (
+                        _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
+                        and isinstance(gate_hash, str)
+                        and any(char != "0" for char in gate_hash[2:])
+                        and not any(
+                            gate_hash == value for value in audit_hashes.values()
+                        )
+                    ):
+                        errors.append(
+                            f"{source_gate_label} gate_hash must match one "
+                            "audit_hashes value"
                         )
             errors.extend(
                 _string_list_field_errors(
@@ -1608,6 +2547,20 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     source_gate,
                     "blockers",
                     allow_empty=True,
+                )
+            )
+            blockers = source_gate.get("blockers")
+            if (
+                source_gate.get("ready") is True
+                and isinstance(blockers, list)
+                and blockers
+            ):
+                errors.append(f"{source_gate_label} blockers must be empty when ready")
+            errors.extend(
+                _source_adapter_gate_coherence_errors(
+                    source_gate_label,
+                    lane,
+                    source_gate,
                 )
             )
         destination_binding = lane.get("destination_binding")
@@ -1634,23 +2587,53 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 "expected_destination_binding_hash",
                 "destination_network_id",
             ):
-                if field in destination_binding and not _is_canonical_hex32_text(
-                    destination_binding.get(field)
-                ):
-                    errors.append(
-                        f"{destination_label} {field} must be a canonical "
-                        "bytes32 hex string"
+                errors.extend(
+                    _nonzero_fixed_hex_field_errors(
+                        destination_label,
+                        destination_binding,
+                        field,
+                        byte_length=32,
+                        type_label="bytes32",
                     )
-            if "destination_bridge_address" in destination_binding and not (
-                _is_canonical_fixed_hex_text(
-                    destination_binding.get("destination_bridge_address"),
+                )
+            errors.extend(
+                _nonzero_fixed_hex_field_errors(
+                    destination_label,
+                    destination_binding,
+                    "destination_bridge_address",
                     byte_length=20,
+                    type_label="20-byte",
                 )
-            ):
-                errors.append(
-                    f"{destination_label} destination_bridge_address must be a "
-                    "canonical 20-byte hex string"
-                )
+            )
+            if domain in ALL_LANES_EVM_DESTINATION_DOMAINS:
+                for field in ("destination_network_id", "destination_bridge_address"):
+                    if field not in destination_binding:
+                        errors.append(
+                            f"{destination_label} {field} is required for "
+                            "EVM-family lanes"
+                        )
+            elif domain == SCCP_DOMAIN_TRON:
+                if "destination_network_id" not in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_network_id is required "
+                        "for TRON lanes"
+                    )
+                if "destination_bridge_address" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_bridge_address is only "
+                        "valid for EVM-family lanes"
+                    )
+            elif domain in ALL_LANES_STATIC_DESTINATION_DOMAINS:
+                if "destination_network_id" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_network_id is only valid "
+                        "for EVM-family or TRON lanes"
+                    )
+                if "destination_bridge_address" in destination_binding:
+                    errors.append(
+                        f"{destination_label} destination_bridge_address is only "
+                        "valid for EVM-family lanes"
+                    )
             errors.extend(
                 _matching_text_field_errors(
                     destination_label,
@@ -1685,12 +2668,15 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
             for field in ("route_allowlist_hash", "expected_route_allowlist_hash"):
-                if field in route_allowlist and not _is_canonical_hex32_text(
-                    route_allowlist.get(field)
-                ):
-                    errors.append(
-                        f"{route_label} {field} must be a canonical bytes32 hex string"
+                errors.extend(
+                    _nonzero_fixed_hex_field_errors(
+                        route_label,
+                        route_allowlist,
+                        field,
+                        byte_length=32,
+                        type_label="bytes32",
                     )
+                )
             errors.extend(
                 _matching_text_field_errors(
                     route_label,
@@ -1705,6 +2691,13 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                     route_label,
                     route_allowlist,
                     "expected_route_allowlist_hash_matches",
+                )
+            )
+            errors.extend(
+                _route_allowlist_recompute_errors(
+                    route_label,
+                    lane,
+                    route_allowlist,
                 )
             )
             route_canary = route_allowlist.get("route_canary")
@@ -1761,7 +2754,11 @@ def _all_lanes_summary_schema_errors(
     )
     errors.extend(_list_field_errors(label, summary, "lanes"))
     errors.extend(_string_list_field_errors(label, summary, "blockers", allow_empty=True))
+    blockers = summary.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        errors.append(f"{label} blockers must be empty")
     errors.extend(_all_lanes_lane_schema_errors(label, summary.get("lanes")))
+    errors.extend(_all_lanes_route_canary_cross_lane_errors(label, summary.get("lanes")))
     required_domains = summary.get("required_domains")
     lanes = summary.get("lanes")
     if (
@@ -1778,6 +2775,13 @@ def _all_lanes_summary_schema_errors(
             errors.append(f"{label} required_domains contains duplicate domains")
         if len(set(lane_domains)) != len(lane_domains):
             errors.append(f"{label} lanes contain duplicate domains")
+        expected_domains = list(ALL_LANES_REQUIRED_DOMAINS)
+        if required_domains != expected_domains:
+            errors.append(
+                f"{label} required_domains must be the production remote domains"
+            )
+        if lane_domains != expected_domains:
+            errors.append(f"{label} lane domains must be the production remote domains")
         if required_domains != lane_domains:
             errors.append(f"{label} required_domains must match lane domains")
     if "release_checklist" in summary and not isinstance(
@@ -1797,9 +2801,7 @@ def _release_checklist_schema_errors(
         errors.append(f"{label} release_checklist contains unknown field: {key}")
     for key in sorted(RELEASE_CHECKLIST_KEYS - set(checklist)):
         errors.append(f"{label} release_checklist missing field: {key}")
-    errors.extend(
-        _boolean_field_errors(f"{label} release_checklist", checklist, "ready")
-    )
+    errors.extend(_true_field_errors(f"{label} release_checklist", checklist, "ready"))
     items = checklist.get("items")
     if not isinstance(items, list):
         errors.append(f"{label} release_checklist items is not a list")
@@ -1820,10 +2822,13 @@ def _release_checklist_schema_errors(
             errors.append(f"{item_label} missing field: {key}")
         errors.extend(_non_empty_string_field_errors(item_label, item, "id"))
         errors.extend(_non_empty_string_field_errors(item_label, item, "title"))
-        errors.extend(_boolean_field_errors(item_label, item, "ready"))
+        errors.extend(_true_field_errors(item_label, item, "ready"))
         errors.extend(
             _string_list_field_errors(item_label, item, "blockers", allow_empty=True)
         )
+        blockers = item.get("blockers")
+        if isinstance(blockers, list) and blockers:
+            errors.append(f"{item_label} blockers must be empty")
     return errors
 
 
@@ -1849,6 +2854,9 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
             allow_empty=True,
         )
     )
+    blockers = corridor.get("blockers")
+    if isinstance(blockers, list) and blockers:
+        errors.append("readiness report corridor blockers must be empty")
     return errors
 
 

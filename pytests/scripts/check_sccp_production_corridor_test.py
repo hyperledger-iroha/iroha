@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
+REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "sccp_production_corridor.yml"
 EXPECTED_PHASES = {
     "rust-sccp",
@@ -21,6 +24,20 @@ EXPECTED_PHASES = {
     "contract-smoke",
     "core-admission",
 }
+
+
+def load_report_module():
+    """Load release-readiness helpers without running the CLI."""
+
+    spec = spec_from_file_location(
+        "sccp_release_readiness_report_corridor_helpers",
+        REPORT_SCRIPT,
+    )
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)  # type: ignore[assignment]
+    return module
 
 
 def test_sccp_production_corridor_script_is_listable() -> None:
@@ -172,6 +189,39 @@ def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> No
     assert "SCCP production corridor dry run completed." in completed.stdout
 
 
+def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> None:
+    """Release evidence command fragments must stay synced to the runner output."""
+
+    report = load_report_module()
+    assert set(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS) == EXPECTED_PHASES
+    assert set(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS) == EXPECTED_PHASES
+
+    completed = subprocess.run(
+        ["bash", str(SCRIPT), "--dry-run"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    output = completed.stdout
+
+    phase_markers = [
+        (phase, f"==> SCCP production corridor: {phase}")
+        for phase in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    ]
+    for index, (phase, marker) in enumerate(phase_markers):
+        assert marker in output
+        start = output.index(marker)
+        if index + 1 < len(phase_markers):
+            next_marker = phase_markers[index + 1][1]
+            end = output.index(next_marker, start + len(marker))
+        else:
+            end = len(output)
+        phase_output = output[start:end]
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+            assert fragment in phase_output
+
+
 def test_sccp_production_corridor_log_dir_dry_run_is_explicit(tmp_path: Path) -> None:
     """Local release evidence collection must be visible before heavyweight runs."""
 
@@ -226,3 +276,18 @@ def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() ->
     assert "./gradlew :core:test --console=plain --tests" in completed.stdout
     assert "ANDROID_HOME=" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
+
+
+def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> None:
+    """Gradle phases must fall back to Homebrew JDK 21 on macOS workstations."""
+
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'macos_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)"' in script
+    assert '[[ -x "$macos_java_home/bin/java" ]]' in script
+    assert "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
+    assert "/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
+    assert "/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home" in (
+        script
+    )
+    assert "install Homebrew openjdk@21" in script

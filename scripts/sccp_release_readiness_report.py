@@ -18,6 +18,7 @@ ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
+CORRIDOR_PHASE_MARKER_PREFIX = "==> SCCP production corridor: "
 USER_PROVER_SDK_PHASES = (
     "js-sdk",
     "python-sdk",
@@ -25,74 +26,463 @@ USER_PROVER_SDK_PHASES = (
     "kotlin-sdk",
     "java-android",
 )
+USER_PROVER_CHAIN_PHASES = (*USER_PROVER_SDK_PHASES, "core-admission")
+PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
+    "evidence-scripts": (
+        "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+    ),
+    "js-sdk": (
+        "node --test",
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        "javascript/iroha_js/test/package_dist.test.js",
+        "javascript/iroha_js/test/sccpPackageExports.test.js",
+    ),
+    "python-sdk": (
+        "python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py",
+    ),
+    "swift-sdk": (
+        "swift test --filter SccpSolanaProverTests --disable-swift-testing",
+        "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions",
+    ),
+    "kotlin-sdk": (
+        "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+    ),
+    "java-android": (
+        "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
+        "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
+        "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
+    ),
+    "contract-smoke": (
+        "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        "bash scripts/sccp_evm_contract_smoke.sh",
+    ),
+    "core-admission": ("cargo test -p iroha_core --test bridge_proofs -- --nocapture",),
+}
+PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
+    "rust-sccp": ("test result: ok",),
+    "evidence-scripts": (" passed in ",),
+    "js-sdk": ("fail 0", "pass "),
+    "python-sdk": (" passed in ",),
+    "swift-sdk": ("0 failures",),
+    "kotlin-sdk": ("BUILD SUCCESSFUL",),
+    "java-android": ("BUILD SUCCESSFUL",),
+    "contract-smoke": ("sccp_message_bridge_smoke: ok",),
+    "core-admission": ("test result: ok",),
+}
+EVM_JS_USER_PROVER_HELPERS = (
+    "buildEvmSccpProofRequest",
+    "canonicalEvmSccpReceiptProofBytes",
+    "evmSccpReceiptProofHash",
+    "canonicalBscSccpReceiptProofBytes",
+    "bscSccpReceiptProofHash",
+    "EvmSccpProver",
+    "witnessProvider",
+    "proveFn",
+    "buildEvmSccpSubmission",
+    "buildEvmSccpBridgeProofSubmitPayload",
+)
+EVM_PYTHON_USER_PROVER_HELPERS = (
+    "build_evm_sccp_proof_request",
+    "canonical_evm_sccp_receipt_proof_bytes",
+    "evm_sccp_receipt_proof_hash",
+    "canonical_bsc_sccp_receipt_proof_bytes",
+    "bsc_sccp_receipt_proof_hash",
+    "EvmSccpProver",
+    "witness_provider",
+    "prove",
+    "build_evm_sccp_submission",
+    "build_evm_sccp_bridge_proof_submit_payload",
+)
+EVM_SWIFT_USER_PROVER_HELPERS = (
+    "buildEvmSccpProofRequest",
+    "canonicalEvmSccpReceiptProofBytes",
+    "evmSccpReceiptProofHash",
+    "canonicalBscSccpReceiptProofBytes",
+    "bscSccpReceiptProofHash",
+    "EvmSccpProver",
+    "EvmSccpWitnessProvider",
+    "EvmSccpProver.ProveFunction",
+    "buildEvmSccpSubmission",
+    "ToriiBridgeProofSubmitRequest.init(evmSccpSubmission:)",
+)
+EVM_KOTLIN_USER_PROVER_HELPERS = (
+    "SccpEvm.buildProofRequest",
+    "SccpSourceProofs.canonicalEvmReceiptProofBytes",
+    "SccpSourceProofs.evmReceiptProofHash",
+    "SccpSourceProofs.canonicalBscReceiptProofBytes",
+    "SccpSourceProofs.bscReceiptProofHash",
+    "EvmSccpProver",
+    "EvmSccpWitnessProvider",
+    "EvmSccpProofEngine",
+    "SccpEvm.buildSubmission",
+    "BridgeProofSubmitRequest.fromEvmSccpSubmission",
+)
+EVM_JAVA_ANDROID_USER_PROVER_HELPERS = (
+    "EvmSccpProver.buildProofRequest",
+    "SourceSccpProofs.canonicalEvmReceiptProofBytes",
+    "SourceSccpProofs.evmReceiptProofHash",
+    "SourceSccpProofs.canonicalBscReceiptProofBytes",
+    "SourceSccpProofs.bscReceiptProofHash",
+    "EvmSccpProver",
+    "EvmSccpProver.WitnessProvider",
+    "EvmSccpProver.ProofEngine",
+    "EvmSccpProver.buildSubmission",
+    "BridgeProofSubmitRequest.fromEvmSccpSubmission",
+)
+TRON_JS_USER_PROVER_HELPERS = (
+    "buildTronSccpProofRequest",
+    "canonicalTronSccpReceiptProofBytes",
+    "canonicalTronSccpReceiptStateProofBytes",
+    "canonicalTronSccpTransactionSourceProofBytes",
+    "tronSccpTransactionSourceProofHash",
+    "TronSccpProver",
+    "witnessProvider",
+    "proveFn",
+    "buildTronSccpSubmission",
+    "buildTronSccpBridgeProofSubmitPayload",
+)
+TRON_PYTHON_USER_PROVER_HELPERS = (
+    "build_tron_sccp_proof_request",
+    "canonical_tron_sccp_receipt_proof_bytes",
+    "canonical_tron_sccp_receipt_state_proof_bytes",
+    "canonical_tron_sccp_transaction_source_proof_bytes",
+    "tron_sccp_transaction_source_proof_hash",
+    "TronSccpProver",
+    "witness_provider",
+    "prove",
+    "build_tron_sccp_submission",
+    "build_tron_sccp_bridge_proof_submit_payload",
+)
+TRON_SWIFT_USER_PROVER_HELPERS = (
+    "buildTronSccpProofRequest",
+    "canonicalTronSccpReceiptProofBytes",
+    "canonicalTronSccpReceiptStateProofBytes",
+    "canonicalTronSccpTransactionSourceProofBytes",
+    "tronSccpTransactionSourceProofHash",
+    "TronSccpProver",
+    "TronSccpWitnessProvider",
+    "TronSccpProver.ProveFunction",
+    "buildTronSccpSubmission",
+    "ToriiBridgeProofSubmitRequest.init(tronSccpSubmission:)",
+)
+TRON_KOTLIN_USER_PROVER_HELPERS = (
+    "SccpTron.buildProofRequest",
+    "SccpSourceProofs.canonicalTronReceiptProofBytes",
+    "SccpSourceProofs.canonicalTronReceiptStateProofBytes",
+    "SccpSourceProofs.canonicalTronTransactionSourceProofBytes",
+    "SccpSourceProofs.tronTransactionSourceProofHash",
+    "TronSccpProver",
+    "TronSccpWitnessProvider",
+    "TronSccpProofEngine",
+    "SccpTron.buildSubmission",
+    "BridgeProofSubmitRequest.fromTronSccpSubmission",
+)
+TRON_JAVA_ANDROID_USER_PROVER_HELPERS = (
+    "TronSccpProver.buildProofRequest",
+    "SourceSccpProofs.canonicalTronReceiptProofBytes",
+    "SourceSccpProofs.canonicalTronReceiptStateProofBytes",
+    "SourceSccpProofs.canonicalTronTransactionSourceProofBytes",
+    "SourceSccpProofs.tronTransactionSourceProofHash",
+    "TronSccpProver",
+    "TronSccpProver.WitnessProvider",
+    "TronSccpProver.ProofEngine",
+    "TronSccpProver.buildSubmission",
+    "BridgeProofSubmitRequest.fromTronSccpSubmission",
+)
+SOLANA_JS_USER_PROVER_HELPERS = (
+    "buildSolanaSccpProofRequest",
+    "buildSolanaSccpAccountsLtHashProofRequest",
+    "buildSolanaSccpTowerReplayProofRequest",
+    "buildSolanaSccpFullAccountsdbLatticeProofRequest",
+    "buildSolanaSccpBankForkChoiceProofRequest",
+    "buildSolanaSccpFullLightClientAuditProofRequests",
+    "SolanaSccpSourceStateProver",
+    "SolanaSccpProver",
+    "witnessProvider",
+    "proveFn",
+    "buildSolanaSccpSubmission",
+)
+SOLANA_PYTHON_USER_PROVER_HELPERS = (
+    "build_solana_sccp_proof_request",
+    "build_solana_sccp_accounts_lt_hash_proof_request",
+    "build_solana_sccp_tower_replay_proof_request",
+    "build_solana_sccp_full_accountsdb_lattice_proof_request",
+    "build_solana_sccp_bank_fork_choice_proof_request",
+    "build_solana_sccp_full_light_client_audit_proof_requests",
+    "SolanaSccpSourceStateProver",
+    "SolanaSccpProver",
+    "witness_provider",
+    "prove",
+    "build_solana_sccp_submission",
+)
+SOLANA_SWIFT_USER_PROVER_HELPERS = (
+    "buildSolanaSccpProofRequest",
+    "buildSolanaSccpAccountsLtHashProofRequest",
+    "buildSolanaSccpTowerReplayProofRequest",
+    "buildSolanaSccpFullAccountsdbLatticeProofRequest",
+    "buildSolanaSccpBankForkChoiceProofRequest",
+    "buildSolanaSccpFullLightClientAuditProofRequests",
+    "SolanaSccpSourceStateProver",
+    "SolanaSccpProver",
+    "SolanaSccpWitnessProvider",
+    "SolanaSccpProver.ProveFunction",
+    "SolanaSccpSourceStateProver.AccountsLtHashProveFunction",
+    "SolanaSccpSourceStateProver.FullLightClientAuditProveFunction",
+    "buildSolanaSccpSubmission",
+)
+SOLANA_KOTLIN_USER_PROVER_HELPERS = (
+    "SccpSolana.buildProofRequest",
+    "SccpSolana.buildAccountsLtHashProofRequest",
+    "SccpSolana.buildTowerReplayProofRequest",
+    "SccpSolana.buildFullAccountsdbLatticeProofRequest",
+    "SccpSolana.buildBankForkChoiceProofRequest",
+    "SccpSolana.buildFullLightClientAuditProofRequests",
+    "SolanaSccpSourceStateProver",
+    "SolanaSccpProver",
+    "SolanaSccpWitnessProvider",
+    "SolanaSccpProofEngine",
+    "SolanaSccpAccountsLtHashProofEngine",
+    "SolanaSccpFullLightClientAuditProofEngine",
+    "SccpSolana.buildSubmission",
+)
+SOLANA_JAVA_ANDROID_USER_PROVER_HELPERS = (
+    "SolanaSccpProver.buildProofRequest",
+    "SolanaSccpProver.buildAccountsLtHashProofRequest",
+    "SolanaSccpProver.buildTowerReplayProofRequest",
+    "SolanaSccpProver.buildFullAccountsdbLatticeProofRequest",
+    "SolanaSccpProver.buildBankForkChoiceProofRequest",
+    "SolanaSccpProver.buildFullLightClientAuditProofRequests",
+    "SolanaSccpProver.SourceStateProver",
+    "SolanaSccpProver",
+    "SolanaSccpProver.WitnessProvider",
+    "SolanaSccpProver.ProofEngine",
+    "SolanaSccpProver.AccountsLtHashProofEngine",
+    "SolanaSccpProver.FullLightClientAuditProofEngine",
+    "SolanaSccpProver.buildSubmission",
+)
+TON_JS_USER_PROVER_HELPERS = (
+    "buildTonSccpProofRequest",
+    "buildTonShardStateProofRequest",
+    "buildTonSccpMasterchainConfigProofRequest",
+    "buildTonSccpValidatorSetTransitionProofRequest",
+    "buildTonSccpShardAccountsDictionaryProofRequest",
+    "buildTonSccpFullLightClientAuditProofRequests",
+    "TonSccpSourceStateProver",
+    "TonSccpProver",
+    "witnessProvider",
+    "proveFn",
+    "buildTonSccpSubmission",
+)
+TON_PYTHON_USER_PROVER_HELPERS = (
+    "build_ton_sccp_proof_request",
+    "build_ton_shard_state_proof_request",
+    "build_ton_sccp_masterchain_config_proof_request",
+    "build_ton_sccp_validator_set_transition_proof_request",
+    "build_ton_sccp_shard_accounts_dictionary_proof_request",
+    "build_ton_sccp_full_light_client_audit_proof_requests",
+    "TonSccpSourceStateProver",
+    "TonSccpProver",
+    "witness_provider",
+    "prove",
+    "build_ton_sccp_submission",
+)
+TON_SWIFT_USER_PROVER_HELPERS = (
+    "buildTonSccpProofRequest",
+    "buildTonShardStateProofRequest",
+    "buildTonSccpMasterchainConfigProofRequest",
+    "buildTonSccpValidatorSetTransitionProofRequest",
+    "buildTonSccpShardAccountsDictionaryProofRequest",
+    "buildTonSccpFullLightClientAuditProofRequests",
+    "TonSccpSourceStateProver",
+    "TonSccpProver",
+    "TonSccpWitnessProvider",
+    "TonSccpProver.ProveFunction",
+    "TonSccpSourceStateProver.ShardStateProveFunction",
+    "TonSccpSourceStateProver.FullLightClientAuditProveFunction",
+    "buildTonSccpSubmission",
+)
+TON_KOTLIN_USER_PROVER_HELPERS = (
+    "SccpTon.buildProofRequest",
+    "SccpTon.buildShardStateProofRequest",
+    "SccpTon.buildMasterchainConfigProofRequest",
+    "SccpTon.buildValidatorSetTransitionProofRequest",
+    "SccpTon.buildShardAccountsDictionaryProofRequest",
+    "SccpTon.buildFullLightClientAuditProofRequests",
+    "TonSccpSourceStateProver",
+    "TonSccpProver",
+    "TonSccpWitnessProvider",
+    "TonSccpProofEngine",
+    "TonSccpShardStateProofEngine",
+    "TonSccpFullLightClientAuditProofEngine",
+    "SccpTon.buildSubmission",
+)
+TON_JAVA_ANDROID_USER_PROVER_HELPERS = (
+    "TonSccpProver.buildProofRequest",
+    "TonSccpProver.buildShardStateProofRequest",
+    "TonSccpProver.buildMasterchainConfigProofRequest",
+    "TonSccpProver.buildValidatorSetTransitionProofRequest",
+    "TonSccpProver.buildShardAccountsDictionaryProofRequest",
+    "TonSccpProver.buildFullLightClientAuditProofRequests",
+    "TonSccpProver.SourceStateProver",
+    "TonSccpProver",
+    "TonSccpProver.WitnessProvider",
+    "TonSccpProver.ProofEngine",
+    "TonSccpProver.ShardStateProofEngine",
+    "TonSccpProver.FullLightClientAuditProofEngine",
+    "TonSccpProver.buildSubmission",
+)
+SUBSTRATE_JS_USER_PROVER_HELPERS = (
+    "buildSubstrateSccpProofRequest",
+    "buildSubstrateSccpRuntimeStorageProofRequest",
+    "SubstrateSccpProver",
+    "witnessProvider",
+    "proveFn",
+    "buildSubstrateSccpSubmission",
+)
+SUBSTRATE_PYTHON_USER_PROVER_HELPERS = (
+    "build_substrate_sccp_proof_request",
+    "build_substrate_sccp_runtime_storage_proof_request",
+    "SubstrateSccpProver",
+    "witness_provider",
+    "prove",
+    "build_substrate_sccp_submission",
+)
+SUBSTRATE_SWIFT_USER_PROVER_HELPERS = (
+    "buildSubstrateSccpProofRequest",
+    "buildSubstrateSccpRuntimeStorageProofRequest",
+    "SubstrateSccpProver",
+    "SubstrateSccpWitnessProvider",
+    "SubstrateSccpProver.ProveFunction",
+    "buildSubstrateSccpSubmission",
+)
+SUBSTRATE_KOTLIN_USER_PROVER_HELPERS = (
+    "SccpSubstrate.buildProofRequest",
+    "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
+    "SubstrateSccpProver",
+    "SubstrateSccpWitnessProvider",
+    "SubstrateSccpProofEngine",
+    "SccpSubstrate.buildSubmission",
+)
+SUBSTRATE_JAVA_ANDROID_USER_PROVER_HELPERS = (
+    "SubstrateSccpProver.buildProofRequest",
+    "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
+    "SubstrateSccpProver",
+    "SubstrateSccpProver.WitnessProvider",
+    "SubstrateSccpProver.ProofEngine",
+    "SubstrateSccpProver.buildSubmission",
+)
+
+
+def _sdk_helper_sets(
+    js: tuple[str, ...],
+    python: tuple[str, ...],
+    swift: tuple[str, ...],
+    kotlin: tuple[str, ...],
+    java_android: tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    return {
+        "js-sdk": js,
+        "python-sdk": python,
+        "swift-sdk": swift,
+        "kotlin-sdk": kotlin,
+        "java-android": java_android,
+    }
+
+
+def _helper_text(helpers: tuple[str, ...]) -> str:
+    return ", ".join(helpers)
+
+
 USER_PROVER_SUBMISSION_SURFACES: tuple[dict[str, Any], ...] = (
     {
         "lanes": "eth,bsc",
         "proof_backend": "evm-groth16-bn254-v1",
-        "sdk_helpers": (
-            "buildEvmSccpProofRequest, canonicalEvmSccpReceiptProofBytes, "
-            "evmSccpReceiptProofHash, canonicalBscSccpReceiptProofBytes, "
-            "bscSccpReceiptProofHash, EvmSccpProver, "
-            "buildEvmSccpSubmission, buildEvmSccpBridgeProofSubmitPayload"
+        "sdk_helper_symbols": EVM_JS_USER_PROVER_HELPERS,
+        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
+            EVM_JS_USER_PROVER_HELPERS,
+            EVM_PYTHON_USER_PROVER_HELPERS,
+            EVM_SWIFT_USER_PROVER_HELPERS,
+            EVM_KOTLIN_USER_PROVER_HELPERS,
+            EVM_JAVA_ANDROID_USER_PROVER_HELPERS,
         ),
+        "sdk_helpers": _helper_text(EVM_JS_USER_PROVER_HELPERS),
         "on_chain_submission": (
             "Torii bridge-proof submit payload with BN254 Groth16 "
             "proof_bytes_hex for the EVM verifier contract"
         ),
-        "required_phases": (*USER_PROVER_SDK_PHASES, "contract-smoke"),
+        "required_phases": (
+            *USER_PROVER_SDK_PHASES,
+            "contract-smoke",
+            "core-admission",
+        ),
     },
     {
         "lanes": "tron",
         "proof_backend": "tron-groth16-bn254-v1",
-        "sdk_helpers": (
-            "buildTronSccpProofRequest, canonicalTronSccpReceiptProofBytes, "
-            "canonicalTronSccpReceiptStateProofBytes, "
-            "canonicalTronSccpTransactionSourceProofBytes, "
-            "tronSccpTransactionSourceProofHash, TronSccpProver, "
-            "buildTronSccpSubmission, buildTronSccpBridgeProofSubmitPayload"
+        "sdk_helper_symbols": TRON_JS_USER_PROVER_HELPERS,
+        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
+            TRON_JS_USER_PROVER_HELPERS,
+            TRON_PYTHON_USER_PROVER_HELPERS,
+            TRON_SWIFT_USER_PROVER_HELPERS,
+            TRON_KOTLIN_USER_PROVER_HELPERS,
+            TRON_JAVA_ANDROID_USER_PROVER_HELPERS,
         ),
+        "sdk_helpers": _helper_text(TRON_JS_USER_PROVER_HELPERS),
         "on_chain_submission": (
             "Torii bridge-proof submit payload with BN254 Groth16 "
             "proof_bytes_hex for the TRON verifier contract"
         ),
-        "required_phases": (*USER_PROVER_SDK_PHASES, "contract-smoke"),
+        "required_phases": (
+            *USER_PROVER_SDK_PHASES,
+            "contract-smoke",
+            "core-admission",
+        ),
     },
     {
         "lanes": "sol",
-        "proof_backend": "solana-program-v1",
-        "sdk_helpers": (
-            "buildSolanaSccpProofRequest, "
-            "buildSolanaSccpAccountsLtHashProofRequest, "
-            "buildSolanaSccpFullLightClientAuditProofRequests, "
-            "SolanaSccpSourceStateProver, SolanaSccpProver, "
-            "buildSolanaSccpSubmission"
+        "proof_backend": "sccp-solana-recursive-mainnet-v1",
+        "sdk_helper_symbols": SOLANA_JS_USER_PROVER_HELPERS,
+        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
+            SOLANA_JS_USER_PROVER_HELPERS,
+            SOLANA_PYTHON_USER_PROVER_HELPERS,
+            SOLANA_SWIFT_USER_PROVER_HELPERS,
+            SOLANA_KOTLIN_USER_PROVER_HELPERS,
+            SOLANA_JAVA_ANDROID_USER_PROVER_HELPERS,
         ),
+        "sdk_helpers": _helper_text(SOLANA_JS_USER_PROVER_HELPERS),
         "on_chain_submission": "Solana verifier-program instruction envelope",
-        "required_phases": USER_PROVER_SDK_PHASES,
+        "required_phases": USER_PROVER_CHAIN_PHASES,
     },
     {
         "lanes": "ton",
         "proof_backend": "ton-contract-v1",
-        "sdk_helpers": (
-            "buildTonSccpProofRequest, buildTonShardStateProofRequest, "
-            "buildTonSccpFullLightClientAuditProofRequests, "
-            "TonSccpSourceStateProver, TonSccpProver, "
-            "buildTonSccpSubmission"
+        "sdk_helper_symbols": TON_JS_USER_PROVER_HELPERS,
+        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
+            TON_JS_USER_PROVER_HELPERS,
+            TON_PYTHON_USER_PROVER_HELPERS,
+            TON_SWIFT_USER_PROVER_HELPERS,
+            TON_KOTLIN_USER_PROVER_HELPERS,
+            TON_JAVA_ANDROID_USER_PROVER_HELPERS,
         ),
+        "sdk_helpers": _helper_text(TON_JS_USER_PROVER_HELPERS),
         "on_chain_submission": "TON internal message body BOC",
-        "required_phases": USER_PROVER_SDK_PHASES,
+        "required_phases": USER_PROVER_CHAIN_PHASES,
     },
     {
         "lanes": "substrate",
         "proof_backend": "substrate-runtime-v1",
-        "sdk_helpers": (
-            "buildSubstrateSccpProofRequest, "
-            "buildSubstrateSccpRuntimeStorageProofRequest, "
-            "SubstrateSccpProver, "
-            "buildSubstrateSccpSubmission"
+        "sdk_helper_symbols": SUBSTRATE_JS_USER_PROVER_HELPERS,
+        "sdk_helper_symbols_by_sdk": _sdk_helper_sets(
+            SUBSTRATE_JS_USER_PROVER_HELPERS,
+            SUBSTRATE_PYTHON_USER_PROVER_HELPERS,
+            SUBSTRATE_SWIFT_USER_PROVER_HELPERS,
+            SUBSTRATE_KOTLIN_USER_PROVER_HELPERS,
+            SUBSTRATE_JAVA_ANDROID_USER_PROVER_HELPERS,
         ),
+        "sdk_helpers": _helper_text(SUBSTRATE_JS_USER_PROVER_HELPERS),
         "on_chain_submission": "Substrate runtime call envelope",
-        "required_phases": USER_PROVER_SDK_PHASES,
+        "required_phases": USER_PROVER_CHAIN_PHASES,
     },
 )
 
@@ -188,20 +578,51 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
     )
 
 
+def _phase_transcript_block(phase: str, transcript: str) -> str | None:
+    marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+    start = transcript.find(marker)
+    if start < 0:
+        return None
+    next_start = transcript.find(CORRIDOR_PHASE_MARKER_PREFIX, start + len(marker))
+    if next_start < 0:
+        next_start = len(transcript)
+    return transcript[start:next_start]
+
+
 def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
     path = Path(str(artifact["path"]))
     try:
         transcript = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return ["evidence artifact is not UTF-8 text"]
-    phase_marker = f"==> SCCP production corridor: {phase}"
+    phase_block = _phase_transcript_block(phase, transcript)
     errors: list[str] = []
     if CORRIDOR_DRY_RUN_SENTINEL in transcript:
         errors.append("evidence artifact is a dry-run transcript")
-    if phase_marker not in transcript:
+    if phase_block is None:
         errors.append("evidence artifact is missing the phase marker")
     if CORRIDOR_COMPLETION_SENTINEL not in transcript:
         errors.append("evidence artifact is missing the completion sentinel")
+    required_fragments = PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.get(phase)
+    if required_fragments is None:
+        errors.append("evidence artifact has no expected command fragment configured")
+    elif phase_block is not None:
+        for fragment in required_fragments:
+            if fragment not in phase_block:
+                errors.append(
+                    "evidence artifact is missing expected phase-block command: "
+                    f"{fragment}"
+                )
+    success_fragments = PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS.get(phase)
+    if success_fragments is None:
+        errors.append("evidence artifact has no expected success fragment configured")
+    elif phase_block is not None:
+        for fragment in success_fragments:
+            if fragment not in phase_block:
+                errors.append(
+                    "evidence artifact is missing expected phase-block success marker: "
+                    f"{fragment}"
+                )
     return errors
 
 
@@ -257,12 +678,20 @@ def _submission_surfaces(phase_status: dict[str, str]) -> list[dict[str, Any]]:
     surfaces: list[dict[str, Any]] = []
     for base in USER_PROVER_SUBMISSION_SURFACES:
         surface = dict(base)
+        helper_symbols = list(surface["sdk_helper_symbols"])
+        helper_symbols_by_sdk = {
+            sdk: list(symbols)
+            for sdk, symbols in surface["sdk_helper_symbols_by_sdk"].items()
+        }
         required_phases = list(surface["required_phases"])
         blockers = [
             f"{phase} is {phase_status.get(phase, 'missing')}"
             for phase in required_phases
             if phase_status.get(phase) != "passed"
         ]
+        surface["sdk_helper_symbols"] = helper_symbols
+        surface["sdk_helper_symbols_by_sdk"] = helper_symbols_by_sdk
+        surface["sdk_helpers"] = ", ".join(helper_symbols)
         surface["required_phases"] = required_phases
         surface["validation_status"] = "passed" if not blockers else "blocked"
         surface["validation_blockers"] = blockers
@@ -388,6 +817,12 @@ def _cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
         route_canary = route_allowlist.get("route_canary")
         if not isinstance(route_canary, dict):
             route_canary = {}
+        source_gate = lane.get("source_adapter_gate")
+        if not isinstance(source_gate, dict):
+            source_gate = {}
+        source_gate_audit_hashes = source_gate.get("audit_hashes")
+        if not isinstance(source_gate_audit_hashes, dict):
+            source_gate_audit_hashes = {}
         rows.append(
             {
                 "domain": lane.get("domain"),
@@ -405,6 +840,13 @@ def _cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
                 "route_canary_evidence_hash": route_canary.get("evidence_hash"),
                 "route_canary_evidence_source": route_canary.get("evidence_source"),
                 "route_canary_evidence_bound": bool(route_canary.get("evidence_bound")),
+                "route_canary_block_number": route_canary.get("block_number"),
+                "route_canary_block_timestamp": route_canary.get("block_timestamp"),
+                "source_adapter_gate_required": bool(source_gate.get("required")),
+                "source_adapter_gate_hash": source_gate.get("gate_hash") or "",
+                "source_adapter_gate_audit_hashes": dict(
+                    sorted(source_gate_audit_hashes.items())
+                ),
             }
         )
     return rows
@@ -414,6 +856,36 @@ def _hash_cell(value: Any) -> str:
     if isinstance(value, str) and value:
         return f"`{value}`"
     return "-"
+
+
+def _audit_hashes_cell(value: Any) -> str:
+    if not isinstance(value, dict) or not value:
+        return "-"
+    return "<br>".join(
+        f"`{key}`: `{audit_hash}`"
+        for key, audit_hash in sorted(value.items())
+        if isinstance(key, str) and isinstance(audit_hash, str)
+    ) or "-"
+
+
+def _integer_cell(value: Any) -> str:
+    if type(value) is int:
+        return f"`{value}`"
+    return "-"
+
+
+def _sdk_helper_sets_cell(surface: dict[str, Any]) -> str:
+    helper_sets = surface.get("sdk_helper_symbols_by_sdk")
+    if not isinstance(helper_sets, dict):
+        return surface["sdk_helpers"]
+    rows: list[str] = []
+    for sdk in USER_PROVER_SDK_PHASES:
+        helpers = helper_sets.get(sdk)
+        if not isinstance(helpers, list):
+            continue
+        helper_text = ", ".join(f"`{helper}`" for helper in helpers)
+        rows.append(f"`{sdk}`: {helper_text}")
+    return "<br>".join(rows) if rows else surface["sdk_helpers"]
 
 
 def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> str:
@@ -462,24 +934,38 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
     lines.extend(["", "## Cryptographic Evidence", ""])
     lines.append(
         "| Domain | Chain | Source Material | Source Deployment | "
-        "Destination Binding | Route Allowlist | Route Canary | Canary Source |"
+        "Destination Binding | Source Gate | Source Gate Audits | "
+        "Route Allowlist | Route Canary | Canary Source | Canary Block | "
+        "Canary Timestamp |"
     )
-    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    lines.append(
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    )
     for row in report["cryptographic_evidence"]:
         canary_source = row["route_canary_evidence_source"] or "-"
         if not row["route_canary_evidence_bound"]:
             canary_source = f"{canary_source} (unbound)"
+        source_gate = _hash_cell(row["source_adapter_gate_hash"])
+        if not row["source_adapter_gate_required"] and source_gate == "-":
+            source_gate = "not required"
         lines.append(
             "| {domain} | `{chain}` | {source} | {deploy} | {dest} | "
-            "{route} | {canary} | `{canary_source}` |".format(
+            "{source_gate} | {source_gate_audits} | {route} | {canary} | "
+            "`{canary_source}` | {canary_block} | {canary_timestamp} |".format(
                 domain=row["domain"],
                 chain=row["chain"],
                 source=_hash_cell(row["source_verifier_material_hash"]),
                 deploy=_hash_cell(row["source_adapter_engine_deployment_hash"]),
                 dest=_hash_cell(row["destination_binding_hash"]),
+                source_gate=source_gate,
+                source_gate_audits=_audit_hashes_cell(
+                    row["source_adapter_gate_audit_hashes"]
+                ),
                 route=_hash_cell(row["route_allowlist_hash"]),
                 canary=_hash_cell(row["route_canary_evidence_hash"]),
                 canary_source=canary_source,
+                canary_block=_integer_cell(row["route_canary_block_number"]),
+                canary_timestamp=_integer_cell(row["route_canary_block_timestamp"]),
             )
         )
 
@@ -501,7 +987,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "{required_phases} | {validation} |".format(
                 lanes=surface["lanes"],
                 proof_backend=surface["proof_backend"],
-                sdk_helpers=surface["sdk_helpers"],
+                sdk_helpers=_sdk_helper_sets_cell(surface),
                 submission=surface["on_chain_submission"],
                 required_phases=required_phases,
                 validation=validation,
@@ -541,6 +1027,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "## Required Release Evidence",
             "",
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
+            "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             "- A complete all-lanes evidence bundle containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records for every advertised SCCP remote domain.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",

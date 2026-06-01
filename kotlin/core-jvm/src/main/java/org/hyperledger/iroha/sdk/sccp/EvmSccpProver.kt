@@ -13,6 +13,7 @@ object SccpEvm {
     const val DOMAIN_BSC: Int = SccpSourceProofs.DOMAIN_BSC
     const val GROTH16_BN254_PROOF_BACKEND_V1: String = "evm-groth16-bn254-v1"
     const val GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: Int = 384
+    const val SOURCE_STATE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
     const val CONTRACT_CALL_ABI_TUPLE_V1: String = "abi_tuple_v1"
     const val SUBMIT_MESSAGE_PROOF_ABI_V1: String =
         "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
@@ -100,11 +101,8 @@ object SccpEvm {
             "backend must be evm-groth16-bn254-v1"
         }
         val bundleBytes = input.bundleBytes.copyOf()
-        val sourceProofBytes = input.sourceProofBytes.copyOf()
+        val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "sourceProofBytes must not be all zero"
-        }
         val publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs)
         val proofContext = normalizeProofContext(input.statementHash, input.destinationBindingHash)
         val publicSignalWords = groth16Bn254PublicSignalWords(
@@ -194,10 +192,10 @@ object SccpEvm {
         require(envelopeHash == hashHex(PROOF_ENVELOPE_PREFIX_V1, envelopePayload.toByteArray())) {
             "proofResult.envelopeHash must match wrapped proof bytes"
         }
-        val sourceProofBytes = proofResult.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "proofResult.sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        val sourceProofBytes = requireOptionalSourceProofBytes(
+            proofResult.sourceProofBytes,
+            "proofResult.sourceProofBytes",
+        )
         val expectedRequest = buildProofRequest(
             EvmSccpProofRequestInput(
                 publicInputs = proofResult.publicInputs,
@@ -606,11 +604,20 @@ object SccpEvm {
         require(request.bundleBytes.isNotEmpty()) {
             "EVM-family SCCP proof request bundleBytes must not be empty"
         }
-        val sourceProofBytes = request.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "EVM-family SCCP proof request sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        requireOptionalSourceProofBytes(
+            request.sourceProofBytes,
+            "EVM-family SCCP proof request sourceProofBytes",
+        )
         requireProductionDestinationBinding(request)
+    }
+
+    private fun requireOptionalSourceProofBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.size <= SOURCE_STATE_MAX_PROOF_BYTES) {
+            "$label must be at most $SOURCE_STATE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.isEmpty() || copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
     }
 
     private fun requireProductionDestinationBinding(request: EvmSccpProofRequest) {

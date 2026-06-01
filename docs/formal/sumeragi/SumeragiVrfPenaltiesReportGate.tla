@@ -136,9 +136,16 @@ ImplementationActions(candidate) ==
 Init ==
   checked = 0
 
-Next ==
+Advance ==
   /\ checked < 14
   /\ checked' = checked + 1
+
+Stable ==
+  UNCHANGED vars
+
+Next ==
+  \/ Advance
+  \/ Stable
 
 TypeInvariant ==
   /\ Bug \in {

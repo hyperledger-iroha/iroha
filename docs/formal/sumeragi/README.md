@@ -19,6 +19,8 @@ branches:
 - honest single-vote discipline across branches,
 - commit-certificate formation for each branch, plus a mutation that disables
   the single-vote/locked-QC guards and must produce a counterexample.
+Its TLC cross-check exhausts the permissioned fast config and the
+expected-failure double-sign/lock-gate mutation.
 
 `SumeragiQuorumPolicy.tla` captures fail-closed quorum-policy arithmetic:
 - permissioned count quorum requires a strict two-thirds supermajority plus
@@ -27,6 +29,8 @@ branches:
   total stake,
 - missing/negative stake, zero/negative total stake, over-total stake, exact
   two-thirds stake, and overflow all fail closed.
+Its TLC cross-check exhausts the fast config and six expected-failure quorum
+arithmetic mutation configs.
 
 `SumeragiRbcDeliverQuorum.tla` captures the RBC deliver-quorum gate:
 - the default deliver threshold equals the commit quorum over the deduplicated
@@ -38,6 +42,8 @@ branches:
   inflate the deliver decision,
 - deliver is impossible before the distinct READY count reaches the required
   threshold.
+Its TLC cross-check exhausts the fast config and four expected-failure deliver
+quorum mutation configs.
 
 `SumeragiRbcCausalityGate.tla` captures implementation-side RBC message
 causality:
@@ -53,6 +59,8 @@ causality:
 - DELIVER before INIT is stashed, duplicate DELIVER is ignored, accepted
   DELIVER requires signature and chunk-root validation, and embedded READY
   bundle entries seed state only after independent READY-signature validation.
+Its TLC cross-check exhausts the same twenty-five expected-failure configs as
+Apalache.
 
 `SumeragiRbcDeliverAcceptanceGate.tla` captures
 `evaluate_deliver_acceptance_with_policy(...)`, the final DELIVER acceptance
@@ -64,6 +72,8 @@ decision after session context exists:
 - a present expected chunk root and present computed chunk root must match,
   but an absent expected or computed root does not fail closed by itself,
 - accepted DELIVER decisions require READY, chunk, and root gates to be open.
+Its TLC cross-check independently exhausts the same ten expected-failure
+configs as Apalache.
 
 `SumeragiRbcReadyEmissionGate.tla` captures `maybe_emit_rbc_ready(...)`, the
 local RBC READY emission path:
@@ -85,6 +95,8 @@ local RBC READY emission path:
   DELIVER path, and
 - observers mark READY sent without broadcasting, local-not-in-roster defers,
   and builder misses with local roster membership do not fabricate READY.
+Its TLC cross-check exhausts the same twenty-four expected-failure configs as
+Apalache.
 
 `SumeragiRbcDeliverEmissionGate.tla` captures
 `maybe_emit_rbc_deliver_at_with_local_ready_bypass(...)`, the top-level local
@@ -102,6 +114,8 @@ DELIVER emission path:
 - successful local DELIVER clears DELIVER deferral state, records status,
   drives availability, suppresses broadcast for already-committed blocks, and
   otherwise broadcasts plus runs block recovery and commit processing.
+Its TLC cross-check exhausts the same thirty-one expected-failure configs as
+Apalache.
 
 `SumeragiRbcDeliveredRebroadcastGate.tla` captures delivered-session RBC
 rebroadcast handling in `rbc_next_due(...)` and
@@ -117,6 +131,8 @@ rebroadcast handling in `rbc_next_due(...)` and
   never payload repair or broad READY-set rebroadcast, and
 - successful delivered DELIVER rebroadcast records the timestamp and reports
   progress.
+Its TLC cross-check exhausts the same twenty-two expected-failure configs as
+Apalache.
 
 `SumeragiRbcRebroadcastCursorGate.tla` captures session selection and cursor
 advancement in `rebroadcast_stalled_rbc_payloads(...)`:
@@ -129,6 +145,8 @@ advancement in `rebroadcast_stalled_rbc_payloads(...)`:
   and
 - the cursor advances to the last urgent-selected or scanned key even when no
   session produced work.
+Its TLC cross-check exhausts the same thirteen expected-failure configs as
+Apalache.
 
 `SumeragiRbcRebroadcastActionGate.tla` captures the non-delivered
 per-session action branch in `rebroadcast_stalled_rbc_payloads(...)`:
@@ -148,6 +166,8 @@ per-session action branch in `rebroadcast_stalled_rbc_payloads(...)`:
   cooldown, and payload-bundle availability, and
 - exact-frontier chunk repair may request targeted chunk repair while hot
   repair suppression still blocks broad payload/READY/rescue work.
+Its TLC cross-check exhausts the same twenty-four expected-failure configs as
+Apalache.
 
 `SumeragiRbcNextDueGate.tla` captures the non-delivered `rbc_next_due(...)`
 scheduler surface:
@@ -166,6 +186,8 @@ scheduler surface:
 - missing last-send timestamps are due now, future/overflowing additions are
   clamped to now, stale-status TTL zero disables status cleanup scheduling,
   and multiple candidates merge to the earliest deadline.
+Its TLC cross-check exhausts the same twenty-six expected-failure configs as
+Apalache.
 
 `SumeragiRbcCommitProcessingGate.tla` captures
 `should_process_commit_after_ready(...)` and
@@ -177,6 +199,8 @@ helpers:
 - READY state changes after delivery do not keep waking commit work unless
   clear-pending or READY-quorum evidence explicitly requires it,
 - DELIVER processing wakes commit work exactly once, on the first DELIVER.
+Its TLC cross-check independently exhausts the same ten expected-failure
+configs as Apalache.
 
 `SumeragiRbcChunkTargetGate.tla` captures `rbc_chunk_target_count(...)` and
 `select_rbc_chunk_targets(...)`, the initial RBC chunk fanout helpers:
@@ -186,6 +210,8 @@ helpers:
   commit-quorum floor,
 - selection respects zero target counts, truncates only when needed, returns
   all candidates when the target covers them, and never selects the local peer.
+Its TLC cross-check independently exhausts the same ten expected-failure
+configs as Apalache.
 
 `SumeragiRbcChunkPayloadCapGate.tla` captures `rbc_chunk_payload_cap(...)`, the
 RBC chunk payload frame-cap helper:
@@ -199,6 +225,8 @@ RBC chunk payload frame-cap helper:
   must keep `base_len + cap + headroom` within the payload frame cap,
 - actor initialization must derive the helper input from the consensus payload
   frame cap, not the larger control frame cap.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiRbcRebroadcastSelectionGate.tla` captures
 `rbc_rebroadcasters_count(...)`, `rbc_ready_rebroadcasters_count(...)`, and
@@ -209,6 +237,8 @@ RBC chunk payload frame-cap helper:
 - selection returns none for zero count, returns the whole roster when the
   count covers it, includes the leader in partial non-empty selections, and
   rejects absent-local membership checks.
+Its TLC cross-check independently exhausts the same eleven expected-failure
+configs as Apalache.
 
 `SumeragiRbcChunkAllocationGate.tla` captures `distribute_chunks(...)` and
 `distribute_allocation_weights(...)`, the RBC lane/dataspace chunk allocation
@@ -220,6 +250,8 @@ helpers:
 - zero-weight entries receive no chunks when any positive weight exists,
 - the min-one allocation wrapper preserves total chunks for positive weights
   and trims excess from the end.
+Its TLC cross-check independently exhausts the same eleven expected-failure
+configs as Apalache.
 
 `SumeragiRbcPayloadChunkingGate.tla` captures `chunk_count(...)` and
 `chunk_payload_bytes(...)`, the plain RBC payload chunking helpers:
@@ -228,6 +260,8 @@ helpers:
 - non-empty payloads use ceiling division,
 - produced chunk vectors have the computed chunk count,
 - non-empty chunks cover the payload without empty leading/trailing chunks.
+Its TLC cross-check independently exhausts the same ten expected-failure
+configs as Apalache.
 
 `SumeragiRbcPayloadLayoutGate.tla` captures `RbcPayloadLayout` helper
 semantics:
@@ -240,6 +274,8 @@ semantics:
 - expected encoded-chunk lengths preserve full chunks, short tail data chunks,
   parity chunks, out-of-payload data slots, and out-of-range plain slots
   exactly.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiRbcSessionChunkIngestGate.tla` captures `RbcSession` construction,
 chunk admission, and digest cleanup:
@@ -255,6 +291,8 @@ chunk admission, and digest cleanup:
   drops only mismatching stored chunks, preserves matching chunks, reports the
   exact drop count, and recomputes the received count when anything was
   removed.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiRbcSessionReadyDeliverGate.tla` captures RBC session READY/DELIVER
 recording:
@@ -269,6 +307,8 @@ recording:
   `Delivered`, and
 - DELIVER replays return false without rewriting the recorded sender/signature
   or invalidating the session.
+Its TLC cross-check independently exhausts the same twenty expected-failure
+configs as Apalache.
 
 `SumeragiRbcDeliveredPayloadBytesGate.tla` captures delivered payload byte
 telemetry helpers:
@@ -283,6 +323,8 @@ telemetry helpers:
 - delivered unrecorded sessions use computed bytes before fallback bytes, use
   fallback bytes when local bytes are unavailable, and set the recorded marker
   only after a byte count is returned.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiRbcRs16InitialFanoutGate.tla` captures
 `rs16_initial_chunk_indices_for_target(...)`, the RS16 reduced initial fanout
@@ -293,6 +335,8 @@ helper:
   parity is available and clamps to stripe width otherwise,
 - reduced selections are sorted, deduplicated, in range, and cover every
   stripe with enough chunks for reconstruction.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiRbcChunkBroadcastOrderGate.tla` captures
 `compute_chunk_broadcast_order(...)`, the RBC chunk emission order helper:
@@ -301,6 +345,8 @@ helper:
 - positive drop intervals remove every nth position using one-based positions,
 - drop-every-one drops all chunks and oversized intervals drop none,
 - filtering preserves order and never emits duplicates or out-of-range indices.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiPendingRbcStashGate.tla` captures the bounded pending-RBC stash used
 before INIT/session context is available:
@@ -315,6 +361,8 @@ before INIT/session context is available:
   requests missing-block repair, and publishes the backlog snapshot,
 - flushing after INIT replays only retained chunk/READY/DELIVER frames and
   removes the pending wrapper.
+Its TLC cross-check independently exhausts the same forty-four
+expected-failure configs as Apalache.
 
 `SumeragiIngressDedupCacheGate.tla` captures ingress dedup cache helpers:
 - `DedupCache<T>` floors configured capacity at one, evicts expired entries
@@ -324,6 +372,8 @@ before INIT/session context is available:
 - `BlockPayloadDedupCache` routes each consensus payload kind through an
   independent bucket and keeps total/per-key length projections aligned with
   those buckets.
+Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
 
 `SumeragiConsensusMessageLabelsGate.tla` captures the status-facing consensus
 message label surface:
@@ -333,6 +383,8 @@ message label surface:
   distinct,
 - every `ConsensusMessageReason::as_str(...)` label remains exact, including
   stash-cap, deferred-roster, mode-mismatch, and membership-mismatch reasons.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiRbcStatusLookupGate.tla` captures RBC status lookup helpers used by
 payload recovery and cleanup:
@@ -345,6 +397,8 @@ payload recovery and cleanup:
   require DELIVER,
 - stale-key and next-due helpers use zero TTL as disabled, treat exact TTL
   boundary as due-but-not-stale, and saturate future timestamps to age zero.
+Its TLC cross-check independently exhausts the same twenty-one
+expected-failure configs as Apalache.
 
 `SumeragiRbcStatusRetentionGate.tla` captures RBC status retention helpers used
 by persisted status housekeeping:
@@ -359,6 +413,8 @@ by persisted status housekeeping:
   persists inserted or changed summaries when disk retention is configured,
   skips persistence only for unchanged summaries when both TTL and capacity are
   disabled, and publishes the active count after retention pruning.
+Its TLC cross-check independently exhausts the same seventeen
+expected-failure configs as Apalache.
 
 `SumeragiRbcStatusPersistenceGate.tla` captures RBC status disk persistence and
 fallback helpers:
@@ -375,6 +431,8 @@ fallback helpers:
   storage/write/quota errors, and records the fatal persistence metric,
 - `temp_store_path(...)` appends `.tmp` without replacing existing file
   extensions.
+Its TLC cross-check independently exhausts the same thirty-three
+expected-failure configs as Apalache.
 
 `SumeragiRbcStatusHandleGate.tla` captures RBC status handle lifecycle and
 global accessors:
@@ -393,6 +451,8 @@ global accessors:
 - `register_handle(...)`, `set_active(...)`, `snapshot()`, and
   `sessions_active()` expose the selected active handle store and continue to
   reflect later changes to that handle.
+Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
 
 `SumeragiRbcBacklogStatusGate.tla` captures RBC backlog summary and status
 publication helpers:
@@ -407,6 +467,8 @@ publication helpers:
 - `update_rbc_backlog_snapshot(...)` publishes undelivered-session missing
   totals/maxima separately from pending-stash sessions, bytes, caps, TTL, and
   entry snapshots.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiRbcAbortStatusGate.tla` captures RBC abort status accounting:
 - `record_rbc_abort(...)` increments the abort total and records the latest
@@ -744,6 +806,8 @@ telemetry status:
 - the top-level status snapshot projects the vote-validation drop snapshot, and
 - `should_log_vote_drop_count(...)` logs only the first occurrence and powers
   of ten.
+Its TLC cross-check independently exhausts the same thirty-five
+expected-failure configs as Apalache.
 
 `SumeragiPenaltyOffenderSelectionGate.tla` captures deterministic evidence
 penalty attribution:
@@ -958,6 +1022,8 @@ metadata wire/rebuild helpers:
 - transactions, external entrypoints, execution context, DA commitments, DA
   proof policies, DA pin intents, previous roster evidence, and NPoS effects
   remain bound into the canonical payload.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiCachedProposalRebroadcastGate.tla` captures
 `maybe_rebroadcast_cached_proposal(...)`:
@@ -1298,6 +1364,8 @@ and observation-merge helpers:
   or candidate payload remains unavailable,
 - locally checkable higher same-view Commit votes must extend the locked chain,
   while newer-view higher votes use the shared locked-QC bypass.
+Its TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
 
 `SumeragiEvidenceHorizonGate.tla` captures `evidence_within_horizon(...)`, the
 stale-evidence admission helper:
@@ -1724,6 +1792,9 @@ in `schedule_background(...)` and `schedule_background_via_queue(...)`:
   matching stake snapshot, valid signer mapping, and stake quorum,
 - the caller replaces stale vote-roster cache entries and defers payload
   recovery only after certification plus QC validation or aggregate recovery.
+
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiBlockBodyDirectCommitQcGate.tla` captures
 `direct_commit_qc_from_block_body_response(...)`:
@@ -2494,6 +2565,9 @@ draining:
   accepted result is applied, and kickstart is limited to durable commit
   outcomes.
 
+Its TLC cross-check independently exhausts the same twenty-seven
+expected-failure configs as Apalache.
+
 `SumeragiCommitDrainSummaryGate.tla` captures commit-drain summary aggregation:
 - each accepted result increments the result counter with saturating arithmetic,
 - absent timing fields leave their corresponding accumulators unchanged,
@@ -2502,6 +2576,9 @@ draining:
 - result and stage counters saturate instead of overflowing,
 - the `progress` flag is preserved because it is owned by the surrounding drain
   path, not by `CommitDrainSummary::record(...)`.
+
+Its TLC cross-check independently exhausts the same ten expected-failure
+configs as Apalache.
 
 `SumeragiCommitPipelineSampleGate.tla` captures commit-pipeline timing samples:
 - `CommitPipelineTimings::finish(...)` replaces the stored total with the
@@ -2512,6 +2589,9 @@ draining:
 - drain stage aggregate millisecond counters are copied independently, and
   non-sampled bookkeeping such as result counts, abort/reschedule timers, and
   block counters does not leak into the status sample.
+
+Its TLC cross-check independently exhausts the same eleven expected-failure
+configs as Apalache.
 
 `SumeragiCommitPipelineStatusGate.tla` captures commit-pipeline status
 recording:
@@ -2525,6 +2605,9 @@ recording:
   `reset_commit_pipeline_status_for_tests()` clears both snapshot and EMA
   state for isolated tests.
 
+Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
+
 `SumeragiAutoscaleTransitionGate.tla` captures deterministic autoscale queue
 reconfiguration after commit:
 - `autoscale_transition_committed_at(...)` returns true only when Nexus
@@ -2536,6 +2619,9 @@ reconfiguration after commit:
   reconfigure the queue,
 - the reconfiguration status/log context keeps the committed pending height.
 
+Its TLC cross-check independently exhausts the same nine expected-failure
+configs as Apalache.
+
 `SumeragiCommitQuorumSignersGate.tla` captures commit-QC signer quorum gating:
 - missing QC signer metadata never counts as a quorum, even at a zero
   threshold,
@@ -2544,6 +2630,9 @@ reconfiguration after commit:
 - empty present signer sets are accepted only for a zero threshold,
 - the failed-commit quorum branch is reachable only on a commit failure after
   the helper accepts the signer set.
+
+Its TLC cross-check independently exhausts the same eight expected-failure
+configs as Apalache.
 
 `SumeragiSignatureIndexRecoveryGate.tla` captures commit signature-index
 recovery:
@@ -2556,6 +2645,9 @@ recovery:
 - remapped duplicate signatures, remapped duplicate signer indexes, and empty
   replacement sets fail closed before a recovered block can be retried.
 
+Its TLC cross-check independently exhausts the same thirteen expected-failure
+configs as Apalache.
+
 `SumeragiCommitQcLookupGate.tla` captures commit-QC cache/history lookup:
 - an exact cached commit QC has priority over any historical fallback,
 - history fallback is accepted only when the QC is commit-phase and matches the
@@ -2563,6 +2655,9 @@ recovery:
 - historical QCs with empty aggregate signatures are rejected,
 - the historical validator set must match the commit topology before it can be
   reused.
+
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiPrecommitSignerRecordGate.tla` captures cached-QC precommit signer
 record construction:
@@ -2575,6 +2670,9 @@ record construction:
 - accepted records preserve the topology length, parsed signer count, and
   mode-appropriate stake snapshot attachment.
 
+Its TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
+
 `SumeragiRosterValidationMemoGate.tla` captures roster-validation memo caches:
 - new memo caches start empty and preserve their configured capacity,
 - cache misses do not alter recency order while hits return the stored value and
@@ -2585,6 +2683,9 @@ record construction:
 - commit-QC and checkpoint memo lanes remain isolated while sharing the same
   configured capacity, and world refresh resets both lanes to fresh empty
   caches.
+
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
 
 `SumeragiRosterValidationCachedGate.tla` captures cached roster-validation
 wrappers:
@@ -2599,6 +2700,9 @@ wrappers:
   insert successful rosters, and return the validated roster,
 - validation calls forward the caller-provided block, consensus, chain, mode,
   epoch, roots, genesis-stub, and roster-input arguments.
+
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiRosterValidationCoreGate.tla` captures core roster validation:
 - commit-QC and checkpoint validators reject empty rosters, wrong
@@ -2617,6 +2721,9 @@ wrappers:
 - successful validation returns the full validator set, not just the signer
   subset.
 
+Its TLC cross-check independently exhausts the same thirty expected-failure
+configs as Apalache.
+
 `SumeragiRosterArtifactSelectionGate.tla` captures roster artifact selection:
 - roster selection view prefers the commit certificate view, then the
   checkpoint view, then the candidate block view,
@@ -2630,6 +2737,9 @@ wrappers:
   cert-input, then checkpoint-input order, and mismatching snapshots are ignored,
 - checkpoint validation uses the expected epoch/input/root/genesis-stub choices
   from the surrounding helper logic.
+
+Its TLC cross-check independently exhausts the same twenty-eight
+expected-failure configs as Apalache.
 
 `SumeragiBlockRosterCachesGate.tla` captures block roster cache helpers:
 - roster-selection cache keys require at least one roster artifact and reject
@@ -2645,6 +2755,9 @@ wrappers:
 - signer-cache block removal drops matching entries and order keys while
   preserving other blocks.
 
+Its TLC cross-check independently exhausts the same thirty expected-failure
+configs as Apalache.
+
 `SumeragiBlockSyncRosterEvidenceGate.tla` captures block-sync roster evidence
 helpers:
 - missing commit proof is reported unless the update carries either a commit QC
@@ -2658,6 +2771,9 @@ helpers:
   evidence,
 - applying a roster selection overwrites commit-QC, validator-checkpoint, and
   stake-snapshot lanes while preserving unrelated update fields.
+
+Its TLC cross-check independently exhausts the same twenty-one
+expected-failure configs as Apalache.
 
 `SumeragiBlockSyncHistoryRosterGate.tla` captures
 `block_sync_history_roster_for_block(...)`:
@@ -2673,6 +2789,9 @@ helpers:
   only when no same-height checkpoint is available,
 - source, roster height/view, checkpoint-height filtering, stake-snapshot
   forwarding, and post-validation fallback match the Rust helper.
+
+Its TLC cross-check independently exhausts the same twenty-seven
+expected-failure configs as Apalache.
 
 `SumeragiPersistedRosterSelectionGate.tla` captures
 `persisted_roster_for_block(...)`:
@@ -2690,6 +2809,9 @@ helpers:
 - previous-roster evidence converts stake snapshots into the runtime cache
   representation, validates checkpoint-only artifacts, records only the
   returned checkpoint, and fails closed when no persisted source applies.
+
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiBlockSyncUpdateRosterHydrationGate.tla` captures
 `block_sync_update_with_roster_inner(...)`:
@@ -2710,6 +2832,9 @@ helpers:
   update still lacks one; existing stake snapshots, no-selection cases, and
   Permissioned mode are left untouched.
 
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
+
 `SumeragiRosterIndexProjectionGate.tla` captures roster index projection and
 epoch-manager normalization:
 - `compute_roster_indices_from_topology(...)` returns an empty list for empty
@@ -2723,6 +2848,9 @@ epoch-manager normalization:
   effective length, and leaves the previous manager indices unchanged when the
   effective length cannot fit in `u32`.
 
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
+
 `SumeragiMembershipViewHashGate.tla` captures the deterministic
 membership-view hash preimage:
 - `compute_membership_view_hash(...)` binds chain id bytes, big-endian height,
@@ -2732,6 +2860,9 @@ membership-view hash preimage:
   single-peer rosters, and empty rosters all produce distinct abstract
   preimages, so nodes cannot silently normalize or omit membership context
   before recording the membership snapshot.
+
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiMembershipMismatchStatusGate.tla` captures membership snapshot and
 mismatch status helpers:
@@ -2744,6 +2875,9 @@ mismatch status helpers:
   consecutive count without erasing the global last context, absent-peer clears
   are no-ops, and reset clears both active entries and last context.
 
+Its TLC cross-check independently exhausts the same twenty-three
+expected-failure configs as Apalache.
+
 `SumeragiMembershipAdvertGate.tla` captures membership snapshot publication:
 - `record_membership_snapshot(...)` computes the membership-view hash from the
   exact chain id, height, view, epoch, and topology tuple before any status or
@@ -2753,6 +2887,24 @@ mismatch status helpers:
 - `broadcast_consensus_params(...)` derives collector parameters from the
   membership height, forwards `redundant_send_r`, and clamps oversized
   `collectors_k` to `u16::MAX` without clamping in-range values.
+
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
+
+`SumeragiMembershipMismatchIngressGate.tla` captures membership-mismatch
+ingress and fail-closed gating:
+- consensus-params adverts without membership, remote hash, local snapshot,
+  matching height/view/epoch context, or an authenticated sender do not mutate
+  mismatch state,
+- authenticated adverts for the current membership context record mismatches,
+  clear state when the advertised hash matches the local snapshot, and warn only
+  after the configured consecutive threshold,
+- fail-closed ingress drops only non-`ConsensusParams` messages from
+  authenticated peers whose active mismatch count reached the threshold, and
+  dropped messages carry the `membership_mismatch` status reason.
+
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiConsensusParamsIngressGate.tla` captures inbound consensus-params
 advert handling:
@@ -2765,6 +2917,9 @@ advert handling:
   `redundant_send_r` mismatch diagnostics, records telemetry from advertised
   values, and returns success for both matching and mismatching adverts.
 
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
+
 `SumeragiPrevalidatedCommitArtifactGate.tla` captures prevalidated commit
 artifact trust:
 - trusted artifacts must be present and match the candidate block hash, height,
@@ -2775,6 +2930,9 @@ artifact trust:
   commit execution,
 - the post-validation witness must be present and reproduce the artifact's
   parent and post-state roots before the prevalidated path can be accepted.
+
+Its TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
 
 `SumeragiCommitJobDispatchGate.tla` captures commit-job dispatch ownership:
 - a duplicate finalize for the same inflight block is suppressed without
@@ -2789,6 +2947,9 @@ artifact trust:
   with disconnected sends also clearing commit worker state,
 - every dispatch path leaves the block recoverable through exactly one owner:
   existing inflight, worker queue, pending retry, or inline commit.
+
+Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
 
 `SumeragiCommitWorkerConfigGate.tla` captures commit-worker channel capacity
 configuration:
@@ -2855,6 +3016,9 @@ budget preservation:
   current interval, including the zero-interval boundary,
 - the test-only deadline accessor is read-only.
 
+Its TLC cross-check independently exhausts the same thirteen expected-failure
+configs as Apalache.
+
 `SumeragiPacemakerEvaluationGate.tla` captures pacemaker evaluation:
 - initial deferral logging fires only on the first backpressure transition and
   is not repeated for subsequent deferring ticks,
@@ -2866,6 +3030,9 @@ budget preservation:
   attempts even when the deadline is due,
 - recovered pressure clears the backpressure tracker without deferral logging.
 
+Its TLC cross-check independently exhausts the same forty expected-failure
+configs as Apalache.
+
 `SumeragiPacingGovernorGate.tla` captures pacing-governor factor evaluation:
 - adjacent committed-block samples use saturating creation-time and
   view-change deltas before integer permille ratios are computed,
@@ -2876,6 +3043,9 @@ budget preservation:
 - min factors are floored at 10_000 bps, max factors are raised to at least
   min, and both step-up and step-down outputs are clamped to those bounds,
 - ambiguous windows and no-op bound hits return no decision.
+
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiCachedSlotTimeoutGate.tla` captures cached proposal-slot timeout
 selection:
@@ -3086,6 +3256,9 @@ semantics after failed commit recovery:
 - pending-block drop removes only present entries, preserves the block
   transaction count, and returns delegated requeue counters.
 
+Its TLC cross-check independently exhausts the same twenty expected-failure
+configs as Apalache.
+
 `SumeragiTickDeadlineHelpersGate.tla` captures tick/deadline scheduling helper
 semantics:
 - deadline merging keeps the earliest concrete deadline while preserving the
@@ -3101,6 +3274,9 @@ semantics:
   future-last-attempt saturation,
 - abstract next-tick scheduling returns `now` for immediate work and otherwise
   chooses the earliest clamped candidate deadline.
+
+Its TLC cross-check independently exhausts the same twenty-eight
+expected-failure configs as Apalache.
 
 `SumeragiWorkerTickGapGate.tla` captures worker-loop tick-gap helper semantics:
 - elapsed time uses saturating subtraction so future `last_tick` instants count
@@ -3125,6 +3301,9 @@ and inline frontier backup transport:
   `BlockCreated` frame is inline, and inline backup is configured; RBC body
   transport is used for DA primary RBC or that inline backup path.
 
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
+
 `SumeragiHighestQcDependencyDeferralGate.tla` captures highest-QC dependency
 deferral helpers:
 - retry-aborted non-invalid pending blocks and the active pending-processing
@@ -3139,6 +3318,9 @@ deferral helpers:
 - lock-rejected highest-QC hashes do not regain markers or fetches, and every
   deferral path avoids observing the slot or updating local highest-QC state.
 
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
+
 `SumeragiPrecommitQcViewChangeGate.tla` captures the precommit-QC selector
 used by pacemaker view-change handling:
 - the local highest QC is filtered to Commit phase before it can seed NewView
@@ -3150,6 +3332,9 @@ used by pacemaker view-change handling:
 - when both Commit-phase candidates exist, `(height, view)` ordering selects
   the local highest QC exactly when it is lexicographically greater than or
   equal to the committed QC, including equal-slot ties.
+
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiCommitEvidenceReplayGate.tla` captures known-block commit-evidence
 replay pacing:
@@ -3163,6 +3348,8 @@ replay pacing:
   `BlockSyncUpdate` hydration,
 - explicit replay targets exclude the local peer and are deduplicated before
   outbound work is scheduled.
+Its TLC cross-check exhausts the same twelve expected-failure configs as
+Apalache.
 
 `SumeragiBlockSyncRecoveryGate.tla` captures BlockSyncUpdate recovery
 admission into the BlockCreated owner path:
@@ -3176,6 +3363,8 @@ admission into the BlockCreated owner path:
 - sparse next-height payloads and vote-only unknown-frontier updates track
   missing commit-QC repair,
 - unvalidated commit-QC sidecars cannot promote lock or highest-QC state.
+Its TLC cross-check exhausts the same fifteen expected-failure configs as
+Apalache.
 
 `SumeragiCertifiedBlockFetchGate.tla` captures direct certified-block fetch
 recovery:
@@ -3209,6 +3398,8 @@ exact-frontier missing-body recovery:
   one-shot `force_retry_now` flag,
 - existing requests never receive the force flag and are not held by this
   ingress gate.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiPayloadProgressAvailabilityGate.tla` captures actor-local payload
 availability for progress:
@@ -3219,6 +3410,8 @@ availability for progress:
 - deferred block-sync payloads and Kura payloads count when no local owner
   rejects the hash,
 - hash-only `pending_processing` state and absent payloads do not count.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiHighestQcFetchBodyKnownGate.tla` captures highest-QC body fetch
 suppression:
@@ -3228,6 +3421,8 @@ suppression:
   fetch,
 - deferred block-sync payloads, hash-only `pending_processing` state, and absent
   payloads remain missing for this fetch path.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiLocalPayloadAvailabilityGate.tla` captures broad actor-local payload
 availability:
@@ -3236,11 +3431,15 @@ availability:
   payloads count as local material,
 - only a fully absent payload returns missing; stricter progress, fetch, and
   lock helpers apply their own filters.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiBlockKnownLocallyGate.tla` captures actor-local block-known routing:
 - non-aborted pending and commit-inflight entries count even when invalid,
 - hash-only `pending_processing` and Kura height knowledge count,
 - aborted local owners, deferred-only payloads, and absent blocks stay unknown.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiBlockKnownForLockGate.tla` captures lock-safety block-known routing:
 - pending entries count only when non-aborted and validated as `Valid`,
@@ -3248,6 +3447,8 @@ availability:
   inflight ownership, hash-only `pending_processing`, or Kura height knowledge,
 - deferred-only payloads and absent blocks stay unknown for lock/highest-QC
   checks.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiMissingLockedQcRecoveryGate.tla` captures missing locked-QC payload
 recovery:
@@ -3268,6 +3469,8 @@ recovery:
   `round_liveness_catchup_isolated` range-pull reanchor,
 - same-hash, non-higher, non-frontier, and fresh conflicts cannot take the
   stale-obsolete path.
+Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
 
 `SumeragiLocalSignedBlockLookupGate.tla` captures local signed-block
 materialization for `local_signed_block_for_hash(...)` and body repair:
@@ -3277,6 +3480,8 @@ materialization for `local_signed_block_for_hash(...)` and body repair:
   inflight, deferred block-sync, or Kura material,
 - accepted pending/inflight owners outrank deferred material, and deferred
   material outranks Kura.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiAuthoritativePayloadProgressGate.tla` captures authoritative payload
 lookup for consensus progress:
@@ -3286,6 +3491,8 @@ lookup for consensus progress:
   inflight, deferred, or Kura material,
 - deferred block-sync payloads are ignored, while Kura payloads count only when
   the requested hash is the committed block hash for the loaded header height.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
 
 `SumeragiAuthoritativeBlockPayloadGate.tla` captures hash-level authoritative
 payload availability:
@@ -3295,6 +3502,8 @@ payload availability:
   authoritative RBC sessions to satisfy the predicate,
 - wrong-hash and non-authoritative RBC sessions are ignored without blocking
   later matching authoritative sessions.
+Its TLC cross-check independently exhausts the same thirteen expected-failure
+configs as Apalache.
 
 `SumeragiPendingBlockActiveForTipGate.tla` captures pending-block activity for
 the current tip:
@@ -3311,6 +3520,8 @@ the current tip:
 - stored votes and cached QCs each block the fast-unblock path before the age
   comparison,
 - the age threshold is inclusive: `progress_age >= fast_timeout`.
+Their TLC cross-checks independently exhaust the same sixteen and twelve
+expected-failure configs as Apalache.
 
 `SumeragiBlockingPendingBlocksGate.tla` captures the blocking pending-block
 counters:
@@ -3322,6 +3533,8 @@ counters:
 - with non-zero quorum timeout, aborted/off-tip blocks do not block, vote or
   QC evidence blocks immediately, and no-evidence blocks count only in the
   `stall_grace <= progress_age < quorum_timeout` window.
+Its TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
 
 `SumeragiQuorumRecoveryVoteDrainUrgentGate.tla` captures
 `quorum_recovery_vote_drain_urgent()`:
@@ -3343,6 +3556,8 @@ counters:
   satisfy the quorum-evidence gate,
 - only RBC chunk, block-payload, or block queues count as relevant backlog;
   vote backlog alone is ignored.
+Their TLC cross-checks independently exhaust the same seventeen and sixteen
+expected-failure configs as Apalache.
 
 `SumeragiRbcAuthoritativePayloadProgressGate.tla` captures RBC authoritative
 payload knowledge for progress:
@@ -3364,6 +3579,8 @@ payload knowledge:
 - Kura requires the requested view and committed block hash for the height, and
   RBC requires a matching non-retained session with authoritative progress
   payload material.
+Their TLC cross-checks independently exhaust the same nineteen and twenty-one
+expected-failure configs as Apalache.
 
 `SumeragiMissingBlockFetchGate.tla` captures QC-first missing-block fetch
 planning:
@@ -3397,6 +3614,8 @@ around missing-block fetches and stale recovery suppression:
 - `snapshot()` projects the fetch and recovery counters without cross-field
   drift, and `reset_missing_block_fetch_counters_for_tests()` clears the same
   status fields for isolated tests.
+Its TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
 
 `SumeragiRecoveryFsmReasonGate.tla` captures recovery-FSM reason helper
 stability:
@@ -3407,6 +3626,8 @@ stability:
 - `stable_sort_recovery_events(...)` orders recovery transition events by
   `(height, reason.rank(), peer_id)` so height, reason priority, and peer
   tie-breaks stay explicit.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiQcRebuildStatusGate.tla` captures QC rebuild status accounting:
 - QC rebuild attempts, successful rebuilds, accepted QCs with missing local
@@ -3417,6 +3638,8 @@ stability:
 - `snapshot()` projects the four QC rebuild counters without field drift, and
   `reset_qc_rebuild_counters_for_tests()` clears the same fields for isolated
   tests.
+Its TLC cross-check independently exhausts the same twenty-one expected-failure
+configs as Apalache.
 
 `SumeragiQcRebuildQuorumGate.tla` captures QC rebuild quorum reachability:
 - permissioned rebuild candidates are admitted exactly when the signer count
@@ -3426,6 +3649,8 @@ stability:
 - after signer peers are known, NPoS requires a non-empty stake roster, an
   available stake snapshot, and a positive stake-quorum result; missing
   snapshots, false quorum, and quorum errors fail closed.
+Its TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
 
 `SumeragiCollectorTargetingStatusGate.tla` captures collector-targeting status
 accounting:
@@ -3438,6 +3663,8 @@ accounting:
 - `snapshot()` projects the three fields without drift, and
   `reset_collectors_targeting_for_tests()` clears the same fields for isolated
   tests.
+Its TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
 
 `SumeragiDeferredRecoveryStatusGate.tla` captures deferred recovery status
 accounting:
@@ -3448,6 +3675,8 @@ accounting:
 - `snapshot()` projects the deferred-QC and empty-topology counters without
   cross-field drift, and `reset_missing_block_fetch_counters_for_tests()`
   clears those fields for isolated tests.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiMissingQcLivenessStatusGate.tla` captures missing-QC liveness status
 accounting:
@@ -3460,6 +3689,8 @@ accounting:
   stuck-round fields without cross-field drift, and
   `reset_missing_block_fetch_counters_for_tests()` clears those fields for
   isolated tests.
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
 
 `SumeragiSidecarNoProposalStatusGate.tla` captures sidecar/no-proposal status
 accounting:
@@ -3471,6 +3702,8 @@ accounting:
 - `snapshot()` projects the sidecar and no-proposal storm fields without
   cross-field drift, and `reset_missing_block_fetch_counters_for_tests()`
   clears those fields for isolated tests.
+Its TLC cross-check independently exhausts the same twenty-three
+expected-failure configs as Apalache.
 
 `SumeragiDeterministicCommitteeStatusGate.tla` captures deterministic-committee
 status publication:
@@ -3481,6 +3714,8 @@ status publication:
 - `snapshot()` projects the stored committee size without drift, and
   `reset_missing_block_fetch_counters_for_tests()` clears it for isolated
   tests.
+Its TLC cross-check independently exhausts the same eight expected-failure
+configs as Apalache.
 
 `SumeragiTimingStatusCountersGate.tla` captures timing/liveness status
 accounting:
@@ -3492,6 +3727,8 @@ accounting:
 - `snapshot()` and getter helpers project the timing and RBC deferral counters
   without cross-field drift, while the pacemaker and prevote test reset helpers
   clear their counters for isolated tests.
+Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
 
 `SumeragiRosterRecoveryStatusGate.tla` captures roster-recovery status
 accounting:
@@ -3501,6 +3738,8 @@ accounting:
 - catch-up isolation enter, success, and rejoin counters remain distinct,
 - recovery state and dwell maps are published by snapshot, later writes
   overwrite earlier values, and reset clears both fields for isolated tests.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiRangePullRecoveryGate.tla` captures range-pull recovery helper
 decisions:
@@ -3524,6 +3763,8 @@ decisions:
   idle missing-QC behavior,
 - reason classifiers keep lock-lag, canonical-chain, missing-QC, and
   previous-anchor routing distinct.
+Its TLC cross-check independently exhausts the same forty-seven
+expected-failure configs as Apalache.
 
 `SumeragiRangePullStatusGate.tla` captures range-pull status accounting:
 - escalation, success, failure, and candidate-exhausted counters increment
@@ -3534,6 +3775,8 @@ decisions:
 - `snapshot()` projects all range-pull counters and streak fields without
   cross-field drift, and the missing-block fetch/block-sync reset helpers
   clear those fields for isolated tests.
+Its TLC cross-check independently exhausts the same twenty
+expected-failure configs as Apalache.
 
 `SumeragiRoundRecoveryBundleWindowGate.tla` captures same-height
 round-recovery bundle window gating:
@@ -3550,6 +3793,8 @@ round-recovery bundle window gating:
   default non-commit window,
 - gate records are keyed by height, and zero-duration explicit windows are
   floored before computing elapsed window indexes.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiCommittedEdgeConflictGate.tla` captures committed-edge conflicting
 highest-QC suppression:
@@ -3570,6 +3815,8 @@ highest-QC suppression:
   owner and hand off the contiguous frontier to passive catch-up, while the
   shared recovery window controls whether owner/range-pull reanchors are
   emitted.
+Its TLC cross-check independently exhausts the same twenty-three
+expected-failure configs as Apalache.
 
 `SumeragiLockRejectedSinkGate.tla` captures lock-rejected branch sink
 lifecycle:
@@ -3588,6 +3835,8 @@ lifecycle:
 - height clears preserve other heights, while purge cleanup removes matching
   vote/QC/deferred/known-work, proposal/owner/frontier, fetch/recovery,
   validation, and RBC artifacts for the rejected branch.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiActiveLockRejectRecoveryGate.tla` captures active-height
 lock-reject recovery routing:
@@ -3602,6 +3851,8 @@ lock-reject recovery routing:
   preserved,
 - view-change reporting follows the final recovery advance result, and the
   rejected branch never enters pending proposal state.
+Its TLC cross-check independently exhausts the same twenty-one
+expected-failure configs as Apalache.
 
 `SumeragiMissingBlockHardCapGate.tla` captures missing-block height hard-cap
 recovery escalation:
@@ -3680,6 +3931,8 @@ replay across restart:
 - compaction preserves exactly the live records,
 - torn payload or length tails are repaired while preserving the last complete
   native AMX record.
+Its TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
 
 `SumeragiNativeAmxRoutingPlanGate.tla` captures native AMX routing-plan
 canonicalization and execution-context projection:
@@ -3721,6 +3974,8 @@ inside block execution-context validation:
   body preimage,
 - duplicate same-body signer votes do not create duplicate cache entries, while
   retried bodies and distinct participant legs stay separately cacheable.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiVNextChainOrderGate.tla` captures vNext chain-order helper
 construction:
@@ -3736,6 +3991,8 @@ construction:
   missing-weight, or zero-total-stake inputs,
 - `build_signer_bitmap(...)` uses the canonical byte length, rejects duplicate
   signer indices, and rejects out-of-range signer indices.
+Its TLC cross-check independently exhausts the same nineteen expected-failure
+configs as Apalache.
 
 `SumeragiVNextStakeWeightGate.tla` captures vNext stake-weight helper
 semantics:
@@ -3757,6 +4014,8 @@ semantics:
   hash,
 - count and stake quorum policies are rechecked after quarantine, with exact
   two-thirds stake still rejected by the strict NPoS comparison.
+Its TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
 
 `SumeragiVNextRechainErrorLabelGate.tla` captures
 `rechain_error_label(...)`:
@@ -3765,6 +4024,8 @@ semantics:
   embedded expected successor or untainted-validator counts,
 - expected-failure mutations cover label drift for every variant and dynamic
   payload leakage into labels.
+Its TLC cross-check independently exhausts the same thirteen expected-failure
+configs as Apalache.
 
 `SumeragiVNextSignatureGate.tla` captures vNext aggregate certificate
 verification:
@@ -3781,6 +4042,8 @@ verification:
   aggregate signature over the canonical certificate preimage,
 - accepted certificates return exactly the bitmap-selected signer set, and
   rejected certificates return no signers.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiVNextSigningPreimageGate.tla` captures vNext signing preimage
 construction:
@@ -3795,6 +4058,8 @@ construction:
   signature state,
 - suspicion signing-body hashes include the canonical suspicion evidence fields
   while excluding the signature.
+Its TLC cross-check independently exhausts the same twenty-seven
+expected-failure configs as Apalache.
 
 `SumeragiVNextControlIngressGate.tla` captures actor-level vNext control
 certificate ingress:
@@ -3813,6 +4078,8 @@ certificate ingress:
 - view-change certificates always install through the non-canonical diagnostic
   path, abort only an installed highest slot, and trigger only nonzero new
   views.
+Its TLC cross-check independently exhausts the same twenty-eight
+expected-failure configs as Apalache.
 
 `SumeragiVNextSlotLifecycleGate.tla` captures actor-owned vNext slot lifecycle:
 - proposal, availability, validation, and commit-persisted events cannot
@@ -3829,6 +4096,8 @@ certificate ingress:
 - recovery starts only for due, unprotected running or backpressured timeouts,
   and recovery does not emit validation result side effects,
 - commit-persisted events make the slot sticky-committed and record progress.
+Its TLC cross-check independently exhausts the same thirty-two expected-failure
+configs as Apalache.
 
 `SumeragiVNextValidationGate.tla` captures vNext validation ownership:
 - unqueued validation dispatches a worker, queued validation awaits a worker,
@@ -3842,6 +4111,8 @@ certificate ingress:
   `(id, generation)` worker results may apply,
 - wrong-id, wrong-generation, and non-running worker results are ignored
   without mutating validation state.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiVNextDeadlineProtectionGate.tla` captures vNext validation deadline
 and protection helpers:
@@ -3855,6 +4126,8 @@ and protection helpers:
   protection includes only backpressured slots whose pending block is retained,
 - `vnext_round_next_due(...)` ignores terminal/non-running states and returns
   the earliest fresh-worker, running-suspicion, or backpressure deadline.
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiVNextPerformanceConfigGate.tla` captures vNext performance-fault
 configuration conversion:
@@ -3888,6 +4161,8 @@ redrive helper decisions:
 - vNext redrive ignores missing/terminal slots, redrives queued/backpressured
   slots exactly at retry timeout boundaries, treats missing running ownership as
   orphaned, and maps stalled running validation to `StalledRunning`.
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiValidationRedriveLabelGate.tla` captures
 `VNextValidationRedriveReason::label()`:
@@ -3919,6 +4194,8 @@ identity:
 - `VoteVerifyKey::from_vote_with_signer_public_key(...)` and the vote cache-key
   constructor intentionally ignore the optional signer public key so retry and
   local-public-key hints cannot split the verification identity.
+Its TLC cross-check independently exhausts the same twenty-seven
+expected-failure configs as Apalache.
 
 `SumeragiVoteVerifyAsyncGate.tla` captures actor-side async vote verification:
 - no-worker dispatch falls back to inline signature verification instead of
@@ -3933,6 +4210,8 @@ identity:
   and invalid-signature results cannot mutate consensus state,
 - a disconnected result channel clears worker senders plus in-flight and
   pending work and does not retain the dead receiver.
+Its TLC cross-check independently exhausts the same thirty expected-failure
+configs as Apalache.
 
 `SumeragiVoteVerifyWorkerConfigGate.tla` captures vote-signature verification
 worker configuration:
@@ -3959,6 +4238,8 @@ verification:
   QCs re-enter `apply_known_block_qc_work(...)`,
 - disconnected worker senders or result receivers clear worker-owned state and
   fall back to inline verification rather than keeping stale ownership.
+Its TLC cross-check independently exhausts the same thirty-nine
+expected-failure configs as Apalache.
 
 `SumeragiQcVerifyWorkerConfigGate.tla` captures QC aggregate-verification
 worker configuration:
@@ -4034,6 +4315,8 @@ parallel worker execution envelopes:
   state,
 - commit inflight start/finish captures pause/resume queue-depth snapshots and
   finish is a no-op when the active id does not match.
+Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
 
 `SumeragiNposVrfEpochSealGate.tla` captures NPoS VRF epoch-seal staging and
 committed-effect reconciliation:
@@ -4155,6 +4438,8 @@ realignment and committed-anchor range-pull pacing:
 - older conflicting branches cannot use quorum-completion as an escape hatch,
 - locked-QC conflicts, missing locked payloads at the same or older view, and
   non-extending locked-chain candidates fail closed.
+Its TLC cross-check independently exhausts the same nine expected-failure
+configs as Apalache.
 
 `SumeragiSameHeightVoteConflictGate.tla` captures same-height local vote
 conflict helpers shared by proposal assembly and precommit voting:
@@ -4167,6 +4452,8 @@ conflict helpers shared by proposal assembly and precommit voting:
   only under the current helper gates,
 - pending same-height vote verification defers while Prepare/Commit validation
   at or before the current view remains unresolved.
+Its TLC cross-check independently exhausts the same thirty-six
+expected-failure configs as Apalache.
 
 `SumeragiSameHeightVoteLockGate.tla` captures aggregate same-height vote-lock
 construction and frontier competing-quorum lock composition:
@@ -4196,6 +4483,8 @@ vote gates:
 - missing-QC repair can bypass a stale local Commit vote only for a newer
   frontier proposal with canonical committed-tip highest-QC evidence and no
   recoverable same-height lock/QC/inflight work.
+Its TLC cross-check independently exhausts the same thirty-eight
+expected-failure configs as Apalache.
 
 `SumeragiSameHeightVoteRecoveryGapGate.tla` captures exact same-height vote
 recovery view-gap thresholds:
@@ -4224,6 +4513,8 @@ recovery view-gap thresholds:
 - `da::gate_satisfaction(...)` reports `MissingDataRecovered` only for the
   exact `MissingLocalData -> None` transition,
 - manifest guard kind labels remain stable for telemetry/status snapshots.
+Its TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
 
 `SumeragiDaGateStatusGate.tla` captures data-availability gate status
 accounting:
@@ -4235,6 +4526,8 @@ accounting:
   same counters, latest reason, and last-satisfied status as the recorder,
 - the test reset helper clears counters, latest reason, and last-satisfied
   status.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiManifestGuardGate.tla` captures DA manifest enforcement helpers:
 - matching manifests pass, missing/read/spool-scan errors reject on strict
@@ -4243,6 +4536,17 @@ accounting:
   record and accept blocks without DA commitments,
 - DA bundle caps reject too many commitments/openings, missing proof digests,
   and zero-like proof digests while accepting valid nonzero digests.
+
+`SumeragiConsensusCapsStatusGate.tla` captures consensus capability status
+projection:
+- the initially absent state, setters, getters, and snapshots preserve every
+  `ConsensusConfigCaps` field,
+- collector fanout, DA encoding, RS16, RBC session TTL, and RBC store caps
+  remain distinct in getter and status projections,
+- repeated writes overwrite to the latest value without swapping max/soft
+  session or byte limits.
+Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
 
 `SumeragiConsensusHandshakeCapsGate.tla` captures consensus handshake
 capability construction:
@@ -4256,6 +4560,8 @@ capability construction:
   minimum finality, and one millisecond,
 - handshake caps copy the configured transport caps and protocol version while
   the fingerprint binds mode, protocol, chain, and canonical params.
+Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
 
 `SumeragiHandshakeGate.tla` captures p2p consensus handshake admission:
 - `HandshakeGate::local(...)` stores the local chain id, mode tag, protocol
@@ -4290,6 +4596,8 @@ capability construction:
 - staged mode status maps Permissioned/NPoS tags exactly and reports the
   configured activation height independently from whether activation has
   already occurred.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiEffectiveTimingGate.tla` captures effective consensus timing
 aggregation:
@@ -4304,6 +4612,8 @@ aggregation:
   forwarded into the timing snapshot,
 - `quorum_timeout_for_da(...)` returns the cached timeout for matching DA mode
   and recomputes with the requested DA flag and multiplier otherwise.
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
 
 `SumeragiNewViewStatsGate.tla` captures NEW_VIEW receipt statistics:
 - receipt senders are deduplicated per `(height, view)` key, so duplicate
@@ -4356,6 +4666,8 @@ accumulator:
 - suppressed-only counters are sufficient to emit a summary, and
 - every due/reset path clears all counters and refreshes `last_emit`, while a
   due empty summary refreshes without logging.
+Its TLC cross-check independently exhausts the same twenty-one
+expected-failure configs as Apalache.
 
 `SumeragiAdaptiveObservabilityGate.tla` captures adaptive observability
 timing/fanout control:
@@ -4372,6 +4684,8 @@ timing/fanout control:
   cap,
 - missing local-data deltas saturate before threshold comparison and the
   missing-data baseline is refreshed on every evaluation.
+Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 
 `SumeragiPacingBackpressureGate.tla` captures pacing backpressure helpers:
 - `BackpressureGate::new(...)` stores the receiver snapshot as the cached
@@ -4394,6 +4708,8 @@ backpressure cooldown helpers:
 - cooldown windows are strict: samples at or after the boundary are inactive,
   while backward time samples saturate elapsed age to zero, and
 - reset/disable test helpers clear timestamps and fail closed.
+Its TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
 
 `SumeragiPacemakerBackpressureTrackerGate.tla` captures per-reason pacemaker
 backpressure telemetry tracking:
@@ -4423,6 +4739,8 @@ backpressure telemetry tracking:
 - `realign_locked_to_committed_if_extends(...)` returns the committed QC only
   when a committed QC exists and the highest QC extends it; otherwise it keeps
   the existing lock state.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiPrecommitQcExtendsLockedGate.tla` captures the actor-level
 `precommit_qc_extends_locked(...)` wrapper:
@@ -4434,6 +4752,8 @@ backpressure telemetry tracking:
   allow aggregation,
 - same-view missing parent, divergent parent, height regression, and
   same-height hash conflict reject aggregation and emit the skip warning.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
 
 `SumeragiStakeSnapshotGate.tla` captures NPoS stake snapshot helpers:
 - empty rosters produce no commit stake snapshot,
@@ -4478,6 +4798,8 @@ backpressure telemetry tracking:
   uses its world-derived active validator roster before legacy fallback,
 - all non-empty live rosters are deduplicated and sorted before local
   NEW_VIEW/precommit vote signing.
+Its TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
 
 `SumeragiCanonicalRoundRosterGate.tla` captures canonical round-roster
 selection:
@@ -4497,6 +4819,8 @@ selection:
 - roll-forward ignores non-commit, future-parent, and empty-validator-set
   candidates, sorts newest height/view first, requires intermediate hashes,
   filters live consensus keys, and canonicalizes nonempty outputs.
+Its TLC cross-check independently exhausts the same twenty-two
+expected-failure configs as Apalache.
 
 `SumeragiVoteRosterSelectionGate.tla` captures block-specific vote roster
 selection:
@@ -4549,6 +4873,8 @@ and roster-change reset handling:
 - `proposals_seen` is preserved only when requested, and `on_block_commit(...)`
   invokes the reset only for membership changes while preserving caches for
   order-only rotations.
+Its TLC cross-check independently exhausts the same twenty-nine
+expected-failure configs as Apalache.
 
 `SumeragiPrecommitSignerHistoryGate.tla` captures precommit signer-history
 fallback for block-sync roster and QC recovery:
@@ -4568,6 +4894,8 @@ fallback for block-sync roster and QC recovery:
   aligned stake snapshot when NPoS selected it,
 - cached QC reconstruction from precommit signer history requires a non-empty
   aggregate signature before it can synthesize a Commit QC.
+Its TLC cross-check independently exhausts the same twenty-three
+expected-failure configs as Apalache.
 
 `SumeragiProposalAssemblyGate.tla` captures local proposal assembly before
 prepare voting:
@@ -5392,6 +5720,13 @@ backpressure status accounting:
   projection, and
 - saturation remains an explicit state rather than an inference from
   depth/capacity equality.
+The TLC cross-checks for telemetry status, lane-detail status, mode status,
+effective timing status, and transaction-queue backpressure status
+independently exhaust the same twenty-seven, twenty-eight, twenty-nine,
+thirty, and twenty expected-failure configs as Apalache.
+The TLC cross-checks for pending-RBC status, ingress status counters, and
+phase-latency status independently exhaust the same twenty-seven, thirty-three,
+and twenty-nine expected-failure configs as Apalache.
 
 `SumeragiValidationEvidenceQcGate.tla` captures
 `qc_for_validation_evidence(...)`, the QC selector used when building
@@ -6141,6 +6476,8 @@ verification, and full networking details.
 - `SumeragiQcSignerCountGate_bug_*.cfg`: expected-failure empty, zero, low/high-bit, full-byte, byte-vs-bit, multi-byte, padding-bit, saturation, and nonzero-byte mutations.
 - `SumeragiCommitRootConsistency.tla`: commit-QC execution-root consistency model.
 - `SumeragiCommitRootConsistency_fast.cfg`: CI-friendly commit-root consistency check.
+- `SumeragiCommitRootConsistency_tlc_fast.cfg`: witness-constrained TLC commit-root consistency cross-check.
+- `SumeragiCommitRootConsistency_tlc_bug_*.cfg`: witness-constrained TLC expected-failure commit-root consistency cross-checks.
 - `SumeragiCommitRootConsistency_bug_mix_root_signers.cfg`: expected-failure mixed-root quorum mutation.
 - `SumeragiCommitRootConsistency_bug_count_wrong_context.cfg`: expected-failure wrong-context vote counting mutation.
 - `SumeragiCommitRootConsistency_bug_tie_high_root.cfg`: expected-failure nondeterministic/high-root tie mutation.
@@ -8256,6 +8593,10 @@ surfaces it abstracts:
 | `lockedBranch`, `lockView`, `PrepareQc` | Locked-QC acceptance rules in `crates/iroha_core/src/sumeragi/main_loop/locked_qc.rs` and the pure engine's `proposal_satisfies_lock(...)`. |
 | `commitCerts` | Commit-certificate formation and finality conflict rejection in the collector/receiver path; the pure engine bridge coverage includes `conflicting_blocks_cannot_both_commit_at_same_height` and `committed_block_notifications_do_not_overwrite_conflicting_height`. |
 
+TLC now cross-checks `fork-fast` and the `fork-bug-*` expected-failure
+mutation so the same finite fork-safety state space is covered by both
+Apalache and TLC.
+
 The quorum-policy model is intentionally finite. These are the implementation
 surfaces it abstracts:
 
@@ -8266,6 +8607,10 @@ surfaces it abstracts:
 | `StakeSpecSatisfied` | `QuorumPolicy::is_satisfied_by_stake(...)` accepts only signed stake strictly greater than two thirds of total stake. |
 | `StakeRejectsInvalidInputs`, `StakeRejectsOverTotal` | NPoS stake quorum rejects missing/negative stake, zero/negative total stake, signed stake above total stake, and checked-multiply overflow. The same bridge test exercises these fail-closed boundaries. |
 
+TLC now cross-checks `quorum-fast` and all six `quorum-bug-*`
+expected-failure mutations, giving the fail-closed quorum arithmetic model an
+independent exhaustive checker in addition to Apalache.
+
 The RBC causality model is intentionally finite. These are the implementation
 surfaces it abstracts:
 
@@ -8275,6 +8620,10 @@ surfaces it abstracts:
 | `chunk_before_init`, `valid_chunk_recorded`, `chunk_bad_digest`, `complete_chunks_emit_ready`, `chunk_root_mismatch_blocks_ready` | `handle_rbc_chunk(...)`, `RbcSession::ingest_chunk_with_outcome(...)`, and `maybe_emit_rbc_ready(...)` stash chunks before INIT, reject digest mismatches, require complete payload evidence and matching chunk root before local READY, and mark mismatched roots invalid instead of signing. |
 | `ready_before_init`, `valid_ready_recorded`, `ready_bad_signature`, `ready_roster_mismatch`, `ready_root_mismatch`, `ready_conflict` | `handle_rbc_ready(...)` stashes READY before session/roster availability, validates roster hash, sender signature, and chunk root before recording, and marks conflicting same-sender READY evidence invalid while clearing pending RBC state. |
 | `deliver_before_init`, `valid_deliver`, `deliver_bad_signature`, `deliver_root_mismatch`, `deliver_ready_bundle`, `deliver_invalid_ready_bundle`, `deliver_duplicate` | `handle_rbc_deliver(...)` stashes DELIVER before session/roster availability, validates DELIVER signature and chunk root before recording delivery, validates embedded READY signatures independently before seeding the ready set, ignores invalid READY bundle entries, ignores duplicate DELIVER, and wakes the commit pipeline only after first delivery. |
+
+TLC now cross-checks `rbc-causality-fast` and all `rbc-causality-bug-*`
+expected-failure mutations, giving the RBC INIT/chunk/READY/DELIVER causality
+model an independent exhaustive checker in addition to Apalache.
 
 The RBC DELIVER acceptance model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -8962,6 +9311,11 @@ implementation surfaces it abstracts:
 | `duplicateVoteTargets` | `rebroadcast_block_votes_to_targets(...)` filters local targets and deduplicates explicit remotes. Bridge coverage includes `known_block_commit_evidence_replay_deduplicates_explicit_vote_targets`. |
 | `VoteEvidenceUsesVoteReplay`, `CommitQcUsesCommitCertReplay`, `PayloadFallbackNeverUsed` | Vote replay uses `QcVote`, cached commit-QC replay uses `CommitCert`, and neither path rebuilds `BlockCreated` or `BlockSyncUpdate` payload traffic. Bridge coverage includes `known_block_commit_evidence_replay_uses_explicit_targets`, `known_block_commit_qc_replay_targets_snapshot_roster`, and `commit_evidence_replay_cooldown_does_not_fallback_to_payload`. |
 
+TLC now cross-checks `commit-evidence-replay-fast` and all
+`commit-evidence-replay-bug-*` expected-failure mutations, giving the
+known-block evidence replay model an independent exhaustive checker in addition
+to Apalache.
+
 The block-sync recovery-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
 
@@ -8974,6 +9328,11 @@ implementation surfaces it abstracts:
 | `payloadOnlyStaleInflight`, `certifiedStaleInflight` | Payload-only exact repair does not clear stale commit inflight or steal owner state, but certified repair may bypass stale inflight and clear it. Bridge coverage includes `block_sync_update_accepts_stale_exact_frontier_payload_repair_with_da` and `block_sync_update_commit_qc_bypasses_stale_commit_inflight_frontier_owner`. |
 | `sameHeightRawQuorumConflict`, `sameHeightCertifiedConflict` | Raw block-signature quorum can hydrate a passive retained branch, while certified evidence may supersede a stale same-height frontier owner. Bridge coverage includes `block_sync_update_same_height_conflict_with_block_quorum_stays_passive_without_certified_evidence` and `block_sync_update_commit_qc_supersedes_stale_same_height_frontier_owner`. |
 | `cachedCommitQcPayload`, `unvalidatedCommitQc`, `unrequestedFuture` | Cached commit-QC payload recovery remains authoritative, unvalidated sidecar QC cannot advance lock/highest-QC state, and unrequested future-height updates are dropped. Bridge coverage includes `block_sync_payload_with_cached_commit_qc_supersedes_lock_conflicting_stale_frontier_owner`, `block_sync_update_does_not_advance_qc_for_unvalidated_payload`, and `block_sync_update_drops_unrequested_future_height_beyond_active_frontier_lanes`. |
+
+TLC now cross-checks `block-sync-recovery-fast` and all
+`block-sync-recovery-bug-*` expected-failure mutations, giving the
+BlockSyncUpdate recovery-admission model an independent exhaustive checker in
+addition to Apalache.
 
 The direct certified-block fetch model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10548,6 +10907,18 @@ bash scripts/formal/sumeragi_apalache.sh frontier-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-deep
 bash scripts/formal/sumeragi_apalache.sh frontier-wide
 bash scripts/formal/sumeragi_tlc.sh frontier-small
+bash scripts/formal/sumeragi_tlc.sh fork-fast
+bash scripts/formal/sumeragi_tlc.sh quorum-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-causality-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-ready-emission-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-deliver-emission-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-delivered-rebroadcast-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-cursor-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-action-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-next-due-fast
+bash scripts/formal/sumeragi_tlc.sh commit-evidence-replay-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-fast
 bash scripts/formal/sumeragi_tlc.sh validation-redrive-label-fast
 bash scripts/formal/sumeragi_tlc.sh validation-ownership-cleanup-fast
 bash scripts/formal/sumeragi_tlc.sh worker-loop-stage-fast
@@ -10559,6 +10930,9 @@ bash scripts/formal/sumeragi_tlc.sh commit-stage-timing-threshold-fast
 bash scripts/formal/sumeragi_tlc.sh commit-inflight-timeout-fast
 bash scripts/formal/sumeragi_tlc.sh post-commit-pacemaker-kick-fast
 bash scripts/formal/sumeragi_tlc.sh idle-view-proposal-budget-fast
+bash scripts/formal/sumeragi_tlc.sh pacemaker-core-fast
+bash scripts/formal/sumeragi_tlc.sh pacemaker-evaluation-fast
+bash scripts/formal/sumeragi_tlc.sh pacing-governor-fast
 bash scripts/formal/sumeragi_tlc.sh cached-slot-timeout-fast
 bash scripts/formal/sumeragi_tlc.sh pending-fast-path-timeout-fast
 bash scripts/formal/sumeragi_tlc.sh stalled-pending-timeout-fast
@@ -10570,7 +10944,115 @@ bash scripts/formal/sumeragi_tlc.sh slot-tracker-state-fast
 bash scripts/formal/sumeragi_tlc.sh timeout-derivation-fast
 bash scripts/formal/sumeragi_tlc.sh round-view-helpers-fast
 bash scripts/formal/sumeragi_tlc.sh phase-tracker-fast
+bash scripts/formal/sumeragi_tlc.sh round-trace-status-fast
 bash scripts/formal/sumeragi_tlc.sh failure-recovery-helpers-fast
+bash scripts/formal/sumeragi_tlc.sh requeue-transactions-fast
+bash scripts/formal/sumeragi_tlc.sh tick-deadline-helpers-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-parent-resolution-fast
+bash scripts/formal/sumeragi_tlc.sh highest-qc-dependency-deferral-fast
+bash scripts/formal/sumeragi_tlc.sh precommit-qc-view-change-fast
+bash scripts/formal/sumeragi_tlc.sh block-known-locally-fast
+bash scripts/formal/sumeragi_tlc.sh block-known-for-lock-fast
+bash scripts/formal/sumeragi_tlc.sh missing-locked-qc-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh active-lock-reject-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh locked-qc-helper-fast
+bash scripts/formal/sumeragi_tlc.sh precommit-qc-extends-locked-fast
+bash scripts/formal/sumeragi_tlc.sh drop-precommit-vote-for-lock-fast
+bash scripts/formal/sumeragi_tlc.sh precommit-fast
+bash scripts/formal/sumeragi_tlc.sh consensus-caps-status-fast
+bash scripts/formal/sumeragi_tlc.sh consensus-handshake-caps-fast
+bash scripts/formal/sumeragi_tlc.sh consensus-message-labels-fast
+bash scripts/formal/sumeragi_tlc.sh da-gate-fast
+bash scripts/formal/sumeragi_tlc.sh da-gate-status-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-ingress-fetch-fast
+bash scripts/formal/sumeragi_tlc.sh payload-progress-availability-fast
+bash scripts/formal/sumeragi_tlc.sh local-payload-availability-fast
+bash scripts/formal/sumeragi_tlc.sh highest-qc-fetch-body-known-fast
+bash scripts/formal/sumeragi_tlc.sh authoritative-payload-progress-fast
+bash scripts/formal/sumeragi_tlc.sh authoritative-block-payload-fast
+bash scripts/formal/sumeragi_tlc.sh block-payload-canonicalization-fast
+bash scripts/formal/sumeragi_tlc.sh pending-block-active-for-tip-fast
+bash scripts/formal/sumeragi_tlc.sh pending-fast-unblock-fast
+bash scripts/formal/sumeragi_tlc.sh blocking-pending-blocks-fast
+bash scripts/formal/sumeragi_tlc.sh quorum-recovery-vote-drain-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-body-gap-payload-drain-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-authoritative-payload-progress-fast
+bash scripts/formal/sumeragi_tlc.sh slot-authoritative-payload-fast
+bash scripts/formal/sumeragi_tlc.sh recovery-status-counters-fast
+bash scripts/formal/sumeragi_tlc.sh recovery-fsm-reason-fast
+bash scripts/formal/sumeragi_tlc.sh deferred-recovery-status-fast
+bash scripts/formal/sumeragi_tlc.sh qc-rebuild-status-fast
+bash scripts/formal/sumeragi_tlc.sh qc-rebuild-quorum-fast
+bash scripts/formal/sumeragi_tlc.sh collector-targeting-status-fast
+bash scripts/formal/sumeragi_tlc.sh deterministic-committee-status-fast
+bash scripts/formal/sumeragi_tlc.sh telemetry-status-fast
+bash scripts/formal/sumeragi_tlc.sh lane-detail-status-fast
+bash scripts/formal/sumeragi_tlc.sh settlement-status-fast
+bash scripts/formal/sumeragi_tlc.sh nexus-economics-status-fast
+bash scripts/formal/sumeragi_tlc.sh npos-repair-coverage-status-fast
+bash scripts/formal/sumeragi_tlc.sh mode-status-fast
+bash scripts/formal/sumeragi_tlc.sh effective-timing-status-fast
+bash scripts/formal/sumeragi_tlc.sh tx-queue-backpressure-status-fast
+bash scripts/formal/sumeragi_tlc.sh pending-rbc-status-fast
+bash scripts/formal/sumeragi_tlc.sh ingress-status-counters-fast
+bash scripts/formal/sumeragi_tlc.sh phase-latency-status-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-status-lookup-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-status-retention-fast
+bash scripts/formal/sumeragi_tlc.sh ingress-dedup-cache-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-status-persistence-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-status-handle-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-backlog-status-fast
+bash scripts/formal/sumeragi_tlc.sh worker-queue-status-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-vote-conflict-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-stale-vote-fast
+bash scripts/formal/sumeragi_tlc.sh effective-mode-fast
+bash scripts/formal/sumeragi_tlc.sh effective-timing-fast
+bash scripts/formal/sumeragi_tlc.sh hotspot-log-summary-fast
+bash scripts/formal/sumeragi_tlc.sh adaptive-observability-fast
+bash scripts/formal/sumeragi_tlc.sh counter-backpressure-cooldown-fast
+bash scripts/formal/sumeragi_tlc.sh local-signed-block-lookup-fast
+bash scripts/formal/sumeragi_tlc.sh live-vote-roster-fast
+bash scripts/formal/sumeragi_tlc.sh canonical-round-roster-fast
+bash scripts/formal/sumeragi_tlc.sh commit-topology-state-fast
+bash scripts/formal/sumeragi_tlc.sh precommit-signer-history-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-chunk-target-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-chunk-payload-cap-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-rebroadcast-selection-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-chunk-allocation-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-payload-chunking-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-rs16-initial-fanout-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-chunk-broadcast-order-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-commit-processing-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-deliver-acceptance-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-payload-layout-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-session-chunk-ingest-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-session-ready-deliver-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-delivered-payload-bytes-fast
+bash scripts/formal/sumeragi_tlc.sh pending-rbc-stash-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-liveness-status-fast
+bash scripts/formal/sumeragi_tlc.sh sidecar-no-proposal-status-fast
+bash scripts/formal/sumeragi_tlc.sh timing-status-counters-fast
+bash scripts/formal/sumeragi_tlc.sh roster-recovery-status-fast
+bash scripts/formal/sumeragi_tlc.sh range-pull-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh range-pull-status-fast
+bash scripts/formal/sumeragi_tlc.sh round-recovery-bundle-window-fast
+bash scripts/formal/sumeragi_tlc.sh committed-edge-conflict-fast
+bash scripts/formal/sumeragi_tlc.sh lock-rejected-sink-fast
+bash scripts/formal/sumeragi_tlc.sh native-amx-journal-fast
+bash scripts/formal/sumeragi_tlc.sh native-amx-ingress-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-chain-order-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-rechain-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-rechain-error-label-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-signature-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-signing-preimage-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-control-ingress-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-slot-lifecycle-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-validation-fast
+bash scripts/formal/sumeragi_tlc.sh vnext-deadline-protection-fast
+bash scripts/formal/sumeragi_tlc.sh validation-stall-redrive-fast
+bash scripts/formal/sumeragi_tlc.sh verify-cache-key-fast
+bash scripts/formal/sumeragi_tlc.sh vote-verify-async-fast
+bash scripts/formal/sumeragi_tlc.sh qc-verify-async-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-timing-fast
 bash scripts/formal/sumeragi_tlc.sh idle-backlog-signals-fast
 bash scripts/formal/sumeragi_tlc.sh proposal-liveness-fast
@@ -10622,20 +11104,26 @@ bash scripts/formal/sumeragi_tlc.sh classic-preimage-fast
 bash scripts/formal/sumeragi_tlc.sh classic-signature-fast
 bash scripts/formal/sumeragi_tlc.sh invalid-signature-labels-fast
 bash scripts/formal/sumeragi_tlc.sh invalid-signature-throttle-fast
+bash scripts/formal/sumeragi_tlc.sh vote-validation-drop-status-fast
 bash scripts/formal/sumeragi_tlc.sh penalty-offender-selection-fast
 bash scripts/formal/sumeragi_tlc.sh consensus-penalty-action-fast
 bash scripts/formal/sumeragi_tlc.sh penalty-status-fast
 bash scripts/formal/sumeragi_tlc.sh local-peer-removed-status-fast
 bash scripts/formal/sumeragi_tlc.sh exec-witness-roots-fast
+bash scripts/formal/sumeragi_tlc.sh exec-witness-recorder-fast
+bash scripts/formal/sumeragi_tlc.sh exec-witness-access-key-fast
+bash scripts/formal/sumeragi_tlc.sh smt-path-hash-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-rbc-compact-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-priority-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-height-view-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-kind-fast
+bash scripts/formal/sumeragi_tlc.sh kura-replica-advert-fast
 bash scripts/formal/sumeragi_tlc.sh message-projection-fast
 bash scripts/formal/sumeragi_tlc.sh pipeline-event-emission-fast
 bash scripts/formal/sumeragi_tlc.sh block-message-wire-fast
 bash scripts/formal/sumeragi_tlc.sh block-created-frontier-wire-fast
 bash scripts/formal/sumeragi_tlc.sh cached-proposal-rebroadcast-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-block-sync-hint-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-same-slot-activity-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-reassembly-activity-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-quorum-owner-actionable-fast
@@ -10647,15 +11135,176 @@ bash scripts/formal/sumeragi_tlc.sh live-frontier-idle-missing-qc-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-admission-fast
 bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-action-fast
 bash scripts/formal/sumeragi_tlc.sh missing-commit-qc-actionable-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-height-stall-fast
+bash scripts/formal/sumeragi_tlc.sh missing-qc-stall-range-pull-fast
+bash scripts/formal/sumeragi_tlc.sh missing-payload-fetch-window-fast
+bash scripts/formal/sumeragi_tlc.sh canonical-frontier-reanchor-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast
+bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast
+bash scripts/formal/sumeragi_tlc.sh vote-admission-fast
+bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast
+bash scripts/formal/sumeragi_tlc.sh evidence-validation-fast
+bash scripts/formal/sumeragi_tlc.sh double-vote-recording-fast
+bash scripts/formal/sumeragi_tlc.sh invalid-qc-shape-fast
+bash scripts/formal/sumeragi_tlc.sh qc-validation-evidence-fast
+bash scripts/formal/sumeragi_tlc.sh qc-validation-reason-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-qc-fallback-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-qc-status-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-locked-qc-fast
+bash scripts/formal/sumeragi_tlc.sh known-block-qc-enqueue-fast
+bash scripts/formal/sumeragi_tlc.sh known-block-qc-work-fast
+bash scripts/formal/sumeragi_tlc.sh known-block-qc-drain-fast
+bash scripts/formal/sumeragi_tlc.sh signed-quorum-fetch-fallback-fast
+bash scripts/formal/sumeragi_tlc.sh commit-qc-only-fetch-response-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-update-targets-fast
+bash scripts/formal/sumeragi_tlc.sh apply-cached-qcs-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-roster-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-roster-status-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-vote-deferral-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-known-hintless-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-implicit-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-vote-placeholder-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-hint-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-roster-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-no-roster-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-known-roster-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-known-selected-roster-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-signatures-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-quorum-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-mode-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-apply-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-prefilter-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-process-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-cache-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-stale-view-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-commit-conflict-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-warning-throttle-fast
+bash scripts/formal/sumeragi_tlc.sh qc-insufficient-warning-fast
+bash scripts/formal/sumeragi_tlc.sh fetch-response-deferral-fast
+bash scripts/formal/sumeragi_tlc.sh fetch-block-body-handle-fast
+bash scripts/formal/sumeragi_tlc.sh background-frame-cap-fast
+bash scripts/formal/sumeragi_tlc.sh background-dispatch-fast
+bash scripts/formal/sumeragi_tlc.sh background-bypass-fast
+bash scripts/formal/sumeragi_tlc.sh background-fallback-fast
+bash scripts/formal/sumeragi_tlc.sh fetch-pending-response-send-fast
+bash scripts/formal/sumeragi_tlc.sh fetch-pending-responses-batch-fast
+bash scripts/formal/sumeragi_tlc.sh pending-response-flush-fast
+bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-helper-fast
+bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-cache-fast
+bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-replay-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-future-window-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-repair-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-request-stash-fast
+bash scripts/formal/sumeragi_tlc.sh same-height-block-body-repair-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-repair-epoch-fast
+bash scripts/formal/sumeragi_tlc.sh direct-commit-qc-for-block-fast
+bash scripts/formal/sumeragi_tlc.sh materialize-qc-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-direct-commit-qc-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-detached-commit-qc-fast
+bash scripts/formal/sumeragi_tlc.sh block-body-response-dispatch-fast
+bash scripts/formal/sumeragi_tlc.sh invalid-proposal-evidence-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-mismatch-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-cache-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-hint-fast
+bash scripts/formal/sumeragi_tlc.sh stale-proposal-hint-repair-fast
+bash scripts/formal/sumeragi_tlc.sh stale-rbc-hint-repair-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-admission-fast
+bash scripts/formal/sumeragi_tlc.sh peer-admin-detection-fast
+bash scripts/formal/sumeragi_tlc.sh block-created-admission-fast
+bash scripts/formal/sumeragi_tlc.sh missing-request-clear-fast
+bash scripts/formal/sumeragi_tlc.sh missing-block-clear-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-budget-fast
+bash scripts/formal/sumeragi_tlc.sh non-rbc-payload-budget-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast
+bash scripts/formal/sumeragi_tlc.sh proposal-batch-fast
+bash scripts/formal/sumeragi_tlc.sh lane-interleave-fast
+bash scripts/formal/sumeragi_tlc.sh commitment-snapshot-builder-fast
+bash scripts/formal/sumeragi_tlc.sh collector-selection-fast
+bash scripts/formal/sumeragi_tlc.sh topology-mutation-fast
+bash scripts/formal/sumeragi_tlc.sh prf-leader-shuffle-fast
+bash scripts/formal/sumeragi_tlc.sh topology-fanout-fast
+bash scripts/formal/sumeragi_tlc.sh topology-role-filter-fast
+bash scripts/formal/sumeragi_tlc.sh active-topology-selection-fast
+bash scripts/formal/sumeragi_tlc.sh p2p-topology-trusted-fast
+bash scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast
+bash scripts/formal/sumeragi_tlc.sh quorum-retransmit-fast
+bash scripts/formal/sumeragi_tlc.sh retransmit-backpressure-fast
+bash scripts/formal/sumeragi_tlc.sh paced-retransmit-targets-fast
+bash scripts/formal/sumeragi_tlc.sh quorum-reschedule-backoff-fast
+bash scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast
+bash scripts/formal/sumeragi_tlc.sh vote-backed-reassembly-stall-fast
+bash scripts/formal/sumeragi_tlc.sh completed-quorum-view-advance-fast
+bash scripts/formal/sumeragi_tlc.sh quorum-rebroadcast-dispatch-fast
+bash scripts/formal/sumeragi_tlc.sh isolated-vote-backed-handoff-fast
+bash scripts/formal/sumeragi_tlc.sh preemptive-vote-backed-retransmit-fast
+bash scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast
+bash scripts/formal/sumeragi_tlc.sh manifest-gate-reschedule-fast
 bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast
 bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast
+bash scripts/formal/sumeragi_tlc.sh qc-signers-fast
 bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast
+bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast
 bash scripts/formal/sumeragi_tlc.sh signer-index-normalization-fast
+bash scripts/formal/sumeragi_tlc.sh commit-roots-fast
+bash scripts/formal/sumeragi_tlc.sh commit-pipeline-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh known-block-commit-qc-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh stale-view-commit-qc-fetch-fast
+bash scripts/formal/sumeragi_tlc.sh commit-anchor-qc-fast
+bash scripts/formal/sumeragi_tlc.sh committed-height-qc-fast
+bash scripts/formal/sumeragi_tlc.sh empty-block-qc-drop-fast
+bash scripts/formal/sumeragi_tlc.sh pending-progress-fast
+bash scripts/formal/sumeragi_tlc.sh pending-block-lifecycle-fast
+bash scripts/formal/sumeragi_tlc.sh pending-block-marker-fast
+bash scripts/formal/sumeragi_tlc.sh kura-retry-fast
+bash scripts/formal/sumeragi_tlc.sh commit-pipeline-scheduling-fast
 bash scripts/formal/sumeragi_tlc.sh precommit-vote-count-fast
 bash scripts/formal/sumeragi_tlc.sh commit-quorum-signers-fast
 bash scripts/formal/sumeragi_tlc.sh commit-qc-lookup-fast
 bash scripts/formal/sumeragi_tlc.sh precommit-signer-record-fast
 bash scripts/formal/sumeragi_tlc.sh voting-signer-count-fast
+bash scripts/formal/sumeragi_tlc.sh distinct-vote-epochs-fast
+bash scripts/formal/sumeragi_tlc.sh new-view-highest-qc-votes-fast
+bash scripts/formal/sumeragi_tlc.sh frontier-new-view-catch-up-fast
+bash scripts/formal/sumeragi_tlc.sh late-new-view-emission-fast
+bash scripts/formal/sumeragi_tlc.sh near-quorum-new-view-rebroadcast-fast
+bash scripts/formal/sumeragi_tlc.sh requester-roster-proof-fast
+bash scripts/formal/sumeragi_tlc.sh online-validator-relay-counters-fast
+bash scripts/formal/sumeragi_tlc.sh commit-result-drain-fast
+bash scripts/formal/sumeragi_tlc.sh commit-drain-summary-fast
+bash scripts/formal/sumeragi_tlc.sh commit-pipeline-sample-fast
+bash scripts/formal/sumeragi_tlc.sh commit-pipeline-status-fast
+bash scripts/formal/sumeragi_tlc.sh autoscale-transition-fast
+bash scripts/formal/sumeragi_tlc.sh signature-index-recovery-fast
+bash scripts/formal/sumeragi_tlc.sh embedded-qc-roster-fast
+bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast
+bash scripts/formal/sumeragi_tlc.sh roster-validation-cached-fast
+bash scripts/formal/sumeragi_tlc.sh roster-validation-core-fast
+bash scripts/formal/sumeragi_tlc.sh roster-artifact-selection-fast
+bash scripts/formal/sumeragi_tlc.sh block-roster-caches-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-roster-evidence-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-history-roster-fast
+bash scripts/formal/sumeragi_tlc.sh persisted-roster-selection-fast
+bash scripts/formal/sumeragi_tlc.sh block-sync-update-roster-fast
+bash scripts/formal/sumeragi_tlc.sh roster-index-projection-fast
+bash scripts/formal/sumeragi_tlc.sh membership-view-hash-fast
+bash scripts/formal/sumeragi_tlc.sh membership-mismatch-status-fast
+bash scripts/formal/sumeragi_tlc.sh membership-advert-fast
+bash scripts/formal/sumeragi_tlc.sh membership-mismatch-ingress-fast
+bash scripts/formal/sumeragi_tlc.sh consensus-params-ingress-fast
+bash scripts/formal/sumeragi_tlc.sh prevalidated-commit-artifact-fast
+bash scripts/formal/sumeragi_tlc.sh commit-job-dispatch-fast
 bash scripts/formal/sumeragi_tlc.sh collector-plan-fast
 ```
 
@@ -11253,6 +11902,10 @@ state, retained-window pruning, pacemaker reset, and round-phase priority.
 `phase-tracker-fast` and `phase-tracker-bug-*` cross-check tracker
 construction, round start, view-change reset, record suppression, phase
 duration/marker updates, view-age lookup, and current-view lookup.
+`round-trace-status-fast` and `round-trace-status-bug-*` cross-check
+round-trace status recording: transition return values, gap snapshots,
+bounded trace retention, reset behavior, commit-pipeline wakeups, request
+latency metadata, inferred pending/no-progress events, and queue-state copying.
 `failure-recovery-helpers-fast` and `failure-recovery-helpers-bug-*`
 cross-check failed-commit QC realignment, pending-block drop after requeue,
 view-change cause priority, block-sync readiness, and post-block QC
@@ -11489,6 +12142,10 @@ RBC mismatch log keying, first/within-window/boundary outcomes, height/view
 advance bypasses, retention pruning, RBC `should_log`, penalty threshold-zero
 disablement, cooldown suppression/expiry, window reset, zero-cooldown behavior,
 and penalty prune boundaries.
+`vote-validation-drop-status-fast` and `vote-validation-drop-status-bug-*`
+cross-check vote-validation drop telemetry status: stable drop labels,
+newest-first recent-entry capping, peer/roster aggregate accounting, status
+projection, decadic log thresholds, and saturating totals.
 `penalty-offender-selection-fast` and `penalty-offender-selection-bug-*`
 cross-check evidence penalty attribution: permissioned canonical index
 rotation, range and empty-topology rejection, duplicate/sorted offender
@@ -11514,6 +12171,18 @@ idempotence, and getter side-effect freedom.
 execution-witness root projection: post-root read/write selection, parent-root
 prevalue filtering, canonical root input ordering/deduplication, commit
 prevalidation root matching, and FASTPQ public-input root binding.
+`exec-witness-recorder-fast` and `exec-witness-recorder-bug-*` cross-check
+execution-witness recorder lifecycle and keying: active capture gating,
+read/write/delete semantics, sorted drain snapshots, FastPQ grouping/finalize
+and apply-digest alignment, and metadata/root tag preservation.
+`exec-witness-access-key-fast` and `exec-witness-access-key-bug-*` cross-check
+execution-witness access-key parsing: supported account/domain/asset/NFT/role
+and permission prefixes, malformed and unsupported IDs, Boolean parsing, and
+split-tail/prefix fallthrough handling.
+`smt-path-hash-fast` and `smt-path-hash-bug-*` cross-check sparse-Merkle
+path/hash helpers: empty roots, input leaf hashing, leaf/node domain tags,
+child order, missing children, duplicate-key ordering, truncation, and
+parent/child prefix-bit rules.
 `block-message-rbc-compact-fast` and `block-message-rbc-compact-bug-*`
 cross-check RBC chunk compact block-message helpers: compact boundary
 admission, payload field preservation, full-message fallback, normalization,
@@ -11530,6 +12199,10 @@ widening, and height/view ordering.
 block-message log/status kind projection: certified-fetch subtype labels,
 NewView vote/certificate labels, compact/full RBC chunk collapse,
 future-window log labels, coarser status telemetry, and Kura status omission.
+`kura-replica-advert-fast` and `kura-replica-advert-bug-*` cross-check Kura
+replica advert ingress: authenticated remote-only admission, local self
+suppression, peer/height/hash/payload-length metadata, and zero-payload
+normalization/rejection.
 `message-projection-fast` and `message-projection-bug-*` cross-check
 consensus message projection helpers: timing guard admission, exact timing
 labels and header fields, elapsed-ms saturation, control evidence labels, and
@@ -11557,6 +12230,12 @@ remote-leader relay, remote-only fanout for `BlockCreated`, proposal hints,
 proposal metadata, and successful block-hash returns. Its TLC cross-check
 independently exhausts the same twenty-five expected-failure configs as
 Apalache.
+`frontier-block-sync-hint-fast` and `frontier-block-sync-hint-bug-*`
+cross-check frontier block-sync hints and direct-response permits: pause-gate
+defaults, pressure/lane gating, absent-peer rejection, request recording,
+pending-count pruning, fresh versus expired TTL boundaries, peer ownership, and
+direct-response consumption. Its TLC cross-check independently exhausts the
+same twenty-seven expected-failure configs as Apalache.
 `frontier-same-slot-activity-fast` and
 `frontier-same-slot-activity-bug-*` cross-check exact-slot frontier recovery
 activity helpers: payload progress evidence, ingress backlog/payload gates,
@@ -11640,15 +12319,1066 @@ NEW_VIEW quorum rejection, non-actionable dependency filtering, NEW_VIEW and
 Prepare subject-height mapping, and stale-prune preservation for local payloads
 owned by the authoritative or frontier slot. Its TLC cross-check independently
 exhausts the same twenty-five expected-failure configs as Apalache.
+`missing-qc-height-stall-fast` and `missing-qc-height-stall-bug-*` cross-check
+same-height missing-QC stall dampening: snapshot lifecycle, three-window
+activation, active window advancement, dependency-progress and commit-progress
+reset, dependency continuity across reclassification, rotation reservation and
+availability, and range-pull/rotation marker height and mode gating. Its TLC
+cross-check independently exhausts the same twenty-five expected-failure configs
+as Apalache.
+`missing-qc-stall-range-pull-fast` and
+`missing-qc-stall-range-pull-bug-*` cross-check same-height missing-QC stall
+range-pull emission: reanchor reason admission, exact active/canonical height
+gating, already-emitted and recovery-FSM suppression, empty-target suppression,
+deterministic cohort fanout, sorted/deduplicated cooldown handling,
+stall-window cooldown application, and successful-send marking. Its TLC
+cross-check independently exhausts the same twenty-three expected-failure
+configs as Apalache.
+`missing-payload-fetch-window-fast` and
+`missing-payload-fetch-window-bug-*` cross-check same-height missing-payload
+fetch-window and hash-miss cap helpers: snapshot gating, window freshness,
+entered-at preservation, absent marker read/write/clear behavior, and
+lock-lag-based cap widening/clamping. Its TLC cross-check independently
+exhausts the same twenty-four expected-failure configs as Apalache.
+`canonical-frontier-reanchor-fast` and
+`canonical-frontier-reanchor-bug-*` cross-check canonical contiguous-frontier
+reanchor gating: canonical reanchor reason admission, shared frontier-window
+key collapse, window snapshot and dependency-progress watermarks, stride-based
+suppression, deterministic range-pull fanout and cooldown handling, successful
+send marking, and quorum view-change suppression while reanchor work remains
+unresolved. Its TLC cross-check independently exhausts the same thirty-five
+expected-failure configs as Apalache.
+`frontier-repair-view-change-fast` and
+`frontier-repair-view-change-bug-*` cross-check contiguous-frontier repair
+view-change suppression: quorum/stake-quorum cause admission, committed+1
+height gating, committed-edge and passive catch-up precedence, direct-view and
+authoritative-payload exits, exact repair/missing-payload/reassembly repair
+source admission, recovery seeding, urgent body fetch emission, and precedence
+ordering. Its TLC cross-check independently exhausts the same twenty-six
+expected-failure configs as Apalache.
+`frontier-recovery-advance-fast` and `frontier-recovery-advance-bug-*`
+cross-check contiguous-frontier recovery advance: reason-to-cause mapping,
+committed+1 gating, committed-edge and passive catch-up preemption, same-height
+evidence seeding, exact-frontier event routing, actionable dependency state
+updates, live-work/cooldown suppression, catch-up range-pull and cleanup
+transitions, and rotate-armed view-change behavior. Its TLC cross-check
+independently exhausts the same thirty-six expected-failure configs as Apalache.
+`same-height-no-proposal-storm-fast` and
+`same-height-no-proposal-storm-bug-*` cross-check same-height no-proposal storm
+recovery: dependency-progress monotonicity, progress-triggered state resets,
+timeout record/count behavior, bounded force-break admission and cleanup, and
+active-pending idle timeout integration. Its TLC cross-check independently
+exhausts the same thirty-six expected-failure configs as Apalache.
+`vrf-admission-fast` and `vrf-admission-bug-*` cross-check VRF commit/reveal
+admission: consensus-mode and epoch-manager gating, signer/signature checks,
+commit/reveal window and duplicate handling, external rebroadcast policy, local
+state updates, and late-reveal PRF refresh suppression. Its TLC cross-check
+independently exhausts the same twenty-one expected-failure configs as Apalache.
+`vrf-epoch-window-fast` and `vrf-epoch-window-bug-*` cross-check VRF epoch-window
+arithmetic: zero-length and offset clamping, zero-height/one-based position and
+epoch mapping, commit/reveal window boundaries, empty reveal windows, and
+outside-window rejection. Its TLC cross-check independently exhausts the same
+seventeen expected-failure configs as Apalache.
+`vrf-epoch-boundary-fast` and `vrf-epoch-boundary-bug-*` cross-check VRF
+epoch-boundary finalization: no-op boundaries, penalty calculation, snapshot
+preservation, seed evolution, clear/advance/reset/take semantics, roster
+canonicalization, and entropy ordering. Its TLC cross-check independently
+exhausts the same twenty-three expected-failure configs as Apalache.
+`vrf-epoch-restore-fast` and `vrf-epoch-restore-bug-*` cross-check VRF epoch
+restore/snapshot/merge behavior: unfinalized and finalized record hydration,
+parameter clamps, snapshot roster and input preservation, report clearing, merge
+conflict handling, late-reveal hydration, and identity preservation. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure configs
+as Apalache.
+`vrf-material-derivation-fast` and `vrf-material-derivation-bug-*` cross-check
+local VRF material derivation: required message inputs, big-endian epoch and
+signer encoding, field order, private-key signature binding, reveal/commitment
+hash chain, return ordering, and suppression of raw intermediate outputs. Its
+TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
+`vrf-local-state-fast` and `vrf-local-state-bug-*` cross-check local VRF emission
+state: supported-mode state creation, unsupported-mode preservation, epoch-switch
+material reset, same-epoch material preservation, commit/reveal note mutation,
+and actor reset. Its TLC cross-check independently exhausts the same twelve
+expected-failure configs as Apalache.
+`vrf-penalties-report-fast` and `vrf-penalties-report-bug-*` cross-check VRF
+penalties report storage: initial emptiness, update keying/latest-epoch
+tracking, exact report fields, same-epoch replacement, multi-epoch preservation,
+missing-get behavior, clear/reset semantics, post-clear updates, and read
+side-effect freedom. Its TLC cross-check independently exhausts the same
+seventeen expected-failure configs as Apalache.
+`vote-admission-fast` and `vote-admission-bug-*` cross-check classic inbound
+vote admission: early height/view, lock, roster, duplicate, chain-order, and
+signature gates; NEW_VIEW highest-QC validation; conflict/defer/evidence
+handling; QC attempts; roster caching; new-view tracking; pipeline requests; and
+progress touches. Its TLC cross-check independently exhausts the same thirty-one
+expected-failure configs as Apalache.
+`vote-duplicate-key-fast` and `vote-duplicate-key-bug-*` cross-check vote
+duplicate-key projection: raw key fields, public-key exclusion from raw keys,
+identity-key public-key binding, block-hash comparison, NEW_VIEW highest-QC
+matching, and non-NEW_VIEW highest-QC ignoring. Its TLC cross-check
+independently exhausts the same fifteen expected-failure configs as Apalache.
+`evidence-horizon-fast` and `evidence-horizon-bug-*` cross-check evidence
+freshness filtering: zero-horizon disablement, missing-subject defaulting,
+saturating lower-bound arithmetic, inclusive boundary handling, stale rejection,
+and future evidence admission. Its TLC cross-check independently exhausts the
+same eleven expected-failure configs as Apalache.
+`evidence-canonicalization-fast` and `evidence-canonicalization-bug-*`
+cross-check evidence canonicalization and persistence: canonical keys, subject
+height/view extraction, block references, valid/invalid store insertion,
+canonical storage keys, persistence defaults, duplicate rejection, and unset
+penalty flags. Its TLC cross-check independently exhausts the same thirty-seven
+expected-failure configs as Apalache.
+`evidence-validation-fast` and `evidence-validation-bug-*` cross-check
+fail-closed evidence validation: kind/payload matching, double-vote signature,
+phase, height, epoch, signer, block/root conflict, and precedence checks,
+invalid proposal height, parent, and view-reset handling, and censorship receipt
+transaction, signer, signature, quorum, deduplication, and precedence checks.
+Its TLC cross-check independently exhausts the same thirty-nine
+expected-failure configs as Apalache.
+`double-vote-recording-fast` and `double-vote-recording-bug-*` cross-check
+double-vote detection and recording: height, epoch, topology-resolved signer
+identity, block/root conflict detection, phase-pair support, canonical
+evidence kind/key selection, no-evidence side effects, store rejection,
+persistence calls, persistence rejection, and duplicate handling. Its TLC
+cross-check independently exhausts the same thirty-seven expected-failure
+configs as Apalache.
+`invalid-qc-shape-fast` and `invalid-qc-shape-bug-*` cross-check invalid-QC
+shape evidence construction: empty signer bitmaps, zero height/view sentinel
+handling, height-zero or view-zero non-emitting cases, valid nonempty QCs,
+evidence kind selection, certificate payload cloning, and fixed diagnostic
+reason handling. Its TLC cross-check independently exhausts the same sixteen
+expected-failure configs as Apalache.
+`qc-validation-evidence-fast` and `qc-validation-evidence-bug-*` cross-check QC
+validation evidence mapping: hard malformed-certificate errors emit cloned
+`InvalidQc` evidence with the original validation reason, soft local-context or
+quorum failures do not emit evidence, successful validation returns `Ok`, and
+validation errors remain errors. Its TLC cross-check independently exhausts the
+same twenty-four expected-failure configs as Apalache.
+`qc-validation-reason-fast` and `qc-validation-reason-bug-*` cross-check QC
+validation reason projection: every validation error keeps its stable telemetry
+label, hard failures emit evidence carrying the same label, and soft
+local-context/quorum failures keep telemetry labels without emitting evidence.
+Its TLC cross-check independently exhausts the same seventeen expected-failure
+configs as Apalache.
+`block-sync-qc-fallback-fast` and `block-sync-qc-fallback-bug-*` cross-check
+block-sync QC retry/fallback handling: retryable missing-context QC errors,
+non-retryable malformed-certificate errors, COMMIT-only aggregate fallback,
+nested highest-QC rejection, aggregate and bitmap validity, permissioned
+quorum floors, and NPoS snapshot/stake-quorum rejection. Its TLC cross-check
+independently exhausts the same nineteen expected-failure configs as Apalache.
+`block-sync-qc-status-fast` and `block-sync-qc-status-bug-*` cross-check
+block-sync QC status accounting: invalid-signature drops, QC replacement and
+derivation-failure counters, locked-QC prefilter drops, quarantine and
+revalidation counters, final-drop count/reason projection, snapshot projection,
+counter accumulation, and reset clearing. Its TLC cross-check independently
+exhausts the same twenty-four expected-failure configs as Apalache.
+`block-sync-locked-qc-fast` and `block-sync-locked-qc-bug-*` cross-check
+block-sync locked-QC helper gates: locked-chain extension checks, missing
+locked-payload newer-view handling, parent extension and rejection,
+same-height conflict view gates, same-height recoverability gates, locked
+payload deferral/quarantine/drop side effects, and stale-lock predicates. Its
+TLC cross-check independently exhausts the same twenty-two expected-failure
+configs as Apalache.
+`known-block-qc-enqueue-fast` and `known-block-qc-enqueue-bug-*` cross-check
+known-block QC work enqueueing: canonical QC vote-key projection, duplicate
+suppression without overwrites, new-work insertion and preservation, deferred
+aggregate-verification status fields, queued debug and length observation, and
+wake-sender attempt/ignore semantics. Its TLC cross-check independently
+exhausts the same twenty-seven expected-failure configs as Apalache.
+`known-block-qc-work-fast` and `known-block-qc-work-bug-*` cross-check
+known-block QC work preparation: empty-topology recovery, QC/block shape
+mismatch drops, same-height locked-QC deferral and drop side effects,
+recoverable same-height work, stale-lock drops, non-extending retention,
+extending/no-lock work admission, and work-field preservation. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure
+configs as Apalache.
+`known-block-qc-drain-fast` and `known-block-qc-drain-bug-*` cross-check
+known-block QC work queue draining: empty-queue returns, initial and mid-drain
+tick-budget stops, per-tick cap handling, remaining-work preservation, progress
+return projection, processed counters, debug logging, and remove-before-apply
+ordering. Its TLC cross-check independently exhausts the same eighteen
+expected-failure configs as Apalache.
+`signed-quorum-fetch-fallback-fast` and `signed-quorum-fetch-fallback-bug-*`
+cross-check committed signed-quorum fetch fallback admission: committed-hash
+gating, primary roster versus fallback topology selection, signer validation,
+permissioned quorum floors, NPoS state/cache snapshot priority, signer-peer
+mapping, and stake-quorum rejection. Its TLC cross-check independently exhausts
+the same sixteen expected-failure configs as Apalache.
+`commit-qc-only-fetch-response-fast` and
+`commit-qc-only-fetch-response-bug-*` cross-check commit-QC-only fetch response
+dispatch: direct commit-QC companion sends, certified-proof companion ordering,
+vote rebroadcast suppression/admission, requester target inclusion and
+deduplication, signed-quorum fallback dispatch, bypass flag projection,
+requester roster-proof preservation, and return-value handling. Its TLC
+cross-check independently exhausts the same sixteen expected-failure configs as
+Apalache.
+`block-sync-update-targets-fast` and `block-sync-update-targets-bug-*`
+cross-check BlockSyncUpdate gossip target selection: zero-limit and empty-peer
+outputs, local-peer exclusion, registered/trusted stray priority, unregistered
+stray rejection, trusted-stray admission, online world-peer preference, offline
+world fallback, final fanout caps, and underfill prevention. Its TLC
+cross-check independently exhausts the same eleven expected-failure configs as
+Apalache.
+`apply-cached-qcs-fast` and `apply-cached-qcs-bug-*` cross-check cached
+BlockSyncUpdate proof/vote attachment: commit-QC source priority, existing QC
+and checkpoint preservation, checkpoint synthesis from final QCs, no spurious
+checkpoint creation, NPoS stake snapshot repair, permissioned stake
+non-repair, record-stake cloning, cached vote attachment, existing vote
+preservation, and wrong-context vote rejection. Its TLC cross-check
+independently exhausts the same sixteen expected-failure configs as Apalache.
+`block-sync-roster-fast` and `block-sync-roster-bug-*` cross-check
+uncertified block-sync roster admission: explicitly requested missing blocks at
+stale, same, next, and future heights, unrequested exact-next admission from
+zero and nonzero heights, Rust-style saturated next-height admission, and
+unrequested stale/same/future rejection. Its TLC cross-check independently
+exhausts the same nine expected-failure configs as Apalache.
+`block-sync-roster-status-fast` and `block-sync-roster-status-bug-*`
+cross-check block-sync roster status accounting: paired commit-QC/checkpoint
+hints, individual source counters, history/sidecar/journal counters,
+unknown-source no-op handling, missing and unsolicited-share drop counters,
+repeated-counter accumulation, snapshot projection, top-level snapshot
+inclusion, and reset clearing. Its TLC cross-check independently exhausts the
+same twenty-four expected-failure configs as Apalache.
+`block-sync-vote-deferral-fast` and `block-sync-vote-deferral-bug-*`
+cross-check BlockSyncUpdate vote filtering and deferral handoff: valid
+commit-vote processing, invalid phase/hash/height/view/epoch vote rejection,
+mixed-vote filtering, missing-block request refresh and explicit request
+preservation, known-block vote-only fast-path return/cleanup, QC-bearing known
+block deferral, vote-stripped deferral ordering, QC/checkpoint/stake sidecar
+preservation, and deferral reason forwarding. Its TLC cross-check independently
+exhausts the same twenty-two expected-failure configs as Apalache.
+`block-sync-known-hintless-fast` and `block-sync-known-hintless-bug-*`
+cross-check the already-known hintless BlockSyncUpdate fast path: known block
+skip admission, missing-request clearing with the `PayloadAvailable` reason, no
+status recording, `Ok(())` return without continuation, unknown-block
+continuation, and commit-QC/checkpoint/stake/vote roster-hint preservation.
+Its TLC cross-check independently exhausts the same twelve expected-failure
+configs as Apalache.
+`block-sync-implicit-recovery-fast` and `block-sync-implicit-recovery-bug-*`
+cross-check the DA implicit BlockSyncUpdate recovery flag: already-requested
+preservation, DA-disabled/known-local/above-frontier/implicit-disallowed
+rejection, same-height/next-height/saturated-boundary request admission, and
+the no-status/no-clear/no-deferral/no-early-return side-effect contract. Its
+TLC cross-check independently exhausts the same twelve expected-failure configs
+as Apalache.
+`block-sync-vote-placeholder-fast` and `block-sync-vote-placeholder-bug-*`
+cross-check frontier vote-placeholder side effects: valid vote placeholder
+counting, invalid phase/hash/height/view/epoch vote filtering, mixed-vote
+filtering, exact-frontier/known-local/requested-missing gates, commit-QC and
+checkpoint sidecar exclusion, stake-sidecar allowance, vote-subject and empty
+payload marker projection, and no-status/no-clear/no-deferral/no-early-return
+continuation. Its TLC cross-check independently exhausts the same twenty
+expected-failure configs as Apalache.
+`block-sync-snapshot-hint-fast` and `block-sync-snapshot-hint-bug-*`
+cross-check known-block commit-roster snapshot hint filtering: unknown/no-local
+snapshot preservation, matching QC preservation, same-roster different-QC
+preservation with revalidation, different-roster QC rejection, checkpoint and
+stake sidecar filtering, all-hint matching/mismatch handling, and the
+no-status/no-clear/no-deferral/no-early-return continuation contract. Its TLC
+cross-check independently exhausts the same twenty-one expected-failure configs
+as Apalache.
+`block-sync-snapshot-roster-fast` and `block-sync-snapshot-roster-bug-*`
+cross-check known-block commit-roster snapshot roster selection: nonempty
+snapshot gate, journal source projection, snapshot roster/QC/checkpoint/stake
+attachment, snapshot cache-key insertion, snapshot preemption over persisted,
+cached, and fresh sources, persisted/cache/fresh fallback ordering, fresh
+cache insertion policy, and sidecar-quarantine propagation. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure configs
+as Apalache.
+`block-sync-no-roster-fast` and `block-sync-no-roster-bug-*` cross-check the
+terminal no-verifiable-roster BlockSyncUpdate branch: known vote-only vote
+processing and snapshot suppression, known hinted drop cleanup, effective and
+trusted exact-frontier repair deferral, missing-QC request refresh and sidecar
+failover, missing-roster drop status/reason/metrics, `PayloadAvailable`
+cleanup, and `Ok(())` non-continuation. Its TLC cross-check independently
+exhausts the same twenty-five expected-failure configs as Apalache.
+`block-sync-known-roster-fast` and `block-sync-known-roster-bug-*` cross-check
+the selected-roster known-block terminal path: source metrics, vote-roster
+caching, checkpoint recording, commit-roster preparation/persistence,
+checkpoint/stake projection, known-vote processing, incoming/selection/
+checkpoint QC replay priority, redundant replay suppression, work preparation,
+cached commit-QC cleanup, missing-block cleanup, known `Ok(())` return, and
+unknown-block continuation. Its TLC cross-check independently exhausts the same
+twenty-eight expected-failure configs as Apalache.
+`block-sync-known-selected-roster-fast` and
+`block-sync-known-selected-roster-bug-*` cross-check selected-roster
+known-block BlockSyncUpdate replay and cleanup: source metrics, vote-roster
+caching, checkpoint recording, commit-roster record preparation/persistence,
+checkpoint/stake projection, known-vote processing, incoming/selection/
+checkpoint QC replay priority, redundant replay suppression, work preparation,
+cached commit-QC cleanup, missing-block cleanup, known `Ok(())` return,
+unknown-block continuation, and unknown-path no-clear handling. Its TLC
+cross-check independently exhausts the same twenty-nine expected-failure
+configs as Apalache.
+`block-sync-selected-signatures-fast` and
+`block-sync-selected-signatures-bug-*` cross-check selected-roster
+BlockSyncUpdate signature handling: cache-hit reuse without revalidation,
+validated-signer caching only with a cache key, signer-set projection,
+missing-parent and gap deferral with effective topology and selected-roster
+context, deferred status/reason recording, payload-only recovery forwarding,
+roster-evidence continuation with empty signers, invalid-signature
+status/metric/reason projection, `Ok(())` returns for terminal paths,
+QC-candidate continuation, and no missing-block cleanup on signature drops.
+Its TLC cross-check independently exhausts the same twenty-nine
+expected-failure configs as Apalache.
+`block-sync-selected-qc-fast` and `block-sync-selected-qc-bug-*` cross-check
+selected-roster BlockSyncUpdate QC candidate handling: incoming, selection,
+checkpoint-derived, world-derived, and cached source precedence; height, hash,
+epoch, and COMMIT-phase shape filtering; missing-context quarantine and final
+validation drops; replaced-QC metrics; cached-QC recovery and aggregate
+fallback acceptance; hard locked-QC conflict evidence stripping and status
+recording; usable-QC caching and quarantine cleanup; selected commit-cert
+projection; invalid-payload drop gating; `Ok(())` invalid-payload returns; and
+no missing-block cleanup on invalid QC drops. Its TLC cross-check independently
+exhausts the same thirty-three expected-failure configs as Apalache.
+`block-sync-selected-quorum-fast` and
+`block-sync-selected-quorum-bug-*` cross-check selected-roster BlockSyncUpdate
+quorum and missing-QC repair handling: QC evidence, commit-cert, block
+signature quorum, checkpoint, explicit requested sparse frontier, and tracked
+sparse frontier admission; zero-signer, commit-vote, non-frontier, and
+unrequested sparse rejection; missing-QC request admission and request marking;
+NPoS vote-only deferral; post-request quorum recomputation; exact body-repair
+deferral; quorum-missing drop status/reason/metric/return handling; invalid-QC
+short-circuit gating by block quorum or checkpoint evidence; and no
+missing-block cleanup on invalid QC drops. Its TLC cross-check independently
+exhausts the same thirty expected-failure configs as Apalache.
+`block-sync-recovery-mode-fast` and `block-sync-recovery-mode-bug-*`
+cross-check stale BlockCreated and block-sync recovery-mode helpers:
+height-at-or-below stale detection, stale admission by missing request,
+retained match, or recovery evidence, no-signal rejection, authoritative
+frontier supersede permission for signed-quorum and commit-evidence repair
+only, stale-without-request bypass for requested-payload and commit-evidence
+repair only, aborted-pending revival only for commit-evidence repair with the
+explicit flag, and observed commit-QC epoch projection only from
+commit-evidence repair. Its TLC cross-check independently exhausts the same
+twenty-five expected-failure configs as Apalache.
+`block-sync-selected-apply-fast` and `block-sync-selected-apply-bug-*`
+cross-check selected-roster BlockSyncUpdate apply/recovery behavior:
+same-height and non-extending QC admission from selected or incoming evidence,
+payload-mismatch preserve-flag projection, authoritative frontier supersede
+from usable incoming QC, commit cert, checkpoint, or non-conflicting signature
+quorum, commit-evidence versus signed-quorum versus payload-only recovery-mode
+selection, observed epoch projection, aborted-revival gating, signed-quorum
+commit-QC repair activation and side effects, sparse next-height known-block
+commit-QC recovery, readiness for QC application, payload-unapplied drop
+recording, and commit-vote/QC application calls. Its TLC cross-check
+independently exhausts the same thirty-five expected-failure configs as
+Apalache.
+`block-sync-selected-qc-prefilter-fast` and
+`block-sync-selected-qc-prefilter-bug-*` cross-check selected-roster
+post-apply QC prefilter handling: empty-topology recovery without tallying,
+hash/height/epoch/phase shape mismatch ignores and `Ok(())` returns,
+same-height locked-QC drop metrics/status without tallying, recoverable
+same-height continuation, stale locked-QC drops and status recording,
+non-extending missing locked-payload quarantine and status recording,
+non-extending locked drops with or without lock context, allowed non-extending
+retention, and extending/no-lock tally plus precommit processing admission. Its
+TLC cross-check independently exhausts the same twenty expected-failure
+configs as Apalache.
+`block-sync-selected-qc-process-fast` and
+`block-sync-selected-qc-process-bug-*` cross-check selected-roster
+post-prefilter QC processing: cached tally reuse versus fresh tally validation,
+no-QC no-tally handling, tally validation-error recording, precommit signer
+recording, validated-tally notes, `block_known_for_commit` and
+`allow_nonextending_qc` argument forwarding, process rejection side effects,
+commit-QC record/cache insertion, known-block commit application, runtime DA
+cleanup gating, commit-pipeline requests, unknown pending-epoch observation,
+creation-error propagation, and unknown-block QC cache handoff. Its TLC
+cross-check independently exhausts the same twenty-three expected-failure
+configs as Apalache.
+`block-sync-selected-qc-cache-fast` and
+`block-sync-selected-qc-cache-bug-*` cross-check unknown-block QC cache
+handling: empty-topology recovery, shape mismatch ignores, same-height/stale
+locked-QC drops, non-extending missing locked-payload quarantine,
+non-extending drop/retain decisions, fresh signer tally validation, transient
+missing-context quarantine versus final validation drops, precommit signer and
+validated-tally recording, `process_precommit_qc` calls with `block_known =
+false` and forwarded non-extending permission, process-reject side-effect
+suppression, non-extending locked-QC realignment and vote pruning, highest-QC
+preservation while the payload is missing, quarantine removal, and commit-QC
+record/cache insertion. Its TLC cross-check independently exhausts the same
+thirty-three expected-failure configs as Apalache.
+`block-sync-stale-view-fast` and `block-sync-stale-view-bug-*` cross-check
+BlockSyncUpdate stale-view admission: fresh views continue, stale unrequested
+unknown updates without commit evidence are recorded as
+`BlockSyncUpdate`/`Dropped`/`StaleView`, return `Ok(())`, and do not clear
+missing-block requests, while requested, locally known, incoming-QC,
+checkpoint, and commit-vote evidence cases continue to later block-sync gates.
+Its TLC cross-check independently exhausts the same fifteen expected-failure
+configs as Apalache.
+`block-sync-commit-conflict-fast` and
+`block-sync-commit-conflict-bug-*` cross-check committed-height
+BlockSyncUpdate conflict handling: zero-height, absent-committed, and same-hash
+updates fall through; conflicting no-QC and invalid-QC updates drop, clear the
+missing request, record `CommitConflict`, and emit no evidence; conflicting
+valid-QC updates validate with the block subject, epoch, consensus mode/tag,
+stake snapshot, and genesis-stub allowance, emit `InvalidQc` evidence carrying
+the incoming certificate and `commit_conflict_finality` reason, then drop,
+clear, and return `Ok(())`; and evidence broadcast errors do not re-admit the
+conflict. Its TLC cross-check independently exhausts the same twenty-four
+expected-failure configs as Apalache.
+`block-sync-warning-throttle-fast` and
+`block-sync-warning-throttle-bug-*` cross-check block-sync warning throttling:
+first-warning insertion, strict within-cooldown suppression,
+cooldown-boundary emission, suppressed-count replay/reset,
+per-kind/hash/height/view key separation, burst-cap suppression for new and
+existing entries, burst-window reset/preservation, zero burst-cap and
+zero-cooldown behavior, GC boundary/expiry behavior, zero-cooldown GC floor,
+and `clear()` entry/burst reset semantics. Its TLC cross-check independently
+exhausts the same twenty-one expected-failure configs as Apalache.
+`qc-insufficient-warning-fast` and `qc-insufficient-warning-bug-*` cross-check
+QC-insufficient warning throttling: first-warning insertion, strict
+within-cooldown suppression, cooldown-boundary emission, suppressed-count
+replay/reset, per-kind/phase/hash/height/view key separation, zero-cooldown
+bypass, GC boundary/expiry behavior, zero-cooldown GC floor, and `clear()`
+entry reset semantics. Its TLC cross-check independently exhausts the same
+fourteen expected-failure configs as Apalache.
+`fetch-response-deferral-fast` and `fetch-response-deferral-bug-*`
+cross-check canonical committed fetch/body response deferral: next-height and
+historical responses do not defer, same-height hash mismatches and unknown
+committed hashes do not defer, canonical `BlockCreated` and bare
+`BlockSyncUpdate` responses defer, commit-QC and validator-checkpoint sidecars
+prevent deferral, and non-payload messages do not defer. Its TLC cross-check
+independently exhausts the same ten expected-failure configs as Apalache.
+`fetch-block-body-handle-fast` and `fetch-block-body-handle-bug-*`
+cross-check exact block-body fetch handling: canonical committed exact matches
+defer instead of dispatching, exact local created/proof responses dispatch
+through the plain-fallback helper, identity mismatches and absent local blocks
+are not served, canonical deferral stashes pending requesters, dispatch does
+not stash, pending-window and frontier stashes are separated, frontier matches
+beat the broader pending window, dispatch removes the requester while deferral
+keeps it, non-dispatch paths record deferred handling, every path releases the
+dedup key exactly once, and dispatch-helper use matches actual dispatch. Its
+TLC cross-check independently exhausts the same twenty-two expected-failure
+configs as Apalache.
+`background-frame-cap-fast` and `background-frame-cap-bug-*` cross-check
+background consensus frame-cap preparation: fetch/control messages use the
+control cap while payloads use the payload cap, under-cap messages are
+preserved, oversized payloads and updates are dropped, commit votes are
+trimmed first, permissioned updates may drop stale stake but NPoS keeps stake,
+commit-QC sidecars are tried before validator checkpoints, oversized
+`BlockBodyResponse` updates trim embedded updates before downgrading to
+`BlockCreated`, direct `BlockSyncUpdate` fallback is preferred only when it
+fits, and changed/dropped status follows the prepared result. Its TLC
+cross-check independently exhausts the same nineteen expected-failure configs
+as Apalache.
+`background-dispatch-fast` and `background-dispatch-bug-*` cross-check
+background consensus request dispatch: all request variants remain
+blocking-eligible for caller-side inline fallback, ready queues enqueue and do
+not return a request, full queues record overflow and return without drop
+status, unavailable workers record drop status and return, telemetry kind
+labels are stable, and returned requests preserve their original kind. Its TLC
+cross-check independently exhausts the same nine expected-failure configs as
+Apalache.
+`background-bypass-fast` and `background-bypass-bug-*` cross-check background
+scheduler bypass policy: accepted post payloads bypass through fallback,
+accepted broadcast payloads bypass only for the broadcast-safe message set,
+broadcast QC/vote/fetch request messages stay queued, control-flow and native
+AMX requests stay queued, disabled workers dispatch accepted requests inline,
+and forced-queue scheduling never bypasses even when the message would
+otherwise be eligible. Its TLC cross-check independently exhausts the same
+thirteen expected-failure configs as Apalache.
+`background-fallback-fast` and `background-fallback-bug-*` cross-check
+background fallback network dispatch: post requests remain P2P posts,
+broadcast requests remain broadcasts, block/control/native payload classes are
+preserved, block-message priority is projected from the embedded priority,
+control-flow and native AMX fallbacks stay high priority, posts preserve peer
+targets, and broadcasts omit peers. Its TLC cross-check independently exhausts
+the same thirteen expected-failure configs as Apalache.
+`fetch-pending-response-send-fast` and
+`fetch-pending-response-send-bug-*` cross-check single fetch-pending-block
+response sends: hintless `BlockSyncUpdate` responses require caller allowance
+and requester roster proof, invalid hintless responses downgrade to
+`BlockCreated`, cached QC sidecars apply before trimming, bypass is computed
+from force/consensus/highest/created/hintless policy and is preserved across
+fallback, update trimming falls back to `BlockCreated` or drops oversized
+payloads, direct commit-QC companions are emitted when available even if the
+payload drops, companions require QC material, and companions are sent before
+the final payload. Its TLC cross-check independently exhausts the same
+twenty-six expected-failure configs as Apalache.
+`fetch-pending-responses-batch-fast` and
+`fetch-pending-responses-batch-bug-*` cross-check batched
+fetch-pending-block fanout: empty peer sets return without payload building,
+commit-QC-only requesters dispatch first and retain their restash flag on
+failure, commit-QC-only peers are excluded from payload fanout, consensus
+payload requesters receive exact-body companions, hintless policy is decided
+per requester with allowance and roster-proof arguments preserved,
+roster-hinted updates send a fitting `BlockCreated` companion before the main
+update, created bypass requires the hintless-bypass allowance, force bypass
+and consensus priority are forwarded, and non-hintless payload sends keep the
+allow-hintless argument. Its TLC cross-check independently exhausts the same
+twenty-six expected-failure configs as Apalache.
+`pending-response-flush-fast` and `pending-response-flush-bug-*` cross-check
+pending fetch/body response readiness flushing: absent pending keys do not
+build payloads or return ready, canonical deferral keeps pending entries,
+ready fetch entries build payloads, remove the pending entry, call batch fanout
+for exactly the recorded requesters with force/highest/hintless bypass disabled,
+ready body entries build exact `BlockBodyResponse` values bound to the block
+hash/height/view/payload, remove pending body entries, dispatch only recorded
+requesters, and use the plain-fallback helper. Its TLC cross-check
+independently exhausts the same thirty expected-failure configs as Apalache.
+`deferred-block-sync-helper-fast` and
+`deferred-block-sync-helper-bug-*` cross-check deferred BlockSyncUpdate helper
+behavior: validation blocks only for active conflicting work, deferral reasons
+prioritize commit work before validation and pending processing while the
+certified exact-frontier bypass suppresses all reasons, merge fills missing
+commit/checkpoint/stake sidecars without overwriting existing sidecars, sender
+replacement happens only when the incoming sender is present, commit evidence
+detects commit QC, validator checkpoint, or stake snapshot, cap zero is
+unlimited, cap enforcement evicts until within limit while retaining evidence
+and newer view/height/hash, and eviction metrics increment only when entries
+are removed. Its TLC cross-check independently exhausts the same twenty-nine
+expected-failure configs as Apalache.
+`deferred-block-sync-cache-fast` and `deferred-block-sync-cache-bug-*`
+cross-check deferred BlockSyncUpdate cache/defer integration: incoming commit
+votes are stripped before caching, matching full `(height, view, block_hash)`
+keys merge while distinct heights/views/hashes insert, missing commit-QC
+sidecars are filled without overwriting existing commit-QC sidecars, sender
+replacement follows the merge helper's Some-only rule, cap enforcement runs
+after insert and merge paths, `defer_block_sync_update` invokes the cache path
+first, forwards the deferral reason, and records
+`BlockSyncUpdate`/`Deferred`/`CommitPipelineActive` after caching. Its TLC
+cross-check independently exhausts the same twenty expected-failure configs as
+Apalache.
+`deferred-block-sync-replay-fast` and `deferred-block-sync-replay-bug-*`
+cross-check deferred BlockSyncUpdate replay behavior: empty queues do no work,
+commit or validation inflight work preserves the deferred queue, replay
+selects the first ordered key, removes the selected entry before calling the
+handler, forwards the stored update and sender unchanged, logs handler errors
+while still reporting a successful replay, preserves later ordered entries,
+and treats remove-missing races as no-handle false returns. Its TLC
+cross-check independently exhausts the same sixteen expected-failure configs
+as Apalache.
+`block-sync-future-window-fast` and `block-sync-future-window-bug-*`
+cross-check future BlockSyncUpdate drop/window behavior: known local blocks
+bypass all drop gates, requested missing-block recovery is bounded by the
+committed-height margin before parent availability can short-circuit,
+unresolved lower missing heights drop far-ahead sparse updates before known
+parents admit connected chains, generic height/view windows preserve disabled
+and boundary cases, stale or absent phase-view baselines do not drop updates,
+and saturated height arithmetic remains inclusive. Its TLC cross-check
+independently exhausts the same seventeen expected-failure configs as
+Apalache.
+`block-body-repair-fast` and `block-body-repair-bug-*` cross-check RBC exact
+block-body repair admission: DA/RBC must be enabled, the response height must
+match the current frontier height, the RBC session must exist with matching
+metadata, authoritative payloads already known locally suppress repair,
+expected payload hashes must be present, `BlockCreated` and `BlockSyncUpdate`
+bodies are both accepted when exact, and block hash/height/view/payload hash
+identity mismatches are rejected. Its TLC cross-check independently exhausts
+the same twelve expected-failure configs as Apalache.
+`block-body-request-stash-fast` and `block-body-request-stash-bug-*`
+cross-check exact block-body requester stash-window behavior: configured
+missing-request margins are floored at one, next-height and within-margin
+requests are stashed, upper bounds are inclusive, beyond-margin, same-height,
+and stale-height requests are rejected, zero committed-height next slots are
+allowed, and saturating lower/upper boundaries preserve Rust-style inclusive
+range semantics. Its TLC cross-check independently exhausts the same eleven
+expected-failure configs as Apalache.
+`same-height-block-body-repair-fast` and
+`same-height-block-body-repair-bug-*` cross-check same-height exact body
+repair admission: the response must target the current frontier height, a
+matching pending missing-block request, deferred missing-payload commit QC, or
+active missing commit-QC repair round may authorize repair, pending and
+deferred sources must be commit-phase records bound to the exact block hash,
+height, and view, non-actionable dependencies are rejected, and no-source
+responses remain inadmissible. Its TLC cross-check independently exhausts the
+same fifteen expected-failure configs as Apalache.
+`block-body-repair-epoch-fast` and `block-body-repair-epoch-bug-*`
+cross-check the observed commit-QC epoch source helper for body repair:
+exact cached commit QCs have highest priority, matching deferred
+missing-payload commit QCs beat pending blocks, pending sources require an
+observed commit QC with an epoch, deferred sources must be commit-phase records
+bound to the response block hash, height, and view, missing or mismatched
+sources return no epoch, and no-source cases remain empty. Its TLC cross-check
+independently exhausts the same thirteen expected-failure configs as Apalache.
+`direct-commit-qc-for-block-fast` and
+`direct-commit-qc-for-block-bug-*` cross-check direct commit-QC companion
+selection and local vote formation: exact cached commit QCs win immediately,
+world-derived commit QCs win before local formation, a non-empty exact round
+roster blocks fallback topology, fallback topology is used only when no primary
+roster is available, quorum floors use `max(1)`, local formation runs only with
+enough votes, uses commit phase and the target block subject, and a formed QC
+is returned only after cache readback for the same block. Its TLC cross-check
+independently exhausts the same sixteen expected-failure configs as Apalache.
+`materialize-qc-fast` and `materialize-qc-bug-*` cross-check QC
+materialization and Kura recovery: existing cached QCs win immediately, empty
+rosters recover only from Kura, non-empty rosters try local vote formation
+before Kura recovery and local signer aggregation, NPoS requires a stake roster
+and stake quorum, commit-root filtering and empty vote sets fail closed,
+permissioned and NPoS under-quorum cases are rejected, aggregation and
+canonical mapping failures return no QC, prepare-phase quorums remain
+admissible, and recovered/rebuilt QCs are cached. Its TLC cross-check
+independently exhausts the same seventeen expected-failure configs as
+Apalache.
+`block-body-direct-commit-qc-fast` and
+`block-body-direct-commit-qc-bug-*` cross-check direct commit-QC extraction
+from BlockBodyResponse payloads: body identity must match response block hash,
+height, and view, `BlockSyncUpdate` bodies prefer embedded commit QCs before
+validator-checkpoint-derived QCs and locally available direct QCs,
+`BlockCreated` bodies can only use local direct QCs, no-source responses return
+no QC, and identity mismatches are rejected for both body kinds. Its TLC
+cross-check independently exhausts the same fourteen expected-failure configs
+as Apalache.
+`block-body-detached-commit-qc-fast` and
+`block-body-detached-commit-qc-bug-*` cross-check detached BlockBodyResponse
+commit-QC handling: responses without commit QCs do not call the QC handler or
+clear requests, already cached QCs clear obsolete missing commit-QC requests
+without re-handling, uncached QCs call the handler, post-handle clearing is
+driven by whether the QC is cached afterward, and handler errors still clear
+only when the QC became cached. Its TLC cross-check independently exhausts the
+same ten expected-failure configs as Apalache.
+`block-body-response-dispatch-fast` and
+`block-body-response-dispatch-bug-*` cross-check exact BlockBodyResponse
+fallback and companion dispatch: under-cap `BlockCreated` companions are sent
+before the rich response, oversized companions are skipped, `BlockSyncUpdate`
+bodies get a plain fallback before the rich response, the rich response is
+always sent, direct commit-QC companions are sent after the response only when
+available, and every dispatch uses the bypass/background path. Its TLC
+cross-check independently exhausts the same fourteen expected-failure configs
+as Apalache.
+`invalid-proposal-evidence-fast` and
+`invalid-proposal-evidence-bug-*` cross-check invalid-proposal evidence
+wrapping and building: the wrapper emits `InvalidProposal` evidence while
+preserving the proposal and validation reason, the builder derives proposer
+from the first block signature with a zero fallback, uses the block header view,
+caller epoch, and caller payload hash, carries the QC selected for validation
+evidence, preserves the parent/height relation required by downstream
+validation, and records the validation error string rather than a label. Its
+TLC cross-check independently exhausts the same sixteen expected-failure
+configs as Apalache.
+`proposal-mismatch-fast` and `proposal-mismatch-bug-*` cross-check proposal
+metadata mismatch detection: height, view, parent hash, transaction root,
+state root, and payload hash are reported in implementation priority order,
+missing parent and transaction roots default to zero, zero proposal state roots
+remain compatibility values, payload mismatches are still checked after a zero
+state-root compatibility case, and no-mismatch results are allowed only when
+all compared fields are compatible. Its TLC cross-check independently exhausts
+the same fifteen expected-failure configs as Apalache.
+`proposal-cache-fast` and `proposal-cache-bug-*` cross-check bounded
+ProposalCache behavior: hint and proposal maps enforce their configured
+limits independently, zero limits retain no inserted entries, overflow evicts
+the lowest key from the overflowing map, eviction metrics match real
+evictions, duplicate hint insertion replaces without growing, pop removes only
+the requested kind, observed timestamps are retained only while either a hint
+or proposal remains for the key, and prune removes committed entries while
+retaining future entries. Its TLC cross-check independently exhausts the same
+twenty-five expected-failure configs as Apalache.
+`proposal-hint-fast` and `proposal-hint-bug-*` cross-check inbound
+proposal-hint admission: stale height/view hints, malformed highest-QC
+references, cached conflicts, committed-edge conflicts, local metadata
+mismatches, and locked-QC conflicts fail closed; missing future highest-QC
+parents arm exact repair and deferral markers without observed/highest-QC side
+effects, with cross-view hints cached only as dependency context; accepted
+hints update PRF context, cache and observe the hint, replay deferred votes,
+prune observed slots, and update highest-QC only for newer references or
+same-slot Commit promotion, while lock-lag catchup keeps metadata but defers
+the highest-QC mutation. Its TLC cross-check independently exhausts the same
+forty expected-failure configs as Apalache.
+`stale-proposal-hint-repair-fast` and
+`stale-proposal-hint-repair-bug-*` cross-check the stale-view proposal hint
+repair exception: an exact committed-QC hint seeds repair only when DA is
+enabled, the hint targets the active height, the local view is exactly one
+ahead, and the hint highest-QC identity matches the latest committed QC by
+height, view, subject hash, and epoch. Every denied stale hint remains a
+stale-view drop and does not cache metadata, mark the slot observed, or mutate
+highest-QC state. Its TLC cross-check independently exhausts the same fourteen
+expected-failure configs as Apalache.
+`stale-rbc-hint-repair-fast` and `stale-rbc-hint-repair-bug-*` cross-check
+the stale RBC proposal-hint bridge into exact-frontier repair: a stale RBC
+chunk with no session may continue only when DA is enabled, the message kind is
+allowed to seed repair, the height is the exact frontier, and the cached
+proposal hint at the same height/view names the same block hash. Every rejected
+stale RBC message still drops as stale and does not stash a chunk or arm exact
+frontier repair. Its TLC cross-check independently exhausts the same eleven
+expected-failure configs as Apalache.
+`proposal-admission-fast` and `proposal-admission-bug-*` cross-check proposal
+metadata admission: stale height/view proposals, proposal epoch mismatches,
+highest-QC height/epoch mismatches, parent hash mismatches, stored-parent and
+committed-edge conflicts, missing committed/future highest-QC dependencies,
+local metadata mismatches, and locked-QC conflicts fail closed. Missing future
+highest-QC parents arm exact repair and a deferral marker without caching or
+observing proposal metadata; accepted proposals update PRF and leader context,
+cache and observe the proposal, sample proposal phase, replay deferred votes,
+and prune old observed slots. Highest-QC updates remain limited to newer
+references or same-slot Commit promotion, lock-lag catchup keeps metadata but
+defers the highest-QC mutation, and proposal metadata alone never wakes the
+commit pipeline or records payload-phase progress. Its TLC cross-check
+independently exhausts the same forty-three expected-failure configs as
+Apalache.
+`peer-admin-detection-fast` and `peer-admin-detection-bug-*` cross-check
+peer-admin transaction detection: instruction IDs are matched
+case-insensitively, substring matches for `registerpeer` and `unregisterpeer`
+are admin-sensitive, reversed words and unrelated or empty IDs are not
+admin-sensitive, only external signed instruction batches are inspected, and a
+batch is admin-sensitive when any contained instruction is admin-sensitive. Its
+TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
+`block-created-admission-fast` and `block-created-admission-bug-*` cross-check
+direct `BlockCreated` payload admission: valid payloads update pending state,
+phase sampling, commit-pipeline wakeup, authoritative ownership, passive
+retention, and inline proposal context exactly when the admission branch
+requires it; duplicates, stale/local-removed payloads, lock rejections, missing
+highest-QC hints, proposal mismatches, RBC payload mismatches, and empty payload
+rejections fail closed while preserving their repair, evidence, cleanup,
+missing-request, and deferral side effects. Its TLC cross-check independently
+exhausts the same fifty-four expected-failure configs as Apalache.
+`missing-request-clear-fast` and `missing-request-clear-bug-*` cross-check
+missing-block request clearing: locked-QC rejections clear requests only when
+committed history, known ancestry, durable locks, or local ancestry disprove
+the branch, while same-hash, unresolved-parentless, uncommitted lock-conflict,
+and clean future requests remain live; stale `BlockCreated` drops clear only
+below the committed tip, when payload is locally available, or when committed
+history disproves the hash, while committed-height payload-repair requests stay
+alive. Its TLC cross-check independently exhausts the same fourteen
+expected-failure configs as Apalache.
+`missing-block-clear-fast` and `missing-block-clear-bug-*` cross-check the
+missing-block clear reason helper: payload-available clears are allowed only
+when the payload is already known locally, while obsolete clears are allowed
+regardless of local payload availability. Its TLC cross-check independently
+exhausts the same seven expected-failure configs as Apalache.
+`proposal-budget-fast` and `proposal-budget-bug-*` cross-check proposal-side
+budget/cap arithmetic: queue caps are floored and trigger at the configured
+block/RBC depth, DA payload budget chooses the minimum of payload cap, RBC
+chunk budget, and pending byte/chunk budget with zero chunk caps floored,
+transaction limits respect config and parameter caps while keeping empty queues
+at one transaction, fast-finality transaction and gas caps apply only when
+commit or effective time is under the threshold, and stale-window scaling
+handles zero-transaction, one-batch, grace, and max-cap cases. Its TLC
+cross-check independently exhausts the same twenty-one expected-failure
+configs as Apalache.
+`non-rbc-payload-budget-fast` and `non-rbc-payload-budget-bug-*` cross-check
+non-RBC payload frame budgeting: the consensus payload frame cap is reduced by
+fixed non-RBC headroom with saturating subtraction, absent block-payload caps
+use the adjusted frame cap directly, explicit caps clamp to the lower of the
+configured cap and adjusted frame cap, and zero/small frame caps cannot leak
+configured payload bytes. Its TLC cross-check independently exhausts the same
+nine expected-failure configs as Apalache.
+`proposal-backpressure-fast` and `proposal-backpressure-bug-*` cross-check
+proposal backpressure classification: queue saturation and consensus worker
+queue pressure defer proposals but remain pacing-only so queued proposal work
+can still run after the pacemaker deadline, while active pending blocks, RBC
+backlog, and relay pressure are hard stops that suppress pacing-only
+classification and block queued proposal work. Its TLC cross-check
+independently exhausts the same nineteen expected-failure configs as Apalache.
+`proposal-defer-warning-fast` and `proposal-defer-warning-bug-*` cross-check
+proposal-defer warning throttling: first observations insert and emit,
+within-cooldown repeats are suppressed with a strict `< cooldown` check,
+cooldown-boundary emissions replay suppressed counts, warning keys separate
+kind/hash/height/view except for empty-topology view normalization,
+zero-cooldown bypasses suppression, and GC keeps boundary entries while pruning
+expired entries. Its TLC cross-check independently exhausts the same fifteen
+expected-failure configs as Apalache.
+`proposal-batch-fast` and `proposal-batch-bug-*` cross-check proposal batch
+trim/canonicalization helpers: tail trimming removes only excess transactions
+while preserving singleton and zero-size floor behavior, returned removed
+transactions keep route/plan/size companions aligned, canonicalization leaves
+empty/single/already-sorted batches stable, sorts by key deterministically,
+preserves duplicate-key stability, and keeps route/plan/size companions aligned
+without changing batch length. Its TLC cross-check independently exhausts the
+same nineteen expected-failure configs as Apalache.
+`lane-interleave-fast` and `lane-interleave-bug-*` cross-check lane
+interleaving of routing decisions: empty, single-item, and single-lane inputs
+fall back to original index order, multi-lane inputs traverse sorted lane IDs,
+each lane preserves intra-lane order, skewed lanes drain round-robin without
+dropping the final round, and slot height/view offsets rotate and wrap the
+starting lane deterministically. Its TLC cross-check independently exhausts
+the same eleven expected-failure configs as Apalache.
+`commitment-snapshot-builder-fast` and `commitment-snapshot-builder-bug-*`
+cross-check lane/dataspace commitment snapshot construction: block height/hash,
+lane and dataspace IDs, transaction/chunk counts, RBC byte totals, TEU totals,
+and BTreeMap-derived sorted order are preserved independently when aggregate
+maps are projected into status snapshots. Its TLC cross-check independently
+exhausts the same six expected-failure configs as Apalache.
+`collector-selection-fast` and `collector-selection-bug-*` cross-check
+collector fanout and selection helpers: commit-quorum floors and non-leader
+caps bound the requested fanout, default selection starts at the proxy tail
+without wrapping, fallback selection wraps without including the leader or
+duplicates, PRF selection is distinct, in range, and leader-free, and the
+deterministic wrapper chooses fallback without a seed and PRF with a seed. Its
+TLC cross-check independently exhausts the same eighteen expected-failure
+configs as Apalache.
+`topology-mutation-fast` and `topology-mutation-bug-*` cross-check ordered
+topology mutation helpers: rotations use modulo without resetting view,
+`nth_rotation` rejects rewinds while returning the forward delta, new topology
+construction deduplicates without sorting away caller order, peer-list updates
+preserve surviving old order then append new peers without duplicates,
+`block_committed` resets the view while applying the same order rules, and
+canonicalization sorts/deduplicates without resetting view. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure
+configs as Apalache.
+`prf-leader-shuffle-fast` and `prf-leader-shuffle-bug-*` cross-check PRF
+topology ordering helpers: empty and single rosters stay stable, multi-peer
+shuffles consume the deterministic seed/height permutation, leader selection
+uses `view % len` over the PRF order with periodic and cycle-distinct
+behavior, shuffles preserve length and distinctness, and the wrapper
+canonicalizes/deduplicates input, resets view, and uses the height-specific
+permutation. Its TLC cross-check independently exhausts the same fifteen
+expected-failure configs as Apalache.
+`topology-fanout-fast` and `topology-fanout-bug-*` cross-check topology
+fanout and redundant-send helpers: redundant-send fanout uses `2f + 1`,
+zero-length rosters are treated as one, `u8::MAX` clamps apply, view-change
+quorums use `f + 1` without exceeding the roster, configured redundant floors
+are raised to commit quorum and at least one, and tail fanout skips the leader,
+wraps from the proxy tail, preserves uniqueness, and caps to the non-leader
+set. Its TLC cross-check independently exhausts the same eighteen
+expected-failure configs as Apalache.
+`topology-role-filter-fast` and `topology-role-filter-bug-*` cross-check
+topology role classification and role-filtered signature selection: role
+partitioning keeps leader, validating peers, proxy tail, Set B, and undefined
+indices distinct; role-slice helpers expose the same partition; signature
+filters reject invalid indices while preserving input order and duplicates;
+and audit-role derivation sorts/deduplicates, rotates the commit-quorum prefix
+from the previous block hash, and labels roles after rotation. Its TLC
+cross-check independently exhausts the same thirty-two expected-failure
+configs as Apalache.
+`active-topology-selection-fast` and `active-topology-selection-bug-*`
+cross-check active validator topology selection: commit topology takes
+priority over world peers, world peers take priority over trusted fallback,
+BLS filtering, deduplication, and canonical sorting shape every output,
+incomplete PoP maps are skipped for primary rosters but enforced for trusted
+fallbacks, complete PoP filters must preserve quorum, and empty primary
+results fall through trusted validators without synthesizing peers. Its TLC
+cross-check independently exhausts the same fifteen expected-failure configs
+as Apalache.
+`p2p-topology-trusted-fast` and `p2p-topology-trusted-bug-*` cross-check
+trusted-peer P2P topology helpers: expected topology is the deduplicated union
+of world peers, the local trusted peer, and configured trusted peers, while
+outside-peer filtering preserves observed online order, keeps duplicate stray
+observations, excludes peers already in the expected topology, and treats
+trusted observers as non-strays. Its TLC cross-check independently exhausts
+the same nine expected-failure configs as Apalache.
+`p2p-topology-refresh-fast` and `p2p-topology-refresh-bug-*` cross-check P2P
+topology refresh coordination: empty and unchanged peer sets do not
+rebroadcast, changed topology and stray peers advertise the current world set,
+network updates include trusted peers only on normal refresh, the local-seen
+latch gates local-removal handling, local removal clears queues and gossips an
+empty topology, and normal refreshes clear local-removed status and update
+`last_advertised`. Its TLC cross-check independently exhausts the same
+twenty-two expected-failure configs as Apalache.
+`quorum-retransmit-fast` and `quorum-retransmit-bug-*` cross-check
+commit-vote repair target selection: empty and local-only rosters produce no
+remote targets, observed below-quorum voters are not retargeted, missing
+remote voters are targeted in topology order, near-commit quorum and mapping
+failures fan out to every remote peer, local peers stay excluded, duplicate
+targets are rejected, and view-mapped signer indices resolve to the intended
+canonical peers. Its TLC cross-check independently exhausts the same twelve
+expected-failure configs as Apalache.
+`retransmit-backpressure-fast` and `retransmit-backpressure-bug-*` cross-check
+retransmit pacing helpers: transaction queue utilization and saturation, RBC
+pressure levels and byte thresholds, additive combined pressure scoring,
+target-limit floors for heavy pressure and zero targets, rebroadcast cooldown
+multipliers, consensus and near-quorum backlog backoff scaling, and
+near-quorum timeout lower/upper clamps. Its TLC cross-check independently
+exhausts the same twenty-two expected-failure configs as Apalache.
+`paced-retransmit-targets-fast` and `paced-retransmit-targets-bug-*`
+cross-check paced retransmit target selection: zero limits and empty target
+lists fail closed, under-limit lists preserve input order and duplicates,
+over-limit lists sort and deduplicate before fitting or rotating, height/view
+offsets are applied modulo the deduplicated length, and truncation obeys the
+selected target limit exactly. Its TLC cross-check independently exhausts the
+same seventeen expected-failure configs as Apalache.
+`quorum-reschedule-backoff-fast` and `quorum-reschedule-backoff-bug-*`
+cross-check quorum reschedule backoff and contiguous-frontier fast resend:
+zero base backoff remains zero, vote deficit selects 3x/2x/1x before stall
+escalation, zero quorum timeout disables escalation, moderate and severe stall
+boundaries raise the multiplier to at least 4x and 5x, zero rebroadcast
+cooldown clamps to a one-millisecond resend window, and fast resend only opens
+for contiguous, vote-backed, below-quorum blocks without relay, vote-queue, or
+RBC backpressure. Its TLC cross-check independently exhausts the same twenty
+expected-failure configs as Apalache.
+`rbc-availability-reschedule-fast` and `rbc-availability-reschedule-bug-*`
+cross-check DA/RBC availability gating for quorum rescheduling: DA-disabled,
+timed-out, local-payload, absent, invalid, delivered, complete-ready, and
+zero-total sessions fail open, while pending entries, zero-timeout pending
+entries, missing chunks, missing READY quorum, and complete-but-not-ready
+sessions block rescheduling before timeout. Its TLC cross-check independently
+exhausts the same thirteen expected-failure configs as Apalache.
+`vote-backed-reassembly-stall-fast` and `vote-backed-reassembly-stall-bug-*`
+cross-check vote-backed same-height frontier reassembly stall helpers:
+hard-cap arithmetic uses twice the maximum frontier recovery window, quorum
+timeout, resend window, and one-millisecond floor; same-height slots qualify
+only for exact active quorum-timeout ownership; rejected slots fall through to
+matching recovery ownership; owner ages use latest progress timestamps; and
+expiry requires both owner and quorum stall ages to reach the hard cap. Its TLC
+cross-check independently exhausts the same nineteen expected-failure configs
+as Apalache.
+`completed-quorum-view-advance-fast` and
+`completed-quorum-view-advance-bug-*` cross-check completed quorum-reschedule
+view advancement: exact frontier heights route through the slot event even
+when the slot is missing or stale, non-exact heights use generic view-change
+routing without mutating slot state, exact slots choose the maximum of active,
+requested, and candidate views, active view increments with saturation,
+timestamps and causes are preserved, and exact slot handling clears the
+quorum-timeout rebroadcast latch. Its TLC cross-check independently exhausts
+the same fifteen expected-failure configs as Apalache.
+`quorum-rebroadcast-dispatch-fast` and
+`quorum-rebroadcast-dispatch-bug-*` cross-check pending-block rebroadcast
+dispatch: local votes are gated before retransmit work, relay/no-target,
+cooldown, backlog, and empty-paced-target exits fail closed, forced fanout
+bypasses cooldown and target-limit throttles, vote replay precedes payload
+repair, missing commit-QC fetches require vote-backed blocks without cached
+commit QC, near-quorum contiguous blocks may send fitting non-local
+BlockSyncUpdates, BlockCreated replay requires observed vote backing, and any
+actual work marks the precommit rebroadcast marker. Its TLC cross-check
+independently exhausts the same twenty-four expected-failure configs as
+Apalache.
+`isolated-vote-backed-handoff-fast` and
+`isolated-vote-backed-handoff-bug-*` cross-check the one-vote frontier handoff
+helper: resilience, exact one-vote under-quorum state, next-height matching,
+and cached commit-QC suppression gate admission; recovery seeding and body
+events fire only after admission; the seeded slot must match height, view, and
+hash, carry a body, lack commit QC, and retain vote-backed owner state; and a
+true result requires a successful committed-anchor range pull with the
+`frontier_stall_reset_fallback` reason. Its TLC cross-check independently
+exhausts the same nineteen expected-failure configs as Apalache.
+`preemptive-vote-backed-retransmit-fast` and
+`preemptive-vote-backed-retransmit-bug-*` cross-check the pre-timeout
+vote-backed retransmit handoff: only admitted resend-window candidates produce
+work, missing pending blocks cannot synthesize work or state, vote-roster
+targets are preferred before commit-topology fallback, empty combined targets
+fail closed while preserving pending state, progress requires downstream vote,
+BlockSyncUpdate, or BlockCreated output, and the downstream near-quorum flag is
+exactly `vote_count < min_votes_for_commit`. Its TLC cross-check independently
+exhausts the same twenty-two expected-failure configs as Apalache.
+`near-quorum-preemptive-escalation-fast` and
+`near-quorum-preemptive-escalation-bug-*` cross-check the pre-timeout
+near-quorum missing-payload escalation coordinator: an exhausted tick budget
+marks `budget_exhausted` and fails closed, missing pending blocks cannot
+escalate, fresh matching missing-block requests and in-flight range pulls
+suppress duplicate escalation, stale or mismatched duplicate records do not
+suppress, delegate return values are the only source of escalation
+counts/progress, and the per-tick cap ignores a second candidate. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure configs
+as Apalache.
+`manifest-gate-reschedule-fast` and `manifest-gate-reschedule-bug-*`
+cross-check the manifest-gated quorum-reschedule branch: manifest-gated pending
+blocks count as effective work, are retained, avoid immediate authoritative
+frontier rotation, and use plain quorum-reschedule markers unless votes are
+present; empty target sets remain no-op reschedules; plain zero-work pending
+blocks are dropped and cleaned; vote-backed evidence and frontier ownership
+remain effective without forcing the manifest action path. Its TLC cross-check
+independently exhausts the same twenty-five expected-failure configs as
+Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check
 QC aggregate-verification worker count and queue-cap derivation.
+`qc-signers-fast` and `qc-signers-bug-*` cross-check QC signer-bitmap
+admission: bitmap length must match the full topology width, bits outside the
+topology are rejected, quorum accounting counts only voting validators, observer
+and padding bits cannot satisfy quorum, and under-quorum signer sets are
+rejected. Its TLC cross-check independently exhausts the same four
+expected-failure configs as Apalache.
 It also supports `qc-signer-count-fast` and the `qc-signer-count-bug-*`
 expected-failure modes, providing an exhaustive raw signer-bitmap population
 count cross-check for the small QC helper model.
+`build-signers-bitmap-fast` and `build-signers-bitmap-bug-*` cross-check QC
+signer-bitmap construction: zero-length rosters produce an empty bitmap,
+non-empty rosters allocate `ceil(roster_len / 8)` bytes, signer indexes map to
+little-endian bits within each byte, duplicate observations collapse, and
+out-of-roster or padding indexes never set bits or extend the bitmap. Its TLC
+cross-check independently exhausts the same seventeen expected-failure configs
+as Apalache.
 `signer-index-normalization-fast` and `signer-index-normalization-bug-*`
 check canonical/view signer-index conversion across shuffled topologies.
+`commit-roots-fast` and `commit-roots-bug-*` cross-check commit-QC
+execution-root consistency: votes are grouped by one parent/post-state root
+before quorum evaluation, wrong-context votes are ignored, permissioned mode
+uses largest same-root signer count with a low-root tie-break, NPoS uses
+heaviest same-root stake with the same tie-break, mixed roots cannot satisfy
+quorum, and validation rejects QC signers whose recorded vote roots mismatch
+the QC roots. Its TLC cross-check independently exhausts the same six
+expected-failure mutations as Apalache using smaller TLC-specific configs.
+Those TLC configs constrain the state space to representative witnesses for the
+six mutation classes; the Apalache configs retain the broader bounded search.
+`commit-pipeline-recovery-fast` and `commit-pipeline-recovery-bug-*`
+cross-check adapter-side commit recovery ordering: cached local commit votes
+form a local commit QC before peer recovery, missing commit-QC recovery is only
+requested for stale local-vote pending blocks without local data gaps or an
+observed commit QC, commit-QC observations are preserved, and near-quorum
+cached-vote retransmit uses quorum missing-signer targets rather than collector
+targets. Its TLC cross-check independently exhausts the same fourteen
+expected-failure configs as Apalache.
+`known-block-commit-qc-recovery-fast` and
+`known-block-commit-qc-recovery-bug-*` cross-check known-block commit-QC
+recovery helpers: local payloads request commit-QC-only fetches while missing
+payloads request block bodies, pending blocks must extend the committed tip,
+stale-view commit-QC fetch admission requires matching height/hash/view,
+validation and active-consensus state, a local commit vote, parent/tip
+continuity, and override/map source selection never lets a bad source block a
+valid one. Its TLC cross-check independently exhausts the same twenty
+expected-failure configs as Apalache.
+`stale-view-commit-qc-fetch-fast` and
+`stale-view-commit-qc-fetch-bug-*` cross-check stale-view commit-QC fetch
+admission: fetches require exact pending block hash, height, and view, valid
+and active pending state, a local commit vote, and a pending block that extends
+the current tip by exactly one height with matching parent/tip hash including
+the all-absent parent/tip genesis case. Its TLC cross-check independently
+exhausts the same eleven expected-failure configs as Apalache.
+`commit-anchor-qc-fast` and `commit-anchor-qc-bug-*` cross-check commit-anchor
+QC promotion: highest QC keeps strictly newer compatible anchors and otherwise
+uses incoming anchors, locked QC keeps equal-or-newer locks, precommit votes are
+pruned exactly when the lock changes, incompatible retained highest QCs realign
+to the lock, and status records match the final highest/locked choices. Its TLC
+cross-check independently exhausts the same twelve expected-failure configs as
+Apalache.
+`committed-height-qc-fast` and `committed-height-qc-bug-*` cross-check
+committed-height QC admission: future-height QCs continue, matching committed
+blocks record only the correct cache/roster/missing-request/replay side
+effects, unknown committed-height blocks drop as stale, divergent non-commit
+QCs drop as conflicts, divergent commit QCs validate against the incoming
+subject context, genesis-stub policy, and stake snapshot, and valid divergent
+commit QCs emit finality-conflict evidence before dropping. Its TLC cross-check
+independently exhausts the same twenty-six expected-failure configs as
+Apalache.
+`empty-block-qc-drop-fast` and `empty-block-qc-drop-bug-*` cross-check
+empty-block QC filtering: non-NewView QCs for locally known empty blocks
+without due time triggers drop before downstream QC processing, the drop path
+records invalid-payload outcome, and pending, missing-request, RBC, QC,
+proposal, hint, vote-log, validation, roster, and signer caches are cleared
+only on the rejected block. Its TLC cross-check independently exhausts the same
+twenty-two expected-failure configs as Apalache.
+`pending-progress-fast` and `pending-progress-bug-*` cross-check
+pending-progress accounting helpers: touches and activation-window refreshes
+update only exact, non-aborted pending-map or commit-inflight owners; post-commit
+activation refresh scans only tip-extending pending-map entries; and RBC
+recent-progress admission honors the zero-window disable path plus inclusive
+height and age windows. Its TLC cross-check independently exhausts the same
+twenty-seven expected-failure configs as Apalache.
+`pending-block-lifecycle-fast` and `pending-block-lifecycle-bug-*` cross-check
+`PendingBlock` lifecycle helpers: construction starts active and
+validation-pending with reset commit, DA, retry, scheduler, artifact, root, and
+replay state; same-subject replacements preserve lifecycle while replacing
+payload state; different-subject replacements reset lifecycle state; and abort,
+retire, revive, and retired-payload refresh paths preserve or clear the
+documented accessors. Its TLC cross-check independently exhausts the same
+twenty-five expected-failure configs as Apalache.
+`pending-block-marker-fast` and `pending-block-marker-bug-*` cross-check
+`PendingBlock` progress markers and cooldown gates: local commit-vote emission
+and commit-QC observation advance accessors and touch progress only on the
+documented first/epoch-changing transitions; reset clears the observed QC
+epoch; quorum, precommit, and validation-redrive cooldowns use missing-last and
+inclusive-boundary semantics; and vote-backed quorum reschedules require stale
+progress plus a strictly higher vote count. Its TLC cross-check independently
+exhausts the same twenty-seven expected-failure configs as Apalache.
+`kura-retry-fast` and `kura-retry-bug-*` cross-check pending-block Kura retry
+state: missing deadlines are due, deadline boundaries are inclusive, aborted
+retry state suppresses retry admission, reset and mark-persisted clear retry
+state correctly, retry failures increment attempts before exponential backoff,
+max-attempt and checked-add overflow abort paths clear deadlines as specified,
+and public `next_in_ms` values clamp to the u32 surface. Its TLC cross-check
+independently exhausts the same twenty-one expected-failure configs as
+Apalache.
+`commit-pipeline-scheduling-fast` and `commit-pipeline-scheduling-bug-*`
+cross-check commit-pipeline scheduling: tick entry requires active pending
+work, inflight work, or an explicit wakeup; event entry runs before budget
+exhaustion; wakeups and queue saturation control deadline bypass and recovery
+candidate inclusion; backlog observation cannot fabricate candidates; budget
+exhaustion sets wakeups and stops candidate processing; and idle-view budget is
+preserved only for woken active candidates. Its TLC cross-check independently
+exhausts the same thirty-two expected-failure configs as Apalache.
 `precommit-vote-count-fast` and `precommit-vote-count-bug-*` check the
 precommit vote-progress phase gate and bitmap-counting obligations through
 TLC.
@@ -11661,6 +13391,58 @@ cached-QC signer record admission for permissioned and NPoS quorum policy.
 `voting-signer-count-fast` and `voting-signer-count-bug-*` cover the bounded
 voting-roster support-count helper, including duplicate collapse and
 out-of-range signer filtering.
+`distinct-vote-epochs-fast` and `distinct-vote-epochs-bug-*` cross-check
+cached vote-log epoch replay: only Commit votes for the exact hash, height, and
+view contribute value epochs; duplicate epochs replay once; key-epoch mismatch
+cannot replace the vote value epoch; and replay is gated on resolved commit
+topology. Its TLC cross-check independently exhausts the same eleven
+expected-failure configs as Apalache.
+`new-view-highest-qc-votes-fast` and `new-view-highest-qc-votes-bug-*`
+cross-check NEW_VIEW highest-QC vote selection: accepted votes must come from
+the requested signer set and exact height/view/epoch NEW_VIEW slot, candidates
+must carry Prepare or Commit QCs, exact references form signer groups, and
+selection ranks by height, view, phase rank, then block hash. Its TLC
+cross-check independently exhausts the same thirteen expected-failure configs
+as Apalache.
+`frontier-new-view-catch-up-fast` and `frontier-new-view-catch-up-bug-*`
+cross-check active-frontier NEW_VIEW catch-up emission: resilience must be
+enabled, the group must be non-empty and not already signed locally, the height
+must be the committed frontier, the highest QC must be the canonical committed
+tip, missing canonical payload bytes do not block hash-only catch-up, and the
+candidate view must be the tracked current view or its immediate successor. Its
+TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
+`late-new-view-emission-fast` and `late-new-view-emission-bug-*` cross-check
+late NEW_VIEW emission for same-highest near-quorum support: top-level
+frontier/view/local-index gates fail closed, permissioned and NPoS completion
+use the correct quorum policy, stake-roster and signer-map errors do not admit
+bad groups, catch-up remains lower priority than completion, superseded local
+votes may be replaced, and the final result respects inner emission failure.
+Its TLC cross-check independently exhausts the same twenty expected-failure
+configs as Apalache.
+`near-quorum-new-view-rebroadcast-fast` and
+`near-quorum-new-view-rebroadcast-bug-*` cross-check near-quorum NEW_VIEW vote
+rebroadcast: only validators at the committed frontier with nonzero
+under-quorum support pass admission, the effective cooldown floor is respected,
+dispatch uses NEW_VIEW plus backpressure and the exact near-quorum label, zero
+backpressure returns zero without nudging the pacemaker, and pacemaker nudges
+preserve earlier deadlines and fail closed on time overflow. Its TLC
+cross-check independently exhausts the same seventeen expected-failure configs
+as Apalache.
+`requester-roster-proof-fast` and `requester-roster-proof-bug-*` cross-check
+local requester roster-proof detection: any one exact committed snapshot,
+Commit-QC cache entry, precommit signer record, or highest-QC header proves the
+requester roster, while no evidence and wrong phase/hash/height/view/epoch or
+vNext chain-order evidence fail closed. Its TLC cross-check independently
+exhausts the same twenty expected-failure configs as Apalache.
+`online-validator-relay-counters-fast` and
+`online-validator-relay-counters-bug-*` cross-check online-validator counting
+and relay drop counters: online peers are filtered by canonical voting-roster
+membership using peer IDs, empty/offline/outside/duplicate roster cases are
+handled deterministically, relay totals include every lane with saturating
+addition, and collected cap-violation totals include every p2p family. Its TLC
+cross-check independently exhausts the same twenty-four expected-failure
+configs as Apalache.
 `collector-plan-fast` and `collector-plan-bug-*` exercise the bounded
 collector retry/gossip plan model through the same TLC path.
 

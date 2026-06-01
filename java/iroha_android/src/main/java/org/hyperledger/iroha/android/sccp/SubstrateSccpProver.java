@@ -23,6 +23,7 @@ public final class SubstrateSccpProver {
       "SccpBridge.submit_message_proof";
   public static final String STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+  public static final int SOURCE_STATE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
 
   private static final String PROOF_REQUEST_PREFIX_V1 =
       "sccp:substrate:runtime-proof-request:v1";
@@ -114,13 +115,9 @@ public final class SubstrateSccpProver {
     if (!RUNTIME_PROOF_BACKEND_V1.equals(input.backend())) {
       throw new IllegalArgumentException("backend must be substrate-runtime-v1");
     }
-    final byte[] bundleBytes = Arrays.copyOf(input.bundleBytes(), input.bundleBytes().length);
+    final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
     final byte[] sourceProofBytes =
-        Arrays.copyOf(input.sourceProofBytes(), input.sourceProofBytes().length);
-    if (bundleBytes.length == 0) {
-      throw new IllegalArgumentException("bundleBytes must not be empty");
-    }
-    requireOptionalNonZeroBytes(sourceProofBytes, "sourceProofBytes");
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
     if (input.sourceDomain() != DOMAIN_SORA) {
       throw new IllegalArgumentException("sourceDomain must be SORA");
     }
@@ -186,8 +183,13 @@ public final class SubstrateSccpProver {
     }
     final byte[] proofBytes = input.proofBytes();
     requireNonZeroProofBytes(proofBytes);
-    final byte[] bundleBytes = input.bundleBytes();
-    final byte[] sourceProofBytes = input.sourceProofBytes();
+    final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
+    final byte[] sourceProofBytes =
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
+    if (input.proofResult() == null && sourceProofBytes.length > 0) {
+      throw new IllegalArgumentException(
+          "sourceProofBytes requires proofResult for request-bound submission");
+    }
     final ProofRequest request =
         buildProofRequest(
             new ProofRequestInput(
@@ -297,6 +299,16 @@ public final class SubstrateSccpProver {
     throw new IllegalArgumentException(label + " must not be all zero");
   }
 
+  private static byte[] requireOptionalSourceProofBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length > SOURCE_STATE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + SOURCE_STATE_MAX_PROOF_BYTES + " bytes");
+    }
+    requireOptionalNonZeroBytes(copy, label);
+    return copy;
+  }
+
   private static void requireNonEmptyNonZeroBytes(final byte[] bytes, final String label) {
     if (bytes.length == 0) {
       throw new IllegalArgumentException(label + " must not be empty");
@@ -348,12 +360,28 @@ public final class SubstrateSccpProver {
       throw new IllegalArgumentException(
           "Substrate SCCP production proofs must target a Substrate-family domain");
     }
-    if (request.bundleBytes().length == 0) {
-      throw new IllegalArgumentException(
-          "Substrate SCCP proof request bundleBytes must not be empty");
-    }
-    requireOptionalNonZeroBytes(
+    requireNativeRecursivePayloadBytes(
+        request.bundleBytes(), "Substrate SCCP proof request bundleBytes");
+    requireOptionalSourceProofBytes(
         request.sourceProofBytes(), "Substrate SCCP proof request sourceProofBytes");
+  }
+
+  private static byte[] requireNativeRecursivePayloadBytes(
+      final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length == 0) {
+      throw new IllegalArgumentException(label + " must not be empty");
+    }
+    if (copy.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+    }
+    for (final byte value : copy) {
+      if (value != 0) {
+        return copy;
+      }
+    }
+    throw new IllegalArgumentException(label + " must not be all zero");
   }
 
   private static boolean targetDomainIsSupported(final int value) {

@@ -2429,12 +2429,9 @@ public final class TonSccpProver {
     final byte[] destinationBindingHash =
         nonZeroHex32Bytes(input.destinationBindingHash(), "destinationBindingHash");
     final byte[] proofBytes = input.proofBytes();
-    final byte[] bundleBytes = input.bundleBytes();
+    final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
     final byte[] metadataBytes = input.metadataBytes();
     requireNonZeroProofBytes(proofBytes);
-    if (bundleBytes.length == 0) {
-      throw new IllegalArgumentException("bundleBytes must not be empty");
-    }
     final ByteArrayOutputStream rootData = new ByteArrayOutputStream();
     writeU32Be(rootData, SUBMIT_OP_V1);
     writeU64Be(
@@ -2486,9 +2483,7 @@ public final class TonSccpProver {
     if (input.publicInputs().targetDomain() != DOMAIN_TON) {
       throw new IllegalArgumentException("publicInputs.targetDomain must be TON");
     }
-    if (input.bundleBytes().length == 0) {
-      throw new IllegalArgumentException("bundleBytes must not be empty");
-    }
+    final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
@@ -2520,9 +2515,10 @@ public final class TonSccpProver {
         SolanaSccpProver.sourceAdapterDeploymentBindingHash(deploymentBinding);
     final ByteArrayOutputStream preimage = new ByteArrayOutputStream();
     write(preimage, publicInputsBytes);
-    writeVector(preimage, input.bundleBytes());
-    requireOptionalNonZeroBytes(input.sourceProofBytes(), "sourceProofBytes");
-    writeVector(preimage, input.sourceProofBytes());
+    writeVector(preimage, bundleBytes);
+    final byte[] sourceProofBytes =
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
+    writeVector(preimage, sourceProofBytes);
     writeString(preimage, sourceStateVerifierId, "sourceStateVerifierId");
     write(preimage, sourceStateVerifierHashBytes);
     write(preimage, hex32Bytes(proofContext.statementHash(), "statementHash"));
@@ -2535,8 +2531,8 @@ public final class TonSccpProver {
         input.publicInputs().targetDomain(),
         input.publicInputs(),
         publicInputsBytes,
-        Arrays.copyOf(input.bundleBytes(), input.bundleBytes().length),
-        Arrays.copyOf(input.sourceProofBytes(), input.sourceProofBytes().length),
+        Arrays.copyOf(bundleBytes, bundleBytes.length),
+        sourceProofBytes,
         proofContext,
         proofContext.statementHash(),
         proofContext.destinationBindingHash(),
@@ -2670,7 +2666,8 @@ public final class TonSccpProver {
       throw new IllegalArgumentException(
           "proofResult.envelopeHash must match wrapped proof bytes");
     }
-    requireOptionalNonZeroBytes(proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
+    requireOptionalSourceProofBytes(proofResult.sourceProofBytes(), "proofResult.sourceProofBytes");
+    requireNativeRecursivePayloadBytes(proofResult.bundleBytes(), "proofResult.bundleBytes");
     final ProofRequest expectedRequest =
         buildProofRequest(
             new ProofRequestInput(
@@ -2708,6 +2705,21 @@ public final class TonSccpProver {
     throw new IllegalArgumentException("proofBytes must not be all zero");
   }
 
+  private static byte[] requireNativeRecursivePayloadBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length == 0) {
+      throw new IllegalArgumentException(label + " must not be empty");
+    }
+    if (copy.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+    }
+    if (!containsNonZero(copy)) {
+      throw new IllegalArgumentException(label + " must not be all zero");
+    }
+    return copy;
+  }
+
   private static void requireOptionalNonZeroBytes(final byte[] bytes, final String label) {
     if (bytes.length == 0) {
       return;
@@ -2715,6 +2727,16 @@ public final class TonSccpProver {
     if (!containsNonZero(bytes)) {
       throw new IllegalArgumentException(label + " must not be all zero");
     }
+  }
+
+  private static byte[] requireOptionalSourceProofBytes(final byte[] bytes, final String label) {
+    final byte[] copy = Arrays.copyOf(Objects.requireNonNull(bytes, label), bytes.length);
+    if (copy.length > NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+      throw new IllegalArgumentException(
+          label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
+    }
+    requireOptionalNonZeroBytes(copy, label);
+    return copy;
   }
 
   private static void requireNonEmptyNonZeroBytes(final byte[] bytes, final String label) {
@@ -2777,10 +2799,9 @@ public final class TonSccpProver {
     if (!CONTRACT_PROOF_BACKEND_V1.equals(request.backend())) {
       throw new IllegalArgumentException("TON SCCP proof request backend must be ton-contract-v1");
     }
-    if (request.bundleBytes().length == 0) {
-      throw new IllegalArgumentException("TON SCCP proof request bundleBytes must not be empty");
-    }
-    requireOptionalNonZeroBytes(
+    requireNativeRecursivePayloadBytes(
+        request.bundleBytes(), "TON SCCP proof request bundleBytes");
+    requireOptionalSourceProofBytes(
         request.sourceProofBytes(), "TON SCCP proof request sourceProofBytes");
     if (!MAINNET_SHARD_STATE_VERIFIER_ID_V1.equals(request.sourceStateVerifierId())) {
       throw new IllegalArgumentException(

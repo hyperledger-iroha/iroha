@@ -18,6 +18,9 @@ SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID = (
     "sccp-substrate-runtime-storage-v1"
 )
 SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET = "fastpq-lane-balanced"
+SCCP_SUBSTRATE_RUNTIME_STORAGE_GATE_PREFIX = (
+    b"sccp:substrate:runtime-storage-gate:v1"
+)
 SUBSTRATE_SOURCE_PROOF_PLAN_CODE = 6
 SUBSTRATE_FINALITY_MODEL_CODE = 6
 FASTPQ_BALANCED_TRACE_ROOT = 0x002A_247F_81C6_F850
@@ -462,6 +465,48 @@ def substrate_source_adapter_engine_deployment_record_hash(
     )
 
 
+def substrate_runtime_storage_gate_hash(args: argparse.Namespace) -> bytes:
+    """Compute Rust's Substrate runtime-storage source-adapter gate hash."""
+
+    domain = _require_exact_u32(args.domain, "domain")
+    target_domain = _require_exact_u32(args.target_domain, "target_domain")
+    profile = _profile(domain)
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("target_domain must be SORA")
+    material_hash = substrate_source_verifier_material_record_hash(args)
+    deployment_hash = substrate_source_adapter_engine_deployment_record_hash(args)
+
+    payload = bytearray()
+    _push_u8(payload, 1)
+    _push_u32(payload, domain)
+    _push_u32(payload, target_domain)
+    _push_vec(payload, profile["chain"].encode("utf-8"))
+    _push_u8(payload, SUBSTRATE_SOURCE_PROOF_PLAN_CODE)
+    _push_u8(payload, SUBSTRATE_FINALITY_MODEL_CODE)
+    _push_vec(
+        payload,
+        SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID.encode("utf-8"),
+    )
+    _push_vec(
+        payload,
+        SCCP_SUBSTRATE_RUNTIME_STORAGE_FASTPQ_PARAMETER_SET.encode("utf-8"),
+    )
+    _push_vec(payload, profile["source_state_verifier_id"].encode("utf-8"))
+    payload.extend(
+        _require_nonzero_fixed_bytes(
+            args.source_state_verifier_hash,
+            label="source_state_verifier_hash",
+            byte_length=32,
+        )
+    )
+    payload.extend(material_hash)
+    payload.extend(deployment_hash)
+    return _prefixed_blake2b(
+        SCCP_SUBSTRATE_RUNTIME_STORAGE_GATE_PREFIX,
+        bytes(payload),
+    )
+
+
 def _toml_string(value: str) -> str:
     return json.dumps(value)
 
@@ -576,12 +621,35 @@ def _require_expected_record_hashes(
             )
 
 
+def _require_expected_runtime_storage_gate_hash(
+    args: argparse.Namespace,
+    *,
+    output: str | None = None,
+) -> None:
+    expected_gate_hash = getattr(args, "expected_runtime_storage_gate_hash", None)
+    if expected_gate_hash is None:
+        if output is not None:
+            raise SystemExit(
+                f"--{output} requires --expected-runtime-storage-gate-hash"
+            )
+        return
+    gate_hash = substrate_runtime_storage_gate_hash(args)
+    if expected_gate_hash != gate_hash:
+        prefix = f"--{output} " if output is not None else ""
+        raise SystemExit(
+            f"{prefix}--expected-runtime-storage-gate-hash does not match the "
+            f"canonical {_profile(args.domain)['chain']} runtime-storage source gate: "
+            f"expected {_hex(expected_gate_hash)}, got {_hex(gate_hash)}"
+        )
+
+
 def _validate_substrate_source_evidence_args(args: argparse.Namespace) -> None:
     _require_substrate_sora_lane(args)
     _reject_template_hashes(args)
     _require_canonical_adapter_verifier_vk_hash(args)
     _require_source_role_hash_separation(args)
     _require_expected_record_hashes(args)
+    _require_expected_runtime_storage_gate_hash(args)
 
 
 def _component_hash_args() -> tuple[str, ...]:
@@ -682,7 +750,9 @@ def render_toml(args: argparse.Namespace) -> str:
     _validate_substrate_source_evidence_args(args)
     material_hash = substrate_source_verifier_material_record_hash(args)
     deployment_hash = substrate_source_adapter_engine_deployment_record_hash(args)
+    gate_hash = substrate_runtime_storage_gate_hash(args)
     _require_expected_record_hashes(args, output="toml")
+    _require_expected_runtime_storage_gate_hash(args, output="toml")
     return "\n".join(
         [
             "# sccp_substrate_source_verifier_material_hash = "
@@ -691,6 +761,8 @@ def render_toml(args: argparse.Namespace) -> str:
             "",
             "# sccp_substrate_source_adapter_engine_deployment_hash = "
             + json.dumps(_hex(deployment_hash)),
+            "# sccp_substrate_runtime_storage_gate_hash = "
+            + json.dumps(_hex(gate_hash)),
             *_deployment_lines(args),
             "",
         ]
@@ -702,6 +774,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     profile = _profile(args.domain)
     material_hash = substrate_source_verifier_material_record_hash(args)
     deployment_hash = substrate_source_adapter_engine_deployment_record_hash(args)
+    gate_hash = substrate_runtime_storage_gate_hash(args)
     expected_material_matches = (
         getattr(args, "expected_source_verifier_material_hash", None) == material_hash
     )
@@ -709,6 +782,8 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         getattr(args, "expected_source_adapter_engine_deployment_hash", None)
         == deployment_hash
     )
+    expected_gate_hash = getattr(args, "expected_runtime_storage_gate_hash", None)
+    expected_gate_matches = expected_gate_hash == gate_hash
     return {
         "source_domain": args.domain,
         "target_domain": args.target_domain,
@@ -721,11 +796,17 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "deployment_receipt_hash": _hex(args.deployment_receipt_hash),
         "source_verifier_material_hash": _hex(material_hash),
         "source_adapter_engine_deployment_hash": _hex(deployment_hash),
+        "substrate_runtime_storage_gate_hash": _hex(gate_hash),
         "expected_source_verifier_material_hash_matches": expected_material_matches,
         "expected_source_adapter_engine_deployment_hash_matches": (
             expected_deployment_matches
         ),
-        "toml_ready": expected_material_matches and expected_deployment_matches,
+        "expected_runtime_storage_gate_hash_matches": expected_gate_matches,
+        "toml_ready": (
+            expected_material_matches
+            and expected_deployment_matches
+            and expected_gate_matches
+        ),
     }
 
 
@@ -778,6 +859,18 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Optional governed Substrate-family source-adapter deployment record "
             "hash. Mismatches fail instead of rendering evidence."
+        ),
+    )
+    parser.add_argument(
+        "--expected-runtime-storage-gate-hash",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="expected runtime storage gate hash",
+            byte_length=32,
+        ),
+        help=(
+            "Optional governed Substrate-family runtime-storage source-adapter "
+            "gate hash. Mismatches fail instead of rendering evidence."
         ),
     )
     parser.add_argument(

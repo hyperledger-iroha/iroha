@@ -1679,9 +1679,7 @@ public func canonicalSolanaSccpSubmissionPublicInputsBytes(_ input: SolanaSccpSu
 
 /// Build Solana verifier program instruction data from UI-generated proof bytes.
 public func buildSolanaSccpSubmission(_ input: SolanaSccpSubmissionInput) throws -> SolanaSccpSubmission {
-    guard !input.bundleBytes.isEmpty else {
-        throw SolanaSccpProverError.invalidString("bundleBytes")
-    }
+    try requireNativeRecursivePayloadBytes(input.bundleBytes, field: "bundleBytes")
     guard input.publicInputs.version == 1 else {
         throw SolanaSccpProverError.invalidString("publicInputs.version")
     }
@@ -1768,6 +1766,18 @@ public func buildSolanaSccpSubmission(_ input: SolanaSccpSubmissionInput) throws
         envelopeBytes: instructionData,
         envelopeHex: "0x" + instructionData.hexEncodedString()
     )
+}
+
+private func requireNativeRecursivePayloadBytes(_ bytes: Data, field: String) throws {
+    guard !bytes.isEmpty else {
+        throw SolanaSccpProverError.invalidString(field)
+    }
+    guard bytes.count <= sccpNativeRecursiveMaxProofBytes else {
+        throw SolanaSccpProverError.invalidString(field)
+    }
+    guard bytes.contains(where: { $0 != 0 }) else {
+        throw SolanaSccpProverError.invalidString(field)
+    }
 }
 
 /// Canonical bytes used for the Solana message inclusion proof hash.
