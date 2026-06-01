@@ -1321,6 +1321,67 @@ final class OfflineNoteTests: XCTestCase {
         )
     }
 
+    func testOfflineNoteWalletScopesSharedStoreByChainAndAccount() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let sharedStore = InMemoryOfflineNoteStore()
+        let ownedNote = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let otherAccountNote = try Self.noteVariant(
+            ownedNote,
+            xorFirstByte: 0x01,
+            accountId: fixture.paymentToken.recipientAccountId
+        )
+        let otherChainNote = try Self.noteVariant(
+            ownedNote,
+            xorFirstByte: 0x02,
+            chainId: "00000043"
+        )
+        try sharedStore.upsert(ownedNote)
+        try sharedStore.upsert(otherAccountNote)
+        try sharedStore.upsert(otherChainNote)
+
+        let wallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: ownedNote.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: sharedStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_200 }
+        )
+
+        XCTAssertEqual(
+            Set(try wallet.listNotes().map(\.noteCommitmentHex)),
+            [ownedNote.noteCommitmentHex]
+        )
+
+        let receiveRequest = try wallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        XCTAssertEqual(
+            Set(try wallet.listNotes().map(\.noteCommitmentHex)),
+            [ownedNote.noteCommitmentHex, receiveRequest.outputCommitmentHex]
+        )
+        XCTAssertEqual(
+            Set(try sharedStore.listNotes().map(\.noteCommitmentHex)),
+            [
+                ownedNote.noteCommitmentHex,
+                receiveRequest.outputCommitmentHex,
+                otherAccountNote.noteCommitmentHex,
+                otherChainNote.noteCommitmentHex
+            ]
+        )
+    }
+
     func testOfflineNoteWalletRejectsBearerCashCustodyPolicyOverflow() throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
@@ -4535,6 +4596,31 @@ final class OfflineNoteTests: XCTestCase {
             state: .spendable,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000
+        )
+    }
+
+    private static func noteVariant(
+        _ note: OfflineNoteWalletNote,
+        xorFirstByte: UInt8,
+        chainId: String? = nil,
+        accountId: String? = nil
+    ) throws -> OfflineNoteWalletNote {
+        var commitment = [UInt8](note.noteCommitment)
+        commitment[0] ^= xorFirstByte
+        return try OfflineNoteWalletNote(
+            chainId: chainId ?? note.chainId,
+            accountId: accountId ?? note.accountId,
+            assetId: note.assetId,
+            amount: note.amount,
+            keyCertificate: note.keyCertificate,
+            noteCommitment: Data(commitment),
+            noteSecret: note.noteSecret,
+            origin: note.origin,
+            bearerAuditTrail: note.bearerAuditTrail,
+            spentPaymentRequestId: note.spentPaymentRequestId,
+            state: note.state,
+            createdAtMs: note.createdAtMs,
+            updatedAtMs: note.updatedAtMs
         )
     }
 
