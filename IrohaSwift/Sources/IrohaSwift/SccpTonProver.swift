@@ -3019,9 +3019,7 @@ public func buildTonSccpMessageBodyBoc(_ input: TonSccpMessageBodyInput) throws 
     guard input.proofBytes.contains(where: { $0 != 0 }) else {
         throw TonSccpProverError.allZeroProof
     }
-    guard !input.bundleBytes.isEmpty else {
-        throw TonSccpProverError.invalidField("bundleBytes")
-    }
+    let bundleBytes = try requireTonNativeRecursivePayloadBytes(input.bundleBytes, field: "bundleBytes")
     let queryId: UInt64
     if let suppliedQueryId = input.queryId {
         queryId = suppliedQueryId
@@ -3038,7 +3036,7 @@ public func buildTonSccpMessageBodyBoc(_ input: TonSccpMessageBodyInput) throws 
     var cells = [TonCell(data: rootData, refs: [])]
     let publicInputsRoot = try tonPushSnakeCells(&cells, bytes: publicInputsBytes)
     let proofRoot = try tonPushSnakeCells(&cells, bytes: input.proofBytes)
-    let bundleRoot = try tonPushSnakeCells(&cells, bytes: input.bundleBytes)
+    let bundleRoot = try tonPushSnakeCells(&cells, bytes: bundleBytes)
     let metadataRoot = try tonPushSnakeCells(&cells, bytes: input.metadataBytes)
     cells[0].refs = [publicInputsRoot, proofRoot, bundleRoot, metadataRoot]
     return try tonEncodeBocSingleRoot(cells, rootIndex: 0)
@@ -3078,15 +3076,11 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
     guard input.publicInputs.targetDomain == sccpDomainTon else {
         throw TonSccpProverError.invalidField("publicInputs.targetDomain")
     }
-    guard !input.bundleBytes.isEmpty else {
-        throw TonSccpProverError.invalidField("bundleBytes")
-    }
-    guard input.bundleBytes.count <= Int(UInt32.max),
-          input.sourceProofBytes.count <= Int(UInt32.max) else {
+    let bundleBytes = try requireTonNativeRecursivePayloadBytes(input.bundleBytes, field: "bundleBytes")
+    let sourceProofBytes = try requireTonOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
+    guard bundleBytes.count <= Int(UInt32.max),
+          sourceProofBytes.count <= Int(UInt32.max) else {
         throw TonSccpProverError.invalidField("proof byte length")
-    }
-    guard input.sourceProofBytes.isEmpty || input.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TonSccpProverError.invalidField("sourceProofBytes")
     }
     let publicInputsBytes = try canonicalTonSccpPublicInputsBytes(input.publicInputs)
     let proofContext = try normalizeTonSccpProofContext(
@@ -3118,8 +3112,8 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
     let deploymentBindingHash = try sccpSourceAdapterDeploymentBindingHash(deploymentBinding)
     var preimage = Data()
     preimage.append(publicInputsBytes)
-    tonAppendVector(input.bundleBytes, to: &preimage)
-    tonAppendVector(input.sourceProofBytes, to: &preimage)
+    tonAppendVector(bundleBytes, to: &preimage)
+    tonAppendVector(sourceProofBytes, to: &preimage)
     try tonAppendString(sourceStateVerifierId, field: "sourceStateVerifierId", to: &preimage)
     preimage.append(sourceStateVerifierHashBytes)
     try preimage.append(tonBytesFromHex32(proofContext.statementHash, field: "statementHash"))
@@ -3132,8 +3126,8 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
         targetDomain: input.publicInputs.targetDomain,
         publicInputs: input.publicInputs,
         publicInputsBytes: publicInputsBytes,
-        bundleBytes: input.bundleBytes,
-        sourceProofBytes: input.sourceProofBytes,
+        bundleBytes: bundleBytes,
+        sourceProofBytes: sourceProofBytes,
         proofContext: proofContext,
         statementHash: proofContext.statementHash,
         destinationBindingHash: proofContext.destinationBindingHash,
@@ -3143,6 +3137,31 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
         sourceAdapterDeploymentBinding: deploymentBinding,
         requestHash: tonHashHex(prefix: "sccp:ton:proof-request:v1", payload: preimage)
     )
+}
+
+@discardableResult
+private func requireTonNativeRecursivePayloadBytes(_ bytes: Data, field: String) throws -> Data {
+    guard !bytes.isEmpty else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    guard bytes.count <= sccpNativeRecursiveMaxProofBytes else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    guard bytes.contains(where: { $0 != 0 }) else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return bytes
+}
+
+@discardableResult
+private func requireTonOptionalSourceProofBytes(_ bytes: Data, field: String) throws -> Data {
+    guard bytes.count <= sccpSourceStateMaxProofBytes else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    guard bytes.isEmpty || bytes.contains(where: { $0 != 0 }) else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return bytes
 }
 
 private func normalizeTonSccpProofContext(statementHash: String,
@@ -3302,9 +3321,8 @@ private func requireWrappedTonProofResultForSubmission(
     guard envelopeHash == tonHashHex(prefix: "sccp:ton:proof-envelope:v1", payload: envelopePayload) else {
         throw TonSccpProverError.invalidField("proofResult.envelopeHash")
     }
-    guard proofResult.sourceProofBytes.isEmpty || proofResult.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TonSccpProverError.invalidField("proofResult.sourceProofBytes")
-    }
+    try requireTonOptionalSourceProofBytes(proofResult.sourceProofBytes, field: "proofResult.sourceProofBytes")
+    try requireTonNativeRecursivePayloadBytes(proofResult.bundleBytes, field: "proofResult.bundleBytes")
     let expectedRequest = try buildTonSccpProofRequest(TonSccpProofRequestInput(
         publicInputs: proofResult.publicInputs,
         bundleBytes: proofResult.bundleBytes,
@@ -3358,12 +3376,8 @@ private func requireProductionTonSccpProofRequest(_ request: TonSccpProofRequest
     guard request.backend == sccpTonContractProofBackendV1 else {
         throw TonSccpProverError.invalidBranch("request.backend")
     }
-    guard !request.bundleBytes.isEmpty else {
-        throw TonSccpProverError.invalidField("request.bundleBytes")
-    }
-    guard request.sourceProofBytes.isEmpty || request.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TonSccpProverError.invalidField("request.sourceProofBytes")
-    }
+    try requireTonNativeRecursivePayloadBytes(request.bundleBytes, field: "request.bundleBytes")
+    try requireTonOptionalSourceProofBytes(request.sourceProofBytes, field: "request.sourceProofBytes")
     guard request.sourceStateVerifierId == sccpTonMainnetShardStateVerifierIdV1 else {
         throw TonSccpProverError.invalidField("request.sourceStateVerifierId")
     }

@@ -24827,6 +24827,17 @@ fn zk_policy_put_option_u32(hasher: &mut Sha256, name: &str, value: Option<u32>)
     }
 }
 
+fn zk_policy_put_option_u64(hasher: &mut Sha256, name: &str, value: Option<u64>) {
+    zk_policy_put_field(hasher, name);
+    match value {
+        Some(value) => {
+            Sha2Digest::update(hasher, [1]);
+            Sha2Digest::update(hasher, value.to_be_bytes());
+        }
+        None => Sha2Digest::update(hasher, [0]),
+    }
+}
+
 fn zk_policy_put_option_bool(hasher: &mut Sha256, name: &str, value: Option<bool>) {
     zk_policy_put_field(hasher, name);
     match value {
@@ -25666,8 +25677,20 @@ fn zk_policy_put_sccp_route_allowlists(
                     .cmp(&right.evm_route_canary_log_index)
             })
             .then_with(|| {
+                left.evm_route_canary_call_data_sha256
+                    .cmp(&right.evm_route_canary_call_data_sha256)
+            })
+            .then_with(|| {
                 left.evm_route_canary_message_id
                     .cmp(&right.evm_route_canary_message_id)
+            })
+            .then_with(|| {
+                left.evm_route_canary_payload_hash
+                    .cmp(&right.evm_route_canary_payload_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_target_domain
+                    .cmp(&right.evm_route_canary_target_domain)
             })
             .then_with(|| {
                 left.evm_route_canary_statement_hash
@@ -25676,6 +25699,22 @@ fn zk_policy_put_sccp_route_allowlists(
             .then_with(|| {
                 left.evm_route_canary_commitment_root
                     .cmp(&right.evm_route_canary_commitment_root)
+            })
+            .then_with(|| {
+                left.evm_route_canary_finality_height
+                    .cmp(&right.evm_route_canary_finality_height)
+            })
+            .then_with(|| {
+                left.evm_route_canary_finality_block_hash
+                    .cmp(&right.evm_route_canary_finality_block_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_proof_version
+                    .cmp(&right.evm_route_canary_proof_version)
+            })
+            .then_with(|| {
+                left.evm_route_canary_proof_source_domain
+                    .cmp(&right.evm_route_canary_proof_source_domain)
             })
             .then_with(|| {
                 left.evm_route_canary_used_message_proof
@@ -25688,6 +25727,14 @@ fn zk_policy_put_sccp_route_allowlists(
             .then_with(|| {
                 left.tron_route_canary_transaction_owner_address
                     .cmp(&right.tron_route_canary_transaction_owner_address)
+            })
+            .then_with(|| {
+                left.tron_route_canary_block_number
+                    .cmp(&right.tron_route_canary_block_number)
+            })
+            .then_with(|| {
+                left.tron_route_canary_block_timestamp
+                    .cmp(&right.tron_route_canary_block_timestamp)
             })
             .then_with(|| {
                 left.tron_route_canary_log_index
@@ -25822,8 +25869,23 @@ fn zk_policy_put_sccp_route_allowlists(
         );
         zk_policy_put_option_str(
             hasher,
+            "evm_route_canary_call_data_sha256",
+            allowlist.evm_route_canary_call_data_sha256.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
             "evm_route_canary_message_id",
             allowlist.evm_route_canary_message_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_payload_hash",
+            allowlist.evm_route_canary_payload_hash.as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "evm_route_canary_target_domain",
+            allowlist.evm_route_canary_target_domain,
         );
         zk_policy_put_option_str(
             hasher,
@@ -25834,6 +25896,26 @@ fn zk_policy_put_sccp_route_allowlists(
             hasher,
             "evm_route_canary_commitment_root",
             allowlist.evm_route_canary_commitment_root.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_finality_height",
+            allowlist.evm_route_canary_finality_height.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_finality_block_hash",
+            allowlist.evm_route_canary_finality_block_hash.as_deref(),
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "evm_route_canary_proof_version",
+            allowlist.evm_route_canary_proof_version,
+        );
+        zk_policy_put_option_u32(
+            hasher,
+            "evm_route_canary_proof_source_domain",
+            allowlist.evm_route_canary_proof_source_domain,
         );
         zk_policy_put_option_bool(
             hasher,
@@ -25851,6 +25933,16 @@ fn zk_policy_put_sccp_route_allowlists(
             allowlist
                 .tron_route_canary_transaction_owner_address
                 .as_deref(),
+        );
+        zk_policy_put_option_u64(
+            hasher,
+            "tron_route_canary_block_number",
+            allowlist.tron_route_canary_block_number,
+        );
+        zk_policy_put_option_u64(
+            hasher,
+            "tron_route_canary_block_timestamp",
+            allowlist.tron_route_canary_block_timestamp,
         );
         zk_policy_put_option_u32(
             hasher,
@@ -52123,12 +52215,21 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x12; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
+                evm_route_canary_payload_hash: None,
+                evm_route_canary_target_domain: None,
                 evm_route_canary_statement_hash: None,
                 evm_route_canary_commitment_root: None,
+                evm_route_canary_finality_height: None,
+                evm_route_canary_finality_block_hash: None,
+                evm_route_canary_proof_version: None,
+                evm_route_canary_proof_source_domain: None,
                 evm_route_canary_used_message_proof: None,
                 tron_route_canary_transaction_id: None,
                 tron_route_canary_transaction_owner_address: None,
+                tron_route_canary_block_number: None,
+                tron_route_canary_block_timestamp: None,
                 tron_route_canary_log_index: None,
                 tron_route_canary_message_id: None,
                 tron_route_canary_call_data_sha256: None,
@@ -52171,12 +52272,36 @@ mod tests {
             compute_zk_consensus_policy_hash(&evm_route_canary_changed)
         );
 
+        let mut evm_route_canary_finality_changed = changed.clone();
+        evm_route_canary_finality_changed.sccp_route_allowlists[0]
+            .evm_route_canary_finality_block_hash = Some(hex::encode([0x4a; 32]));
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&evm_route_canary_finality_changed)
+        );
+
         let mut tron_route_canary_changed = changed.clone();
         tron_route_canary_changed.sccp_route_allowlists[0].tron_route_canary_call_data_sha256 =
             Some(hex::encode([0x47; 32]));
         assert_ne!(
             changed_hash,
             compute_zk_consensus_policy_hash(&tron_route_canary_changed)
+        );
+
+        let mut tron_route_canary_block_number_changed = changed.clone();
+        tron_route_canary_block_number_changed.sccp_route_allowlists[0]
+            .tron_route_canary_block_number = Some(234);
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&tron_route_canary_block_number_changed)
+        );
+
+        let mut tron_route_canary_block_timestamp_changed = changed.clone();
+        tron_route_canary_block_timestamp_changed.sccp_route_allowlists[0]
+            .tron_route_canary_block_timestamp = Some(567_000);
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&tron_route_canary_block_timestamp_changed)
         );
 
         let mut ton_live_metadata_changed = changed.clone();
@@ -52278,12 +52403,21 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x37; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
+                evm_route_canary_payload_hash: None,
+                evm_route_canary_target_domain: None,
                 evm_route_canary_statement_hash: None,
                 evm_route_canary_commitment_root: None,
+                evm_route_canary_finality_height: None,
+                evm_route_canary_finality_block_hash: None,
+                evm_route_canary_proof_version: None,
+                evm_route_canary_proof_source_domain: None,
                 evm_route_canary_used_message_proof: None,
                 tron_route_canary_transaction_id: None,
                 tron_route_canary_transaction_owner_address: None,
+                tron_route_canary_block_number: None,
+                tron_route_canary_block_timestamp: None,
                 tron_route_canary_log_index: None,
                 tron_route_canary_message_id: None,
                 tron_route_canary_call_data_sha256: None,

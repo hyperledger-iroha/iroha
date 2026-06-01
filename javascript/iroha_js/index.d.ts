@@ -2910,6 +2910,130 @@ export interface TonSccpRouteCanaryEvidenceInput {
   ton_verifier_code_boc_root_hash?: string;
 }
 
+export interface TronSccpRouteCanaryEvidenceInput {
+  routeAllowlistHash?: string;
+  route_allowlist_hash?: string;
+  expectedRouteAllowlistHash?: string;
+  expected_route_allowlist_hash?: string;
+  destinationBindingHash?: string;
+  destination_binding_hash?: string;
+  expectedDestinationBindingHash?: string;
+  expected_destination_binding_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  networkId?: string;
+  network_id?: string;
+  networkIdHex?: string;
+  network_id_hex?: string;
+  verifierAddress?: string;
+  verifier_address?: string;
+  verifierCodeHash?: string;
+  verifier_code_hash?: string;
+  verifierCodeHashHex?: string;
+  verifier_code_hash_hex?: string;
+  verifierKeyHash?: string;
+  verifier_key_hash?: string;
+  verifierKeyHashHex?: string;
+  verifier_key_hash_hex?: string;
+  verifierBackend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  verifier_backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  backend?: typeof SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1;
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  destinationSourceDomain?: SccpDomainIdInput;
+  destination_source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  destinationTargetDomain?: SccpDomainIdInput;
+  destination_target_domain?: SccpDomainIdInput;
+  routeCanaryTargetDomain?: SccpDomainIdInput;
+  route_canary_target_domain?: SccpDomainIdInput;
+  transactionId?: string;
+  transaction_id?: string;
+  routeCanaryTransactionId?: string;
+  route_canary_transaction_id?: string;
+  transactionOwnerAddress?: string;
+  transaction_owner_address?: string;
+  routeCanaryTransactionOwnerAddress?: string;
+  route_canary_transaction_owner_address?: string;
+  blockNumber?: string | number | bigint;
+  block_number?: string | number | bigint;
+  routeCanaryBlockNumber?: string | number | bigint;
+  route_canary_block_number?: string | number | bigint;
+  blockTimestamp?: string | number | bigint;
+  block_timestamp?: string | number | bigint;
+  routeCanaryBlockTimestamp?: string | number | bigint;
+  route_canary_block_timestamp?: string | number | bigint;
+  logIndex?: SccpDomainIdInput;
+  log_index?: SccpDomainIdInput;
+  routeCanaryLogIndex?: SccpDomainIdInput;
+  route_canary_log_index?: SccpDomainIdInput;
+  messageId?: string;
+  message_id?: string;
+  routeCanaryMessageId?: string;
+  route_canary_message_id?: string;
+  callDataSha256?: string;
+  call_data_sha256?: string;
+  routeCanaryCallDataSha256?: string;
+  route_canary_call_data_sha256?: string;
+  payloadHash?: string;
+  payload_hash?: string;
+  routeCanaryPayloadHash?: string;
+  route_canary_payload_hash?: string;
+  commitmentRoot?: string;
+  commitment_root?: string;
+  routeCanaryCommitmentRoot?: string;
+  route_canary_commitment_root?: string;
+  finalityHeight?: string;
+  finality_height?: string;
+  routeCanaryFinalityHeight?: string;
+  route_canary_finality_height?: string;
+  finalityBlockHash?: string;
+  finality_block_hash?: string;
+  routeCanaryFinalityBlockHash?: string;
+  route_canary_finality_block_hash?: string;
+  statementHash?: string;
+  statement_hash?: string;
+  routeCanaryStatementHash?: string;
+  route_canary_statement_hash?: string;
+  proofVersion?: SccpVersionInput;
+  proof_version?: SccpVersionInput;
+  routeCanaryProofVersion?: SccpVersionInput;
+  route_canary_proof_version?: SccpVersionInput;
+  proofSourceDomain?: SccpDomainIdInput;
+  proof_source_domain?: SccpDomainIdInput;
+  routeCanaryProofSourceDomain?: SccpDomainIdInput;
+  route_canary_proof_source_domain?: SccpDomainIdInput;
+  usedMessageProof?: boolean;
+  used_message_proof?: boolean;
+  routeCanaryUsedMessageProof?: boolean;
+  route_canary_used_message_proof?: boolean;
+  rawDataOwnerMatchesTransaction?: boolean;
+  raw_data_owner_matches_transaction?: boolean;
+  routeCanaryRawDataOwnerMatchesTransaction?: boolean;
+  route_canary_raw_data_owner_matches_transaction?: boolean;
+  signatureSha256?: string;
+  signature_sha256?: string;
+  routeCanarySignatureSha256?: string;
+  route_canary_signature_sha256?: string;
+  signatureRecoveredAddress?: string;
+  signature_recovered_address?: string;
+  routeCanarySignatureRecoveredAddress?: string;
+  route_canary_signature_recovered_address?: string;
+  signatureRecoversToOwner?: boolean;
+  signature_recovers_to_owner?: boolean;
+  routeCanarySignatureRecoversToOwner?: boolean;
+  route_canary_signature_recovers_to_owner?: boolean;
+  routeCanaryEvidenceHash?: string;
+  route_canary_evidence_hash?: string;
+  expectedRouteCanaryEvidenceHash?: string;
+  expected_route_canary_evidence_hash?: string;
+}
+
 export interface SolanaSccpProofRequest {
   readonly version: 1;
   readonly backend: typeof SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1;
@@ -3284,8 +3408,10 @@ export interface EvmSccpSubmissionInput {
   proof_result?: EvmSccpProofResult;
   proofBytes?: BinaryLike;
   proof_bytes?: BinaryLike;
+  /** Accepted only with proofResult; raw contract-call submissions cannot bind bundle bytes. */
   bundleBytes?: BinaryLike;
   bundle_bytes?: BinaryLike;
+  /** Accepted only with proofResult; raw contract-call submissions cannot bind source proof bytes. */
   sourceProofBytes?: BinaryLike;
   source_proof_bytes?: BinaryLike;
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -3397,8 +3523,10 @@ export interface TronSccpSubmissionInput {
   proof_result?: TronSccpProofResult;
   proofBytes?: BinaryLike;
   proof_bytes?: BinaryLike;
+  /** Accepted only with proofResult; raw contract-call submissions cannot bind bundle bytes. */
   bundleBytes?: BinaryLike;
   bundle_bytes?: BinaryLike;
+  /** Accepted only with proofResult; raw contract-call submissions cannot bind source proof bytes. */
   sourceProofBytes?: BinaryLike;
   source_proof_bytes?: BinaryLike;
   publicInputs?: SccpMessageTransparentPublicInputsInput;
@@ -3546,7 +3674,9 @@ export interface SubstrateSccpSubmissionInput {
   public_inputs_bytes?: BinaryLike;
   bundleBytes?: BinaryLike;
   bundle_bytes?: BinaryLike;
+  /** Accepted only with `proofResult`; raw runtime-call payloads do not carry these request-bound bytes. */
   sourceProofBytes?: BinaryLike;
+  /** Accepted only with `proof_result`; raw runtime-call payloads do not carry these request-bound bytes. */
   source_proof_bytes?: BinaryLike;
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
@@ -4388,6 +4518,12 @@ export function canonicalTonSccpRouteCanaryEvidenceBytes(
 ): Uint8Array;
 export function tonSccpRouteCanaryEvidenceHash(
   input: TonSccpRouteCanaryEvidenceInput,
+): string;
+export function canonicalTronSccpRouteCanaryEvidenceBytes(
+  input: TronSccpRouteCanaryEvidenceInput,
+): Uint8Array;
+export function tronSccpRouteCanaryEvidenceHash(
+  input: TronSccpRouteCanaryEvidenceInput,
 ): string;
 export function evmSccpDestinationBinding(input: EvmSccpDestinationBindingInput): EvmSccpDestinationBinding;
 export function evmSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;

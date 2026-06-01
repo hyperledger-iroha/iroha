@@ -55,7 +55,9 @@ vars ==
     commit_spacing_ratio_permille, view_change_ratio_permille, min_factor,
     max_factor, clamped_current, decision_present, action, new_factor_bps>>
 
-MaxU32 == 4294967295
+\* TLC cannot enumerate the concrete u32::MAX sentinel. This bounded model only
+\* needs a ratio saturation value above every pressure/clear threshold.
+MaxU32 == 100000
 FactorFloor == 10000
 DefaultViewPressure == 100
 DefaultViewClear == 10

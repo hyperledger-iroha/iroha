@@ -34,9 +34,11 @@ TRON_ROUTE_ALLOWLIST_HASH_VECTOR = (
     "fea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a"
 )
 TRON_ROUTE_CANARY_EVIDENCE_HASH = (
-    "0fcd46001b9b68604a190377fc77bd64e77dcea6021aee4232be99f855958662"
+    "e0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
 )
 TRON_ROUTE_CANARY_TRANSACTION_ID = "fa" * 32
+TRON_ROUTE_CANARY_BLOCK_NUMBER = 234
+TRON_ROUTE_CANARY_BLOCK_TIMESTAMP = 567000
 TRON_ROUTE_CANARY_MESSAGE_ID = "dd" * 32
 TRON_ROUTE_CANARY_CALL_DATA_SHA256 = (
     "f96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951"
@@ -122,6 +124,8 @@ def sample_full_toml_args():
         route_canary_transaction_owner_address=bytes.fromhex(
             TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS
         ),
+        route_canary_block_number=TRON_ROUTE_CANARY_BLOCK_NUMBER,
+        route_canary_block_timestamp=TRON_ROUTE_CANARY_BLOCK_TIMESTAMP,
         route_canary_log_index=0,
         route_canary_message_id=bytes.fromhex(TRON_ROUTE_CANARY_MESSAGE_ID),
         route_canary_call_data_sha256=bytes.fromhex(
@@ -156,6 +160,8 @@ def add_route_canary_transaction_metadata(args):
     args.route_canary_transaction_owner_address = bytes.fromhex(
         TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS
     )
+    args.route_canary_block_number = TRON_ROUTE_CANARY_BLOCK_NUMBER
+    args.route_canary_block_timestamp = TRON_ROUTE_CANARY_BLOCK_TIMESTAMP
     args.route_canary_log_index = 0
     args.route_canary_message_id = bytes.fromhex(TRON_ROUTE_CANARY_MESSAGE_ID)
     args.route_canary_call_data_sha256 = bytes.fromhex(
@@ -235,6 +241,10 @@ def sample_full_toml_cli_args(*, include_route_canary=True):
                 "0x" + TRON_ROUTE_CANARY_TRANSACTION_ID,
                 "--route-canary-transaction-owner-address",
                 "0x" + TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS,
+                "--route-canary-block-number",
+                str(TRON_ROUTE_CANARY_BLOCK_NUMBER),
+                "--route-canary-block-timestamp",
+                str(TRON_ROUTE_CANARY_BLOCK_TIMESTAMP),
                 "--route-canary-log-index",
                 "0",
                 "--route-canary-message-id",
@@ -371,6 +381,10 @@ def sample_full_toml_cli_args_with_runtime(module, *, include_route_canary=True)
                 "0x" + TRON_ROUTE_CANARY_TRANSACTION_ID,
                 "--route-canary-transaction-owner-address",
                 "0x" + TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS,
+                "--route-canary-block-number",
+                str(TRON_ROUTE_CANARY_BLOCK_NUMBER),
+                "--route-canary-block-timestamp",
+                str(TRON_ROUTE_CANARY_BLOCK_TIMESTAMP),
                 "--route-canary-log-index",
                 "0",
                 "--route-canary-message-id",
@@ -956,6 +970,8 @@ def test_toml_rendering_carries_mainnet_profile_ids_and_config_hash():
         route_canary_transaction_owner_address=bytes.fromhex(
             TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS
         ),
+        route_canary_block_number=TRON_ROUTE_CANARY_BLOCK_NUMBER,
+        route_canary_block_timestamp=TRON_ROUTE_CANARY_BLOCK_TIMESTAMP,
         route_canary_log_index=0,
         route_canary_message_id=bytes.fromhex(TRON_ROUTE_CANARY_MESSAGE_ID),
         route_canary_call_data_sha256=bytes.fromhex(
@@ -1145,6 +1161,14 @@ def test_toml_rendering_carries_mainnet_profile_ids_and_config_hash():
         'tron_route_canary_transaction_owner_address = "0x'
         + TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS
         + '"'
+        in full_rendered
+    )
+    assert (
+        f'tron_route_canary_block_number = {TRON_ROUTE_CANARY_BLOCK_NUMBER}'
+        in full_rendered
+    )
+    assert (
+        f'tron_route_canary_block_timestamp = {TRON_ROUTE_CANARY_BLOCK_TIMESTAMP}'
         in full_rendered
     )
     assert "tron_route_canary_log_index = 0" in full_rendered
@@ -1365,6 +1389,8 @@ def test_full_toml_rendering_requires_route_canary_evidence():
     args.route_canary_evidence_hash = None
     args.route_canary_transaction_id = None
     args.route_canary_transaction_owner_address = None
+    args.route_canary_block_number = None
+    args.route_canary_block_timestamp = None
     args.route_canary_log_index = None
     args.route_canary_message_id = None
     args.route_canary_call_data_sha256 = None
@@ -1395,6 +1421,8 @@ def test_full_toml_rendering_rejects_hash_only_route_canary_evidence():
     args = sample_full_toml_args()
     args.route_canary_transaction_id = None
     args.route_canary_transaction_owner_address = None
+    args.route_canary_block_number = None
+    args.route_canary_block_timestamp = None
     args.route_canary_log_index = None
     args.route_canary_message_id = None
     args.route_canary_call_data_sha256 = None
@@ -1432,6 +1460,16 @@ def test_full_toml_rendering_binds_route_canary_call_transcript_metadata():
         (
             "route_canary_payload_hash",
             bytes.fromhex("02" * 32),
+            "route_canary_evidence_hash does not match",
+        ),
+        (
+            "route_canary_block_number",
+            TRON_ROUTE_CANARY_BLOCK_NUMBER + 1,
+            "route_canary_evidence_hash does not match",
+        ),
+        (
+            "route_canary_block_timestamp",
+            TRON_ROUTE_CANARY_BLOCK_TIMESTAMP + 1,
             "route_canary_evidence_hash does not match",
         ),
         (
@@ -1701,6 +1739,26 @@ def test_full_toml_rendering_derives_route_canary_from_transaction_metadata():
         f'"0x{TRON_ROUTE_CANARY_TRANSACTION_OWNER_ADDRESS}"'
         in full_rendered
     )
+    assert (
+        "# sccp_tron_route_canary_block_number = "
+        f'"{TRON_ROUTE_CANARY_BLOCK_NUMBER}"'
+        in full_rendered
+    )
+    assert (
+        "tron_route_canary_block_number = "
+        f"{TRON_ROUTE_CANARY_BLOCK_NUMBER}"
+        in full_rendered
+    )
+    assert (
+        "# sccp_tron_route_canary_block_timestamp = "
+        f'"{TRON_ROUTE_CANARY_BLOCK_TIMESTAMP}"'
+        in full_rendered
+    )
+    assert (
+        "tron_route_canary_block_timestamp = "
+        f"{TRON_ROUTE_CANARY_BLOCK_TIMESTAMP}"
+        in full_rendered
+    )
     assert '# sccp_tron_route_canary_log_index = "0"' in full_rendered
     assert "tron_route_canary_log_index = 0" in full_rendered
     assert (
@@ -1771,6 +1829,39 @@ def test_full_toml_rendering_requires_route_canary_used_message_state():
         assert "--route-canary-used-message-proof" in str(exc)
     else:
         raise AssertionError("full TOML accepted route canary without used state")
+
+
+def test_full_toml_rendering_requires_route_canary_block_metadata():
+    module = load_evidence_module()
+
+    for field, expected in (
+        ("route_canary_block_number", "--route-canary-block-number"),
+        ("route_canary_block_timestamp", "--route-canary-block-timestamp"),
+    ):
+        args = add_route_canary_transaction_metadata(sample_full_toml_args())
+        setattr(args, field, None)
+
+        try:
+            module.render_full_toml(args, bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR))
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"full TOML accepted route canary without {field}"
+            )
+
+
+def test_full_toml_rendering_rejects_zero_route_canary_block_number():
+    module = load_evidence_module()
+    args = add_route_canary_transaction_metadata(sample_full_toml_args())
+    args.route_canary_block_number = 0
+
+    try:
+        module.render_full_toml(args, bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR))
+    except ValueError as exc:
+        assert "route_canary_block_number must be a positive u64" in str(exc)
+    else:
+        raise AssertionError("full TOML accepted a zero route canary block number")
 
 
 def test_full_toml_rendering_requires_route_canary_raw_owner_binding():
@@ -1863,6 +1954,8 @@ def test_full_toml_rendering_rejects_route_canary_source_record_hash_replay():
         args.route_canary_evidence_hash = getattr(args, attr_name)
         args.route_canary_transaction_id = None
         args.route_canary_transaction_owner_address = None
+        args.route_canary_block_number = None
+        args.route_canary_block_timestamp = None
         args.route_canary_log_index = None
         args.route_canary_message_id = None
         args.route_canary_call_data_sha256 = None

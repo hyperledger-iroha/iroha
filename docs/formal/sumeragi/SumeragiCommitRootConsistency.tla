@@ -339,4 +339,53 @@ ValidationRootMismatchRejected ==
 ValidatedMatchesSpec ==
   validated = (validationVoteRoot = validationQcRoot)
 
+TlcWitnessState ==
+  \/ Init
+  \/ /\ validators = 4
+     /\ totalStake = 7
+     /\ validationVoteRoot \in ConcreteRoots
+     /\ validationQcRoot \in ConcreteRoots
+     /\ \/ /\ mode = "Permissioned"
+           /\ rootASigners = 2
+           /\ rootBSigners = 1
+           /\ wrongContextSigners = 0
+           /\ rootAStake = 2
+           /\ rootBStake = 1
+           /\ wrongContextStake = 0
+        \/ /\ mode = "Permissioned"
+           /\ rootASigners = 2
+           /\ rootBSigners = 0
+           /\ wrongContextSigners = 1
+           /\ rootAStake = 2
+           /\ rootBStake = 0
+           /\ wrongContextStake = 1
+        \/ /\ mode = "Permissioned"
+           /\ rootASigners = 1
+           /\ rootBSigners = 1
+           /\ wrongContextSigners = 0
+           /\ rootAStake = 1
+           /\ rootBStake = 1
+           /\ wrongContextStake = 0
+        \/ /\ mode = "Permissioned"
+           /\ rootASigners = 2
+           /\ rootBSigners = 0
+           /\ wrongContextSigners = 0
+           /\ rootAStake = 2
+           /\ rootBStake = 0
+           /\ wrongContextStake = 0
+        \/ /\ mode = "Npos"
+           /\ rootASigners = 1
+           /\ rootBSigners = 1
+           /\ wrongContextSigners = 0
+           /\ rootAStake = 2
+           /\ rootBStake = 5
+           /\ wrongContextStake = 0
+        \/ /\ mode = "Npos"
+           /\ rootASigners = 1
+           /\ rootBSigners = 1
+           /\ wrongContextSigners = 0
+           /\ rootAStake = 3
+           /\ rootBStake = 3
+           /\ wrongContextStake = 0
+
 ====

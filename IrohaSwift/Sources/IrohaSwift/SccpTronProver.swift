@@ -8,6 +8,12 @@ public let sccpTronContractCallAbiTupleV1 = "tron_abi_tuple_v1"
 private let sccpTronSubmitMessageProofEntrypointV1 =
     "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)"
 private let sccpTronSubmitMessageProofSelectorBytesV1 = Data([0xbd, 0x57, 0x82, 0x6c])
+private let sccpTronRouteCanaryEvidencePrefixV3 =
+    "iroha:sccp:tron-route-canary-evidence:v3"
+private let sccpRouteAllowlistPrefixV1 =
+    "sccp:route-allowlist:lane-evidence:v1"
+private let sccpTronRouteAllowlistIdV1 =
+    "sccp:tron:route-allowlist:tron-mainnet:v1"
 
 /// SCCP public inputs shared by TRON Groth16 proof requests.
 public struct TronSccpPublicInputsInput: Equatable {
@@ -33,6 +39,105 @@ public struct TronSccpPublicInputsInput: Equatable {
         self.commitmentRoot = commitmentRoot
         self.finalityHeight = finalityHeight
         self.finalityBlockHash = finalityBlockHash
+    }
+}
+
+/// Inputs for the governed SORA -> TRON transaction route-canary transcript.
+public struct TronSccpRouteCanaryEvidenceInput: Equatable {
+    public let routeAllowlistHash: String
+    public let destinationBindingHash: String
+    public let expectedDestinationBindingHash: String?
+    public let sourceVerifierMaterialHash: String
+    public let sourceAdapterEngineDeploymentHash: String
+    public let networkId: String
+    public let verifierAddress: String
+    public let verifierCodeHash: String
+    public let verifierKeyHash: String
+    public let sourceDomain: UInt32
+    public let targetDomain: UInt32
+    public let transactionId: String
+    public let transactionOwnerAddress: String
+    public let blockNumber: UInt64
+    public let blockTimestamp: UInt64
+    public let logIndex: UInt32
+    public let messageId: String
+    public let callDataSha256: String
+    public let payloadHash: String
+    public let commitmentRoot: String
+    public let finalityHeight: String
+    public let finalityBlockHash: String
+    public let statementHash: String
+    public let proofVersion: UInt32
+    public let proofSourceDomain: UInt32
+    public let usedMessageProof: Bool
+    public let rawDataOwnerMatchesTransaction: Bool
+    public let signatureSha256: String
+    public let signatureRecoveredAddress: String
+    public let signatureRecoversToOwner: Bool
+    public let routeCanaryEvidenceHash: String?
+
+    public init(routeAllowlistHash: String,
+                destinationBindingHash: String,
+                expectedDestinationBindingHash: String? = nil,
+                sourceVerifierMaterialHash: String,
+                sourceAdapterEngineDeploymentHash: String,
+                networkId: String,
+                verifierAddress: String,
+                verifierCodeHash: String,
+                verifierKeyHash: String,
+                sourceDomain: UInt32 = sccpDomainSora,
+                targetDomain: UInt32 = sccpDomainTron,
+                transactionId: String,
+                transactionOwnerAddress: String,
+                blockNumber: UInt64,
+                blockTimestamp: UInt64,
+                logIndex: UInt32,
+                messageId: String,
+                callDataSha256: String,
+                payloadHash: String,
+                commitmentRoot: String,
+                finalityHeight: String,
+                finalityBlockHash: String,
+                statementHash: String,
+                proofVersion: UInt32 = 1,
+                proofSourceDomain: UInt32 = sccpDomainSora,
+                usedMessageProof: Bool,
+                rawDataOwnerMatchesTransaction: Bool,
+                signatureSha256: String,
+                signatureRecoveredAddress: String,
+                signatureRecoversToOwner: Bool,
+                routeCanaryEvidenceHash: String? = nil) {
+        self.routeAllowlistHash = routeAllowlistHash
+        self.destinationBindingHash = destinationBindingHash
+        self.expectedDestinationBindingHash = expectedDestinationBindingHash
+        self.sourceVerifierMaterialHash = sourceVerifierMaterialHash
+        self.sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash
+        self.networkId = networkId
+        self.verifierAddress = verifierAddress
+        self.verifierCodeHash = verifierCodeHash
+        self.verifierKeyHash = verifierKeyHash
+        self.sourceDomain = sourceDomain
+        self.targetDomain = targetDomain
+        self.transactionId = transactionId
+        self.transactionOwnerAddress = transactionOwnerAddress
+        self.blockNumber = blockNumber
+        self.blockTimestamp = blockTimestamp
+        self.logIndex = logIndex
+        self.messageId = messageId
+        self.callDataSha256 = callDataSha256
+        self.payloadHash = payloadHash
+        self.commitmentRoot = commitmentRoot
+        self.finalityHeight = finalityHeight
+        self.finalityBlockHash = finalityBlockHash
+        self.statementHash = statementHash
+        self.proofVersion = proofVersion
+        self.proofSourceDomain = proofSourceDomain
+        self.usedMessageProof = usedMessageProof
+        self.rawDataOwnerMatchesTransaction = rawDataOwnerMatchesTransaction
+        self.signatureSha256 = signatureSha256
+        self.signatureRecoveredAddress = signatureRecoveredAddress
+        self.signatureRecoversToOwner = signatureRecoversToOwner
+        self.routeCanaryEvidenceHash = routeCanaryEvidenceHash
     }
 }
 
@@ -435,6 +540,190 @@ public func canonicalTronSccpPublicInputsBytes(_ input: TronSccpPublicInputsInpu
     return out
 }
 
+/// Canonical transaction evidence bytes for the SORA -> TRON route canary.
+public func canonicalTronSccpRouteCanaryEvidenceBytes(
+    _ input: TronSccpRouteCanaryEvidenceInput
+) throws -> Data {
+    let evidence = try normalizeTronRouteCanaryEvidence(input)
+    return evidence.payload
+}
+
+/// Hash Rust verifies for the SORA -> TRON transaction route canary.
+public func tronSccpRouteCanaryEvidenceHash(
+    _ input: TronSccpRouteCanaryEvidenceInput
+) throws -> String {
+    let evidence = try normalizeTronRouteCanaryEvidence(input)
+    let digest = tronHashBytes(
+        prefix: sccpTronRouteCanaryEvidencePrefixV3,
+        payload: evidence.payload
+    )
+    if [evidence.routeAllowlistHash,
+        evidence.destinationBindingHash,
+        evidence.sourceVerifierMaterialHash,
+        evidence.sourceAdapterEngineDeploymentHash].contains(digest) {
+        throw TronSccpProverError.invalidPublicInputs("routeCanaryEvidenceHash")
+    }
+    let hash = "0x" + digest.hexEncodedString()
+    if let expected = input.routeCanaryEvidenceHash,
+       try tronNormalizeHex32(expected, field: "routeCanaryEvidenceHash") != hash {
+        throw TronSccpProverError.invalidPublicInputs("routeCanaryEvidenceHash")
+    }
+    return hash
+}
+
+private struct NormalizedTronRouteCanaryEvidence {
+    let payload: Data
+    let routeAllowlistHash: Data
+    let destinationBindingHash: Data
+    let sourceVerifierMaterialHash: Data
+    let sourceAdapterEngineDeploymentHash: Data
+}
+
+private func normalizeTronRouteCanaryEvidence(
+    _ input: TronSccpRouteCanaryEvidenceInput
+) throws -> NormalizedTronRouteCanaryEvidence {
+    let destinationBinding = try sccpTronDestinationBinding(
+        sourceDomain: input.sourceDomain,
+        targetDomain: input.targetDomain,
+        networkId: input.networkId,
+        verifierAddress: input.verifierAddress,
+        verifierCodeHash: input.verifierCodeHash,
+        verifierKeyHash: input.verifierKeyHash
+    )
+    let destinationBindingHash = try tronNonZeroBytesFromHex32(
+        input.destinationBindingHash,
+        field: "destinationBindingHash"
+    )
+    if let expected = input.expectedDestinationBindingHash,
+       try tronNormalizeHex32(expected, field: "expectedDestinationBindingHash") != destinationBinding.hash {
+        throw TronSccpProverError.invalidPublicInputs("expectedDestinationBindingHash")
+    }
+    guard "0x" + destinationBindingHash.hexEncodedString() == destinationBinding.hash else {
+        throw TronSccpProverError.invalidPublicInputs("destinationBindingHash")
+    }
+
+    let routeAllowlistHash = try tronNonZeroBytesFromHex32(
+        input.routeAllowlistHash,
+        field: "routeAllowlistHash"
+    )
+    let sourceVerifierMaterialHash = try tronNonZeroBytesFromHex32(
+        input.sourceVerifierMaterialHash,
+        field: "sourceVerifierMaterialHash"
+    )
+    let sourceAdapterEngineDeploymentHash = try tronNonZeroBytesFromHex32(
+        input.sourceAdapterEngineDeploymentHash,
+        field: "sourceAdapterEngineDeploymentHash"
+    )
+    let expectedRouteAllowlistHash = tronRouteAllowlistHash(
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+        destinationBindingHash: destinationBindingHash
+    )
+    guard routeAllowlistHash == expectedRouteAllowlistHash else {
+        throw TronSccpProverError.invalidPublicInputs("routeAllowlistHash")
+    }
+    guard input.sourceDomain == sccpDomainSora else {
+        throw TronSccpProverError.invalidPublicInputs("sourceDomain")
+    }
+    guard input.targetDomain == sccpDomainTron else {
+        throw TronSccpProverError.invalidPublicInputs("targetDomain")
+    }
+    guard input.sourceDomain != input.targetDomain else {
+        throw TronSccpProverError.invalidPublicInputs("sourceDomain")
+    }
+    guard input.proofVersion == 1 else {
+        throw TronSccpProverError.invalidPublicInputs("proofVersion")
+    }
+    guard input.proofSourceDomain == input.sourceDomain else {
+        throw TronSccpProverError.invalidPublicInputs("proofSourceDomain")
+    }
+    guard input.usedMessageProof else {
+        throw TronSccpProverError.invalidPublicInputs("usedMessageProof")
+    }
+    guard input.rawDataOwnerMatchesTransaction else {
+        throw TronSccpProverError.invalidPublicInputs("rawDataOwnerMatchesTransaction")
+    }
+    guard input.signatureRecoversToOwner else {
+        throw TronSccpProverError.invalidPublicInputs("signatureRecoversToOwner")
+    }
+    guard input.blockNumber > 0 else {
+        throw TronSccpProverError.invalidPublicInputs("blockNumber")
+    }
+
+    let verifierAddress = try sourceProofTronBase58CheckPayload(
+        destinationBinding.verifierAddress,
+        field: "verifierAddress"
+    )
+    let transactionOwnerAddress = try tronRouteCanaryAddressPayload(
+        input.transactionOwnerAddress,
+        field: "transactionOwnerAddress"
+    )
+    let signatureRecoveredAddress = try tronRouteCanaryAddressPayload(
+        input.signatureRecoveredAddress,
+        field: "signatureRecoveredAddress"
+    )
+    guard signatureRecoveredAddress == transactionOwnerAddress else {
+        throw TronSccpProverError.invalidPublicInputs("signatureRecoveredAddress")
+    }
+    let transactionId = try tronNonZeroBytesFromHex32(input.transactionId, field: "transactionId")
+    let messageId = try tronNonZeroBytesFromHex32(input.messageId, field: "messageId")
+    let callDataSha256 = try tronNonZeroBytesFromHex32(input.callDataSha256, field: "callDataSha256")
+    let payloadHash = try tronNonZeroBytesFromHex32(input.payloadHash, field: "payloadHash")
+    let commitmentRoot = try tronNonZeroBytesFromHex32(input.commitmentRoot, field: "commitmentRoot")
+    let finalityHeight = try tronNonZeroBytesFromHex32(input.finalityHeight, field: "finalityHeight")
+    let finalityBlockHash = try tronNonZeroBytesFromHex32(input.finalityBlockHash, field: "finalityBlockHash")
+    let statementHash = try tronNonZeroBytesFromHex32(input.statementHash, field: "statementHash")
+    let signatureSha256 = try tronNonZeroBytesFromHex32(input.signatureSha256, field: "signatureSha256")
+    try requireTronRouteCanaryHashesDistinct([
+        "transactionId": transactionId,
+        "messageId": messageId,
+        "callDataSha256": callDataSha256,
+        "payloadHash": payloadHash,
+        "statementHash": statementHash,
+        "commitmentRoot": commitmentRoot,
+        "finalityBlockHash": finalityBlockHash,
+        "signatureSha256": signatureSha256,
+    ])
+    let networkId = try tronNonZeroBytesFromHex32(destinationBinding.networkId, field: "networkId")
+
+    var out = Data()
+    out.append(3)
+    out.append(routeAllowlistHash)
+    out.append(verifierAddress)
+    out.append(transactionId)
+    out.append(transactionOwnerAddress)
+    tronAppendU64Le(input.blockNumber, to: &out)
+    tronAppendU64Le(input.blockTimestamp, to: &out)
+    tronAppendU32Le(input.logIndex, to: &out)
+    out.append(callDataSha256)
+    out.append(messageId)
+    tronAppendU32Le(input.sourceDomain, to: &out)
+    tronAppendU32Le(input.targetDomain, to: &out)
+    out.append(payloadHash)
+    out.append(commitmentRoot)
+    out.append(finalityHeight)
+    out.append(finalityBlockHash)
+    out.append(statementHash)
+    tronAppendU32Le(input.proofVersion, to: &out)
+    tronAppendU32Le(input.proofSourceDomain, to: &out)
+    out.append(destinationBindingHash)
+    out.append(irohaKeccak256(Data(destinationBinding.verifierBackend.utf8)))
+    out.append(irohaKeccak256(Data(destinationBinding.proofFamily.utf8)))
+    out.append(networkId)
+    out.append(1)
+    out.append(1)
+    out.append(signatureSha256)
+    out.append(signatureRecoveredAddress)
+    out.append(1)
+    return NormalizedTronRouteCanaryEvidence(
+        payload: out,
+        routeAllowlistHash: routeAllowlistHash,
+        destinationBindingHash: destinationBindingHash,
+        sourceVerifierMaterialHash: sourceVerifierMaterialHash,
+        sourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash
+    )
+}
+
 /// Derive the nine BN254 public signal words consumed by EVM/TRON Groth16 verifiers.
 public func sccpGroth16Bn254PublicSignalWords(publicInputs: TronSccpPublicInputsInput,
                                               sourceDomain: UInt32,
@@ -485,12 +774,7 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
     guard input.bundleBytes.count <= Int(UInt32.max) else {
         throw TronSccpProverError.invalidPublicInputs("bundleBytes")
     }
-    guard input.sourceProofBytes.count <= Int(UInt32.max) else {
-        throw TronSccpProverError.invalidPublicInputs("sourceProofBytes")
-    }
-    guard input.sourceProofBytes.isEmpty || input.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TronSccpProverError.invalidPublicInputs("sourceProofBytes")
-    }
+    let sourceProofBytes = try requireTronOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
     let publicInputsBytes = try canonicalTronSccpPublicInputsBytes(input.publicInputs)
     let proofContext = try normalizeTronSccpProofContext(
         statementHash: input.statementHash,
@@ -506,8 +790,8 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
     preimage.append(publicInputsBytes)
     tronAppendU32Le(UInt32(input.bundleBytes.count), to: &preimage)
     preimage.append(input.bundleBytes)
-    tronAppendU32Le(UInt32(input.sourceProofBytes.count), to: &preimage)
-    preimage.append(input.sourceProofBytes)
+    tronAppendU32Le(UInt32(sourceProofBytes.count), to: &preimage)
+    preimage.append(sourceProofBytes)
     try preimage.append(tronBytesFromHex32(proofContext.statementHash, field: "statementHash"))
     try preimage.append(tronBytesFromHex32(proofContext.destinationBindingHash, field: "destinationBindingHash"))
     for signal in publicSignalWords {
@@ -522,7 +806,7 @@ public func buildTronSccpProofRequest(_ input: TronSccpProofRequestInput) throws
         publicInputsBytes: publicInputsBytes,
         publicSignalWords: publicSignalWords,
         bundleBytes: input.bundleBytes,
-        sourceProofBytes: input.sourceProofBytes,
+        sourceProofBytes: sourceProofBytes,
         proofContext: proofContext,
         statementHash: proofContext.statementHash,
         destinationBindingHash: proofContext.destinationBindingHash,
@@ -592,13 +876,14 @@ private func requireWrappedTronProofResultForSubmission(
     guard envelopeHash == tronHashHex(prefix: "sccp:tron:groth16-proof-envelope:v1", payload: envelopePayload) else {
         throw TronSccpProverError.invalidPublicInputs("proofResult.envelopeHash")
     }
-    guard proofResult.sourceProofBytes.isEmpty || proofResult.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TronSccpProverError.invalidPublicInputs("proofResult.sourceProofBytes")
-    }
+    let sourceProofBytes = try requireTronOptionalSourceProofBytes(
+        proofResult.sourceProofBytes,
+        field: "proofResult.sourceProofBytes"
+    )
     let expectedRequest = try buildTronSccpProofRequest(TronSccpProofRequestInput(
         publicInputs: proofResult.publicInputs,
         bundleBytes: proofResult.bundleBytes,
-        sourceProofBytes: proofResult.sourceProofBytes,
+        sourceProofBytes: sourceProofBytes,
         statementHash: proofResult.statementHash,
         destinationBindingHash: proofResult.destinationBindingHash,
         backend: proofResult.backend,
@@ -780,10 +1065,19 @@ private func requireProductionTronSccpProofRequest(_ request: TronSccpProofReque
     guard !request.bundleBytes.isEmpty else {
         throw TronSccpProverError.invalidPublicInputs("request.bundleBytes")
     }
-    guard request.sourceProofBytes.isEmpty || request.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw TronSccpProverError.invalidPublicInputs("request.sourceProofBytes")
-    }
+    try requireTronOptionalSourceProofBytes(request.sourceProofBytes, field: "request.sourceProofBytes")
     try requireProductionTronDestinationBinding(request)
+}
+
+@discardableResult
+private func requireTronOptionalSourceProofBytes(_ bytes: Data, field: String) throws -> Data {
+    guard bytes.count <= sccpSourceStateMaxProofBytes else {
+        throw TronSccpProverError.invalidPublicInputs(field)
+    }
+    guard bytes.isEmpty || bytes.contains(where: { $0 != 0 }) else {
+        throw TronSccpProverError.invalidPublicInputs(field)
+    }
+    return bytes
 }
 
 private func requireProductionTronDestinationBinding(_ request: TronSccpProofRequest) throws {
@@ -1009,8 +1303,67 @@ private func tronAppendU64Le(_ value: UInt64, to out: inout Data) {
     }
 }
 
-private func tronHashHex(prefix: String, payload: Data) -> String {
+private func tronAppendVector(_ value: Data, to out: inout Data) {
+    tronAppendU32Le(UInt32(value.count), to: &out)
+    out.append(value)
+}
+
+private func tronRouteAllowlistHash(
+    sourceVerifierMaterialHash: Data,
+    sourceAdapterEngineDeploymentHash: Data,
+    destinationBindingHash: Data
+) -> Data {
+    var out = Data()
+    out.append(1)
+    tronAppendU32Le(sccpDomainTron, to: &out)
+    tronAppendVector(Data("tron".utf8), to: &out)
+    tronAppendVector(Data("GovernanceAllowlist".utf8), to: &out)
+    tronAppendVector(Data(sccpTronRouteAllowlistIdV1.utf8), to: &out)
+    out.append(sourceVerifierMaterialHash)
+    out.append(sourceAdapterEngineDeploymentHash)
+    out.append(destinationBindingHash)
+    return tronHashBytes(prefix: sccpRouteAllowlistPrefixV1, payload: out)
+}
+
+private func tronRouteCanaryAddressPayload(_ value: String, field: String) throws -> Data {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard trimmed == value else {
+        throw TronSccpProverError.invalidPublicInputs(field)
+    }
+    var hex = trimmed
+    if hex.lowercased().hasPrefix("0x") {
+        hex.removeFirst(2)
+    }
+    if hex.count == 42, let bytes = Data(hexString: hex.lowercased()), bytes.count == 21 {
+        guard bytes.first == 0x41,
+              bytes.dropFirst().contains(where: { $0 != 0 }) else {
+            throw TronSccpProverError.invalidPublicInputs(field)
+        }
+        return bytes
+    }
+    do {
+        return try sourceProofTronBase58CheckPayload(value, field: field)
+    } catch {
+        throw TronSccpProverError.invalidPublicInputs(field)
+    }
+}
+
+private func requireTronRouteCanaryHashesDistinct(_ fields: [String: Data]) throws {
+    var seen: [Data: String] = [:]
+    for (field, bytes) in fields where bytes.contains(where: { $0 != 0 }) {
+        if let previous = seen[bytes] {
+            throw TronSccpProverError.invalidPublicInputs("\(field):\(previous)")
+        }
+        seen[bytes] = field
+    }
+}
+
+private func tronHashBytes(prefix: String, payload: Data) -> Data {
     var preimage = Data(prefix.utf8)
     preimage.append(payload)
-    return "0x" + Blake2b.hash256(preimage).hexEncodedString()
+    return Blake2b.hash256(preimage)
+}
+
+private func tronHashHex(prefix: String, payload: Data) -> String {
+    "0x" + tronHashBytes(prefix: prefix, payload: payload).hexEncodedString()
 }

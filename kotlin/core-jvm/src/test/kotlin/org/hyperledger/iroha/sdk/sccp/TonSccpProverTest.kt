@@ -144,6 +144,18 @@ class TonSccpProverTest {
             SccpTon.buildSubmission(sampleMessageBodyInput(bundleBytes = ByteArray(0)))
         }
         assertTrue(emptyBundle.message?.contains("bundleBytes") == true)
+        val zeroBundle = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildSubmission(sampleMessageBodyInput(bundleBytes = byteArrayOf(0, 0)))
+        }
+        assertTrue(zeroBundle.message?.contains("bundleBytes must not be all zero") == true)
+        val oversizedBundle = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildSubmission(
+                sampleMessageBodyInput(
+                    bundleBytes = ByteArray(SccpTon.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1) { 1 },
+                ),
+            )
+        }
+        assertTrue(oversizedBundle.message?.contains("bundleBytes must be at most") == true)
         val zeroProof = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildSubmission(sampleMessageBodyInput(proofBytes = byteArrayOf(0, 0)))
         }
@@ -2325,6 +2337,26 @@ class TonSccpProverTest {
             )
         }
         assertTrue(emptyBundle.message?.contains("bundleBytes") == true)
+        val zeroBundle = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    bundleBytes = byteArrayOf(0, 0),
+                    sourceAdapterDeploymentHash = "aa".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+                ),
+            )
+        }
+        assertTrue(zeroBundle.message?.contains("bundleBytes must not be all zero") == true)
+        val oversizedBundle = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    bundleBytes = ByteArray(SccpTon.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1) { 1 },
+                    sourceAdapterDeploymentHash = "aa".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+                ),
+            )
+        }
+        assertTrue(oversizedBundle.message?.contains("bundleBytes must be at most") == true)
         val zeroSourceProof = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
                 sampleProofRequestInput(
@@ -2335,6 +2367,16 @@ class TonSccpProverTest {
             )
         }
         assertTrue(zeroSourceProof.message?.contains("sourceProofBytes must not be all zero") == true)
+        val oversizedSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceProofBytes = ByteArray(SccpTon.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1) { 1 },
+                    sourceAdapterDeploymentHash = "aa".repeat(32),
+                    sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
+                ),
+            )
+        }
+        assertTrue(oversizedSourceProof.message?.contains("sourceProofBytes must be at most") == true)
         assertContentEquals(
             ByteArray(0),
             SccpTon.buildProofRequest(

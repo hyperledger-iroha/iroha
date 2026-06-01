@@ -4564,6 +4564,36 @@ public final class SolanaSccpProverTests {
                         canonicalProofResult)));
     assertTrue(wrongBinding.getMessage().contains("destinationBindingHash"));
 
+    final IllegalArgumentException zeroBundle =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.buildSubmission(
+                    new SolanaSccpProver.SubmissionInput(
+                        canonicalPublicInputs,
+                        canonicalProofResult.proofBytes(),
+                        new byte[] {0, 0},
+                        canonicalProofResult.proofContext().statementHash(),
+                        solanaDestinationBindingHash,
+                        canonicalProofResult.proofContextHash(),
+                        canonicalProofResult)));
+    assertTrue(zeroBundle.getMessage().contains("bundleBytes must not be all zero"));
+
+    final IllegalArgumentException oversizedBundle =
+        assertThrows(
+            IllegalArgumentException.class,
+            () ->
+                SolanaSccpProver.buildSubmission(
+                    new SolanaSccpProver.SubmissionInput(
+                        canonicalPublicInputs,
+                        canonicalProofResult.proofBytes(),
+                        filledBytes(SolanaSccpProver.NATIVE_RECURSIVE_MAX_PROOF_BYTES + 1, 1),
+                        canonicalProofResult.proofContext().statementHash(),
+                        solanaDestinationBindingHash,
+                        canonicalProofResult.proofContextHash(),
+                        canonicalProofResult)));
+    assertTrue(oversizedBundle.getMessage().contains("bundleBytes must be at most"));
+
     final IllegalArgumentException ex =
         assertThrows(
             IllegalArgumentException.class,

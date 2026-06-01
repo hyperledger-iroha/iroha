@@ -45,7 +45,7 @@ TRON_MESSAGE_PROOF_ACCEPTED_ABI = (
 TRON_MESSAGE_PROOF_ACCEPTED_TOPIC = evidence._keccak_256(
     TRON_MESSAGE_PROOF_ACCEPTED_ABI
 )
-TRON_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:tron-route-canary-evidence:v2"
+TRON_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:tron-route-canary-evidence:v3"
 TRON_SUBMIT_MESSAGE_PROOF_SELECTOR = bytes.fromhex("bd57826c")
 TRON_GROTH16_PROOF_VERSION = 1
 TRON_GROTH16_PROOF_ABI_BYTE_LENGTH = 32 * 12
@@ -537,14 +537,26 @@ def _parse_transaction_info_id(
     response: dict[str, Any],
     *,
     expected_transaction_id: bytes,
-    label: str = "source event transaction id",
+    label: str = "TRON transaction info",
 ) -> str:
-    raw_id = response.get("id")
-    if not isinstance(raw_id, str):
-        raise RuntimeError("TRON transaction info did not return id")
-    transaction_id = _parse_exact_hex32(raw_id, label=label)
+    transaction_ids: dict[str, bytes] = {}
+    for field in ("id", "txID", "txid"):
+        if field not in response:
+            continue
+        raw_id = response[field]
+        if not isinstance(raw_id, str):
+            raise RuntimeError(f"{label} {field} must be a transaction id")
+        transaction_ids[field] = _parse_exact_hex32(
+            raw_id,
+            label=f"{label} {field}",
+        )
+    if "id" not in transaction_ids:
+        raise RuntimeError(f"{label} did not return id")
+    if len(set(transaction_ids.values())) != 1:
+        raise RuntimeError(f"{label} returned conflicting transaction id aliases")
+    transaction_id = transaction_ids["id"]
     if transaction_id != expected_transaction_id:
-        raise RuntimeError("TRON transaction info id does not match requested id")
+        raise RuntimeError(f"{label} id does not match requested id")
     return _hex(transaction_id)
 
 
@@ -552,14 +564,40 @@ def _parse_transaction_id_field(
     response: dict[str, Any],
     *,
     expected_transaction_id: bytes,
+    label: str = "TRON transaction",
 ) -> str:
-    raw_id = response.get("txID") or response.get("txid") or response.get("id")
-    if not isinstance(raw_id, str):
-        raise RuntimeError("TRON transaction did not return txID")
-    transaction_id = _parse_exact_hex32(raw_id, label="source event transaction txID")
+    transaction_id = _parse_required_transaction_id_aliases(
+        response,
+        required_field="txID",
+        label=label,
+    )
     if transaction_id != expected_transaction_id:
-        raise RuntimeError("TRON transaction txID does not match requested id")
+        raise RuntimeError(f"{label} txID does not match requested id")
     return _hex(transaction_id)
+
+
+def _parse_required_transaction_id_aliases(
+    response: dict[str, Any],
+    *,
+    required_field: str,
+    label: str,
+) -> bytes:
+    transaction_ids: dict[str, bytes] = {}
+    for field in ("txID", "txid", "id"):
+        if field not in response:
+            continue
+        raw_id = response[field]
+        if not isinstance(raw_id, str):
+            raise RuntimeError(f"{label} {field} must be a transaction id")
+        transaction_ids[field] = _parse_exact_hex32(
+            raw_id,
+            label=f"{label} {field}",
+        )
+    if required_field not in transaction_ids:
+        raise RuntimeError(f"{label} did not return {required_field}")
+    if len(set(transaction_ids.values())) != 1:
+        raise RuntimeError(f"{label} returned conflicting transaction id aliases")
+    return transaction_ids[required_field]
 
 
 def _parse_raw_data_tron_payload(value: bytes, *, label: str) -> bytes:
@@ -1114,6 +1152,63 @@ def _parse_canonical_u32(value: Any, *, label: str) -> int:
     if parsed < 0 or parsed > 0xFFFFFFFF:
         raise ValueError(f"{label} must be a u32")
     return parsed
+
+
+def _required_transaction_info_block_number(
+    response: dict[str, Any],
+    *,
+    label: str,
+) -> int:
+    block_number = response.get("blockNumber")
+    if type(block_number) is not int or block_number <= 0:
+        raise RuntimeError(f"{label} blockNumber must be a positive integer")
+    return block_number
+
+
+def _required_transaction_info_block_timestamp(
+    response: dict[str, Any],
+    *,
+    label: str,
+) -> int:
+    block_timestamp = response.get("blockTimeStamp")
+    if type(block_timestamp) is not int or block_timestamp < 0:
+        raise RuntimeError(f"{label} blockTimeStamp must be a non-negative integer")
+    return block_timestamp
+
+
+def _summary_block_metadata(
+    summary: dict[str, Any],
+    *,
+    label: str,
+) -> tuple[int, int]:
+    block_number = summary.get("block_number")
+    if type(block_number) is not int or block_number <= 0:
+        raise RuntimeError(f"{label} block_number must be a positive integer")
+    block_timestamp = summary.get("block_timestamp")
+    if type(block_timestamp) is not int or block_timestamp < 0:
+        raise RuntimeError(f"{label} block_timestamp must be a non-negative integer")
+    return block_number, block_timestamp
+
+
+def _check_optional_log_index_field(
+    log: dict[str, Any],
+    *,
+    expected_index: int,
+    label: str,
+) -> None:
+    has_camel = "logIndex" in log
+    has_snake = "log_index" in log
+    if has_camel and has_snake:
+        raise RuntimeError(f"{label} must not include both logIndex and log_index")
+    if not has_camel and not has_snake:
+        return
+    field = "logIndex" if has_camel else "log_index"
+    log_index = _parse_canonical_u32(log[field], label=f"{label} {field}")
+    if log_index != expected_index:
+        raise RuntimeError(
+            f"{label} {field} does not match log list index: "
+            f"expected {expected_index}, got {log_index}"
+        )
 
 
 def _parse_protobuf_nonnegative_int(value: Any, *, label: str) -> int:
@@ -2764,9 +2859,10 @@ def _source_event_solid_block_summary(
     for index, transaction in enumerate(transactions):
         if not isinstance(transaction, dict):
             raise RuntimeError("source-event block transaction must be an object")
-        tx_id = _parse_exact_hex32(
-            transaction.get("txID"),
-            label=f"source-event block transaction[{index}] txID",
+        tx_id = _parse_required_transaction_id_aliases(
+            transaction,
+            required_field="txID",
+            label=f"source-event block transaction[{index}]",
         )
         transaction_bytes, raw_data_bytes = _tron_transaction_bytes_from_json(
             transaction,
@@ -2945,6 +3041,7 @@ def _source_event_trigger_contract_summary(
     parsed_id = _parse_transaction_id_field(
         response,
         expected_transaction_id=transaction_id,
+        label="source-event transaction",
     )
     raw_data = _parse_exact_hex_blob(
         response.get("raw_data_hex"),
@@ -3040,6 +3137,7 @@ def _source_event_transaction_summary(
     parsed_id = _parse_transaction_info_id(
         response,
         expected_transaction_id=transaction_id,
+        label="source-event transaction info",
     )
     receipt = response.get("receipt")
     receipt_status = receipt.get("result") if isinstance(receipt, dict) else None
@@ -3089,6 +3187,11 @@ def _source_event_transaction_summary(
             and topic0 == TRON_SOURCE_EVENT_TOPIC
             and topic1 == source_event_digest
         ):
+            _check_optional_log_index_field(
+                log,
+                expected_index=index,
+                label="source-event log",
+            )
             summary: dict[str, Any] = {
                 "transaction_id": parsed_id,
                 "receipt_status": receipt_status,
@@ -3110,20 +3213,14 @@ def _source_event_transaction_summary(
             "source-event transaction log did not contain the expected "
             "SccpSourceEvent(bytes32) event"
         )
-    block_number = response.get("blockNumber")
-    if block_number is not None:
-        if type(block_number) is not int or block_number <= 0:
-            raise RuntimeError(
-                "source-event transaction info blockNumber must be a positive integer"
-            )
-        matching_summary["block_number"] = block_number
-    block_timestamp = response.get("blockTimeStamp")
-    if block_timestamp is not None:
-        if type(block_timestamp) is not int or block_timestamp < 0:
-            raise RuntimeError(
-                "source-event transaction info blockTimeStamp must be a non-negative integer"
-            )
-        matching_summary["block_timestamp"] = block_timestamp
+    matching_summary["block_number"] = _required_transaction_info_block_number(
+        response,
+        label="source-event transaction info",
+    )
+    matching_summary["block_timestamp"] = _required_transaction_info_block_timestamp(
+        response,
+        label="source-event transaction info",
+    )
     return matching_summary
 
 
@@ -3171,11 +3268,21 @@ def _require_u32_value(value: int, *, label: str) -> int:
     return value
 
 
+def _require_u64_value(value: int, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RuntimeError(f"{label} must be a u64")
+    if value < 0 or value > 0xFFFF_FFFF_FFFF_FFFF:
+        raise RuntimeError(f"{label} must be a u64")
+    return value
+
+
 def _tron_route_canary_transaction_evidence_hash(
     *,
     route_allowlist_hash: bytes,
     transaction_id: bytes,
     transaction_owner_address: bytes,
+    block_number: int,
+    block_timestamp: int,
     log_index: int,
     verifier_address20: bytes,
     call_data_sha256: bytes,
@@ -3210,6 +3317,16 @@ def _tron_route_canary_transaction_evidence_hash(
     transaction_owner_address = _require_tron_payload_address(
         transaction_owner_address,
         label="route-canary transaction owner address",
+    )
+    block_number = _require_u64_value(
+        block_number,
+        label="route-canary block number",
+    )
+    if block_number == 0:
+        raise RuntimeError("route-canary block number must be a positive u64")
+    block_timestamp = _require_u64_value(
+        block_timestamp,
+        label="route-canary block timestamp",
     )
     log_index = _require_u32_value(
         log_index,
@@ -3308,11 +3425,13 @@ def _tron_route_canary_transaction_evidence_hash(
         raise RuntimeError("route-canary signature recovery witness must be true")
 
     payload = bytearray()
-    evidence._push_u8(payload, 2)
+    evidence._push_u8(payload, 3)
     payload.extend(route_allowlist_hash)
     payload.extend(b"\x41" + verifier_address20)
     payload.extend(transaction_id)
     payload.extend(transaction_owner_address)
+    evidence._push_u64(payload, block_number)
+    evidence._push_u64(payload, block_timestamp)
     evidence._push_u32(payload, log_index)
     payload.extend(call_data_sha256)
     payload.extend(message_id)
@@ -3372,6 +3491,11 @@ def _route_canary_message_proof_event_summary(
         raise RuntimeError(
             "route-canary MessageProofAccepted log must contain exactly three topics"
         )
+    _check_optional_log_index_field(
+        log,
+        expected_index=log_index,
+        label="route-canary MessageProofAccepted log",
+    )
     message_id = _require_nonzero_word(
         _parse_exact_hex32(topics[1], label="route-canary messageId topic"),
         label="route-canary messageId",
@@ -3943,6 +4067,7 @@ def _route_canary_trigger_contract_summary(
     parsed_id = _parse_transaction_id_field(
         response,
         expected_transaction_id=transaction_id,
+        label="route-canary transaction",
     )
     verifier_payload = parse_tron_address_payload(
         str(destination_verifier["address"]),
@@ -4060,7 +4185,7 @@ def _route_canary_transaction_summary(
     parsed_id = _parse_transaction_info_id(
         response,
         expected_transaction_id=transaction_id,
-        label="route-canary transaction id",
+        label="route-canary transaction info",
     )
     receipt = response.get("receipt")
     receipt_status = receipt.get("result") if isinstance(receipt, dict) else None
@@ -4124,20 +4249,14 @@ def _route_canary_transaction_summary(
             "route-canary transaction log did not contain the expected "
             "MessageProofAccepted event"
         )
-    block_number = response.get("blockNumber")
-    if block_number is not None:
-        if type(block_number) is not int or block_number <= 0:
-            raise RuntimeError(
-                "route-canary transaction info blockNumber must be a positive integer"
-            )
-        matching_summary["block_number"] = block_number
-    block_timestamp = response.get("blockTimeStamp")
-    if block_timestamp is not None:
-        if type(block_timestamp) is not int or block_timestamp < 0:
-            raise RuntimeError(
-                "route-canary transaction info blockTimeStamp must be a non-negative integer"
-            )
-        matching_summary["block_timestamp"] = block_timestamp
+    matching_summary["block_number"] = _required_transaction_info_block_number(
+        response,
+        label="route-canary transaction info",
+    )
+    matching_summary["block_timestamp"] = _required_transaction_info_block_timestamp(
+        response,
+        label="route-canary transaction info",
+    )
     return matching_summary
 
 
@@ -4995,6 +5114,10 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 [
                     "--route-canary-transaction-id",
                     str(route_canary_transaction["transaction_id"]),
+                    "--route-canary-block-number",
+                    str(route_canary_transaction["block_number"]),
+                    "--route-canary-block-timestamp",
+                    str(route_canary_transaction["block_timestamp"]),
                     "--route-canary-log-index",
                     str(route_canary_transaction["log_index"]),
                     "--route-canary-message-id",
@@ -5120,6 +5243,22 @@ def _source_event_transaction_verified(
             str(transaction["transaction_id"]),
             label="source-event transaction id",
         )
+        block_number, block_timestamp = _summary_block_metadata(
+            transaction,
+            label="source-event transaction",
+        )
+        solid_block = transaction.get("solid_block")
+        if not isinstance(solid_block, dict):
+            return False
+        solid_block_number, solid_block_timestamp = _summary_block_metadata(
+            solid_block,
+            label="source-event solid block",
+        )
+        if (
+            solid_block_number != block_number
+            or solid_block_timestamp != block_timestamp
+        ):
+            return False
         raw_data = _parse_exact_hex_blob(
             trigger_contract.get("raw_data_hex"),
             label="source-event transaction raw_data_hex",
@@ -5331,6 +5470,10 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
             str(transaction.get("transaction_id")),
             label="route canary transaction id",
         )
+        _summary_block_metadata(
+            transaction,
+            label="route canary transaction",
+        )
         transaction_source_domain = _parse_canonical_u32(
             transaction["source_domain"],
             label="route canary source domain",
@@ -5414,11 +5557,17 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
             raw_data_hash=transaction_id,
             owner_payload=owner_payload,
         )
+        block_number, block_timestamp = _summary_block_metadata(
+            transaction,
+            label="route canary transaction",
+        )
         recomputed_hash = _hex(
             _tron_route_canary_transaction_evidence_hash(
                 route_allowlist_hash=route_allowlist_hash,
                 transaction_id=transaction_id,
                 transaction_owner_address=owner_payload,
+                block_number=block_number,
+                block_timestamp=block_timestamp,
                 log_index=transaction["log_index"],
                 verifier_address20=verifier_payload[1:],
                 call_data_sha256=_parse_hex32(
@@ -5799,6 +5948,14 @@ def _annotate_full_toml_with_live_metadata(
                 _toml_comment(
                     "sccp_tron_route_canary_transaction_owner_address",
                     str(route_canary_transaction["trigger_contract"]["owner_address"]),
+                ),
+                _toml_comment(
+                    "sccp_tron_route_canary_block_number",
+                    str(route_canary_transaction["block_number"]),
+                ),
+                _toml_comment(
+                    "sccp_tron_route_canary_block_timestamp",
+                    str(route_canary_transaction["block_timestamp"]),
                 ),
                 _toml_comment(
                     "sccp_tron_route_canary_log_index",
@@ -6443,7 +6600,7 @@ def collect_live_evidence(
                     for index in range(solid_block_confirmation_depth)
                 ]
                 transaction_summary["trigger_contract"] = trigger_contract
-                transaction_summary["solid_block"] = _source_event_solid_block_summary(
+                solid_block = _source_event_solid_block_summary(
                     block,
                     parent_response=parent_block,
                     ancestor_responses=ancestor_blocks,
@@ -6475,6 +6632,12 @@ def collect_live_evidence(
                         label="source proof transaction hash",
                     ),
                 )
+                if transaction_summary["block_timestamp"] != solid_block["block_timestamp"]:
+                    raise RuntimeError(
+                        "source-event transaction info blockTimeStamp does not "
+                        "match block header timestamp"
+                    )
+                transaction_summary["solid_block"] = solid_block
                 transaction_summary.update(
                     _source_event_transaction_production_readiness(
                         transaction_summary["solid_block"]
@@ -6571,6 +6734,8 @@ def collect_live_evidence(
                 trigger_contract["owner_address"],
                 label="route-canary transaction owner address",
             ),
+            block_number=route_canary_transaction["block_number"],
+            block_timestamp=route_canary_transaction["block_timestamp"],
             log_index=route_canary_transaction["log_index"],
             verifier_address20=parse_tron_address_payload(
                 str(summary["destination_verifier"]["address"]),

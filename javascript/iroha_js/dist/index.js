@@ -634,6 +634,8 @@ export {
   solanaSccpRouteCanaryEvidenceHash,
   canonicalTonSccpRouteCanaryEvidenceBytes,
   tonSccpRouteCanaryEvidenceHash,
+  canonicalTronSccpRouteCanaryEvidenceBytes,
+  tronSccpRouteCanaryEvidenceHash,
   evmSccpDestinationBinding,
   evmSccpDestinationBindingHash,
   tronSccpDestinationBinding,

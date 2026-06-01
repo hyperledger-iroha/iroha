@@ -309,18 +309,8 @@ public func buildSubstrateSccpProofRequest(_ input: SubstrateSccpProofRequestInp
     guard input.backend == sccpSubstrateRuntimeProofBackendV1 else {
         throw SubstrateSccpProverError.invalidPublicInputs("backend")
     }
-    guard !input.bundleBytes.isEmpty else {
-        throw SubstrateSccpProverError.invalidPublicInputs("bundleBytes")
-    }
-    guard input.bundleBytes.count <= Int(UInt32.max) else {
-        throw SubstrateSccpProverError.invalidPublicInputs("bundleBytes")
-    }
-    guard input.sourceProofBytes.count <= Int(UInt32.max) else {
-        throw SubstrateSccpProverError.invalidPublicInputs("sourceProofBytes")
-    }
-    guard input.sourceProofBytes.isEmpty || input.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw SubstrateSccpProverError.invalidPublicInputs("sourceProofBytes")
-    }
+    let bundleBytes = try requireSubstrateNativeRecursivePayloadBytes(input.bundleBytes, field: "bundleBytes")
+    let sourceProofBytes = try requireSubstrateOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
     guard input.sourceDomain == sccpDomainSora else {
         throw SubstrateSccpProverError.invalidPublicInputs("sourceDomain")
     }
@@ -335,10 +325,10 @@ public func buildSubstrateSccpProofRequest(_ input: SubstrateSccpProofRequestInp
     var preimage = Data()
     substrateAppendU32Le(input.sourceDomain, to: &preimage)
     preimage.append(publicInputsBytes)
-    substrateAppendU32Le(UInt32(input.bundleBytes.count), to: &preimage)
-    preimage.append(input.bundleBytes)
-    substrateAppendU32Le(UInt32(input.sourceProofBytes.count), to: &preimage)
-    preimage.append(input.sourceProofBytes)
+    substrateAppendU32Le(UInt32(bundleBytes.count), to: &preimage)
+    preimage.append(bundleBytes)
+    substrateAppendU32Le(UInt32(sourceProofBytes.count), to: &preimage)
+    preimage.append(sourceProofBytes)
     try preimage.append(substrateBytesFromHex32(proofContext.statementHash, field: "statementHash"))
     try preimage.append(substrateBytesFromHex32(proofContext.destinationBindingHash, field: "destinationBindingHash"))
     return SubstrateSccpProofRequest(
@@ -348,8 +338,8 @@ public func buildSubstrateSccpProofRequest(_ input: SubstrateSccpProofRequestInp
         targetDomain: input.publicInputs.targetDomain,
         publicInputs: input.publicInputs,
         publicInputsBytes: publicInputsBytes,
-        bundleBytes: input.bundleBytes,
-        sourceProofBytes: input.sourceProofBytes,
+        bundleBytes: bundleBytes,
+        sourceProofBytes: sourceProofBytes,
         proofContext: proofContext,
         statementHash: proofContext.statementHash,
         destinationBindingHash: proofContext.destinationBindingHash,
@@ -401,10 +391,15 @@ public func buildSubstrateSccpSubmission(_ input: SubstrateSccpSubmissionInput) 
     guard input.proofBytes.contains(where: { $0 != 0 }) else {
         throw SubstrateSccpProverError.allZeroProof
     }
+    let bundleBytes = try requireSubstrateNativeRecursivePayloadBytes(input.bundleBytes, field: "bundleBytes")
+    let sourceProofBytes = try requireSubstrateOptionalSourceProofBytes(input.sourceProofBytes, field: "sourceProofBytes")
+    if input.proofResult == nil && !sourceProofBytes.isEmpty {
+        throw SubstrateSccpProverError.invalidPublicInputs("sourceProofBytes")
+    }
     let request = try buildSubstrateSccpProofRequest(SubstrateSccpProofRequestInput(
         publicInputs: input.publicInputs,
-        bundleBytes: input.bundleBytes,
-        sourceProofBytes: input.sourceProofBytes,
+        bundleBytes: bundleBytes,
+        sourceProofBytes: sourceProofBytes,
         statementHash: input.statementHash,
         destinationBindingHash: input.destinationBindingHash,
         backend: sccpSubstrateRuntimeProofBackendV1,
@@ -417,10 +412,10 @@ public func buildSubstrateSccpSubmission(_ input: SubstrateSccpSubmissionInput) 
         guard proofResult.publicInputs == input.publicInputs else {
             throw SubstrateSccpProverError.invalidPublicInputs("proofResult.publicInputs")
         }
-        guard proofResult.bundleBytes == input.bundleBytes else {
+        guard proofResult.bundleBytes == bundleBytes else {
             throw SubstrateSccpProverError.invalidPublicInputs("bundleBytes")
         }
-        guard proofResult.sourceProofBytes == input.sourceProofBytes else {
+        guard proofResult.sourceProofBytes == sourceProofBytes else {
             throw SubstrateSccpProverError.invalidPublicInputs("sourceProofBytes")
         }
         guard proofResult.proofBase64 == proofResult.proofBytes.base64EncodedString() else {
@@ -440,7 +435,7 @@ public func buildSubstrateSccpSubmission(_ input: SubstrateSccpSubmissionInput) 
     let argumentPairs: [(String, Data)] = [
         ("proof_bytes", input.proofBytes),
         ("public_inputs", request.publicInputsBytes),
-        ("bundle_bytes", input.bundleBytes),
+        ("bundle_bytes", bundleBytes),
     ]
     var runtimeCall = try substrateScaleVec(
         Data(sccpSubstrateSubmitMessageProofEntrypointV1.utf8),
@@ -473,7 +468,7 @@ public func buildSubstrateSccpSubmission(_ input: SubstrateSccpSubmissionInput) 
         requestHash: request.requestHash,
         proofBytes: input.proofBytes,
         publicInputsBytes: request.publicInputsBytes,
-        bundleBytes: input.bundleBytes,
+        bundleBytes: bundleBytes,
         arguments: arguments,
         runtimeCall: runtimeCall,
         runtimeCallHex: "0x" + runtimeCall.hexEncodedString(),
@@ -521,12 +516,22 @@ private func requireProductionSubstrateSccpProofRequest(_ request: SubstrateSccp
           substrateTargetDomainIsSupported(request.targetDomain) else {
         throw SubstrateSccpProverError.invalidPublicInputs("request.targetDomain")
     }
-    guard !request.bundleBytes.isEmpty else {
-        throw SubstrateSccpProverError.invalidPublicInputs("request.bundleBytes")
+    try requireSubstrateNativeRecursivePayloadBytes(request.bundleBytes, field: "request.bundleBytes")
+    try requireSubstrateOptionalSourceProofBytes(request.sourceProofBytes, field: "request.sourceProofBytes")
+}
+
+@discardableResult
+private func requireSubstrateNativeRecursivePayloadBytes(_ bytes: Data, field: String) throws -> Data {
+    guard !bytes.isEmpty else {
+        throw SubstrateSccpProverError.invalidPublicInputs(field)
     }
-    guard request.sourceProofBytes.isEmpty || request.sourceProofBytes.contains(where: { $0 != 0 }) else {
-        throw SubstrateSccpProverError.invalidPublicInputs("request.sourceProofBytes")
+    guard bytes.count <= sccpNativeRecursiveMaxProofBytes else {
+        throw SubstrateSccpProverError.invalidPublicInputs(field)
     }
+    guard bytes.contains(where: { $0 != 0 }) else {
+        throw SubstrateSccpProverError.invalidPublicInputs(field)
+    }
+    return Data(bytes)
 }
 
 private func substrateTargetDomainIsSupported(_ value: UInt32) -> Bool {
@@ -547,6 +552,17 @@ private func substrateBytesFromHex32(_ value: String, field: String) throws -> D
     hex = hex.lowercased()
     guard hex.count == 64, let bytes = Data(hexString: hex), bytes.count == 32 else {
         throw SubstrateSccpProverError.invalidHex32(field)
+    }
+    return bytes
+}
+
+@discardableResult
+private func requireSubstrateOptionalSourceProofBytes(_ bytes: Data, field: String) throws -> Data {
+    guard bytes.count <= sccpSourceStateMaxProofBytes else {
+        throw SubstrateSccpProverError.invalidPublicInputs(field)
+    }
+    guard bytes.isEmpty || bytes.contains(where: { $0 != 0 }) else {
+        throw SubstrateSccpProverError.invalidPublicInputs(field)
     }
     return bytes
 }

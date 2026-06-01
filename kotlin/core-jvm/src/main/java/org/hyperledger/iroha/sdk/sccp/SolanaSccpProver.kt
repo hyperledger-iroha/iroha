@@ -3531,7 +3531,7 @@ object SccpSolana {
 
     @JvmStatic
     fun buildSubmission(input: SolanaSccpSubmissionInput): SolanaSccpSubmission {
-        require(input.bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
+        val bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes, "bundleBytes")
         require(input.publicInputs.version == 1) { "publicInputs.version must be 1" }
         require(input.publicInputs.targetDomain == DOMAIN_SOLANA) {
             "publicInputs.targetDomain must be Solana"
@@ -3574,7 +3574,6 @@ object SccpSolana {
             "destinationBindingHash",
         )
         val proofContextHashBytes = hex32Bytes(expectedProofContextHash, "proofContextHash")
-        val bundleBytes = input.bundleBytes.copyOf()
         val argumentPairs = listOf(
             "proof_bytes" to proofBytes,
             "public_inputs" to publicInputsBytes,
@@ -3605,6 +3604,15 @@ object SccpSolana {
             envelopeBytes = instructionData.copyOf(),
             envelopeHex = "0x" + hexLower(instructionData),
         )
+    }
+
+    private fun requireNativeRecursivePayloadBytes(bytes: ByteArray, label: String): ByteArray {
+        require(bytes.isNotEmpty()) { "$label must not be empty" }
+        require(bytes.size <= NATIVE_RECURSIVE_MAX_PROOF_BYTES) {
+            "$label must be at most $NATIVE_RECURSIVE_MAX_PROOF_BYTES bytes"
+        }
+        require(bytes.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return bytes.copyOf()
     }
 
     @JvmStatic

@@ -40,7 +40,7 @@ TRON_SOURCE_BRIDGE_CONFIG_LABEL = b"iroha:sccp:tron-source-bridge-config:v1"
 TRON_DESTINATION_BINDING_LABEL = b"iroha:sccp:tron-destination-binding:v1"
 SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
 TRON_DPOS_SOURCE_GATE_LABEL = b"sccp:tron:dpos-source-gate:v1"
-TRON_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:tron-route-canary-evidence:v2"
+TRON_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:tron-route-canary-evidence:v3"
 TRON_SOURCE_MESSAGE_CALL_ABI = b"submitSccpSourceEvent(uint32,uint32,bytes32)"
 TRON_TRIGGER_SMART_CONTRACT_TYPE_URL = (
     b"type.googleapis.com/protocol.TriggerSmartContract"
@@ -241,9 +241,31 @@ def parse_u32(value: object, *, label: str) -> int:
     return parsed
 
 
+def parse_u64(value: object, *, label: str) -> int:
+    """Parse a canonical unsigned 64-bit integer."""
+
+    if type(value) is int:
+        parsed = value
+    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+        parsed = int(value, 10)
+    else:
+        raise argparse.ArgumentTypeError(f"{label} must be a u64")
+    if parsed < 0 or parsed > 0xFFFFFFFFFFFFFFFF:
+        raise argparse.ArgumentTypeError(f"{label} must be a u64")
+    return parsed
+
+
 def _require_exact_u32(value: object, label: str) -> int:
     if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
         raise ValueError(f"{label} must be an exact u32")
+    return value
+
+
+def _require_exact_u64(value: object, label: str, *, positive: bool = False) -> int:
+    if type(value) is not int or value < 0 or value > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{label} must be an exact u64")
+    if positive and value == 0:
+        raise ValueError(f"{label} must be a positive u64")
     return value
 
 
@@ -1287,6 +1309,14 @@ def _route_canary_toml_lines(
                     "tron_route_canary_transaction_owner_address",
                     _hex(values["transaction_owner_address"]),
                 ),
+                _toml_line(
+                    "tron_route_canary_block_number",
+                    values["block_number"],
+                ),
+                _toml_line(
+                    "tron_route_canary_block_timestamp",
+                    values["block_timestamp"],
+                ),
                 _toml_line("tron_route_canary_log_index", values["log_index"]),
                 _toml_line(
                     "tron_route_canary_message_id",
@@ -1356,6 +1386,8 @@ def _route_canary_toml_lines(
 _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_transaction_id",
     "route_canary_transaction_owner_address",
+    "route_canary_block_number",
+    "route_canary_block_timestamp",
     "route_canary_log_index",
     "route_canary_message_id",
     "route_canary_call_data_sha256",
@@ -1481,6 +1513,15 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
             "route canary transaction owner address must be a non-zero "
             "0x41-prefixed TRON address"
         )
+    block_number = _require_exact_u64(
+        getattr(args, "route_canary_block_number"),
+        "route_canary_block_number",
+        positive=True,
+    )
+    block_timestamp = _require_exact_u64(
+        getattr(args, "route_canary_block_timestamp"),
+        "route_canary_block_timestamp",
+    )
     signature_sha256 = _require_fixed_bytes(
         getattr(args, "route_canary_signature_sha256"),
         label="route_canary_signature_sha256",
@@ -1514,6 +1555,8 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
             byte_length=32,
         ),
         "transaction_owner_address": transaction_owner_address,
+        "block_number": block_number,
+        "block_timestamp": block_timestamp,
         "log_index": log_index,
         "message_id": _require_fixed_bytes(
             getattr(args, "route_canary_message_id"),
@@ -1609,11 +1652,13 @@ def _route_canary_transaction_evidence_hash(
         label="destination_verifier_address",
     )
     payload = bytearray()
-    _push_u8(payload, 2)
+    _push_u8(payload, 3)
     payload.extend(route_allowlist_hash)
     payload.extend(b"\x41" + verifier_address)
     payload.extend(values["transaction_id"])
     payload.extend(values["transaction_owner_address"])
+    _push_u64(payload, values["block_number"])
+    _push_u64(payload, values["block_timestamp"])
     _push_u32(payload, values["log_index"])
     payload.extend(values["call_data_sha256"])
     payload.extend(values["message_id"])
@@ -1647,6 +1692,10 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
         + json.dumps(_hex(values["transaction_id"])),
         "# sccp_tron_route_canary_transaction_owner_address = "
         + json.dumps(_hex(values["transaction_owner_address"])),
+        "# sccp_tron_route_canary_block_number = "
+        + json.dumps(str(values["block_number"])),
+        "# sccp_tron_route_canary_block_timestamp = "
+        + json.dumps(str(values["block_timestamp"])),
         "# sccp_tron_route_canary_log_index = "
         + json.dumps(str(values["log_index"])),
         "# sccp_tron_route_canary_message_id = "
@@ -1745,6 +1794,8 @@ def _route_canary_summary(
                 "transaction_owner_address": _hex(
                     values["transaction_owner_address"]
                 ),
+                "block_number": values["block_number"],
+                "block_timestamp": values["block_timestamp"],
                 "log_index": values["log_index"],
                 "message_id": _hex(values["message_id"]),
                 "call_data_sha256": _hex(values["call_data_sha256"]),
@@ -2595,6 +2646,16 @@ def build_parser() -> argparse.ArgumentParser:
             "0x41-prefixed visible TriggerSmartContract owner address from the "
             "route canary transaction."
         ),
+    )
+    parser.add_argument(
+        "--route-canary-block-number",
+        type=lambda value: parse_u64(value, label="route canary block number"),
+        help="Positive block number of the route canary transaction.",
+    )
+    parser.add_argument(
+        "--route-canary-block-timestamp",
+        type=lambda value: parse_u64(value, label="route canary block timestamp"),
+        help="Non-negative millisecond block timestamp of the route canary transaction.",
     )
     parser.add_argument(
         "--route-canary-log-index",

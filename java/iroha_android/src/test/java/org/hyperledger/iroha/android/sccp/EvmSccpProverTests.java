@@ -241,6 +241,21 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must not be all zero");
     }
     assert threw : "all-zero EVM source proof bytes must be rejected";
+
+    final byte[] oversizedSourceProof =
+        new byte[EvmSccpProver.SOURCE_STATE_MAX_PROOF_BYTES + 1];
+    Arrays.fill(oversizedSourceProof, (byte) 1);
+    threw = false;
+    try {
+      EvmSccpProver.buildProofRequest(
+          sampleProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+              oversizedSourceProof,
+              repeat("56", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes must be at most");
+    }
+    assert threw : "oversized EVM source proof bytes must be rejected";
     assert EvmSccpProver.buildProofRequest(
             sampleProofRequestInput(
                 samplePublicInputs(EvmSccpProver.DOMAIN_ETH),

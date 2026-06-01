@@ -8040,18 +8040,36 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_transaction_hash: Option<String>,
     /// EVM MessageProofAccepted log index bound by route canary evidence.
     pub evm_route_canary_log_index: Option<u32>,
+    /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_call_data_sha256: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
     pub evm_route_canary_message_id: Option<String>,
+    /// Hex-encoded EVM submitSccpMessageProof payload hash.
+    pub evm_route_canary_payload_hash: Option<String>,
+    /// SCCP target domain decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_target_domain: Option<u32>,
     /// Hex-encoded EVM MessageProofAccepted statement hash bound by route canary evidence.
     pub evm_route_canary_statement_hash: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted commitment root bound by route canary evidence.
     pub evm_route_canary_commitment_root: Option<String>,
+    /// Hex-encoded finality height decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_finality_height: Option<String>,
+    /// Hex-encoded finality block hash decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_finality_block_hash: Option<String>,
+    /// Proof version decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_proof_version: Option<u32>,
+    /// SCCP source domain decoded from the EVM submitSccpMessageProof calldata proof descriptor.
+    pub evm_route_canary_proof_source_domain: Option<u32>,
     /// Whether EVM `usedMessageProofs(messageId)` was true for the canary.
     pub evm_route_canary_used_message_proof: Option<bool>,
     /// Hex-encoded TRON MessageProofAccepted transaction id bound by route canary evidence.
     pub tron_route_canary_transaction_id: Option<String>,
     /// Hex-encoded 0x41-prefixed TRON transaction owner address bound by route canary evidence.
     pub tron_route_canary_transaction_owner_address: Option<String>,
+    /// Positive TRON block number containing the route canary transaction.
+    pub tron_route_canary_block_number: Option<u64>,
+    /// TRON block timestamp in milliseconds containing the route canary transaction.
+    pub tron_route_canary_block_timestamp: Option<u64>,
     /// TRON MessageProofAccepted log index bound by route canary evidence.
     pub tron_route_canary_log_index: Option<u32>,
     /// Hex-encoded TRON MessageProofAccepted message id bound by route canary evidence.

@@ -4213,18 +4213,36 @@ pub struct SccpRouteAllowlist {
     pub evm_route_canary_transaction_hash: Option<String>,
     /// EVM MessageProofAccepted log index bound by route canary evidence.
     pub evm_route_canary_log_index: Option<u32>,
+    /// Hex-encoded SHA-256 digest of the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_call_data_sha256: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted message id bound by route canary evidence.
     pub evm_route_canary_message_id: Option<String>,
+    /// Hex-encoded EVM submitSccpMessageProof payload hash.
+    pub evm_route_canary_payload_hash: Option<String>,
+    /// SCCP target domain decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_target_domain: Option<u32>,
     /// Hex-encoded EVM MessageProofAccepted statement hash bound by route canary evidence.
     pub evm_route_canary_statement_hash: Option<String>,
     /// Hex-encoded EVM MessageProofAccepted commitment root bound by route canary evidence.
     pub evm_route_canary_commitment_root: Option<String>,
+    /// Hex-encoded finality height decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_finality_height: Option<String>,
+    /// Hex-encoded finality block hash decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_finality_block_hash: Option<String>,
+    /// Proof version decoded from the EVM submitSccpMessageProof calldata.
+    pub evm_route_canary_proof_version: Option<u32>,
+    /// SCCP source domain decoded from the EVM submitSccpMessageProof calldata proof descriptor.
+    pub evm_route_canary_proof_source_domain: Option<u32>,
     /// Whether EVM `usedMessageProofs(messageId)` was true for the canary.
     pub evm_route_canary_used_message_proof: Option<bool>,
     /// Hex-encoded TRON MessageProofAccepted transaction id bound by route canary evidence.
     pub tron_route_canary_transaction_id: Option<String>,
     /// Hex-encoded 0x41-prefixed TRON transaction owner address bound by route canary evidence.
     pub tron_route_canary_transaction_owner_address: Option<String>,
+    /// Positive TRON block number containing the route canary transaction.
+    pub tron_route_canary_block_number: Option<u64>,
+    /// TRON block timestamp in milliseconds containing the route canary transaction.
+    pub tron_route_canary_block_timestamp: Option<u64>,
     /// TRON MessageProofAccepted log index bound by route canary evidence.
     pub tron_route_canary_log_index: Option<u32>,
     /// Hex-encoded TRON MessageProofAccepted message id bound by route canary evidence.
@@ -4286,13 +4304,22 @@ impl SccpRouteAllowlist {
             route_canary_destination_binding_hash: self.route_canary_destination_binding_hash,
             evm_route_canary_transaction_hash: self.evm_route_canary_transaction_hash,
             evm_route_canary_log_index: self.evm_route_canary_log_index,
+            evm_route_canary_call_data_sha256: self.evm_route_canary_call_data_sha256,
             evm_route_canary_message_id: self.evm_route_canary_message_id,
+            evm_route_canary_payload_hash: self.evm_route_canary_payload_hash,
+            evm_route_canary_target_domain: self.evm_route_canary_target_domain,
             evm_route_canary_statement_hash: self.evm_route_canary_statement_hash,
             evm_route_canary_commitment_root: self.evm_route_canary_commitment_root,
+            evm_route_canary_finality_height: self.evm_route_canary_finality_height,
+            evm_route_canary_finality_block_hash: self.evm_route_canary_finality_block_hash,
+            evm_route_canary_proof_version: self.evm_route_canary_proof_version,
+            evm_route_canary_proof_source_domain: self.evm_route_canary_proof_source_domain,
             evm_route_canary_used_message_proof: self.evm_route_canary_used_message_proof,
             tron_route_canary_transaction_id: self.tron_route_canary_transaction_id,
             tron_route_canary_transaction_owner_address: self
                 .tron_route_canary_transaction_owner_address,
+            tron_route_canary_block_number: self.tron_route_canary_block_number,
+            tron_route_canary_block_timestamp: self.tron_route_canary_block_timestamp,
             tron_route_canary_log_index: self.tron_route_canary_log_index,
             tron_route_canary_message_id: self.tron_route_canary_message_id,
             tron_route_canary_call_data_sha256: self.tron_route_canary_call_data_sha256,

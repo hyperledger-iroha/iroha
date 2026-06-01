@@ -19,6 +19,11 @@ SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES = {
     7: "2a57fe4beb69e8201299f2c01259a025cafc8388bb38e2a727c2fc872893e13a",
     8: "dac819bff0aa57f7596f06297dfec39027aaab63213497020b772c355a6eaecb",
 }
+SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES = {
+    6: "ddc8810dfb1ff75b37f80db8f77ab3d8a765c59db422ce9e433ba3d56ae9b841",
+    7: "f35f6069d12a12c941858026634815aa02567414df8105f44769dd17d1b3e9b4",
+    8: "c149b8f8e7f626085304c7ec172462403dc08c0f27368d826a60c4c744b9fafa",
+}
 SUBSTRATE_TEMPLATE_SOURCE_STATE_VERIFIER_HASHES = {
     6: "af2d28b3e07447239f28e90ce4fdee7e6cd3778c087eaeda7170781eb4b76b9c",
     7: "664576f1a2409099c3b7dba82512c8757501f2869aedda0e45f858572b940b5d",
@@ -57,6 +62,9 @@ def substrate_args(module, domain=8):
         ),
         expected_source_adapter_engine_deployment_hash=bytes.fromhex(
             SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[domain]
+        ),
+        expected_runtime_storage_gate_hash=bytes.fromhex(
+            SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES[domain]
         ),
     )
 
@@ -265,6 +273,10 @@ def test_substrate_source_record_hashes_match_rust_vectors():
             module.substrate_source_adapter_engine_deployment_record_hash(args).hex()
             == SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[domain]
         )
+        assert (
+            module.substrate_runtime_storage_gate_hash(args).hex()
+            == SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES[domain]
+        )
         profile = module.SUBSTRATE_SOURCE_PROFILES[domain]
         assert (
             module._substrate_template_component_hash(
@@ -441,8 +453,10 @@ def test_substrate_cli_json_summary_and_toml_output(capsys):
         "0x" + SUBSTRATE_SOURCE_VERIFIER_MATERIAL_HASHES[7],
         "--expected-source-adapter-engine-deployment-hash",
         "0x" + SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[7],
+        "--expected-runtime-storage-gate-hash",
+        "0x" + SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES[7],
     ]
-    unpinned_args = args[:-4]
+    unpinned_args = args[:-6]
 
     assert module.main(unpinned_args) == 0
     unpinned = json.loads(capsys.readouterr().out)
@@ -480,13 +494,23 @@ def test_substrate_cli_json_summary_and_toml_output(capsys):
         output["source_adapter_engine_deployment_hash"]
         == "0x" + SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[7]
     )
+    assert (
+        output["substrate_runtime_storage_gate_hash"]
+        == "0x" + SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES[7]
+    )
     assert output["expected_source_verifier_material_hash_matches"] is True
     assert output["expected_source_adapter_engine_deployment_hash_matches"] is True
+    assert output["expected_runtime_storage_gate_hash_matches"] is True
     assert output["toml_ready"] is True
 
     assert module.main([*args, "--toml"]) == 0
     rendered = capsys.readouterr().out
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
+    assert (
+        '# sccp_substrate_runtime_storage_gate_hash = "0x'
+        + SUBSTRATE_RUNTIME_STORAGE_GATE_HASHES[7]
+        + '"'
+    ) in rendered
 
 
 def test_substrate_cli_rejects_expected_record_hash_mismatch():
@@ -518,6 +542,83 @@ def test_substrate_cli_rejects_expected_record_hash_mismatch():
         assert exc.code == 2
     else:
         raise AssertionError("mismatched Substrate expected material hash was accepted")
+
+
+def test_substrate_cli_rejects_expected_runtime_storage_gate_hash_mismatch(capsys):
+    module = load_evidence_module()
+    args = [
+        "--domain",
+        "sora-polkadot",
+        "--source-trust-anchor-hash",
+        "0x" + "44" * 32,
+        "--consensus-verifier-hash",
+        "0x" + "55" * 32,
+        "--message-inclusion-verifier-hash",
+        "0x" + "66" * 32,
+        "--source-state-verifier-hash",
+        "0x" + "77" * 32,
+        "--finality-policy-hash",
+        "0x" + "88" * 32,
+        "--adapter-verifier-vk-hash",
+        "0x" + SUBSTRATE_SOURCE_ADAPTER_VERIFIER_VK_HASHES[7],
+        "--deployment-receipt-hash",
+        "0x" + "aa" * 32,
+        "--expected-source-verifier-material-hash",
+        "0x" + SUBSTRATE_SOURCE_VERIFIER_MATERIAL_HASHES[7],
+        "--expected-source-adapter-engine-deployment-hash",
+        "0x" + SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[7],
+        "--expected-runtime-storage-gate-hash",
+        "0x" + "99" * 32,
+    ]
+
+    try:
+        module.main(args)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("mismatched Substrate runtime storage gate hash was accepted")
+    assert "--expected-runtime-storage-gate-hash does not match" in capsys.readouterr().err
+
+
+def test_substrate_cli_requires_expected_runtime_storage_gate_hash_for_toml(capsys):
+    module = load_evidence_module()
+    args = [
+        "--domain",
+        "sora-polkadot",
+        "--source-trust-anchor-hash",
+        "0x" + "44" * 32,
+        "--consensus-verifier-hash",
+        "0x" + "55" * 32,
+        "--message-inclusion-verifier-hash",
+        "0x" + "66" * 32,
+        "--source-state-verifier-hash",
+        "0x" + "77" * 32,
+        "--finality-policy-hash",
+        "0x" + "88" * 32,
+        "--adapter-verifier-vk-hash",
+        "0x" + SUBSTRATE_SOURCE_ADAPTER_VERIFIER_VK_HASHES[7],
+        "--deployment-receipt-hash",
+        "0x" + "aa" * 32,
+        "--expected-source-verifier-material-hash",
+        "0x" + SUBSTRATE_SOURCE_VERIFIER_MATERIAL_HASHES[7],
+        "--expected-source-adapter-engine-deployment-hash",
+        "0x" + SUBSTRATE_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASHES[7],
+    ]
+
+    assert module.main(args) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["expected_source_verifier_material_hash_matches"] is True
+    assert output["expected_source_adapter_engine_deployment_hash_matches"] is True
+    assert output["expected_runtime_storage_gate_hash_matches"] is False
+    assert output["toml_ready"] is False
+
+    try:
+        module.main([*args, "--toml"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Substrate TOML rendered without expected runtime gate hash")
+    assert "--toml requires --expected-runtime-storage-gate-hash" in capsys.readouterr().err
 
 
 def test_substrate_cli_rejects_non_sora_target():

@@ -9,6 +9,52 @@ import kotlin.test.assertTrue
 
 class TronSccpProverTest {
     @Test
+    fun derivesTronRouteCanaryEvidenceHash() {
+        val evidence = sampleTronRouteCanaryEvidence()
+
+        assertEquals(551, SccpTron.canonicalRouteCanaryEvidenceBytes(evidence).size)
+        assertEquals(
+            "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
+            SccpTron.routeCanaryEvidenceHash(evidence),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(routeAllowlistHash = "0x" + "78".repeat(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(destinationBindingHash = "0x" + "78".repeat(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(targetDomain = SccpSourceProofs.DOMAIN_ETH))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(blockNumber = "0"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(usedMessageProof = false))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(rawDataOwnerMatchesTransaction = false))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(signatureRecoversToOwner = false))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(
+                evidence.copy(signatureRecoveredAddress = "0x41" + "12".repeat(20)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(
+                evidence.copy(expectedDestinationBindingHash = "0x" + "78".repeat(32)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(routeCanaryEvidenceHash = "0x" + "78".repeat(32)))
+        }
+    }
+
+    @Test
     fun derivesGroth16PublicSignalWords() {
         val signals = SccpTron.groth16Bn254PublicSignalWords(
             publicInputs = samplePublicInputs(),
@@ -146,6 +192,14 @@ class TronSccpProverTest {
             SccpTron.buildProofRequest(sampleProofRequestInput(sourceProofBytes = byteArrayOf(0, 0)))
         }
         assertTrue(zeroSourceProof.message?.contains("sourceProofBytes must not be all zero") == true)
+        val oversizedSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTron.buildProofRequest(
+                sampleProofRequestInput(
+                    sourceProofBytes = ByteArray(SccpTron.SOURCE_STATE_MAX_PROOF_BYTES + 1) { 1 },
+                ),
+            )
+        }
+        assertTrue(oversizedSourceProof.message?.contains("sourceProofBytes must be at most") == true)
         assertContentEquals(
             ByteArray(0),
             SccpTron.buildProofRequest(sampleProofRequestInput(sourceProofBytes = ByteArray(0))).sourceProofBytes,
@@ -673,6 +727,38 @@ class TronSccpProverTest {
             verifierCodeHash = "0x" + "bb".repeat(32),
             verifierKeyHash = "0x" + "cc".repeat(32),
         )
+
+    private fun sampleTronRouteCanaryEvidence(): TronSccpRouteCanaryEvidenceInput {
+        val destinationBinding = sampleDestinationBinding()
+        return TronSccpRouteCanaryEvidenceInput(
+            routeAllowlistHash = "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+            destinationBindingHash = destinationBinding.hash,
+            sourceVerifierMaterialHash = "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+            sourceAdapterEngineDeploymentHash = "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+            networkId = destinationBinding.networkId,
+            verifierAddress = destinationBinding.verifierAddress,
+            verifierCodeHash = destinationBinding.verifierCodeHash,
+            verifierKeyHash = destinationBinding.verifierKeyHash,
+            transactionId = "0x" + "fa".repeat(32),
+            transactionOwnerAddress = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            blockNumber = "234",
+            blockTimestamp = "567000",
+            logIndex = 0,
+            messageId = "0x" + "dd".repeat(32),
+            callDataSha256 = "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+            payloadHash = "0x" + "ab".repeat(32),
+            commitmentRoot = "0x" + "ee".repeat(32),
+            finalityHeight = "0x" + "00".repeat(31) + "7b",
+            finalityBlockHash = "0x" + "cd".repeat(32),
+            statementHash = "0x" + "f1".repeat(32),
+            usedMessageProof = true,
+            rawDataOwnerMatchesTransaction = true,
+            signatureSha256 = "0x" + "c4".repeat(32),
+            signatureRecoveredAddress = "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+            signatureRecoversToOwner = true,
+            routeCanaryEvidenceHash = "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56",
+        )
+    }
 
     private fun samplePublicInputs(
         payloadHash: String = "22".repeat(32),

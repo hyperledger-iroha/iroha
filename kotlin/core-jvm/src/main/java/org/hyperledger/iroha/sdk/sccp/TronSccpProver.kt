@@ -12,6 +12,7 @@ object SccpTron {
     const val DOMAIN_SORA: Int = 0
     const val GROTH16_BN254_PROOF_BACKEND_V1: String = "tron-groth16-bn254-v1"
     const val GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: Int = 384
+    const val SOURCE_STATE_MAX_PROOF_BYTES: Int = 2 * 1024 * 1024
     const val CONTRACT_CALL_ABI_TUPLE_V1: String = "tron_abi_tuple_v1"
     const val SUBMIT_MESSAGE_PROOF_ABI_V1: String =
         "submitSccpMessageProof(bytes,bytes32[6],bytes32)"
@@ -19,6 +20,11 @@ object SccpTron {
 
     private const val PROOF_REQUEST_PREFIX_V1: String = "sccp:tron:groth16-proof-request:v1"
     private const val PROOF_ENVELOPE_PREFIX_V1: String = "sccp:tron:groth16-proof-envelope:v1"
+    private const val ROUTE_CANARY_EVIDENCE_PREFIX_V3: String =
+        "iroha:sccp:tron-route-canary-evidence:v3"
+    private const val ROUTE_ALLOWLIST_PREFIX_V1: String = "sccp:route-allowlist:lane-evidence:v1"
+    private const val TRON_ROUTE_ALLOWLIST_ID_V1: String =
+        "sccp:tron:route-allowlist:tron-mainnet:v1"
     private const val STARK_FRI_PROOF_FAMILY_V1: String = "stark-fri-v1"
     private const val SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: String =
         "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)"
@@ -59,6 +65,162 @@ object SccpTron {
         writeU64Le(out, normalizeU64(input.finalityHeight, "finalityHeight"))
         out.write(nonZeroHex32Bytes(input.finalityBlockHash, "finalityBlockHash"))
         return out.toByteArray()
+    }
+
+    @JvmStatic
+    fun canonicalRouteCanaryEvidenceBytes(input: TronSccpRouteCanaryEvidenceInput): ByteArray =
+        normalizeRouteCanaryEvidence(input).payload
+
+    @JvmStatic
+    fun routeCanaryEvidenceHash(input: TronSccpRouteCanaryEvidenceInput): String {
+        val evidence = normalizeRouteCanaryEvidence(input)
+        val digest = hashBytes(ROUTE_CANARY_EVIDENCE_PREFIX_V3, evidence.payload)
+        require(
+            !digest.contentEquals(evidence.routeAllowlistHash) &&
+                !digest.contentEquals(evidence.destinationBindingHash) &&
+                !digest.contentEquals(evidence.sourceVerifierMaterialHash) &&
+                !digest.contentEquals(evidence.sourceAdapterEngineDeploymentHash),
+        ) {
+            "routeCanaryEvidenceHash must be distinct from routeAllowlistHash, " +
+                "destinationBindingHash, sourceVerifierMaterialHash, and " +
+                "sourceAdapterEngineDeploymentHash"
+        }
+        val hash = "0x" + hexLower(digest)
+        input.routeCanaryEvidenceHash?.let { expected ->
+            require(normalizeNonZeroHex32(expected, "routeCanaryEvidenceHash") == hash) {
+                "routeCanaryEvidenceHash must match transaction metadata"
+            }
+        }
+        return hash
+    }
+
+    private data class NormalizedRouteCanaryEvidence(
+        val payload: ByteArray,
+        val routeAllowlistHash: ByteArray,
+        val destinationBindingHash: ByteArray,
+        val sourceVerifierMaterialHash: ByteArray,
+        val sourceAdapterEngineDeploymentHash: ByteArray,
+    )
+
+    private fun normalizeRouteCanaryEvidence(
+        input: TronSccpRouteCanaryEvidenceInput,
+    ): NormalizedRouteCanaryEvidence {
+        val destinationBinding = SccpSourceProofs.tronDestinationBinding(
+            sourceDomain = input.sourceDomain,
+            targetDomain = input.targetDomain,
+            networkId = input.networkId,
+            verifierAddress = input.verifierAddress,
+            verifierCodeHash = input.verifierCodeHash,
+            verifierKeyHash = input.verifierKeyHash,
+        )
+        val destinationBindingHash =
+            nonZeroHex32Bytes(input.destinationBindingHash, "destinationBindingHash")
+        input.expectedDestinationBindingHash?.let { expected ->
+            require(normalizeNonZeroHex32(expected, "expectedDestinationBindingHash") == destinationBinding.hash) {
+                "expectedDestinationBindingHash must match destinationBinding"
+            }
+        }
+        require("0x" + hexLower(destinationBindingHash) == destinationBinding.hash) {
+            "destinationBindingHash must match destinationBinding"
+        }
+        val routeAllowlistHash = nonZeroHex32Bytes(input.routeAllowlistHash, "routeAllowlistHash")
+        val sourceVerifierMaterialHash =
+            nonZeroHex32Bytes(input.sourceVerifierMaterialHash, "sourceVerifierMaterialHash")
+        val sourceAdapterEngineDeploymentHash = nonZeroHex32Bytes(
+            input.sourceAdapterEngineDeploymentHash,
+            "sourceAdapterEngineDeploymentHash",
+        )
+        val expectedRouteAllowlistHash = routeAllowlistHashBytes(
+            sourceVerifierMaterialHash = sourceVerifierMaterialHash,
+            sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash,
+            destinationBindingHash = destinationBindingHash,
+        )
+        require(routeAllowlistHash.contentEquals(expectedRouteAllowlistHash)) {
+            "routeAllowlistHash must match canonical source, deployment, and destination evidence"
+        }
+        require(input.sourceDomain == DOMAIN_SORA) { "sourceDomain must be SORA" }
+        require(input.targetDomain == DOMAIN_TRON) { "targetDomain must be TRON" }
+        require(input.sourceDomain != input.targetDomain) { "sourceDomain and targetDomain must differ" }
+        require(input.proofVersion == 1) { "proofVersion must be 1" }
+        require(input.proofSourceDomain == input.sourceDomain) {
+            "proofSourceDomain must match sourceDomain"
+        }
+        require(input.usedMessageProof) { "usedMessageProof must be true" }
+        require(input.rawDataOwnerMatchesTransaction) {
+            "rawDataOwnerMatchesTransaction must be true"
+        }
+        require(input.signatureRecoversToOwner) { "signatureRecoversToOwner must be true" }
+
+        val verifierAddress =
+            SccpSourceProofs.tronBase58CheckPayload(destinationBinding.verifierAddress, "verifierAddress")
+        val transactionOwnerAddress =
+            routeCanaryAddressPayload(input.transactionOwnerAddress, "transactionOwnerAddress")
+        val signatureRecoveredAddress =
+            routeCanaryAddressPayload(input.signatureRecoveredAddress, "signatureRecoveredAddress")
+        require(signatureRecoveredAddress.contentEquals(transactionOwnerAddress)) {
+            "signatureRecoveredAddress must match transactionOwnerAddress"
+        }
+        val blockNumber = normalizeRouteCanaryU64(input.blockNumber, "blockNumber", positive = true)
+        val blockTimestamp = normalizeRouteCanaryU64(input.blockTimestamp, "blockTimestamp")
+        val transactionId = nonZeroHex32Bytes(input.transactionId, "transactionId")
+        val messageId = nonZeroHex32Bytes(input.messageId, "messageId")
+        val callDataSha256 = nonZeroHex32Bytes(input.callDataSha256, "callDataSha256")
+        val payloadHash = nonZeroHex32Bytes(input.payloadHash, "payloadHash")
+        val commitmentRoot = nonZeroHex32Bytes(input.commitmentRoot, "commitmentRoot")
+        val finalityHeight = nonZeroHex32Bytes(input.finalityHeight, "finalityHeight")
+        val finalityBlockHash = nonZeroHex32Bytes(input.finalityBlockHash, "finalityBlockHash")
+        val statementHash = nonZeroHex32Bytes(input.statementHash, "statementHash")
+        val signatureSha256 = nonZeroHex32Bytes(input.signatureSha256, "signatureSha256")
+        requireRouteCanaryHashesDistinct(
+            mapOf(
+                "transactionId" to transactionId,
+                "messageId" to messageId,
+                "callDataSha256" to callDataSha256,
+                "payloadHash" to payloadHash,
+                "statementHash" to statementHash,
+                "commitmentRoot" to commitmentRoot,
+                "finalityBlockHash" to finalityBlockHash,
+                "signatureSha256" to signatureSha256,
+            ),
+        )
+        val networkId = nonZeroHex32Bytes(destinationBinding.networkId, "networkId")
+
+        val out = ByteArrayOutputStream()
+        out.write(3)
+        out.write(routeAllowlistHash)
+        out.write(verifierAddress)
+        out.write(transactionId)
+        out.write(transactionOwnerAddress)
+        writeU64Le(out, blockNumber)
+        writeU64Le(out, blockTimestamp)
+        writeU32Le(out, input.logIndex)
+        out.write(callDataSha256)
+        out.write(messageId)
+        writeU32Le(out, input.sourceDomain)
+        writeU32Le(out, input.targetDomain)
+        out.write(payloadHash)
+        out.write(commitmentRoot)
+        out.write(finalityHeight)
+        out.write(finalityBlockHash)
+        out.write(statementHash)
+        writeU32Le(out, input.proofVersion)
+        writeU32Le(out, input.proofSourceDomain)
+        out.write(destinationBindingHash)
+        out.write(keccak256(destinationBinding.verifierBackend.toByteArray(Charsets.UTF_8)))
+        out.write(keccak256(destinationBinding.proofFamily.toByteArray(Charsets.UTF_8)))
+        out.write(networkId)
+        out.write(1)
+        out.write(1)
+        out.write(signatureSha256)
+        out.write(signatureRecoveredAddress)
+        out.write(1)
+        return NormalizedRouteCanaryEvidence(
+            payload = out.toByteArray(),
+            routeAllowlistHash = routeAllowlistHash,
+            destinationBindingHash = destinationBindingHash,
+            sourceVerifierMaterialHash = sourceVerifierMaterialHash,
+            sourceAdapterEngineDeploymentHash = sourceAdapterEngineDeploymentHash,
+        )
     }
 
     @JvmStatic
@@ -104,10 +266,7 @@ object SccpTron {
         )
         val bundleBytes = input.bundleBytes.copyOf()
         require(bundleBytes.isNotEmpty()) { "bundleBytes must not be empty" }
-        val sourceProofBytes = input.sourceProofBytes.copyOf()
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "sourceProofBytes must not be all zero"
-        }
+        val sourceProofBytes = requireOptionalSourceProofBytes(input.sourceProofBytes, "sourceProofBytes")
         val preimage = ByteArrayOutputStream()
         preimage.write(publicInputsBytes)
         writeU32Le(preimage, bundleBytes.size)
@@ -189,10 +348,10 @@ object SccpTron {
         require(envelopeHash == hashHex(PROOF_ENVELOPE_PREFIX_V1, envelopePayload.toByteArray())) {
             "proofResult.envelopeHash must match wrapped proof bytes"
         }
-        val sourceProofBytes = proofResult.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "proofResult.sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        val sourceProofBytes = requireOptionalSourceProofBytes(
+            proofResult.sourceProofBytes,
+            "proofResult.sourceProofBytes",
+        )
         val expectedRequest = buildProofRequest(
             TronSccpProofRequestInput(
                 publicInputs = proofResult.publicInputs,
@@ -598,11 +757,20 @@ object SccpTron {
         require(request.bundleBytes.isNotEmpty()) {
             "TRON SCCP proof request bundleBytes must not be empty"
         }
-        val sourceProofBytes = request.sourceProofBytes
-        require(sourceProofBytes.isEmpty() || sourceProofBytes.any { it.toInt() != 0 }) {
-            "TRON SCCP proof request sourceProofBytes must be empty or contain a non-zero byte"
-        }
+        requireOptionalSourceProofBytes(
+            request.sourceProofBytes,
+            "TRON SCCP proof request sourceProofBytes",
+        )
         requireProductionDestinationBinding(request)
+    }
+
+    private fun requireOptionalSourceProofBytes(bytes: ByteArray, label: String): ByteArray {
+        val copy = bytes.copyOf()
+        require(copy.size <= SOURCE_STATE_MAX_PROOF_BYTES) {
+            "$label must be at most $SOURCE_STATE_MAX_PROOF_BYTES bytes"
+        }
+        require(copy.isEmpty() || copy.any { it.toInt() != 0 }) { "$label must not be all zero" }
+        return copy
     }
 
     private fun requireProductionDestinationBinding(request: TronSccpProofRequest) {
@@ -727,13 +895,16 @@ object SccpTron {
         )
     }
 
-    private fun hashHex(prefix: String, payload: ByteArray): String {
+    private fun hashBytes(prefix: String, payload: ByteArray): ByteArray {
         val prefixBytes = prefix.toByteArray(Charsets.UTF_8)
         val preimage = ByteArray(prefixBytes.size + payload.size)
         System.arraycopy(prefixBytes, 0, preimage, 0, prefixBytes.size)
         System.arraycopy(payload, 0, preimage, prefixBytes.size, payload.size)
-        return "0x" + hexLower(Blake2b.digest256(preimage))
+        return Blake2b.digest256(preimage)
     }
+
+    private fun hashHex(prefix: String, payload: ByteArray): String =
+        "0x" + hexLower(hashBytes(prefix, payload))
 
     private fun hex32Bytes(value: String, field: String): ByteArray {
         require(value.trim() == value) { "$field must be canonical hex" }
@@ -778,6 +949,18 @@ object SccpTron {
         return numeric
     }
 
+    private fun normalizeRouteCanaryU64(
+        value: String,
+        field: String,
+        positive: Boolean = false,
+    ): BigInteger {
+        require(isCanonicalDecimalText(value)) { "$field must be an unsigned integer" }
+        val numeric = BigInteger(value)
+        require(numeric <= MAX_U64) { "$field must fit u64" }
+        if (positive) require(numeric != BigInteger.ZERO) { "$field must be positive" }
+        return numeric
+    }
+
     private fun isCanonicalDecimalText(value: String): Boolean =
         value == "0" || (value.isNotEmpty() && value[0] in '1'..'9' && value.all { it in '0'..'9' })
 
@@ -794,6 +977,63 @@ object SccpTron {
         for (i in 0 until 8) {
             out.write(working.and(BigInteger.valueOf(0xffL)).toInt())
             working = working.shiftRight(8)
+        }
+    }
+
+    private fun writeVector(out: ByteArrayOutputStream, value: ByteArray) {
+        writeU32Le(out, value.size)
+        out.write(value)
+    }
+
+    private fun routeAllowlistHashBytes(
+        sourceVerifierMaterialHash: ByteArray,
+        sourceAdapterEngineDeploymentHash: ByteArray,
+        destinationBindingHash: ByteArray,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(1)
+        writeU32Le(out, DOMAIN_TRON)
+        writeVector(out, "tron".toByteArray(Charsets.UTF_8))
+        writeVector(out, "GovernanceAllowlist".toByteArray(Charsets.UTF_8))
+        writeVector(out, TRON_ROUTE_ALLOWLIST_ID_V1.toByteArray(Charsets.UTF_8))
+        out.write(sourceVerifierMaterialHash)
+        out.write(sourceAdapterEngineDeploymentHash)
+        out.write(destinationBindingHash)
+        return hashBytes(ROUTE_ALLOWLIST_PREFIX_V1, out.toByteArray())
+    }
+
+    private fun routeCanaryAddressPayload(value: String, field: String): ByteArray {
+        require(value.trim() == value) { "$field must be canonical hex or TRON Base58Check" }
+        var body = value
+        if (body.startsWith("0x", ignoreCase = true)) body = body.substring(2)
+        if (body.length == 42 && body.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
+            val out = ByteArray(21)
+            for (index in out.indices) {
+                out[index] = body.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+            }
+            require(isNonZeroTronAddress(out)) {
+                "$field must be a non-zero 0x41-prefixed TRON address"
+            }
+            return out
+        }
+        return SccpSourceProofs.tronBase58CheckPayload(value, field)
+    }
+
+    private fun isNonZeroTronAddress(value: ByteArray): Boolean =
+        value.size == 21 &&
+            value[0] == 0x41.toByte() &&
+            value.copyOfRange(1, value.size).any { it != 0.toByte() }
+
+    private fun requireRouteCanaryHashesDistinct(fields: Map<String, ByteArray>) {
+        val seen = mutableMapOf<String, String>()
+        for ((field, bytes) in fields) {
+            if (bytes.all { it == 0.toByte() }) continue
+            val encoded = hexLower(bytes)
+            val previous = seen[encoded]
+            require(previous == null) {
+                "TRON route canary transcript hashes must be distinct: $field matches $previous"
+            }
+            seen[encoded] = field
         }
     }
 
@@ -821,6 +1061,41 @@ data class TronSccpPublicInputsInput(
     val commitmentRoot: String,
     val finalityHeight: String,
     val finalityBlockHash: String,
+)
+
+/** TRON transaction evidence collected by UI code before route canary submission. */
+data class TronSccpRouteCanaryEvidenceInput(
+    val routeAllowlistHash: String,
+    val destinationBindingHash: String,
+    val expectedDestinationBindingHash: String? = null,
+    val sourceVerifierMaterialHash: String,
+    val sourceAdapterEngineDeploymentHash: String,
+    val networkId: String,
+    val verifierAddress: String,
+    val verifierCodeHash: String,
+    val verifierKeyHash: String,
+    val sourceDomain: Int = SccpTron.DOMAIN_SORA,
+    val targetDomain: Int = SccpTron.DOMAIN_TRON,
+    val transactionId: String,
+    val transactionOwnerAddress: String,
+    val blockNumber: String,
+    val blockTimestamp: String,
+    val logIndex: Int,
+    val messageId: String,
+    val callDataSha256: String,
+    val payloadHash: String,
+    val commitmentRoot: String,
+    val finalityHeight: String,
+    val finalityBlockHash: String,
+    val statementHash: String,
+    val proofVersion: Int = 1,
+    val proofSourceDomain: Int = SccpTron.DOMAIN_SORA,
+    val usedMessageProof: Boolean,
+    val rawDataOwnerMatchesTransaction: Boolean,
+    val signatureSha256: String,
+    val signatureRecoveredAddress: String,
+    val signatureRecoversToOwner: Boolean,
+    val routeCanaryEvidenceHash: String? = null,
 )
 
 /** Inputs used to build a local TRON SCCP Groth16 proof request. */

@@ -150,9 +150,16 @@ ImplementationActions(candidate) ==
 Init ==
   checked = 0
 
-Next ==
+Advance ==
   /\ checked < 14
   /\ checked' = checked + 1
+
+Stable ==
+  /\ checked = 14
+  /\ checked' = checked
+
+Next ==
+  Advance \/ Stable
 
 TypeInvariant ==
   checked \in 0..14

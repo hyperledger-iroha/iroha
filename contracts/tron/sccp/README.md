@@ -305,11 +305,12 @@ source-event path. It also queries
 `usedMessageProofs(messageId)` on the same verifier and requires the accepted
 message id to be marked consumed in current contract state. It then derives the
 route canary evidence hash bound to the validated route allowlist. The
-`sccp:tron-route-canary-evidence:v2` transcript commits the exact
+`iroha:sccp:tron-route-canary-evidence:v3` transcript commits the exact
 `submitSccpMessageProof(...)` calldata SHA-256, decoded payload hash, target
 domain, finality height, finality block hash, proof version, proof source
-domain, transaction owner address, raw-data owner binding flag, signature
-SHA-256, recovered signer address, and owner-recovery flag alongside the
+domain, transaction owner address, transaction block number/timestamp,
+raw-data owner binding flag, signature SHA-256, recovered signer address, and
+owner-recovery flag alongside the
 accepted event tuple and governed verifier/backend/network pins. Live
 full-TOML output requires this verified transaction-derived canary evidence;
 supplying both `--route-canary-transaction-id` and `--route-canary-evidence-hash`

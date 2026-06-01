@@ -5241,7 +5241,7 @@ public final class SourceSccpProofs {
     return out;
   }
 
-  private static byte[] tronBase58CheckPayload(final String value, final String field) {
+  static byte[] tronBase58CheckPayload(final String value, final String field) {
     final String text = Objects.requireNonNull(value, field);
     if (text.isEmpty()) {
       throw new IllegalArgumentException(field + " must not be empty");

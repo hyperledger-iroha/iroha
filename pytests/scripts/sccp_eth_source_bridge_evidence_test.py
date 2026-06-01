@@ -284,6 +284,17 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         == ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
     )
     args = eth_args(module)
+    runtime_bytecode = bytes.fromhex("6080604052")
+    source_bridge_code_hash = module.runtime_bytecode_hash(runtime_bytecode)
+    args.source_bridge_emitter_code_hash = source_bridge_code_hash
+    args.source_bridge_runtime_bytecode_hex = runtime_bytecode
+    args.source_bridge_runtime_bytecode_file = None
+    args.expected_source_verifier_material_hash = (
+        module.eth_source_verifier_material_record_hash(args)
+    )
+    args.expected_source_adapter_engine_deployment_hash = (
+        module.eth_source_adapter_engine_deployment_record_hash(args)
+    )
 
     rendered = module.render_toml(args)
 
@@ -291,7 +302,13 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     assert '# sccp_evm_source_bridge_address = "0x' + "11" * 20 + '"' in rendered
     assert (
         '# sccp_evm_source_bridge_runtime_code_hash = "0x'
-        + "77" * 32
+        + source_bridge_code_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_bridge_runtime_bytecode_hex = "0x'
+        + runtime_bytecode.hex()
         + '"'
         in rendered
     )
@@ -315,14 +332,14 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert (
         '# sccp_eth_source_verifier_material_hash = "0x'
-        + ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+        + args.expected_source_verifier_material_hash.hex()
         + '"'
         in rendered
     )
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
     assert (
         '# sccp_eth_source_adapter_engine_deployment_hash = "0x'
-        + ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+        + args.expected_source_adapter_engine_deployment_hash.hex()
         + '"'
         in rendered
     )
@@ -345,7 +362,12 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'source_bridge_emitter_address = "0x' + "11" * 20 + '"' in rendered
-    assert 'source_bridge_emitter_code_hash = "0x' + "77" * 32 + '"' in rendered
+    assert (
+        'source_bridge_emitter_code_hash = "0x'
+        + source_bridge_code_hash.hex()
+        + '"'
+        in rendered
+    )
     assert (
         'adapter_verifier_vk_hash = "0x'
         + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
@@ -552,7 +574,7 @@ def test_eth_source_evidence_rejects_template_component_hashes():
 
 def test_eth_cli_json_summary_and_toml_output(capsys):
     module = load_evidence_module()
-    args = [
+    hash_only_args = [
         "--bridge-address",
         "0x" + "11" * 20,
         "--source-trust-anchor-hash",
@@ -582,7 +604,7 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
         "--expected-source-adapter-engine-deployment-hash",
         "0x" + ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR,
     ]
-    unpinned_args = args[:-4]
+    unpinned_args = hash_only_args[:-4]
 
     assert module.main(unpinned_args) == 0
     unpinned = json.loads(capsys.readouterr().out)
@@ -597,23 +619,81 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
     else:
         raise AssertionError("unpinned ETH source TOML was accepted")
 
+    assert module.main(hash_only_args) == 0
+    hash_only = json.loads(capsys.readouterr().out)
+    assert hash_only["expected_source_verifier_material_hash_matches"] is True
+    assert hash_only["expected_source_adapter_engine_deployment_hash_matches"] is True
+    assert hash_only["toml_ready"] is False
+
+    try:
+        module.main([*hash_only_args, "--toml"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("hash-only ETH source TOML was accepted")
+
+    runtime_bytecode = bytes.fromhex("6080604052")
+    expected = eth_args(module)
+    expected.source_bridge_emitter_code_hash = module.runtime_bytecode_hash(
+        runtime_bytecode
+    )
+    expected_material_hash = module.eth_source_verifier_material_record_hash(expected)
+    expected_deployment_hash = module.eth_source_adapter_engine_deployment_record_hash(
+        expected
+    )
+    args = [
+        "--bridge-address",
+        "0x" + "11" * 20,
+        "--source-trust-anchor-hash",
+        "0x" + "44" * 32,
+        "--consensus-verifier-hash",
+        "0x" + "55" * 32,
+        "--message-inclusion-verifier-hash",
+        "0x" + "66" * 32,
+        "--source-bridge-runtime-bytecode-hex",
+        "0x" + runtime_bytecode.hex(),
+        "--finality-policy-hash",
+        "0x" + "88" * 32,
+        "--adapter-verifier-vk-hash",
+        "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR,
+        "--deployment-receipt-hash",
+        "0x" + "aa" * 32,
+        "--deployment-transaction-hash",
+        "0x" + "de" * 32,
+        "--deployment-receipt-contract-address",
+        "0x" + "11" * 20,
+        "--deployment-receipt-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-receipt-block-number",
+        "4660",
+        "--expected-source-verifier-material-hash",
+        "0x" + expected_material_hash.hex(),
+        "--expected-source-adapter-engine-deployment-hash",
+        "0x" + expected_deployment_hash.hex(),
+    ]
+
     assert module.main(args) == 0
     output = json.loads(capsys.readouterr().out)
     assert output["source_domain"] == 1
     assert output["target_domain"] == 0
     assert output["source_bridge_emitter_address"] == "0x" + "11" * 20
-    assert output["source_bridge_emitter_code_hash"] == "0x" + "77" * 32
+    assert output["source_bridge_emitter_code_hash"] == (
+        "0x" + expected.source_bridge_emitter_code_hash.hex()
+    )
+    assert output["source_bridge_runtime_bytecode_hex"] == (
+        "0x" + runtime_bytecode.hex()
+    )
     assert (
         output["adapter_verifier_vk_hash"]
         == "0x" + ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
     )
     assert (
         output["source_verifier_material_hash"]
-        == "0x" + ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR
+        == "0x" + expected_material_hash.hex()
     )
     assert (
         output["source_adapter_engine_deployment_hash"]
-        == "0x" + ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
+        == "0x" + expected_deployment_hash.hex()
     )
     assert output["expected_source_verifier_material_hash_matches"] is True
     assert output["expected_source_adapter_engine_deployment_hash_matches"] is True
@@ -622,6 +702,12 @@ def test_eth_cli_json_summary_and_toml_output(capsys):
     assert module.main([*args, "--toml"]) == 0
     rendered = capsys.readouterr().out
     assert '# sccp_evm_source_rpc_chain_id = "1"' in rendered
+    assert (
+        '# sccp_evm_source_bridge_runtime_bytecode_hex = "0x'
+        + runtime_bytecode.hex()
+        + '"'
+        in rendered
+    )
     assert '# sccp_evm_source_deployment_transaction_hash = "0x' + "de" * 32 in rendered
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
