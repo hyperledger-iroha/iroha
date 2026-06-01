@@ -674,6 +674,120 @@ def test_release_bundle_verifier_rejects_unmanifested_directory(
     assert "bundle contains unmanifested directory: operator-notes" in verified.stdout
 
 
+def test_release_bundle_rejects_control_character_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Generated public artifact paths must not contain control characters."""
+
+    module = load_bundle_module()
+    output_dir = tmp_path / "bundle"
+    artifact = output_dir / "evidence" / "00-complete\noperator.toml"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("release evidence\n", encoding="utf-8")
+
+    try:
+        module._artifact(artifact, output_dir)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("control-character artifact path was accepted")
+
+    assert (
+        "release artifact path contains control character '\\n': "
+        "'evidence/00-complete\\noperator.toml'"
+    ) in message
+
+
+def test_release_bundle_verifier_rejects_control_character_manifest_paths(
+    tmp_path: Path,
+) -> None:
+    """Manifest artifact paths must be printable canonical paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    manifest_path = output_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["artifacts"][0]["path"] = "sccp-release-readiness\n.md"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "manifest artifact path contains control character '\\n': "
+        "'sccp-release-readiness\\n.md'"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_control_character_report_paths(
+    tmp_path: Path,
+) -> None:
+    """Readiness report paths must not smuggle control characters into review."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"][0] = "evidence/00-complete\n.toml"
+    report["input_artifacts"][0]["path"] = "evidence/00-complete\n.toml"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report inputs path contains control character '\\n': "
+        "'evidence/00-complete\\n.toml'"
+    ) in verified.stdout
+    assert (
+        "readiness report input artifact path contains control character '\\n': "
+        "'evidence/00-complete\\n.toml'"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_control_character_filesystem_entries(
+    tmp_path: Path,
+) -> None:
+    """Extracted bundle entries with control characters must be rejected."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "operator\nnotes.txt").write_text(
+        "unreviewed operator note\n",
+        encoding="utf-8",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundle contains entry path with control character '\\n': "
+        "'operator\\nnotes.txt'"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_extra_manifested_artifact(
     tmp_path: Path,
 ) -> None:
@@ -1021,6 +1135,77 @@ def test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys(
         "all-lanes summary JSON contains duplicate key: production_ready"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_rejects_non_utf8_manifest_json(
+    tmp_path: Path,
+) -> None:
+    """The verifier must fail closed instead of crashing on non-UTF-8 manifest JSON."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "manifest.json").write_bytes(b"\xff")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "manifest JSON is not UTF-8 text:" in verified.stdout
+    assert "Traceback" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_non_utf8_report_summary_json(
+    tmp_path: Path,
+) -> None:
+    """Published report JSON roots must be UTF-8 text."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "sccp-release-readiness.json").write_bytes(b"\xff")
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    (output_dir / "sccp-all-lanes-summary.json").write_bytes(b"\xfe")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report JSON is not UTF-8 text:" in verified.stdout
+    assert "all-lanes summary JSON is not UTF-8 text:" in verified.stdout
+    assert "Traceback" not in verified.stderr
+
+
+def test_release_bundle_verifier_rejects_non_utf8_public_markdown(
+    tmp_path: Path,
+) -> None:
+    """Published Markdown artifacts must be UTF-8 text."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    (output_dir / "sccp-release-readiness.md").write_bytes(b"\xff")
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.md")
+    (output_dir / "sccp-release-notes-attachment.md").write_bytes(b"\xfe")
+    rewrite_manifest_artifact(output_dir, "sccp-release-notes-attachment.md")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "readiness report Markdown is not UTF-8 text:" in verified.stdout
+    assert "release-notes attachment is not UTF-8 text:" in verified.stdout
+    assert "Traceback" not in verified.stderr
 
 
 def test_release_bundle_verifier_rejects_omitted_phase_artifact(

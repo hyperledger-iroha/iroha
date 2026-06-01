@@ -42,10 +42,24 @@ def _verify_module() -> Any:
     return _load_module("_sccp_verify_release_bundle", VERIFY_SCRIPT)
 
 
+def _path_control_character(path: str) -> str | None:
+    for character in path:
+        if ord(character) < 0x20 or ord(character) == 0x7F:
+            return repr(character)
+    return None
+
+
 def _artifact(path: Path, root: Path) -> dict[str, Any]:
     payload = path.read_bytes()
+    artifact_path = path.relative_to(root).as_posix()
+    control_character = _path_control_character(artifact_path)
+    if control_character is not None:
+        raise ValueError(
+            "release artifact path contains control character "
+            f"{control_character}: {artifact_path!r}"
+        )
     return {
-        "path": path.relative_to(root).as_posix(),
+        "path": artifact_path,
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }

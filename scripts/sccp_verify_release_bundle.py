@@ -755,6 +755,13 @@ def _load_json(path: Path) -> Any:
     )
 
 
+def _path_control_character(path: str) -> str | None:
+    for character in path:
+        if ord(character) < 0x20 or ord(character) == 0x7F:
+            return repr(character)
+    return None
+
+
 def _canonical_json_text(payload: Any) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -762,7 +769,7 @@ def _canonical_json_text(payload: Any) -> str:
 def _canonical_json_file_errors(label: str, path: Path, payload: Any) -> list[str]:
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return [f"cannot load {label} JSON for canonical serialization check: {exc}"]
     if text != _canonical_json_text(payload):
         return [f"{label} JSON is not canonical release-bundle serialization"]
@@ -799,6 +806,12 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
     artifact_path = artifact.get("path")
     if not isinstance(artifact_path, str) or not artifact_path:
         return None, ["manifest artifact has no path"]
+    control_character = _path_control_character(artifact_path)
+    if control_character is not None:
+        return None, [
+            "manifest artifact path contains control character "
+            f"{control_character}: {artifact_path!r}"
+        ]
     if "\\" in artifact_path:
         return None, [f"manifest artifact path is not canonical: {artifact_path}"]
     path = PurePosixPath(artifact_path)
@@ -812,6 +825,12 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
 def _canonical_report_input_path_errors(value: Any) -> list[str]:
     if not isinstance(value, str) or not value:
         return ["readiness report inputs item must be a non-empty string"]
+    control_character = _path_control_character(value)
+    if control_character is not None:
+        return [
+            "readiness report inputs path contains control character "
+            f"{control_character}: {value!r}"
+        ]
     if "\\" in value:
         return [f"readiness report inputs path is not canonical: {value}"]
     path = PurePosixPath(value)
@@ -823,6 +842,12 @@ def _canonical_report_input_path_errors(value: Any) -> list[str]:
 
 
 def _canonical_report_artifact_path_errors(label: str, value: str) -> list[str]:
+    control_character = _path_control_character(value)
+    if control_character is not None:
+        return [
+            f"{label} artifact path contains control character "
+            f"{control_character}: {value!r}"
+        ]
     if "\\" in value:
         return [f"{label} artifact path is not canonical: {value}"]
     path = PurePosixPath(value)
@@ -937,6 +962,13 @@ def _bundle_entry_paths(bundle_dir: Path, errors: list[str]) -> tuple[set[str], 
             continue
         if candidate.is_symlink():
             errors.append(f"bundle contains symlink: {relative}")
+            continue
+        control_character = _path_control_character(relative)
+        if control_character is not None:
+            errors.append(
+                "bundle contains entry path with control character "
+                f"{control_character}: {relative!r}"
+            )
             continue
         relative_path = PurePosixPath(relative)
         if (
@@ -4278,6 +4310,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         manifest_sha256 = None
     try:
         manifest = _load_json(manifest_path)
+    except UnicodeDecodeError as exc:
+        return {
+            "verified": False,
+            "errors": [f"manifest JSON is not UTF-8 text: {exc}"],
+            "artifacts": [],
+            "manifest_sha256": manifest_sha256,
+        }
     except json.JSONDecodeError as exc:
         return {
             "verified": False,
@@ -4346,6 +4385,9 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     except DuplicateJsonKeyError as exc:
         report = {}
         errors.append(f"readiness report JSON contains duplicate key: {exc.key}")
+    except UnicodeDecodeError as exc:
+        report = {}
+        errors.append(f"readiness report JSON is not UTF-8 text: {exc}")
     except (OSError, json.JSONDecodeError) as exc:
         report = {}
         errors.append(f"cannot load readiness report JSON: {exc}")
@@ -4368,6 +4410,9 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     except DuplicateJsonKeyError as exc:
         summary = {}
         errors.append(f"all-lanes summary JSON contains duplicate key: {exc.key}")
+    except UnicodeDecodeError as exc:
+        summary = {}
+        errors.append(f"all-lanes summary JSON is not UTF-8 text: {exc}")
     except (OSError, json.JSONDecodeError) as exc:
         summary = {}
         errors.append(f"cannot load all-lanes summary JSON: {exc}")
@@ -4462,6 +4507,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     if report:
         try:
             report_markdown = report_md_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            errors.append(f"readiness report Markdown is not UTF-8 text: {exc}")
         except OSError as exc:
             errors.append(f"cannot load readiness report Markdown: {exc}")
         else:
@@ -4688,6 +4735,9 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
 
     try:
         notes = notes_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        notes = ""
+        errors.append(f"release-notes attachment is not UTF-8 text: {exc}")
     except OSError as exc:
         notes = ""
         errors.append(f"cannot load release-notes attachment: {exc}")

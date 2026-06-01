@@ -12659,7 +12659,9 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       assert.equal(Object.isFrozen(request.proofContext), true);
       assert.equal(Object.isFrozen(request.sourceAdapterDeploymentBinding), true);
       request.bundleBytes[0] = 99;
+      request.sourceProofBytes[0] = 99;
       assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       return {
         proofBytes: [1, 2, 3, 4],
         publicInputs: request.publicInputs,
@@ -12778,7 +12780,9 @@ test("wraps Substrate runtime proof bytes with a request-bound envelope hash", a
       assert.equal(request.targetDomain, SCCP_DOMAIN_SORA2);
       assert.equal(request.sourceDomain, SCCP_DOMAIN_SORA);
       request.bundleBytes[0] = 99;
+      request.sourceProofBytes[0] = 99;
       assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       return { proofBytes: [1, 2, 3, 4] };
     },
   });

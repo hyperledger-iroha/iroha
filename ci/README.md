@@ -379,8 +379,9 @@ as part of a coordinated migration.
   TLC-cross-checked highest-QC selection, TLC-cross-checked optional
   highest-QC selection filter, RBC block-body
   repair admission helper, and
-  frontier-recovery TLA+ models, the small TLC
-  frontier/QC signer-count/signer-index normalization/precommit vote-count/
+  frontier-recovery TLA+ models, the fast canonical-witness TLC frontier
+  recovery check, the small exhaustive TLC frontier check, and QC
+  signer-count/signer-index normalization/precommit vote-count/
   commit-quorum signers/commit-QC lookup/precommit signer record/
   TLC-cross-checked voting signer-count/collector-plan/validation ownership
   cleanup/worker-loop stage/

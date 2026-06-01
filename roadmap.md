@@ -43,6 +43,11 @@ and completed history lives in [`status.md`](./status.md).
   package entrypoints, and TypeScript declarations, and strict release evidence
   plus published release-bundle verification must include the package-root SCCP
   export test transcript.
+- Keep web SCCP linked-prover callback snapshots immutable across production
+  destinations; JavaScript callback regressions now assert frozen request
+  metadata where exposed and copy-backed bundle/source-proof bytes across TON,
+  EVM-family, TRON, and Substrate-family proof engines before app-linked
+  callbacks return proof bytes.
 - Keep public SCCP phase evidence bound to executed production-corridor
   commands; release-readiness and release-bundle checks now require expected
   phase command fragments to appear on traced `+ ...` command lines inside the
@@ -109,8 +114,17 @@ and completed history lives in [`status.md`](./status.md).
 - Keep public SCCP release bundles free of unreviewed filesystem entries; strict
   bundle verification now rejects empty or otherwise unmanifested directories
   instead of comparing only files.
+- Keep public SCCP release artifact paths printable and reviewer-safe; the
+  readiness report, bundle builder, and strict verifier now reject ASCII control
+  characters in manifest, report, and extracted bundle entry paths before they
+  can reach Markdown tables or diagnostics.
+- Keep public SCCP release evidence UTF-8 fail-closed; strict verification now
+  reports non-UTF-8 manifest JSON, readiness JSON, all-lanes summary JSON,
+  readiness Markdown, and release-note attachments as structured bundle
+  failures instead of raising out of the verifier.
 - Keep extending the Sumeragi formal corridor with independent TLC
-  cross-checks; the current local TLC slice covers frontier recovery,
+  cross-checks; the current local TLC slice covers fast canonical frontier
+  recovery, small exhaustive frontier recovery,
   validation redrive labels, raw QC signer-bitmap population counting, and
   signer-index normalization, precommit vote-progress counting, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record

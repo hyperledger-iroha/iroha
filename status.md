@@ -2,6 +2,91 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 SCCP release artifact path control-character guard
+
+- Hardened SCCP release evidence tooling so public artifact paths containing
+  ASCII control characters are rejected before they can enter release-readiness
+  JSON, bundle manifests, extracted bundle entry inventories, verifier
+  diagnostics, or Markdown release-note tables.
+- Added focused release-bundle regressions for bundle-builder artifact paths,
+  manifest artifact paths, readiness-report input/input-artifact paths, and
+  extracted bundle filesystem entries containing control characters, plus a
+  release-readiness CLI regression for control-character evidence paths.
+- Updated the bridge-proof documentation and roadmap to describe the printable
+  path requirement for public release evidence.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k control_character`
+    (`4 passed, 133 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k control_character`
+    (`1 passed, 19 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`157 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`791 passed`)
+
+## 2026-06-01 SCCP release verifier UTF-8 fail-closed gate
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so non-UTF-8 public release
+  roots return structured verifier failures instead of raising traceback-prone
+  decode errors during review. The guard now covers `manifest.json`,
+  `sccp-release-readiness.json`, `sccp-all-lanes-summary.json`,
+  `sccp-release-readiness.md`, and `sccp-release-notes-attachment.md`.
+- Added focused release-bundle regressions for non-UTF-8 manifest JSON,
+  readiness/summary JSON, and public Markdown/release-note attachments, and
+  asserted the CLI reports verifier errors without a Python traceback.
+- Updated the bridge-proof documentation and roadmap to describe the UTF-8
+  fail-closed release evidence rule.
+- Validation: pending.
+
+## 2026-06-01 SCCP web prover callback immutability coverage
+
+- Extended JavaScript SCCP linked-prover callback regressions across TON,
+  EVM-family, TRON, and Substrate-family proof engines.
+- The regressions assert frozen callback-visible request metadata where exposed,
+  nested public inputs, public-signal words, and destination binding objects on
+  the EVM/TRON surfaces, plus defensive copies for `bundleBytes` and
+  `sourceProofBytes` before proof wrapping across the linked-prover callbacks.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`83 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`131 passed`)
+
+## 2026-06-01 Sumeragi frontier-fast TLC witness check
+
+- Added `SpecTlcFast` and `SumeragiFrontierRecovery_tlc_fast.cfg` so the TLC
+  runner checks the fast frontier constants with seven canonical initial
+  witnesses covering zero-evidence, direct commit, queue/payload recovery,
+  stale-owner unlock, retransmit/rotation, view-bound drop, and future
+  reanchor/promotion branches.
+- Wired `frontier-fast` into `scripts/formal/sumeragi_tlc.sh` and the Sumeragi
+  formal CI script. The documented TLC fast-mode gap is now 0 missing modes out
+  of 499 documented fast rows, with all 499 fast modes wired into the TLC
+  runner.
+- The unrestricted fast TLC probe still expands from 3,171,960 initial states /
+  3,197,941 distinct states with 3,171,960 queued after 75 seconds, so the CI
+  TLC mode is intentionally a canonical fast-bound witness check; Apalache
+  remains the full bounded fast/deep/wide frontier proof, and `frontier-small`
+  remains the small exhaustive TLC check.
+- Validation:
+  - `bash -n scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 10292 documented modes`)
+  - documented TLC gap command (`0` missing from TLC runner, `499` documented,
+    `499` TLC-wired fast modes)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecovery.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh frontier-fast`
+    (`238` states generated, `152` distinct states, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh frontier-small`
+    (`2,265,283` states generated, `1,165,588` distinct states, no error)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-fast`
+    (`EXITCODE: OK`, computation length `7`)
+  - `git diff --check -- docs/formal/sumeragi/SumeragiFrontierRecovery.tla docs/formal/sumeragi/SumeragiFrontierRecovery_tlc_fast.cfg scripts/formal/sumeragi_tlc.sh ci/check_sumeragi_formal.sh docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - conflict-marker scan across the touched Sumeragi formal files, CI docs,
+    roadmap, and status files
+
 ## 2026-06-01 SCCP Python UI witness snapshot hardening
 
 - Hardened the Python SCCP SDK witness-provider snapshot path so app-owned
@@ -56,14 +141,14 @@ Last updated: 2026-06-01
   native AMX receipt validation, native AMX routing-plan, NPoS VRF epoch seal,
   post-commit cleanup, and restart replay.
 - Updated the formal README command list, CI inventory, and roadmap to mark
-  those case-enumeration slices as TLC-cross-checked. The documented TLC
-  fast-mode gap is now 1 missing mode out of 499 documented fast rows, with
-  498 fast modes wired into the TLC runner.
-- The only remaining documented unwired fast mode is `frontier-fast`.
+  those case-enumeration slices as TLC-cross-checked. At this point, the
+  documented TLC fast-mode gap was 1 missing mode out of 499 documented fast
+  rows, with 498 fast modes wired into the TLC runner.
+- The only remaining documented unwired fast mode was `frontier-fast`.
   Unconstrained raw TLC probes at 75 seconds still timed out for
   `frontier-fast` and the other candidate-enumeration families except
   `native-amx-attestation-fast`; the singleton runner branches now cover those
-  candidate-enumeration families, while frontier recovery still needs a
+  candidate-enumeration families, while frontier recovery still needed a
   dedicated liveness/state-space reduction beyond the existing
   `frontier-small` TLC check.
 - Validation:

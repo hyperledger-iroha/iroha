@@ -552,12 +552,26 @@ def _parse_phase_results(values: list[str], phases: list[str]) -> dict[str, str]
     return results
 
 
+def _path_control_character(path: str) -> str | None:
+    for character in path:
+        if ord(character) < 0x20 or ord(character) == 0x7F:
+            return repr(character)
+    return None
+
+
 def _artifact(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise ValueError(f"release artifact path must not be a symlink: {path}")
+    artifact_path = str(path)
+    control_character = _path_control_character(artifact_path)
+    if control_character is not None:
+        raise ValueError(
+            "release artifact path contains control character "
+            f"{control_character}: {artifact_path!r}"
+        )
     payload = path.read_bytes()
     return {
-        "path": str(path),
+        "path": artifact_path,
         "bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
     }

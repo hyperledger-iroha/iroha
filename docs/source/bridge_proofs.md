@@ -61,6 +61,11 @@ The dynamic Python witness-provider path snapshots app-owned request data before
 calling the UI resolver, including accepted non-string sequence byte inputs, so
 provider-side normalization or mutation cannot alter the proof request that the
 portal or mobile app is displaying to the user.
+Dynamic JavaScript linked-prover callbacks for TON, EVM-family, TRON, and
+Substrate-family flows share the same callback snapshot contract:
+callback-visible request objects and nested metadata are frozen where those
+flows expose structured request metadata, and `bundleBytes`/`sourceProofBytes`
+accessors return defensive copies before proof wrapping.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation, and
 the all-lanes launch policy still blocks incomplete corridors before accepting
@@ -4237,6 +4242,9 @@ symlinked artifacts, unmanifested directories, duplicate, unmanifested, or
 omitted required artifacts,
 non-canonical manifest/readiness-report/summary JSON serialization,
 duplicate keys in public JSON roots,
+non-UTF-8 public JSON and Markdown roots,
+control characters in manifest, readiness-report, or extracted bundle artifact
+paths,
 unknown corridor phase statuses or evidence keys,
 blocked corridor roots,
 non-canonical corridor phase-log paths,

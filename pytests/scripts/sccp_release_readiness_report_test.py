@@ -1128,3 +1128,31 @@ def test_release_readiness_report_rejects_symlinked_phase_evidence(
 
     assert completed.returncode == 2
     assert "release artifact path must not be a symlink" in completed.stderr
+
+
+def test_release_readiness_rejects_control_character_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    """Release-readiness artifact paths must be printable reviewer text."""
+
+    _, payload = write_complete_evidence(tmp_path)
+    evidence = tmp_path / "complete\noperator.toml"
+    evidence.write_text(payload, encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "release artifact path contains control character '\\n':" in completed.stderr
+    assert "complete\\noperator.toml" in completed.stderr

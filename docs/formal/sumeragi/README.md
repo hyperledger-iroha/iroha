@@ -7718,6 +7718,7 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_bug_future_stale_owner.cfg`: expected-failure future stale-owner mutation.
 - `SumeragiFrontierRecovery_bug_progress_touch.cfg`: expected-failure pending progress-touch mutation.
 - `SumeragiFrontierRecovery_bug_height_only_recovery.cfg`: expected-failure height-only stale recovery mutation.
+- `SumeragiFrontierRecovery_tlc_fast.cfg`: TLC fast-bound canonical frontier witness cross-check config.
 - `SumeragiFrontierRecovery_tlc_small.cfg`: small TLC cross-check config.
 - `.github/workflows/nightly_sumeragi_formal.yml`: scheduled/manual longer-bound
   frontier check using `frontier-nightly`.
@@ -10993,6 +10994,7 @@ bash scripts/formal/sumeragi_apalache.sh highest-optional-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-fast
 bash scripts/formal/sumeragi_apalache.sh frontier-deep
 bash scripts/formal/sumeragi_apalache.sh frontier-wide
+bash scripts/formal/sumeragi_tlc.sh frontier-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-small
 bash scripts/formal/sumeragi_tlc.sh fork-fast
 bash scripts/formal/sumeragi_tlc.sh quorum-fast
@@ -12007,9 +12009,16 @@ The runner sets an explicit Apalache `--length` for each mode:
 `APALACHE_LENGTH=<n>` overrides the per-mode default when locally exploring a
 counterexample or widening a bounded proof.
 
-`scripts/formal/sumeragi_tlc.sh frontier-small` runs a small exhaustive TLC
+`scripts/formal/sumeragi_tlc.sh frontier-fast` uses the fast frontier constants
+with `SpecTlcFast`, a canonical seven-witness initial set that covers the
+zero-evidence, direct commit, vote-queue/payload-recovery, stale-owner unlock,
+retransmit/rotation, view-bound drop, and future reanchor/promotion branches.
+The unrestricted fast TLC initial cross-product is intentionally not used in CI
+because it expands to millions of initial states; Apalache remains the full
+bounded fast/deep/wide frontier proof.
+`scripts/formal/sumeragi_tlc.sh frontier-small` remains the small exhaustive TLC
 cross-check using the same module and TLC-friendly weak-fairness specification.
-The TLC config disables generic deadlock rejection because resolved terminal
+Both TLC configs disable generic deadlock rejection because resolved terminal
 states, such as a legitimate zero-evidence drop, are valid endpoints; invariants
 and temporal properties remain checked.
 The same TLC helper also supports `validation-redrive-label-fast` and the
