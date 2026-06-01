@@ -11266,16 +11266,35 @@ seiyaku DirectInvoke {
   }
 }
 `, { mode: "test" });
+  const nameLiteral = compileKotodamaProgram(`
+seiyaku DirectNameInvoke {
+  kotoage fn run(count: int) -> int {
+    return count + 1;
+  }
+
+  #[test]
+  fn smoke() {
+    let next = invoke_entrypoint(name("run"), json("{\\"count\\":7}"));
+    assert_eq(next, 8);
+  }
+}
+`, { mode: "test" });
   const code = readArtifactCode(compiled.artifactBytes);
+  const nameLiteralCode = readArtifactCode(nameLiteral.artifactBytes);
 
   assert.deepEqual(compiled.diagnostics, []);
+  assert.deepEqual(nameLiteral.diagnostics, []);
   assert.equal(code.indexOf(syscallxNeedle(0x00fe_0004)), -1, "direct invoke should not use the actor-host private syscall");
+  assert.equal(nameLiteralCode.indexOf(syscallxNeedle(0x00fe_0004)), -1, "Name-literal direct invoke should not use the actor-host private syscall");
   assert.notEqual(code.indexOf(syscallNeedle(0x50)), -1, "missing STATE_GET override read");
   assert.notEqual(code.indexOf(syscallNeedle(0x51)), -1, "missing STATE_SET override write");
   assert.notEqual(code.indexOf(syscallNeedle(0x52)), -1, "missing STATE_DEL override cleanup");
   assert.notEqual(code.indexOf(syscallNeedle(0x57)), -1, "missing JSON_ENCODE override payload");
   assert.notEqual(code.indexOf(syscallNeedle(0x58)), -1, "missing JSON_DECODE wrapper override payload");
   assert.ok(compiled.sourceMap.some((entry) => entry.function_name === "smoke"));
+  assert.notEqual(nameLiteralCode.indexOf(syscallNeedle(0x50)), -1, "missing Name-literal STATE_GET override read");
+  assert.notEqual(nameLiteralCode.indexOf(syscallNeedle(0x57)), -1, "missing Name-literal JSON_ENCODE override payload");
+  assert.ok(nameLiteral.sourceMap.some((entry) => entry.function_name === "smoke"));
 });
 
 test("Kotodama compiler SDK lowers direct invoke_entrypoint tuple returns through wrapper multi-return", () => {
@@ -13602,6 +13621,28 @@ seiyaku PayloadCallback {
 
   assert.deepEqual(compiled.diagnostics, []);
   assert.equal(compiled.manifest?.entrypoints[0]?.triggers.length, 1);
+});
+
+test("Kotodama compiler SDK encodes unstructured data-any trigger filters like Rust", () => {
+  const compiled = compileKotodamaProgram(`
+seiyaku DataAnyTrigger {
+  kotoage fn run() {}
+
+  register_trigger wake {
+    call run;
+    on data any;
+  }
+}
+`);
+  const cntrBody = noritoPayloadBody(readArtifactSection(compiled.artifactBytes, 17).payload);
+
+  assert.deepEqual(compiled.diagnostics, []);
+  assert.equal(compiled.manifest?.entrypoints[0]?.triggers.length, 1);
+  assert.notEqual(cntrBody.indexOf(Buffer.from([
+    0x01, 0x00, 0x00, 0x00,
+    0x04,
+    0x00, 0x00, 0x00, 0x00,
+  ])), -1);
 });
 
 test("Kotodama compiler SDK encodes RWA data trigger filters", () => {
