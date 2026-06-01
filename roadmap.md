@@ -26,8 +26,10 @@ and completed history lives in [`status.md`](./status.md).
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
-  the engineering backlog for broader XMLDSig/XAdES trust-anchor and
-  canonicalization fixture coverage, plus official MDR/XSD fixtures.
+  the engineering backlog for XMLDSig/XAdES certificate-chain trust-anchor
+  packages and official MDR/XSD fixtures. `require-verified` profiles now
+  require profile-specific public-key or DER-certificate SHA-256 pins before a
+  P-256/SHA-256 enveloped signature can pass.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
   aliases; the current TON shard-state source-state path rejects duplicate
   camelCase/snake_case names inside nested validator-set transition proofs,
@@ -149,6 +151,12 @@ and completed history lives in [`status.md`](./status.md).
   Substrate-family proof engines, including the Java Android Ethereum/BSC
   mainnet facade witness-provider path, before app-linked callbacks return
   proof bytes.
+- Keep TAIRA-to-TRON XOR source records economically bound at consensus
+  admission; `taira_tron_xor` record overlays must include same-overlay
+  whole-unit XOR burns by the payload sender, with the TAIRA burn-record
+  contract and deployment evidence flow used for activation. Live route
+  activation still needs the browser-safe TRON prover bundle, deployed TAIRA
+  settlement contract evidence, and bidirectional smoke transfers.
 - Keep public SCCP phase evidence bound to executed production-corridor
   commands; release-readiness and release-bundle checks now require expected
   phase command fragments to appear on traced `+ ...` command lines inside the
@@ -167,7 +175,9 @@ and completed history lives in [`status.md`](./status.md).
   verifier material plus source-adapter deployment binding, including replayed
   deployment-receipt rejection before public-input extraction, and the positive
   BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
-  instead of outbound EVM Groth16 destination packaging.
+  instead of outbound EVM Groth16 destination packaging. The remaining release
+  work is broader corridor evidence after stale Ethereum-lane validation jobs
+  are no longer racing the active BSC policy files.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.
@@ -4851,7 +4861,8 @@ validation.
   source and strict quorum math are the only mode differences.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
   workflow entrypoints, Apalache version pins, README commands,
-  conflict-marker-free formal wiring files, well-formed runner case blocks,
+  conflict-marker-free formal wiring and TLA+/CFG artifact files,
+  well-formed runner case blocks,
   length-table-derived bidirectional documented TLC fast-mode coverage,
   duplicate-free and shadow-free
   runner case labels, duplicate-free Apalache command lists including
@@ -4863,7 +4874,8 @@ validation.
   runner proof inputs and scalar runner assignments, flat direct-child formal
   path and suffix containment, runner command shape, runner invocation
   proof-input binding, TLC constraint operator binding,
-  non-type-only CFG checks, TLC module identifier and module-file reachability,
+  non-type-only CFG checks, top-level-only CFG behavior/check detection,
+  TLC module identifier and module-file reachability,
   Apalache/TLC TLA module identity, TLA dependency resolution, Apalache length
   declarations, well-formed purpose-bearing duplicate-free README length rows,
   and README length table agreement, single top-of-file TLA module-header

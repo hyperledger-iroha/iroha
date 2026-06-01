@@ -69,6 +69,18 @@ function compileContracts() {
         "sccp",
         "SccpTronSourceBridge.sol"
       ),
+      "contracts/tron/sccp/TairaXOR.sol": loadRepoSource(
+        "contracts",
+        "tron",
+        "sccp",
+        "TairaXOR.sol"
+      ),
+      "contracts/tron/sccp/TairaXorSccpBridge.sol": loadRepoSource(
+        "contracts",
+        "tron",
+        "sccp",
+        "TairaXorSccpBridge.sol"
+      ),
     },
     settings: {
       optimizer: { enabled: true, runs: 200 },
@@ -221,6 +233,59 @@ function computeTronDestinationBindingHash(
 
 function tronAddressWord(address) {
   return ethers.zeroPadValue(`0x41${ethers.getAddress(address).slice(2)}`, 32);
+}
+
+function computeTairaXorTransferPayloadHash(
+  abi,
+  { routeIdHash, assetKeyHash, bridgeAddress, recipient, amount }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      ["bytes32", "bytes32", "bytes32", "address", "address", "uint256"],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:taira-xor:transfer-payload:v1")
+        ),
+        routeIdHash,
+        assetKeyHash,
+        bridgeAddress,
+        recipient,
+        amount,
+      ]
+    )
+  );
+}
+
+function computeTairaXorBurnSourceEventDigest(
+  abi,
+  { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
+) {
+  return ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "address",
+        "address",
+        "bytes32",
+        "uint256",
+        "uint256",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:taira-xor:burn-source-event:v1")
+        ),
+        routeIdHash,
+        assetKeyHash,
+        bridgeAddress,
+        burner,
+        tairaRecipientHash,
+        amount,
+        nonce,
+      ]
+    )
+  );
 }
 
 const BN254_BASE_FIELD_MODULUS =
@@ -410,6 +475,16 @@ async function main() {
     contracts,
     "contracts/tron/sccp/SccpTronSourceBridge.sol",
     "SccpTronSourceBridge"
+  );
+  const tairaXorArtifact = artifact(
+    contracts,
+    "contracts/tron/sccp/TairaXOR.sol",
+    "TairaXOR"
+  );
+  const tairaXorBridgeArtifact = artifact(
+    contracts,
+    "contracts/tron/sccp/TairaXorSccpBridge.sol",
+    "TairaXorSccpBridge"
   );
   const tronAcceptedEvent = tronGroth16VerifierArtifact.abi.find(
     (entry) => entry.type === "event" && entry.name === "MessageProofAccepted"
@@ -2664,6 +2739,433 @@ async function main() {
     },
     callException
   );
+
+  const routeIdHash = ethers.keccak256(ethers.toUtf8Bytes("taira_tron_xor"));
+  const assetKeyHash = ethers.keccak256(ethers.toUtf8Bytes("xor"));
+  const tairaXor = await deploy(
+    signer,
+    tairaXorArtifact.abi,
+    tairaXorArtifact.bytecode
+  );
+  const tairaXorAddress = await tairaXor.getAddress();
+  assert.equal(await tairaXor.name(), "TAIRA XOR");
+  assert.equal(await tairaXor.symbol(), "TairaXOR");
+  assert.equal(await tairaXor.decimals(), 18n);
+  assert.equal(await tairaXor.totalSupply(), 0n);
+
+  await assert.rejects(
+    async () => {
+      const nonOwnerBridgeTx = await tairaXor
+        .connect(outsider)
+        .setBridge(await outsider.getAddress());
+      await nonOwnerBridgeTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const zeroBridgeTx = await tairaXor.setBridge(ethers.ZeroAddress);
+      await zeroBridgeTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const unauthorizedMintTx = await tairaXor.mint(await signer.getAddress(), 1);
+      await unauthorizedMintTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const overdrawTx = await tairaXor.transfer(await outsider.getAddress(), 1);
+      await overdrawTx.wait();
+    },
+    callException
+  );
+
+  const bridgeSourceBridge = await deploy(
+    signer,
+    tronSourceBridgeArtifact.abi,
+    tronSourceBridgeArtifact.bytecode,
+    tronSourceBridgeConstructorArgs()
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          ethers.ZeroAddress,
+          tronGroth16Address,
+          await bridgeSourceBridge.getAddress(),
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tairaXorAddress,
+          tronGroth16Address,
+          await bridgeSourceBridge.getAddress(),
+          ethers.ZeroHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callException
+  );
+
+  const tairaXorBridge = await deploy(
+    signer,
+    tairaXorBridgeArtifact.abi,
+    tairaXorBridgeArtifact.bytecode,
+    [
+      tairaXorAddress,
+      tronGroth16Address,
+      await bridgeSourceBridge.getAddress(),
+      routeIdHash,
+      assetKeyHash,
+    ]
+  );
+  const tairaXorBridgeAddress = await tairaXorBridge.getAddress();
+  assert.equal(await tairaXorBridge.routeIdHash(), routeIdHash);
+  assert.equal(await tairaXorBridge.assetKeyHash(), assetKeyHash);
+  assert.equal(await tairaXorBridge.networkId(), tronNetworkId);
+  assert.equal(
+    await tairaXorBridge.destinationBindingHash(),
+    expectedTronDestinationBindingHash
+  );
+  const setBridgeTx = await tairaXor.setBridge(tairaXorBridgeAddress);
+  await setBridgeTx.wait();
+  const lockBridgeTx = await tairaXor.lockBridge();
+  await lockBridgeTx.wait();
+  await assert.rejects(
+    async () => {
+      const resetBridgeTx = await tairaXor.setBridge(await outsider.getAddress());
+      await resetBridgeTx.wait();
+    },
+    callException
+  );
+  const transferSourceOwnershipTx =
+    await bridgeSourceBridge.transferOwnership(tairaXorBridgeAddress);
+  await transferSourceOwnershipTx.wait();
+  assert.equal(await bridgeSourceBridge.owner(), tairaXorBridgeAddress);
+
+  const recipient = await outsider.getAddress();
+  const mintAmount = 12_345n;
+  const bridgePayloadHash = computeTairaXorTransferPayloadHash(abi, {
+    routeIdHash,
+    assetKeyHash,
+    bridgeAddress: tairaXorBridgeAddress,
+    recipient,
+    amount: mintAmount,
+  });
+  assert.equal(
+    await tairaXorBridge.tairaXorTransferPayloadHash.staticCall(
+      routeIdHash,
+      assetKeyHash,
+      recipient,
+      mintAmount
+    ),
+    bridgePayloadHash
+  );
+  const bridgeMessageId = ethers.keccak256(
+    ethers.toUtf8Bytes("taira-xor-bridge-message")
+  );
+  const bridgeInputs = [
+    bridgeMessageId,
+    bridgePayloadHash,
+    ethers.zeroPadValue(ethers.toBeHex(5), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-xor-commitment-root")),
+    ethers.zeroPadValue(ethers.toBeHex(77), 32),
+    ethers.keccak256(ethers.toUtf8Bytes("taira-xor-finality-block")),
+  ];
+  const bridgeStatementHash = ethers.keccak256(
+    ethers.toUtf8Bytes("taira-xor-statement")
+  );
+  const bridgeProofBytes = await buildAcceptingGroth16ProofBytes(
+    provider,
+    abi,
+    {
+      publicInputs: bridgeInputs,
+      sourceDomain: 0,
+      statementHash: bridgeStatementHash,
+      destinationBindingHash: expectedTronDestinationBindingHash,
+      g1,
+      g2,
+    }
+  );
+  const standaloneConsumeTx = await tronGroth16Verifier.submitSccpMessageProof(
+    bridgeProofBytes,
+    bridgeInputs,
+    bridgeStatementHash
+  );
+  await standaloneConsumeTx.wait();
+  assert.equal(await tronGroth16Verifier.usedMessageProofs(bridgeMessageId), true);
+  assert.equal(
+    await tairaXorBridge.finalizeFromTaira.staticCall(
+      bridgeProofBytes,
+      bridgeInputs,
+      bridgeStatementHash,
+      routeIdHash,
+      assetKeyHash,
+      recipient,
+      mintAmount
+    ),
+    bridgeMessageId
+  );
+
+  const wrongRouteHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-route"));
+  await assert.rejects(
+    async () => {
+      const wrongRouteTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        bridgeInputs,
+        bridgeStatementHash,
+        wrongRouteHash,
+        assetKeyHash,
+        recipient,
+        mintAmount
+      );
+      await wrongRouteTx.wait();
+    },
+    callException
+  );
+  const wrongAssetHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-asset"));
+  await assert.rejects(
+    async () => {
+      const wrongAssetTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        bridgeInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        wrongAssetHash,
+        recipient,
+        mintAmount
+      );
+      await wrongAssetTx.wait();
+    },
+    callException
+  );
+  const wrongBridgePayloadInputs = bridgeInputs.slice();
+  wrongBridgePayloadInputs[1] = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-taira-xor-payload")
+  );
+  await assert.rejects(
+    async () => {
+      const wrongPayloadTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        wrongBridgePayloadInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        assetKeyHash,
+        recipient,
+        mintAmount
+      );
+      await wrongPayloadTx.wait();
+    },
+    callExceptionWithReason("Payload hash mismatch")
+  );
+  const wrongBridgeTargetInputs = bridgeInputs.slice();
+  wrongBridgeTargetInputs[2] = ethers.zeroPadValue(ethers.toBeHex(4), 32);
+  await assert.rejects(
+    async () => {
+      const wrongTargetTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        wrongBridgeTargetInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        assetKeyHash,
+        recipient,
+        mintAmount
+      );
+      await wrongTargetTx.wait();
+    },
+    callExceptionWithReason("Unexpected target domain")
+  );
+  await assert.rejects(
+    async () => {
+      const zeroRecipientTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        bridgeInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        assetKeyHash,
+        ethers.ZeroAddress,
+        mintAmount
+      );
+      await zeroRecipientTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const zeroAmountTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        bridgeInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        assetKeyHash,
+        recipient,
+        0
+      );
+      await zeroAmountTx.wait();
+    },
+    callException
+  );
+
+  const bridgeMintTx = await tairaXorBridge.finalizeFromTaira(
+    bridgeProofBytes,
+    bridgeInputs,
+    bridgeStatementHash,
+    routeIdHash,
+    assetKeyHash,
+    recipient,
+    mintAmount
+  );
+  const bridgeMintReceipt = await bridgeMintTx.wait();
+  assert.equal(await tairaXorBridge.usedMessageProofs(bridgeMessageId), true);
+  assert.equal(await tairaXor.balanceOf(recipient), mintAmount);
+  assert.equal(await tairaXor.totalSupply(), mintAmount);
+  const tairaXorBridgeIface = new ethers.Interface(tairaXorBridgeArtifact.abi);
+  const bridgeMintLogs = bridgeMintReceipt.logs
+    .filter((log) => log.address.toLowerCase() === tairaXorBridgeAddress.toLowerCase())
+    .map((log) => tairaXorBridgeIface.parseLog(log))
+    .filter((log) => log.name === "TairaXorMintFinalized");
+  assert.equal(bridgeMintLogs.length, 1);
+  assert.equal(bridgeMintLogs[0].args.messageId, bridgeMessageId);
+  assert.equal(bridgeMintLogs[0].args.recipient, recipient);
+  assert.equal(bridgeMintLogs[0].args.amount, mintAmount);
+  assert.equal(bridgeMintLogs[0].args.payloadHash, bridgePayloadHash);
+  await assert.rejects(
+    async () => {
+      const bridgeReplayTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        bridgeInputs,
+        bridgeStatementHash,
+        routeIdHash,
+        assetKeyHash,
+        recipient,
+        mintAmount
+      );
+      await bridgeReplayTx.wait();
+    },
+    callExceptionWithReason("Message proof already used")
+  );
+
+  const transferAmount = 100n;
+  const transferTx = await tairaXor
+    .connect(outsider)
+    .transfer(await signer.getAddress(), transferAmount);
+  await transferTx.wait();
+  assert.equal(await tairaXor.balanceOf(await signer.getAddress()), transferAmount);
+  const approveTx = await tairaXor
+    .connect(outsider)
+    .approve(await signer.getAddress(), 7n);
+  await approveTx.wait();
+  const transferFromTx = await tairaXor.transferFrom(recipient, await signer.getAddress(), 7n);
+  await transferFromTx.wait();
+  assert.equal(await tairaXor.allowance(recipient, await signer.getAddress()), 0n);
+  assert.equal(await tairaXor.balanceOf(await signer.getAddress()), 107n);
+
+  await assert.rejects(
+    async () => {
+      const badBurnRouteTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(wrongRouteHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), 1);
+      await badBurnRouteTx.wait();
+    },
+    callExceptionWithReason("Unexpected route")
+  );
+  await assert.rejects(
+    async () => {
+      const badBurnAssetTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(routeIdHash, wrongAssetHash, ethers.toUtf8Bytes("testu1@taira"), 1);
+      await badBurnAssetTx.wait();
+    },
+    callExceptionWithReason("Unexpected asset")
+  );
+  await assert.rejects(
+    async () => {
+      const zeroBurnAmountTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(routeIdHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), 0);
+      await zeroBurnAmountTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const emptyRecipientTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(routeIdHash, assetKeyHash, "0x", 1);
+      await emptyRecipientTx.wait();
+    },
+    callException
+  );
+  await assert.rejects(
+    async () => {
+      const outsiderOverburnTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(routeIdHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), mintAmount);
+      await outsiderOverburnTx.wait();
+    },
+    callException
+  );
+
+  const burnRecipient = ethers.toUtf8Bytes("testu2@taira");
+  const burnRecipientHash = ethers.keccak256(burnRecipient);
+  const burnAmount = 222n;
+  const expectedBurnDigest = computeTairaXorBurnSourceEventDigest(abi, {
+    routeIdHash,
+    assetKeyHash,
+    bridgeAddress: tairaXorBridgeAddress,
+    burner: recipient,
+    tairaRecipientHash: burnRecipientHash,
+    amount: burnAmount,
+    nonce: 0n,
+  });
+  assert.equal(
+    await tairaXorBridge.tairaXorBurnSourceEventDigest.staticCall(
+      routeIdHash,
+      assetKeyHash,
+      recipient,
+      burnRecipientHash,
+      burnAmount,
+      0
+    ),
+    expectedBurnDigest
+  );
+  const burnTx = await tairaXorBridge
+    .connect(outsider)
+    .burnToTaira(routeIdHash, assetKeyHash, burnRecipient, burnAmount);
+  const burnReceipt = await burnTx.wait();
+  assert.equal(await tairaXorBridge.burnNonce(), 1n);
+  assert.equal(await bridgeSourceBridge.submittedSourceEvents(expectedBurnDigest), true);
+  assert.equal(await tairaXor.balanceOf(recipient), mintAmount - transferAmount - 7n - burnAmount);
+  assert.equal(await tairaXor.totalSupply(), mintAmount - burnAmount);
+  const bridgeBurnLogs = burnReceipt.logs
+    .filter((log) => log.address.toLowerCase() === tairaXorBridgeAddress.toLowerCase())
+    .map((log) => tairaXorBridgeIface.parseLog(log))
+    .filter((log) => log.name === "TairaXorBurnStarted");
+  assert.equal(bridgeBurnLogs.length, 1);
+  assert.equal(bridgeBurnLogs[0].args.sourceEventDigest, expectedBurnDigest);
+  assert.equal(bridgeBurnLogs[0].args.burner, recipient);
+  assert.equal(bridgeBurnLogs[0].args.tairaRecipientHash, burnRecipientHash);
+  assert.equal(bridgeBurnLogs[0].args.amount, burnAmount);
+  assert.equal(bridgeBurnLogs[0].args.nonce, 0n);
+  assert.equal(ethers.hexlify(bridgeBurnLogs[0].args.tairaRecipient), ethers.hexlify(burnRecipient));
 
   console.log("sccp_message_bridge_smoke: ok");
 }

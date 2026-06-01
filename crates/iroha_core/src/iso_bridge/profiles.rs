@@ -744,12 +744,12 @@ impl TradfiRailProfile {
     pub fn accepts_xml_signature_key(
         &self,
         public_key_sha256: &str,
-        certificate_sha256: Option<&str>,
+        certificate_sha256: &[String],
     ) -> bool {
         self.trusted_public_key_sha256
             .iter()
             .any(|pin| pin == public_key_sha256)
-            || certificate_sha256.is_some_and(|digest| {
+            || certificate_sha256.iter().any(|digest| {
                 self.trusted_certificate_sha256
                     .iter()
                     .any(|pin| pin == digest)
@@ -1002,6 +1002,20 @@ mod tests {
             !catalog["swift-cbpr-plus"].has_xml_signature_trust_anchors(),
             "default live profiles must not silently trust XMLDSig keys"
         );
+    }
+
+    #[test]
+    fn xml_signature_key_pins_accept_any_verified_certificate_digest() {
+        let mut profile = default_profile("generic-iso20022").expect("profile");
+        profile.trusted_public_key_sha256 = vec!["aa".repeat(32)];
+        profile.trusted_certificate_sha256 = vec!["bb".repeat(32)];
+
+        assert!(profile.accepts_xml_signature_key(&"aa".repeat(32), &[]));
+        assert!(
+            profile
+                .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "bb".repeat(32)])
+        );
+        assert!(!profile.accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32)]));
     }
 
     #[test]

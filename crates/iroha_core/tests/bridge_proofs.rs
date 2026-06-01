@@ -2968,13 +2968,13 @@ fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_fo
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect("BSC launch policy should admit configured BSC source proofs");
 
-    let record = stx
+    let rec = stx
         .world
         .proofs()
         .get(&proof_id)
-        .expect("BSC bridge proof recorded");
-    assert_eq!(record.status, ProofStatus::Verified);
-    assert!(record.bridge.is_some());
+        .expect("BSC proof should be recorded");
+    assert_eq!(rec.status, ProofStatus::Verified);
+    assert!(rec.bridge.is_some(), "BSC bridge metadata should be stored");
 }
 
 #[test]

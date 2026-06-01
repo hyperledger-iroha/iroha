@@ -2842,7 +2842,7 @@ fn verify_embedded_xml_signature(
     if !profile.has_xml_signature_trust_anchors()
         || !profile.accepts_xml_signature_key(
             &sha256_hex(&key_material.public_key),
-            key_material.certificate_sha256.as_deref(),
+            &key_material.certificate_sha256,
         )
     {
         return Err(MsgError::ValidationFailed);
@@ -2898,7 +2898,7 @@ fn verify_xml_signature_references(
 
 struct XmlSignatureKeyMaterial {
     public_key: Vec<u8>,
-    certificate_sha256: Option<String>,
+    certificate_sha256: Vec<String>,
 }
 
 fn xml_signature_key_material(signature_xml: &str) -> Result<XmlSignatureKeyMaterial, MsgError> {
@@ -2908,16 +2908,38 @@ fn xml_signature_key_material(signature_xml: &str) -> Result<XmlSignatureKeyMate
             .map_err(|_| MsgError::ValidationFailed)?;
         return Ok(XmlSignatureKeyMaterial {
             public_key,
-            certificate_sha256: None,
+            certificate_sha256: Vec::new(),
         });
     }
-    let certificate = decode_required_child_base64(signature_xml, "X509Certificate")?;
-    let (_, cert) =
-        X509Certificate::from_der(&certificate).map_err(|_| MsgError::ValidationFailed)?;
-    let public_key = cert.public_key().subject_public_key.data.to_vec();
+    let certificates = decode_child_base64_values(signature_xml, "X509Certificate")?;
+    if certificates.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let parsed_certificates = certificates
+        .iter()
+        .map(|certificate| {
+            X509Certificate::from_der(certificate)
+                .map(|(_, cert)| cert)
+                .map_err(|_| MsgError::ValidationFailed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let public_key = parsed_certificates[0]
+        .public_key()
+        .subject_public_key
+        .data
+        .to_vec();
+    let mut certificate_sha256 = vec![sha256_hex(&certificates[0])];
+    for (certificates_der, chain_pair) in
+        certificates[1..].iter().zip(parsed_certificates.windows(2))
+    {
+        chain_pair[0]
+            .verify_signature(Some(chain_pair[1].public_key()))
+            .map_err(|_| MsgError::ValidationFailed)?;
+        certificate_sha256.push(sha256_hex(certificates_der));
+    }
     Ok(XmlSignatureKeyMaterial {
         public_key,
-        certificate_sha256: Some(sha256_hex(&certificate)),
+        certificate_sha256,
     })
 }
 
@@ -2926,6 +2948,34 @@ fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>,
     BASE64_STANDARD
         .decode(value)
         .map_err(|_| MsgError::ValidationFailed)
+}
+
+fn decode_child_base64_values(container: &str, child: &str) -> Result<Vec<Vec<u8>>, MsgError> {
+    let mut values = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < container.len() {
+        let Some(span) = find_first_xml_element(&container[cursor..], child) else {
+            break;
+        };
+        let absolute = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        let value: String = container[absolute.content_start..absolute.content_end]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect();
+        values.push(
+            BASE64_STANDARD
+                .decode(value)
+                .map_err(|_| MsgError::ValidationFailed)?,
+        );
+        cursor = absolute.end;
+    }
+    Ok(values)
 }
 
 fn child_attr(container: &str, child: &str, attr: &str) -> Option<String> {
@@ -3227,6 +3277,10 @@ mod tests {
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
     use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as _};
+    use rcgen::{
+        BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair as RcgenKeyPair,
+        KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, SigningKey as _,
+    };
     use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
@@ -3413,6 +3467,82 @@ mod tests {
             signature_xml,
             &unsigned[insertion..]
         )
+    }
+
+    struct CertificateChainSignedPayload {
+        payload: String,
+        issuer_sha256: String,
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain() -> CertificateChainSignedPayload {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
+        let signed_info = format!(
+            r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/></Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+        );
+
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["iso-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer_sha256 = sha256_hex(issuer_cert.der().as_ref());
+        let issuer = Issuer::from_params(&issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Test Leaf");
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        let signature_value = BASE64_STANDARD.encode(
+            leaf_key
+                .sign(signed_info.as_bytes())
+                .expect("leaf XMLDSig signature"),
+        );
+        let leaf_certificate = BASE64_STANDARD.encode(leaf_cert.der().as_ref());
+        let issuer_certificate = BASE64_STANDARD.encode(issuer_cert.der().as_ref());
+        let signature_xml = format!(
+            concat!(
+                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><X509Data>",
+                "<X509Certificate>{leaf_certificate}</X509Certificate>",
+                "<X509Certificate>{issuer_certificate}</X509Certificate>",
+                "</X509Data></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            leaf_certificate = leaf_certificate,
+            issuer_certificate = issuer_certificate
+        );
+        CertificateChainSignedPayload {
+            payload: format!(
+                "{}{}{}",
+                &unsigned[..insertion],
+                signature_xml,
+                &unsigned[insertion..]
+            ),
+            issuer_sha256,
+        }
     }
 
     fn sample_world(asset_alias: Option<&str>) -> World {
@@ -3688,6 +3818,56 @@ mod tests {
         let err = runtime
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
             .expect_err("require-verified must fail closed for unpinned XMLDSig keys");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_certificate_chain_with_pinned_issuer() {
+        let CertificateChainSignedPayload {
+            payload,
+            issuer_sha256,
+        } = signed_pacs008_xml_with_certificate_chain();
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec![issuer_sha256];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("certificate chain ending at a pinned issuer must pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_certificate_chain_with_unpinned_issuer() {
+        let CertificateChainSignedPayload { payload, .. } =
+            signed_pacs008_xml_with_certificate_chain();
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.trusted_public_key_sha256.clear();
+        profile.trusted_certificate_sha256 = vec!["11".repeat(32)];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("certificate chains must still require a configured trust pin");
 
         assert!(matches!(err, MsgError::ValidationFailed));
     }

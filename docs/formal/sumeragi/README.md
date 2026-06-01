@@ -23514,8 +23514,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   here, and backed by existing TLA+/CFG files. It also checks that the PR and
   nightly workflows install pinned Apalache before invoking the formal baseline,
   and that the baseline script runs this guard before invoking Apalache.
-  Formal runners, CI scripts, workflows, and this README must be free of
-  unresolved merge conflict markers before mode inventory parsing starts.
+  Formal runners, CI scripts, workflows, this README, and every TLA+/CFG
+  artifact in this directory must be free of unresolved merge conflict markers
+  before mode inventory parsing starts.
   Apalache version pins in the
   Apalache/TLC runners, installer, workflows, and formal docs must agree.
   Expected-failure runner paths must reject clean passes and only accept
@@ -23532,8 +23533,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `module`, `tlc_constraint`, and `apalache_length` assignment lines are
   rejected the same way before model checking.
   Referenced configs must be
-  non-empty, define either `SPECIFICATION` or both `INIT` and `NEXT`, and
-  include at least one invariant/property directive. Top-level CFG directives
+  non-empty, define either top-level `SPECIFICATION` or top-level `INIT` plus
+  top-level `NEXT`, and include at least one top-level invariant/property
+  directive. Top-level CFG directives
   must be from the supported TLA+/TLC set; malformed or duplicated
   `CHECK_DEADLOCK` values and unknown directive spellings are rejected before
   model checking. Every CFG

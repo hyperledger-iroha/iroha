@@ -205,6 +205,34 @@ def test_conflict_marker_errors_rejects_unresolved_merge_markers(
     ]
 
 
+def test_formal_artifact_conflict_marker_scan_uses_tla_cfg_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi.cfg"
+    tla = tmp_path / "Sumeragi.tla"
+    readme = tmp_path / "README.md"
+    cfg.write_text("INIT Init\n", encoding="utf-8")
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "<<<<<<< HEAD",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    readme.write_text("<<<<<<< HEAD\n", encoding="utf-8")
+
+    paths = module.formal_artifact_paths(tmp_path)
+
+    assert paths == (cfg, tla)
+    assert module.conflict_marker_errors(paths) == [
+        f"{tla}:2 contains merge conflict marker: <<<<<<< HEAD"
+    ]
+
+
 def test_command_mode_duplicates_are_visible_to_guard(tmp_path: Path) -> None:
     module = load_coverage_module()
     script = tmp_path / "commands.sh"
@@ -1300,6 +1328,42 @@ def test_cfg_shape_errors_rejects_incomplete_configs(tmp_path: Path) -> None:
         f"frontier-fast: {missing_next} must define SPECIFICATION or both INIT and NEXT",
         f"frontier-fast: {missing_check} has no invariant or property checks",
         f"frontier-fast: {mixed} mixes SPECIFICATION with INIT/NEXT behavior",
+    ]
+
+
+def test_cfg_shape_errors_ignores_indented_continuations_as_directives(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing_next = tmp_path / "MissingNext.cfg"
+    missing_check = tmp_path / "MissingCheck.cfg"
+    missing_next.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "INVARIANTS",
+                "  NEXT",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_check.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTANTS",
+                "  INVARIANT = TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_shape_errors(
+        "frontier-fast", [missing_next, missing_check]
+    ) == [
+        f"frontier-fast: {missing_next} must define SPECIFICATION or both INIT and NEXT",
+        f"frontier-fast: {missing_check} has no invariant or property checks",
     ]
 
 

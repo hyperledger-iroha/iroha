@@ -109,6 +109,8 @@ export interface KotodamaStudioCompilerOptions {
   sourceName?: string | null
   embedDebug?: boolean
   mode?: 'production' | 'Production' | 'test' | 'Test' | null
+  forceZk?: boolean
+  forceVector?: boolean
 }
 
 export interface KotodamaStudioCompilerOutput {

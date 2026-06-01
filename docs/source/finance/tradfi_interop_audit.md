@@ -59,8 +59,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   - profile-required reference-data gates
   - amount minor-unit checks
   - structured address and SupplementaryData limits
-  - embedded XMLDSig/XAdES markers recorded for generic ISO and rejected for live
-    profiles that do not yet support verification
+  - embedded XMLDSig/XAdES markers recorded for generic ISO, rejected for live
+    profiles that do not enable verification, and accepted for
+    `require-verified` profiles only after P-256/SHA-256 verification plus
+    profile-specific public-key or certificate SHA-256 pin matching
 - Added durable ISO bridge state under `store_dir/messages/*.json`, including
   payload hash, profile metadata, UETR, transaction hash, status history, reason
   codes, context, and reference snapshot id.
@@ -81,7 +83,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 | Area | Current state | Target |
 | --- | --- | --- |
 | Rail connectivity | Local bridge endpoints only | Explicit operator adapters for live rail gateways, outside consensus-critical code |
-| XMLDSig/XAdES | Detected but not verified | Deterministic verification pipeline with profile-specific trust anchors |
+| XMLDSig/XAdES | Supported P-256/SHA-256 enveloped subset is verified against profile public-key/certificate pins | Add certificate-chain fixtures and official profile-specific trust-anchor packages |
 | Follow-up messages | Parser support exists for several families; Torii lifecycle endpoints are partial | Add inbound `pacs.002`, `pacs.004`, `camt.056`, `sese.023`, `sese.024`, `sese.025` transition handlers |
 | Return/cancel lifecycle | Status and rejection reasons exist | Add outbox helpers for `pacs.004`, `camt.029`, securities confirmation/rejection flows |
 | Securities crosswalks | Reference snapshots load locally | Gate `sese.023` ledger mapping on configured account, instrument, venue, and CSD crosswalks |

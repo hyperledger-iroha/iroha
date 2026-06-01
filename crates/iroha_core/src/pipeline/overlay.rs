@@ -36,6 +36,7 @@ use iroha_data_model::{
     },
     isi::{
         InstructionBox,
+        mint_burn::BurnBox,
         settlement::{DvpIsi, PvpIsi},
         smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
@@ -76,6 +77,9 @@ use crate::{
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     streaming,
 };
+
+const SCCP_TAIRA_TRON_XOR_ROUTE_ID: &[u8] = b"taira_tron_xor";
+const SCCP_TAIRA_TRON_XOR_ASSET_KEY: &[u8] = b"xor";
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct StreamingOverlayMetadata {
@@ -466,6 +470,176 @@ fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError
     gas_limit.ok_or_else(|| {
         OverlayBuildError::GasLimit("missing gas_limit in transaction metadata".to_owned())
     })
+}
+
+fn sccp_admission_error(message: impl Into<String>) -> OverlayBuildError {
+    OverlayBuildError::ZkProof(format!(
+        "SCCP settlement validation failed: {}",
+        message.into()
+    ))
+}
+
+fn decode_taira_tron_xor_record(
+    instruction: &InstructionBox,
+) -> Result<Option<iroha_sccp::TransferPayloadV1>, OverlayBuildError> {
+    let Some(record) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+    else {
+        return Ok(None);
+    };
+
+    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)
+        .ok_or_else(|| sccp_admission_error("record payload bytes could not be decoded"))?;
+    if !iroha_sccp::verify_sccp_payload_structure(&payload) {
+        return Err(sccp_admission_error(
+            "record payload bytes failed structural verification",
+        ));
+    }
+
+    let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
+        return Ok(None);
+    };
+    if transfer.source_domain == iroha_sccp::SCCP_DOMAIN_SORA
+        && transfer.dest_domain == iroha_sccp::SCCP_DOMAIN_TRON
+        && transfer.asset_id_codec == iroha_sccp::SCCP_CODEC_TEXT_UTF8
+        && transfer.asset_id == SCCP_TAIRA_TRON_XOR_ASSET_KEY
+        && transfer.route_id_codec == iroha_sccp::SCCP_CODEC_TEXT_UTF8
+        && transfer.route_id == SCCP_TAIRA_TRON_XOR_ROUTE_ID
+    {
+        Ok(Some(transfer))
+    } else {
+        Ok(None)
+    }
+}
+
+fn resolve_taira_xor_settlement_asset_definition<R: StateReadOnly>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+) -> Result<iroha_data_model::asset::AssetDefinitionId, OverlayBuildError> {
+    let now_ms = u64::try_from(tx.creation_time().as_millis()).unwrap_or(u64::MAX);
+    crate::block::parse_asset_definition_literal_with_world(
+        state_ro.world(),
+        &state_ro.nexus().fees.fee_asset_id,
+        now_ms,
+    )
+    .ok_or_else(|| {
+        sccp_admission_error(
+            "taira_tron_xor requires a valid configured nexus.fees.fee_asset_id settlement asset",
+        )
+    })
+}
+
+fn checked_add_sccp_amount(
+    target: &mut BTreeMap<AccountId, u128>,
+    account: AccountId,
+    amount: u128,
+    label: &str,
+) -> Result<(), OverlayBuildError> {
+    let entry = target.entry(account).or_insert(0);
+    *entry = entry
+        .checked_add(amount)
+        .ok_or_else(|| sccp_admission_error(format!("{label} amount overflow")))?;
+    Ok(())
+}
+
+fn validate_taira_tron_xor_settlement_burns<R: StateReadOnly>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    instructions: &[InstructionBox],
+) -> Result<(), OverlayBuildError> {
+    let mut required_by_sender = BTreeMap::<AccountId, u128>::new();
+    for instruction in instructions {
+        let Some(transfer) = decode_taira_tron_xor_record(instruction)? else {
+            continue;
+        };
+        if transfer.amount == 0 {
+            return Err(sccp_admission_error(
+                "taira_tron_xor transfer amount must be greater than zero",
+            ));
+        }
+        if transfer.sender_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+            return Err(sccp_admission_error(
+                "taira_tron_xor sender must use the text codec",
+            ));
+        }
+        let sender_literal = core::str::from_utf8(&transfer.sender)
+            .map_err(|_| sccp_admission_error("taira_tron_xor sender is not valid UTF-8"))?;
+        let sender = AccountId::parse_encoded(sender_literal)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| {
+                sccp_admission_error(format!(
+                    "taira_tron_xor sender is not a canonical account id: {err}"
+                ))
+            })?;
+        checked_add_sccp_amount(
+            &mut required_by_sender,
+            sender,
+            transfer.amount,
+            "required taira_tron_xor transfer",
+        )?;
+    }
+
+    if required_by_sender.is_empty() {
+        return Ok(());
+    }
+
+    let settlement_asset = resolve_taira_xor_settlement_asset_definition(state_ro, tx)?;
+    let mut burned_by_sender = BTreeMap::<AccountId, u128>::new();
+    let mut saw_non_whole_candidate = BTreeMap::<AccountId, bool>::new();
+    let mut saw_too_wide_candidate = BTreeMap::<AccountId, bool>::new();
+
+    for instruction in instructions {
+        let Some(burn) = instruction.as_any().downcast_ref::<BurnBox>() else {
+            continue;
+        };
+        let BurnBox::Asset(burn) = burn else {
+            continue;
+        };
+        if burn.destination.definition != settlement_asset {
+            continue;
+        }
+        let sender = burn.destination.account.clone();
+        if !required_by_sender.contains_key(&sender) {
+            continue;
+        }
+        if burn.object.scale() != 0 {
+            saw_non_whole_candidate.insert(sender, true);
+            continue;
+        }
+        let Some(amount) = burn.object.try_mantissa_u128() else {
+            saw_too_wide_candidate.insert(sender, true);
+            continue;
+        };
+        checked_add_sccp_amount(
+            &mut burned_by_sender,
+            sender,
+            amount,
+            "burned taira_tron_xor",
+        )?;
+    }
+
+    for (sender, required) in required_by_sender {
+        let burned = burned_by_sender.get(&sender).copied().unwrap_or(0);
+        if burned >= required {
+            continue;
+        }
+        if saw_non_whole_candidate.contains_key(&sender) {
+            return Err(sccp_admission_error(format!(
+                "taira_tron_xor settlement burn for `{sender}` must use whole base units"
+            )));
+        }
+        if saw_too_wide_candidate.contains_key(&sender) {
+            return Err(sccp_admission_error(format!(
+                "taira_tron_xor settlement burn for `{sender}` exceeds u128"
+            )));
+        }
+        return Err(sccp_admission_error(format!(
+            "taira_tron_xor record for `{sender}` requires at least {required} burned XOR base units in the same proved overlay; observed {burned}"
+        )));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2323,6 +2497,90 @@ mod tests {
         .into()
     }
 
+    fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            nonce: 11,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: SCCP_TAIRA_TRON_XOR_ASSET_KEY.to_vec(),
+            amount,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: sender.to_string().into_bytes(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+            recipient: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID.to_vec(),
+        });
+        iroha_data_model::isi::bridge::RecordSccpMessage::new(
+            iroha_sccp::canonical_sccp_payload_bytes(&payload),
+        )
+        .into()
+    }
+
+    fn taira_xor_burn_instruction(
+        sender: &AccountId,
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+        amount: iroha_primitives::numeric::Numeric,
+    ) -> InstructionBox {
+        let asset_id = iroha_data_model::asset::AssetId::of(asset_definition_id, sender.clone());
+        iroha_data_model::isi::Burn::asset_numeric(amount, asset_id).into()
+    }
+
+    fn sccp_taira_xor_state() -> (
+        crate::state::State,
+        AccountId,
+        iroha_crypto::KeyPair,
+        iroha_data_model::asset::AssetDefinitionId,
+    ) {
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id =
+            DomainId::try_new("wonderland", "universal").expect("test domain id is valid");
+        let domain = iroha_data_model::domain::Domain::new(domain_id.clone()).build(&authority);
+        let account = build_wonderland_account(&authority);
+        let asset_definition_id =
+            iroha_data_model::asset::AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition =
+            iroha_data_model::asset::AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name("xor".to_owned())
+                .build(&authority);
+        let world = crate::state::World::with([domain], [account], [asset_definition]);
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query_handle = crate::query::store::LiveQueryStore::start_test();
+        let mut state =
+            crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
+        state.nexus.get_mut().fees.fee_asset_id = asset_definition_id.to_string();
+        (state, authority, keypair, asset_definition_id)
+    }
+
+    fn sccp_validation_tx(
+        state: &crate::state::State,
+        authority: AccountId,
+        keypair: &iroha_crypto::KeyPair,
+    ) -> iroha_data_model::transaction::SignedTransaction {
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        insert_gas_limit(&mut metadata);
+        iroha_data_model::transaction::TransactionBuilder::new(state.chain_id.clone(), authority)
+            .with_metadata(metadata)
+            .with_instructions([iroha_data_model::isi::Log::new(
+                iroha_logger::Level::INFO,
+                "sccp-validation".to_owned(),
+            )])
+            .sign(keypair.private_key())
+    }
+
+    fn validate_taira_xor_overlay_for_test(
+        state: &crate::state::State,
+        authority: AccountId,
+        keypair: &iroha_crypto::KeyPair,
+        instructions: &[InstructionBox],
+    ) -> Result<(), OverlayBuildError> {
+        let tx = sccp_validation_tx(state, authority, keypair);
+        validate_taira_tron_xor_settlement_burns(&state.view(), &tx, instructions)
+    }
+
     fn sccp_overlay_state() -> (crate::state::State, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
         let domain = iroha_data_model::domain::Domain::new(
@@ -2386,6 +2644,159 @@ mod tests {
         overlay
             .apply_with_chunk(&mut tx, &authority, 1)
             .expect("verified IVM-proved overlay may record SCCP messages");
+    }
+
+    #[test]
+    fn taira_tron_xor_record_requires_matching_burn() {
+        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![taira_tron_xor_record_instruction(&authority, 10)];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("TAIRA -> TRON record without burn must be rejected");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("requires at least 10 burned XOR base units")
+                    && msg.contains("observed 0")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_accepts_matching_burn() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_record_instruction(&authority, 10),
+        ];
+
+        validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect("matching XOR burn must satisfy TAIRA -> TRON record");
+    }
+
+    #[test]
+    fn taira_tron_xor_record_aggregates_burns_and_rejects_reuse() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_record_instruction(&authority, 10),
+            taira_tron_xor_record_instruction(&authority, 9),
+        ];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("one burn must not be reusable across multiple bridge records");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("requires at least 19 burned XOR base units")
+                    && msg.contains("observed 10")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_rejects_wrong_sender_burn() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let (other, _) = gen_account_in("wonderland");
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &other,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_record_instruction(&authority, 10),
+        ];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("burn from another account must not satisfy bridge record");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("requires at least 10 burned XOR base units")
+                    && msg.contains("observed 0")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_rejects_wrong_asset_burn() {
+        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
+        let wrong_asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().unwrap(),
+        );
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                wrong_asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 0).unwrap(),
+            ),
+            taira_tron_xor_record_instruction(&authority, 10),
+        ];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("burning another asset must not satisfy bridge record");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("requires at least 10 burned XOR base units")
+                    && msg.contains("observed 0")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_rejects_fractional_scale_burn() {
+        let (state, authority, keypair, asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![
+            taira_xor_burn_instruction(
+                &authority,
+                asset_definition_id,
+                iroha_primitives::numeric::Numeric::try_new(10, 1).unwrap(),
+            ),
+            taira_tron_xor_record_instruction(&authority, 10),
+        ];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("fractional-scale burns must not satisfy base-unit bridge records");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg) if msg.contains("must use whole base units")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_rejects_invalid_settlement_asset_config() {
+        let (mut state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
+        state.nexus.get_mut().fees.fee_asset_id = "not an asset literal".to_owned();
+        let instructions = vec![taira_tron_xor_record_instruction(&authority, 10)];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("invalid settlement asset config must fail closed");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg)
+                if msg.contains("valid configured nexus.fees.fee_asset_id")
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_record_rejects_malformed_record_payload() {
+        let (state, authority, keypair, _asset_definition_id) = sccp_taira_xor_state();
+        let instructions = vec![InstructionBox::from(
+            iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![0xFF]),
+        )];
+
+        let err = validate_taira_xor_overlay_for_test(&state, authority, &keypair, &instructions)
+            .expect_err("malformed SCCP record payload must fail closed");
+        assert!(matches!(
+            err,
+            OverlayBuildError::ZkProof(msg) if msg.contains("could not be decoded")
+        ));
     }
 
     #[test]
@@ -5544,6 +5955,7 @@ where
                 .to_owned(),
         ));
     }
+    validate_taira_tron_xor_settlement_burns(state_ro, tx, proved.overlay.as_ref())?;
     let tx_gas_limit = require_tx_gas_limit(tx)?;
     let report = crate::zk::verify_backend_with_timing_checked(
         attachment.backend.as_str(),
@@ -5709,6 +6121,7 @@ where
 
     let mut queued = host.drain_instructions();
     prune_redundant_contract_ops(state_ro, &mut queued);
+    validate_taira_tron_xor_settlement_burns(state_ro, tx, &queued)?;
     let overlay: iroha_primitives::const_vec::ConstVec<InstructionBox> = queued.into();
 
     let overlay_hash = {

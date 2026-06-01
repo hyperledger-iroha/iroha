@@ -564,6 +564,12 @@ export const SCCP_DOMAIN_TRON: number;
 export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
 export const SCCP_DOMAIN_SORA2: number;
+export const SCCP_CODEC_TEXT_UTF8: 1;
+export const SCCP_CODEC_EVM_HEX: 2;
+export const SCCP_CODEC_SOLANA_BASE58: 3;
+export const SCCP_CODEC_TON_RAW: 4;
+export const SCCP_CODEC_TRON_BASE58CHECK: 5;
+export const SCCP_CODEC_SORA_ASSET_ID: 6;
 export const SCCP_ETH_MAINNET_EVM_CHAIN_ID: 1;
 export const SCCP_ETH_MAINNET_NETWORK_ID: string;
 export const SCCP_BSC_MAINNET_EVM_CHAIN_ID: 56;
@@ -618,6 +624,16 @@ export const SCCP_TON_MAINNET_SHARD_ACCOUNTS_DICTIONARY_VERIFIER_ID_V1: string;
 export const SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM: bigint;
 export const SCCP_TON_CONFIG_PARAM_KEY_BITS: number;
 export const SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1: "tron-groth16-bn254-v1";
+export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
+export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
+export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
+export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
+export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
+export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1: "burn_and_record";
+export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
+export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
+export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
 export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1: "substrate-runtime-v1";
 export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1: "scale_call_v1";
 export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "SccpBridge.submit_message_proof";
@@ -632,6 +648,148 @@ export interface SccpBurnPayload {
   sora_asset_id: string;
   amount: string | number | bigint;
   recipient: string;
+}
+
+export interface SccpTransferPayload {
+  version: number;
+  source_domain: number;
+  dest_domain: number;
+  nonce: string | number | bigint;
+  asset_home_domain: number;
+  asset_id_codec: number;
+  asset_id: string | BinaryLike | number[];
+  amount: string | number | bigint;
+  sender_codec: number;
+  sender: string | BinaryLike | number[];
+  recipient_codec: number;
+  recipient: string | BinaryLike | number[];
+  route_id_codec: number;
+  route_id: string | BinaryLike | number[];
+}
+
+export interface TairaXorTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  sender?: string;
+  tairaSender?: string;
+  taira_sender?: string;
+  tairaAccountId?: string;
+  taira_account_id?: string;
+  recipientAddress?: string;
+  recipient_address?: string;
+  recipient?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
+export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
+  chainId?: string;
+  chain_id?: string;
+  tairaChainId?: string;
+  taira_chain_id?: string;
+  networkPrefix?: string | number | bigint;
+  network_prefix?: string | number | bigint;
+  tairaNetworkPrefix?: string | number | bigint;
+  taira_network_prefix?: string | number | bigint;
+  expectedMessageId?: string;
+  expected_message_id?: string;
+  messageId?: string;
+  message_id?: string;
+  expectedCanonicalPayloadBytes?: BinaryLike | number[];
+  expected_canonical_payload_bytes?: BinaryLike | number[];
+  expectedCanonicalPayloadHex?: string;
+  expected_canonical_payload_hex?: string;
+  expectedPayloadBytes?: BinaryLike | number[];
+  expected_payload_bytes?: BinaryLike | number[];
+}
+
+export interface TairaXorSccpRecordDescriptor {
+  readonly version: 1;
+  readonly kind: "TairaXorSccpRecordDescriptor";
+  readonly execution_kind: "ivm_proved_record_sccp_message_v1";
+  readonly chain_id: "809574f5-fee7-5e69-bfcf-52451e42d50f";
+  readonly network_prefix: 369;
+  readonly route_id: "taira_tron_xor";
+  readonly asset_key: "xor";
+  readonly message_kind: "Transfer";
+  readonly source_domain: number;
+  readonly dest_domain: number;
+  readonly message_id: string;
+  readonly canonical_payload_hex: string;
+  readonly canonicalPayloadBytes: Uint8Array;
+  readonly payload: Readonly<SccpTransferPayload>;
+  readonly record_instruction: Readonly<{
+    kind: "RecordSccpMessage";
+    payload_bytes_hex: string;
+  }>;
+  readonly execution_requirements: Readonly<{
+    executable: "IvmProved";
+    overlay_instruction: "RecordSccpMessage";
+    settlement_instruction: "Burn<Numeric, Asset>";
+    settlement_asset_selector: "nexus.fees.fee_asset_id";
+    settlement_asset_key: "xor";
+    settlement_account_binding: "burn.destination.account == payload.sender";
+    settlement_amount_binding: "sum(whole-unit burns) >= sum(recorded amounts) per sender";
+    proof_gate: "sccp_recording_proof_verified";
+    normal_transaction_supported: false;
+  }>;
+}
+
+export interface TairaXorSccpBurnRecordInput extends TairaXorSccpRecordDescriptorInput {
+  descriptor?: TairaXorSccpRecordDescriptor;
+  recordDescriptor?: TairaXorSccpRecordDescriptor;
+  record_descriptor?: TairaXorSccpRecordDescriptor;
+  settlementAssetDefinitionId?: string;
+  settlement_asset_definition_id?: string;
+  settlementAsset?: string;
+  settlement_asset?: string;
+  authority?: string;
+}
+
+export interface TairaXorSccpBurnRecordContractPayload {
+  readonly version: 1;
+  readonly entrypoint: "burn_and_record";
+  readonly descriptor: Readonly<TairaXorSccpRecordDescriptor>;
+  readonly payload: Readonly<{
+    sender: string;
+    settlement_asset: string;
+    amount: string;
+    record_instruction: string;
+  }>;
+  readonly record_instruction_hex: string;
+}
+
+export interface TairaXorSccpBurnRecordZkIvmRequestInput
+  extends TairaXorSccpBurnRecordInput {
+  vkRef?: { backend?: string; name?: string };
+  vk_ref?: { backend?: string; name?: string };
+  bytecode?: string;
+  artifactB64?: string;
+  artifact_b64?: string;
+  contractArtifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  contract_artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  artifact?: { artifact_b64?: string; artifactB64?: string; bytecode?: string };
+  gasLimit?: string | number | bigint;
+  gas_limit?: string | number | bigint;
+  metadata?: Record<string, JsonValue>;
+}
+
+export interface TairaXorSccpBurnRecordZkIvmRequest {
+  readonly version: 1;
+  readonly route_id: "taira_tron_xor";
+  readonly asset_key: "xor";
+  readonly descriptor: Readonly<TairaXorSccpRecordDescriptor>;
+  readonly contract: Readonly<TairaXorSccpBurnRecordContractPayload>;
+  readonly request: Readonly<{
+    vkRef: Readonly<{ backend: string; name: string }>;
+    authority: string;
+    metadata: Readonly<Record<string, JsonValue>>;
+    bytecode: string;
+  }>;
 }
 
 export interface SccpTokenAddPayload {
@@ -4953,6 +5111,94 @@ export function bscMainnetSccpDestinationBinding(
 export function bscMainnetSccpDestinationBindingHash(input: EvmSccpDestinationBindingInput): string;
 export function tronSccpDestinationBinding(input: TronSccpDestinationBindingInput): TronSccpDestinationBinding;
 export function tronSccpDestinationBindingHash(input: TronSccpDestinationBindingInput): string;
+
+export interface TairaXorRouteHashInput {
+  routeId?: string;
+  route_id?: string;
+  routeIdHash?: string;
+  route_id_hash?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetKeyHash?: string;
+  asset_key_hash?: string;
+}
+
+export interface TairaXorTransferPayloadHashInput extends TairaXorRouteHashInput {
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  recipientAddress?: string | BinaryLike | number[];
+  recipient_address?: string | BinaryLike | number[];
+  recipient?: string | BinaryLike | number[];
+  amount: string | number | bigint;
+}
+
+export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  burnerAddress?: string | BinaryLike | number[];
+  burner_address?: string | BinaryLike | number[];
+  burner?: string | BinaryLike | number[];
+  tairaRecipientHash?: string;
+  taira_recipient_hash?: string;
+  tairaRecipientBytes?: BinaryLike | number[];
+  taira_recipient_bytes?: BinaryLike | number[];
+  tairaRecipient?: string | BinaryLike | number[];
+  taira_recipient?: string | BinaryLike | number[];
+  tairaAccountId?: string;
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce?: string | number | bigint;
+  burnNonce?: string | number | bigint;
+  burn_nonce?: string | number | bigint;
+}
+
+export interface TairaXorFinalizeFromTairaCallDataInput extends TairaXorRouteHashInput {
+  proofBytes?: BinaryLike | number[];
+  proof_bytes?: BinaryLike | number[];
+  publicInputs?: SccpMessageTransparentPublicInputsInput;
+  public_inputs?: SccpMessageTransparentPublicInputsInput;
+  statementHash?: string;
+  statement_hash?: string;
+  recipientAddress?: string | BinaryLike | number[];
+  recipient_address?: string | BinaryLike | number[];
+  recipient?: string | BinaryLike | number[];
+  amount: string | number | bigint;
+}
+
+export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
+  tairaRecipientBytes?: BinaryLike | number[];
+  taira_recipient_bytes?: BinaryLike | number[];
+  tairaRecipient?: string | BinaryLike | number[];
+  taira_recipient?: string | BinaryLike | number[];
+  tairaAccountId?: string;
+  taira_account_id?: string;
+  amount: string | number | bigint;
+}
+
+export function tairaXorRouteIdHash(routeId?: string): string;
+export function tairaXorAssetKeyHash(assetKey?: string): string;
+export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorSccpRecordDescriptor(
+  input: TairaXorSccpRecordDescriptorInput,
+): Readonly<TairaXorSccpRecordDescriptor>;
+export function buildRecordSccpMessageInstructionBytes(
+  payloadBytes: BinaryLike | number[],
+): Uint8Array;
+export function buildTairaXorSccpBurnRecordContractPayload(
+  input: TairaXorSccpBurnRecordInput,
+): Readonly<TairaXorSccpBurnRecordContractPayload>;
+export function buildTairaXorSccpBurnRecordZkIvmRequest(
+  input: TairaXorSccpBurnRecordZkIvmRequestInput,
+): Readonly<TairaXorSccpBurnRecordZkIvmRequest>;
+export function tairaXorCanonicalTransferPayloadBytes(input: TairaXorTransferPayloadInput): Uint8Array;
+export function tairaXorTransferMessageId(
+  input: TairaXorTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTransferPayloadHash(input: TairaXorTransferPayloadHashInput): string;
+export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
+export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
+export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;
@@ -4989,14 +5235,22 @@ export function wrapSolanaSccpProofResult(
   request: SolanaSccpProofRequest,
 ): SolanaSccpProofResult;
 export function buildSolanaSccpSubmission(input: SolanaSccpSubmissionInput): SolanaSccpSubmission;
+export function canonicalSccpTransferPayloadBytes(payload: SccpTransferPayload): Uint8Array;
 export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
 export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
 export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
 export function canonicalSccpTokenMessagePayloadBytes(payload: SccpTokenMessagePayload): Uint8Array;
 export function canonicalSccpGovernancePayloadBytes(payload: SccpGovernancePayload): Uint8Array;
 export function canonicalSccpCommitmentBytes(commitment: SccpHubCommitment): Uint8Array;
+export function canonicalSccpPayloadEnvelopeBytes(payload: Record<string, unknown>): Uint8Array;
+export function canonicalSccpMerkleProofBytes(proof: Record<string, unknown>): Uint8Array;
+export function canonicalSccpMessageProofBundleBytes(bundle: Record<string, unknown>): Uint8Array;
 export function sccpBurnMessageId(
   payload: SccpBurnPayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpTransferMessageId(
+  payload: SccpTransferPayload,
   options?: { prefix?: boolean },
 ): string;
 export function sccpTokenAddMessageId(
@@ -8500,6 +8754,7 @@ export interface ToriiSccpCounterpartyCapability {
   registryBackend: string;
   counterpartyAccountCodec: number;
   counterpartyAccountCodecKey: string;
+  destinationRollout: ToriiSccpDestinationRollout | null;
   productionReady: boolean;
   disabledReason: string | null;
 }
@@ -8547,6 +8802,41 @@ export interface ToriiSccpDestinationBinding {
   bindingHash: string;
 }
 
+export type ToriiSccpDestinationVerifierPlan =
+  | "Unknown"
+  | "EvmGroth16Bn254Adapter"
+  | "SolanaProgramNativeRecursive"
+  | "TonContractNativeRecursive"
+  | "TronContractNativeRecursive"
+  | "TronContractGroth16Bn254"
+  | "SubstrateRuntimeNativeRecursive";
+
+export interface ToriiSccpDestinationRollout {
+  version: number;
+  verifierPlan: ToriiSccpDestinationVerifierPlan;
+  immutableVerifierReady: boolean;
+  anchorsReady: boolean;
+  verifierIdentity: string | null;
+  verifierCodeHash: string | null;
+  verifierKeyHash: string | null;
+  destinationNetworkId: string | null;
+  destinationBridgeAddress: string | null;
+  destinationBindingKey: string | null;
+  destinationBindingHash: string | null;
+  anchorId: string | null;
+  blockers: ReadonlyArray<string>;
+}
+
+export interface ToriiSccpTairaXorBurnRecordMaterial {
+  settlementAssetDefinitionId: string;
+  contractArtifactB64: string;
+  vkRef: Readonly<{
+    backend: string;
+    name: string;
+  }>;
+  gasLimit?: number;
+}
+
 export interface ToriiSccpProofManifest {
   version: number;
   localDomain: number;
@@ -8567,9 +8857,11 @@ export interface ToriiSccpProofManifest {
   manifestSeed: string;
   requiredPublicInputs: ReadonlyArray<string>;
   messagePayloadKinds: ReadonlyArray<string>;
+  destinationRollout: ToriiSccpDestinationRollout | null;
   productionReady: boolean;
   disabledReason: string | null;
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
+  tairaXorBurnRecord: ToriiSccpTairaXorBurnRecordMaterial | null;
 }
 
 export interface ToriiSccpProofManifestSet {
@@ -9625,6 +9917,18 @@ export interface TransactionAssemblyInput {
   chainId: string;
   authority: string;
   instructions: Array<object | string>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface IvmProvedTransactionAssemblyInput {
+  chainId: string;
+  authority: string;
+  proved: object | string;
+  attachment: object | string;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -13581,6 +13885,14 @@ export function buildRegisterDomainTransaction(
  * result or a Norito JSON string.
  */
 export function buildTransaction(input: TransactionAssemblyInput): SignedTransactionResult;
+
+/**
+ * Assemble and sign a transaction whose executable is `Executable::IvmProved`
+ * and whose proof attachment list contains the provided attachment.
+ */
+export function buildIvmProvedTransaction(
+  input: IvmProvedTransactionAssemblyInput,
+): SignedTransactionResult;
 
 /**
  * Build and sign a transaction containing a single `Mint::Asset` instruction.

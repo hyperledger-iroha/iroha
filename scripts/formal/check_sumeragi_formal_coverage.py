@@ -263,6 +263,18 @@ def conflict_marker_errors(paths: tuple[Path, ...]) -> list[str]:
     return errors
 
 
+def formal_artifact_paths(spec_dir: Path | None = None) -> tuple[Path, ...]:
+    if spec_dir is None:
+        spec_dir = SPEC_DIR
+    return tuple(
+        sorted(
+            path
+            for suffix in FORMAL_FILE_SUFFIXES
+            for path in spec_dir.glob(f"*{suffix}")
+        )
+    )
+
+
 def documented_fast_table_modes(path: Path = README) -> list[str]:
     return [
         mode
@@ -794,7 +806,9 @@ def cfg_shape_errors(mode: str, paths: list[Path]) -> list[str]:
         directives = {
             stripped.split()[0]
             for line in text.splitlines()
-            if (stripped := line.strip()) and not stripped.startswith("\\*")
+            if (stripped := line.strip())
+            and not stripped.startswith("\\*")
+            and not line[:1].isspace()
         }
         has_specification = "SPECIFICATION" in directives
         has_init = "INIT" in directives
@@ -1455,11 +1469,7 @@ def unreferenced_formal_file_errors(referenced_paths: set[Path]) -> list[str]:
     referenced_formal_paths = {
         path for path in referenced_paths if path.suffix in FORMAL_FILE_SUFFIXES
     }
-    formal_inventory = {
-        path
-        for suffix in FORMAL_FILE_SUFFIXES
-        for path in SPEC_DIR.glob(f"*{suffix}")
-    }
+    formal_inventory = set(formal_artifact_paths())
     return [
         f"{display_path(path)} is not referenced by any checked or documented "
         "Sumeragi formal mode"
@@ -1867,6 +1877,18 @@ def main() -> int:
             [
                 "Sumeragi formal wiring files contain merge conflict markers:\n"
                 + format_items(conflict_marker_mismatches)
+            ]
+        )
+        return 1
+
+    formal_artifact_conflict_marker_mismatches = conflict_marker_errors(
+        formal_artifact_paths()
+    )
+    if formal_artifact_conflict_marker_mismatches:
+        print_error_sections(
+            [
+                "Sumeragi formal TLA+/CFG files contain merge conflict markers:\n"
+                + format_items(formal_artifact_conflict_marker_mismatches)
             ]
         )
         return 1

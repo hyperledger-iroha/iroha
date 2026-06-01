@@ -10101,15 +10101,16 @@ async fn handler_zk_ivm_derive(
     )
     .await?;
 
-    let req: ZkIvmDeriveRequestDto = norito::decode_from_bytes(body.as_ref()).or_else(|_| {
-        norito::json::from_slice(body.as_ref()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "invalid derive request body: {err}"
-                )),
-            ))
-        })
-    })?;
+    let mut req: ZkIvmDeriveRequestDto =
+        norito::decode_from_bytes(body.as_ref()).or_else(|_| {
+            norito::json::from_slice(body.as_ref()).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                        "invalid derive request body: {err}"
+                    )),
+                ))
+            })
+        })?;
 
     let backend = req.vk_ref.backend.as_str();
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
@@ -10134,6 +10135,10 @@ async fn handler_zk_ivm_derive(
             ),
         )));
     }
+    routing::normalize_contract_call_metadata_for_bytecode(
+        &mut req.metadata,
+        req.bytecode.as_ref(),
+    )?;
 
     let vk_record = {
         // Ensure the view guard does not live across `.await` points below.
@@ -10261,7 +10266,7 @@ async fn handler_zk_ivm_prove(
     )
     .await?;
 
-    let req: ZkIvmProveRequestDto = norito::decode_from_bytes(body.as_ref()).or_else(|_| {
+    let mut req: ZkIvmProveRequestDto = norito::decode_from_bytes(body.as_ref()).or_else(|_| {
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -10279,6 +10284,24 @@ async fn handler_zk_ivm_prove(
             ),
         )));
     }
+    let parsed = ivm::ProgramMetadata::parse(req.bytecode.as_ref()).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "invalid IVM header".to_owned(),
+            ),
+        ))
+    })?;
+    if parsed.metadata.mode & ivm::ivm_mode::ZK == 0 {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "ivm prove requires bytecode ZK mode bit (mode & ZK != 0)".to_owned(),
+            ),
+        )));
+    }
+    routing::normalize_contract_call_metadata_for_bytecode(
+        &mut req.metadata,
+        req.bytecode.as_ref(),
+    )?;
 
     let world = app.state.world_view();
     let vk_record = world

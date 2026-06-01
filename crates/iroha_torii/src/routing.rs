@@ -19487,6 +19487,61 @@ fn normalize_contract_payload(
 }
 
 #[cfg(feature = "app_api")]
+pub(crate) fn normalize_contract_call_metadata_for_bytecode(
+    metadata: &mut Metadata,
+    bytecode: &[u8],
+) -> Result<()> {
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                conversion_error(format!("invalid contract_entrypoint metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        return Err(conversion_error(
+            "contract_entrypoint must not be empty".to_owned(),
+        ));
+    }
+    let Some(entrypoint) = entrypoint else {
+        return Ok(());
+    };
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        conversion_error(
+            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == entrypoint)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{entrypoint}`")))?;
+    if !matches!(descriptor.kind, manifest::EntryPointKind::Public) {
+        return Err(conversion_error(format!(
+            "contract entrypoint `{entrypoint}` is not public"
+        )));
+    }
+
+    let manifest_descriptor = descriptor.to_manifest_descriptor();
+    let payload = metadata.get("contract_payload").cloned();
+    let normalized = normalize_contract_payload(&manifest_descriptor, payload.as_ref())?;
+    if let Some(payload) = normalized {
+        metadata.insert(
+            "contract_payload"
+                .parse()
+                .expect("static metadata key `contract_payload`"),
+            payload,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_contract_entrypoint_pc(
     code_bytes: &[u8],
     selector: &str,
@@ -21992,6 +22047,60 @@ mod contract_payload_normalization_tests {
             "alias_literal".into(),
             Value::from(hex::encode("banking@centralbank".as_bytes())),
         );
+        assert_eq!(value, Value::Object(expected));
+    }
+
+    #[test]
+    fn normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload() {
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku ZkIvmPayloadNormalizeTest {
+  meta { abi_version: 1; }
+
+  kotoage fn burn_and_record(
+    sender: AccountId,
+    settlement_asset: AssetDefinitionId,
+    amount: int,
+    record_instruction: Blob
+  ) {}
+}
+"#,
+            )
+            .expect("compile payload normalization contract");
+        let sender = AccountId::new(KeyPair::random().public_key().clone()).to_string();
+        let settlement_asset =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            IrohaJson::new("burn_and_record"),
+        );
+        let mut request_payload = Map::new();
+        request_payload.insert("sender".into(), Value::from(sender.clone()));
+        request_payload.insert(
+            "settlement_asset".into(),
+            Value::from(settlement_asset.clone()),
+        );
+        request_payload.insert("amount".into(), Value::from("25000000000000000"));
+        request_payload.insert("record_instruction".into(), Value::from("0xAABBCC"));
+        metadata.insert(
+            "contract_payload".parse().expect("metadata key"),
+            IrohaJson::new(Value::Object(request_payload)),
+        );
+
+        normalize_contract_call_metadata_for_bytecode(&mut metadata, &code)
+            .expect("metadata payload should normalize");
+
+        let payload = metadata
+            .get("contract_payload")
+            .expect("contract payload metadata");
+        let value = json::parse_value(payload.get()).expect("normalized payload json");
+        let mut expected = Map::new();
+        expected.insert("sender".into(), Value::from(sender));
+        expected.insert("settlement_asset".into(), Value::from(settlement_asset));
+        expected.insert("amount".into(), Value::from(25_000_000_000_000_000_i64));
+        expected.insert("record_instruction".into(), Value::from("aabbcc"));
         assert_eq!(value, Value::Object(expected));
     }
 

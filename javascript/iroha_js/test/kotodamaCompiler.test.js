@@ -15563,6 +15563,25 @@ seiyaku PoseidonFeature {
   assert.equal(poseidon.artifactBytes[6], 1);
 });
 
+test("Kotodama compiler SDK can force feature mode bits without fake opcodes", () => {
+  const source = `
+seiyaku ForcedFeatureBits {
+  kotoage fn burn_only(sender: AccountId, asset: AssetDefinitionId, amount: int) permission(AssetTransferRole) {
+    burn_asset(sender, asset, amount);
+  }
+}
+`;
+  const forcedZk = compileKotodamaProgram(source, { forceZk: true });
+  const forcedBoth = compileKotodamaProgram(source, { forceZk: true, forceVector: true });
+
+  assert.deepEqual(forcedZk.diagnostics, []);
+  assert.equal(forcedZk.manifest?.features_bitmap, 1);
+  assert.equal(forcedZk.artifactBytes[6], 1);
+  assert.deepEqual(forcedBoth.diagnostics, []);
+  assert.equal(forcedBoth.manifest?.features_bitmap, 3);
+  assert.equal(forcedBoth.artifactBytes[6], 3);
+});
+
 test("Kotodama compiler SDK emits pubkgen and valcom ZK crypto opcodes", () => {
   const compiled = compileKotodamaProgram(`
 seiyaku CommitmentHelpers {

@@ -188,9 +188,15 @@ track detailed unfinished engineering work.
   digest and signature verification, rejects tampered digests/signatures and
   unsupported algorithms, and keeps live `reject-unsupported` profiles rejecting
   embedded signature blocks.
-- Broaden deterministic XMLDSig/XAdES coverage beyond the supported P-256
-  enveloped subset, including profile-specific trust anchors, certificate-chain
-  fixtures, and canonicalization edge cases.
+- Completed 2026-06-01: added profile-specific XMLDSig trust pins for
+  `require-verified` profiles. Torii now rejects otherwise valid signed
+  payloads unless the verified raw public key or DER certificate SHA-256 digest
+  matches the selected rail profile, rejects non-canonical/all-zero configured
+  pins at startup, and covers the supported C14N 1.0, C14N 1.1, and exclusive
+  C14N algorithm identifiers with deterministic fixtures.
+- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
+  material, including full certificate-chain fixtures and official
+  rail/profile-specific trust-anchor packages.
 - Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
   profile mismatch, cancellation/return transitions, reference snapshot
   checksum expectations, and replay by business message id/UETR.

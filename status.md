@@ -2,6 +2,56 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 SCCP BSC local-admission finalization
+
+- Restored BSC mainnet as the active SCCP production launch policy across the
+  Rust policy default, Core/Torii configured launch-policy tests, and public
+  release-readiness/release-bundle scripts.
+- Kept BSC -> SORA inbound proofs on the explicit local-admission submission
+  package path, with the source proof bound to configured BSC verifier material
+  plus governed source-adapter deployment evidence instead of outbound EVM
+  Groth16 destination packaging.
+- Resolved generated conflict markers in the SCCP/Core/Torii/status/roadmap
+  surfaces by preserving the local worktree side, then rechecked the final tree
+  for marker-free BSC launch-policy sources.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs bsc_mainnet_source_chain_proof -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`3 passed`)
+  - `cargo fmt --all --check`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'launch or json_tracks_corridor_phase_results or sdk_helper_symbols or user_prover_surfaces'`
+    (`6 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch or submission_surface or helper_inventory_is_independent'`
+    (`15 passed, 129 deselected`)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py status.md roadmap.md`
+
+## 2026-06-01 TradFi XMLDSig profile trust pins
+
+- Added profile-level `trusted_public_key_sha256` and
+  `trusted_certificate_sha256` configuration for ISO bridge rail profiles, with
+  lowercase non-zero SHA-256 validation before Torii accepts a
+  `require-verified` profile.
+- Hardened Torii XMLDSig/XAdES verification so a P-256/SHA-256 enveloped
+  payload must pass payload-digest verification, signature verification,
+  supported canonicalization-method checks, and selected-profile trust-pin
+  matching before it is accepted.
+- Cleared manifest conflict markers that prevented Cargo from loading the
+  workspace while preserving the existing superset dependency/features in the
+  affected manifests; a follow-up conflict-marker scan found no remaining real
+  merge markers before rerunning the focused Torii unit tests.
+- Validation:
+  - `cargo test -p iroha_core iso_bridge::profiles --lib -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_config iso_bridge_json_deserializes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo check -p iroha_torii --lib`
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`8 passed`)
+
 ## 2026-06-01 SCCP .NET BSC outbound facade and verifier closure
 
 - Added .NET BSC outbound proof-request/prove/calldata/submit parity through
@@ -232,28 +282,34 @@ Last updated: 2026-06-01
   closed, including path-escape, nested-directory, and wrong-suffix proof
   inputs. The TLC module-file tests now also reject non-identifier module names.
   The formal coverage guard now also fails before inventory parsing when
-  Sumeragi formal wiring files contain unresolved merge conflict markers, and
-  it rejects malformed runner case labels, unindented case-block content,
-  malformed case terminators, or labels with no exact `;;` terminator before a
-  malformed branch can hide from mode reachability checks.
+  Sumeragi formal wiring files or TLA+/CFG artifacts contain unresolved merge
+  conflict markers, and it rejects malformed runner case labels, unindented
+  case-block content, malformed case terminators, or labels with no exact `;;`
+  terminator before a malformed branch can hide from mode reachability checks.
+  CFG shape validation now counts only top-level `SPECIFICATION`, `INIT`,
+  `NEXT`, `INVARIANT(S)`, and `PROPERTY/PROPERTIES` directives when proving a
+  config has behavior and semantic checks, so indented continuation entries
+  cannot masquerade as behavior or check directives.
   The current 500-module formal corpus passes with single leading headers,
   exactly one terminal `====` per module, no duplicate TLA declarations,
   variable/`vars` drift, CFG/module ownership drift, duplicate runner
   proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
-  module names, malformed runner case-block shape, unresolved formal wiring
-  merge markers, or formal-path containment violations.
+  module names, malformed runner case-block shape, unresolved formal wiring or
+  artifact merge markers, indented CFG continuation spoofing, or formal-path
+  containment violations.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
     (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
   - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
-    (`77 passed`)
+    (`79 passed`)
   - TLA terminator audit across `docs/formal/sumeragi/*.tla`
     (`missing 0`, `multi 0`, `trailing_after_end 0`)
   - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
   - `git diff --check -- scripts/formal/check_sumeragi_formal_coverage.py scripts/formal/sumeragi_tlc.sh scripts/formal/install_apalache.sh pytests/scripts/sumeragi_formal_coverage_test.py docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
   - trailing-whitespace and conflict-marker scans across the same touched
-    formal guard, runner, test, docs, roadmap, and status files
+    formal guard, runner, test, docs, roadmap, and status files, plus the
+    full Sumeragi TLA+/CFG corpus via the coverage guard
 
 ## 2026-06-01 SCCP .NET Ethereum outbound facade parity
 
@@ -1773,6 +1829,61 @@ Last updated: 2026-06-01
     pytest file
   - conflict-marker scan across the touched formal coverage script, TLC runner,
     pytest, formal README, CI README, roadmap, and status files
+
+## 2026-06-01 TAIRA TRON SCCP XOR settlement admission
+
+- Hardened `taira_tron_xor` source-record admission so an `IvmProved`
+  execution that records a TAIRA-to-TRON XOR SCCP transfer must carry a
+  same-overlay `Burn<Numeric, Asset>` settlement from the payload sender.
+  Admission resolves the settlement asset from `nexus.fees.fee_asset_id`,
+  aggregates required burns per sender, and rejects malformed record payloads,
+  wrong routes/assets/senders, fractional burns, and burn reuse.
+- Extended the JavaScript SCCP descriptor for `taira_tron_xor` with the
+  consensus settlement requirements, and added Kotodama compiler SDK options to
+  force ZK/vector feature bits without inserting fake opcodes. The Torii SDK
+  now preserves SCCP destination-rollout verifier identity, verifier/key hash,
+  network id, and destination-binding fields so WalletConnect bridge UIs can
+  derive proof material from normalized manifests.
+- Added a TAIRA burn-and-record Kotodama contract plus deployment-tool support
+  for producing a forced-ZK contract artifact alongside the TRON bridge
+  deployment evidence flow.
+- Added browser-safe SDK builders for `RecordSccpMessage` instruction bytes
+  and the TAIRA XOR burn-record ZK IVM request. Torii now normalizes
+  self-describing ZK IVM `contract_payload` metadata before derive/prove
+  execution so large XOR base-unit amounts can arrive as JSON strings and still
+  execute as contract `int` values.
+- Extended the JavaScript Torii manifest normalizer with a typed
+  `tairaXorBurnRecord` field so route manifests preserve the TAIRA settlement
+  asset id, burn-record artifact, VK reference, and gas limit needed by the
+  wallet `/sccp` readiness and request builder.
+- Added a JavaScript/native `buildIvmProvedTransaction` helper so the wallet can
+  sign the TAIRA source leg with the Torii-generated `IvmProved` payload and
+  proof attachment instead of falling back to instruction-only transaction
+  assembly.
+- Added JavaScript SCCP canonical message-proof bundle byte builders so browser
+  workers can derive TRON Groth16 proof requests from normalized Torii message
+  jobs without reimplementing the Rust bundle layout in wallet code.
+- Validation:
+  - `cargo test -p iroha_core taira_tron_xor_record --lib`
+    (`8 passed`)
+  - `cargo test -p iroha_torii normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload --lib`
+    (`1 passed`)
+  - `node --test --test-name-pattern "TAIRA XOR|RecordSccpMessage|burn-record" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`9 passed`)
+  - `node --test --test-name-pattern "getSccpProofManifests" javascript/iroha_js/test/toriiClient.test.js`
+    (`3 passed`)
+  - `node --test --test-name-pattern "getSccpProofManifests|buildIvmProvedTransaction" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/transactionBuilder.test.js`
+    (`5 passed`)
+  - `cargo test -p iroha_js_host build_ivm_proved_transaction_roundtrip --lib`
+    (`1 passed`)
+  - `node --test --test-name-pattern "canonicalizes normalized SCCP message proof bundles|published package root exports" javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js`
+    (`2 passed`)
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js javascript/iroha_js/test/package_dist.test.js`
+    (`137 passed`)
+  - `node --test --test-name-pattern "force feature mode bits" javascript/iroha_js/test/kotodamaCompiler.test.js`
+    (`1 passed`)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs`
+    (`10 passed`)
 
 ## 2026-06-01 SCCP release artifact path control-character guard
 

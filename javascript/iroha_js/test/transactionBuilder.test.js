@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildRegisterDomainTransaction,
   buildTransaction,
+  buildIvmProvedTransaction,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
@@ -219,6 +220,109 @@ test("buildTransaction rejects empty instruction arrays", () => {
         privateKey: PRIVATE_KEY,
       }),
     /non-empty array/i,
+  );
+});
+
+test("buildIvmProvedTransaction normalizes proved executable and attachment", () => {
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x03, 0x04]),
+    hash: Buffer.alloc(32, 0xbb),
+  };
+  const proved = {
+    bytecode: "TnJ0MA==",
+    overlay: [],
+    events_commitment: normalizedHashHex(Buffer.alloc(32, 0x01)),
+    gas_policy_commitment: normalizedHashHex(Buffer.alloc(32, 0x02)),
+  };
+  const attachment = {
+    backend: "halo2/ipa",
+    proof: {
+      backend: "halo2/ipa",
+      bytes: [1, 2, 3],
+    },
+    vk_ref: {
+      backend: "halo2/ipa",
+      name: "ivm-exec-v1",
+    },
+  };
+
+  withNativeBinding(
+    {
+      buildIvmProvedTransaction: (
+        chainId,
+        authority,
+        provedPayload,
+        attachmentPayload,
+        metadataPayload,
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        secret,
+      ) => {
+        captures.push({
+          chainId,
+          authority,
+          provedPayload,
+          attachmentPayload,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return fakeResult;
+      },
+    },
+    () => {
+      const built = buildIvmProvedTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        proved,
+        attachment,
+        metadata: { gas_limit: 1000 },
+        creationTimeMs: 10,
+        ttlMs: 20,
+        nonce: 5,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(built.signedTransaction, Buffer.from(fakeResult.signed_transaction));
+      assert.deepEqual(built.hash, Buffer.from(fakeResult.hash));
+    },
+  );
+
+  assert.equal(captures.length, 1);
+  const call = captures[0];
+  assert.equal(call.chainId, "test-chain");
+  assert.equal(call.authority, AUTHORITY_ID);
+  assert.deepEqual(JSON.parse(call.provedPayload), proved);
+  assert.deepEqual(JSON.parse(call.attachmentPayload), attachment);
+  assert.equal(call.metadataPayload, JSON.stringify({ gas_limit: 1000 }));
+  assert.equal(call.creationTimeMs, 10);
+  assert.equal(call.ttlMs, 20);
+  assert.equal(call.nonce, 5);
+});
+
+test("buildIvmProvedTransaction rejects empty proved payload strings", () => {
+  withNativeBinding(
+    {
+      buildIvmProvedTransaction: () => {
+        throw new Error("native builder should not be called");
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildIvmProvedTransaction({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            proved: " ",
+            attachment: {},
+            privateKey: PRIVATE_KEY,
+          }),
+        /proved must not be an empty JSON string/i,
+      );
+    },
   );
 });
 
