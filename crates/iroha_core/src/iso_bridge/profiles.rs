@@ -60,6 +60,78 @@ const DEFAULT_PROFILES_JSON: &str = r#"
           {"currency": "KWD", "minor_units": 3},
           {"currency": "USD", "minor_units": 2}
         ]
+      },
+      {
+        "message_type": "pacs.002",
+        "direction": "inbound",
+        "versions": ["pacs.002", "pacs.002.001.10", "pacs.002.001.12"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "pacs.004",
+        "direction": "inbound",
+        "versions": ["pacs.004", "pacs.004.001.09", "pacs.004.001.10"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "camt.056",
+        "direction": "inbound",
+        "versions": ["camt.056", "camt.056.001.08", "camt.056.001.09"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "sese.023",
+        "direction": "inbound",
+        "versions": ["sese.023", "sese.023.001.09", "sese.023.001.11"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "sese.024",
+        "direction": "inbound",
+        "versions": ["sese.024", "sese.024.001.09", "sese.024.001.10"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "sese.025",
+        "direction": "inbound",
+        "versions": ["sese.025", "sese.025.001.08", "sese.025.001.10"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
       }
     ]
   },
@@ -108,6 +180,42 @@ const DEFAULT_PROFILES_JSON: &str = r#"
           {"currency": "KWD", "minor_units": 3},
           {"currency": "USD", "minor_units": 2}
         ]
+      },
+      {
+        "message_type": "pacs.002",
+        "direction": "inbound",
+        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "pacs.004",
+        "direction": "inbound",
+        "versions": ["pacs.004.001.09", "pacs.004.001.10"],
+        "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "camt.056",
+        "direction": "inbound",
+        "versions": ["camt.056.001.08", "camt.056.001.09"],
+        "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
       }
     ]
   },
@@ -144,6 +252,42 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "amount_minor_units": [
           {"currency": "USD", "minor_units": 2}
         ]
+      },
+      {
+        "message_type": "pacs.002",
+        "direction": "inbound",
+        "versions": ["pacs.002.001.10"],
+        "business_services": ["fedwire.funds.01"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "pacs.004",
+        "direction": "inbound",
+        "versions": ["pacs.004.001.09"],
+        "business_services": ["fedwire.funds.01"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "camt.056",
+        "direction": "inbound",
+        "versions": ["camt.056.001.08"],
+        "business_services": ["fedwire.funds.01"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
       }
     ]
   },
@@ -166,6 +310,42 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "amount_minor_units": [
           {"currency": "EUR", "minor_units": 2}
         ]
+      },
+      {
+        "message_type": "pacs.002",
+        "direction": "inbound",
+        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "business_services": ["sepa.sct.inst"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "pacs.004",
+        "direction": "inbound",
+        "versions": ["pacs.004.001.09", "pacs.004.001.10"],
+        "business_services": ["sepa.sct.inst"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "camt.056",
+        "direction": "inbound",
+        "versions": ["camt.056.001.08", "camt.056.001.09"],
+        "business_services": ["sepa.sct.inst"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 2048,
+        "amount_minor_units": []
       }
     ]
   },
@@ -196,9 +376,69 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         ]
       },
       {
+        "message_type": "pacs.002",
+        "direction": "inbound",
+        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "business_services": ["securities.csd.cash"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "pacs.004",
+        "direction": "inbound",
+        "versions": ["pacs.004.001.09", "pacs.004.001.10"],
+        "business_services": ["securities.csd.cash"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "camt.056",
+        "direction": "inbound",
+        "versions": ["camt.056.001.08", "camt.056.001.09"],
+        "business_services": ["securities.csd.cash"],
+        "require_app_header": true,
+        "require_business_service": true,
+        "require_uetr": false,
+        "structured_address_mode": "require-structured",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
         "message_type": "sese.023",
         "direction": "inbound",
         "versions": ["sese.023.001.11"],
+        "business_services": ["securities.csd.settlement"],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "sese.024",
+        "direction": "inbound",
+        "versions": ["sese.024.001.09", "sese.024.001.10"],
+        "business_services": ["securities.csd.settlement"],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "sese.025",
+        "direction": "inbound",
+        "versions": ["sese.025.001.08", "sese.025.001.10"],
         "business_services": ["securities.csd.settlement"],
         "require_app_header": false,
         "require_business_service": false,
@@ -728,5 +968,32 @@ mod tests {
         assert_eq!(profile.minor_units_for("JPY"), 0);
         assert_eq!(profile.minor_units_for("KWD"), 3);
         assert_eq!(profile.minor_units_for("XAU"), 2);
+    }
+
+    #[test]
+    fn default_catalog_exposes_inbound_lifecycle_messages() {
+        let catalog = default_profile_catalog();
+        let generic = &catalog["generic-iso20022"];
+        for message_type in [
+            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025",
+        ] {
+            assert!(
+                generic
+                    .message_profile(message_type, MessageDirection::Inbound)
+                    .is_some(),
+                "generic profile missing {message_type}"
+            );
+        }
+        let securities = &catalog["securities-csd"];
+        assert!(
+            securities
+                .message_profile("sese.024", MessageDirection::Inbound)
+                .is_some()
+        );
+        assert!(
+            securities
+                .message_profile("sese.025", MessageDirection::Inbound)
+                .is_some()
+        );
     }
 }

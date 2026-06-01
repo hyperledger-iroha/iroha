@@ -74,6 +74,10 @@ from iroha_torii_client.client import (
 from .address import AccountAddress, AccountAddressError
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
+from .privacy_catalog import (
+    get_privacy_algorithm_descriptors,
+    privacy_capabilities as _privacy_capabilities,
+)
 from .dataspaces import (
     DataspacePlan,
     DataspaceSpec,
@@ -227,6 +231,69 @@ def _page_total(payload: Any) -> Optional[int]:
         return int(total) if total is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _page_metadata(payload: Mapping[str, Any], item_count: int, context: str) -> Dict[str, Any]:
+    has_total = payload.get("total") is not None
+    if has_total:
+        try:
+            total: Optional[int] = int(payload["total"])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{context} `total` must be numeric") from exc
+        if total < 0:
+            raise TypeError(f"{context} `total` must be non-negative")
+    elif "has_more" in payload or "count_mode" in payload:
+        total = None
+    else:
+        total = item_count
+
+    has_more_raw = payload.get("has_more", False)
+    if not isinstance(has_more_raw, bool):
+        raise TypeError(f"{context} `has_more` must be a boolean")
+
+    count_mode_raw = payload.get("count_mode")
+    if count_mode_raw is None:
+        count_mode = "exact" if total is not None else "bounded"
+    elif isinstance(count_mode_raw, str) and count_mode_raw in {"bounded", "exact"}:
+        count_mode = count_mode_raw
+    else:
+        raise TypeError(f"{context} `count_mode` must be 'bounded' or 'exact'")
+
+    indexed_height_raw = payload.get("indexed_height")
+    if indexed_height_raw is None:
+        indexed_height: Optional[int] = None
+    else:
+        try:
+            indexed_height = int(indexed_height_raw)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"{context} `indexed_height` must be numeric") from exc
+        if indexed_height < 0:
+            raise TypeError(f"{context} `indexed_height` must be non-negative")
+
+    indexed_block_hash = payload.get("indexed_block_hash")
+    if indexed_block_hash is not None and not isinstance(indexed_block_hash, str):
+        raise TypeError(f"{context} `indexed_block_hash` must be a string or null")
+    query_source = payload.get("query_source")
+    if query_source is not None and not isinstance(query_source, str):
+        raise TypeError(f"{context} `query_source` must be a string")
+
+    return {
+        "total": total,
+        "has_more": has_more_raw,
+        "count_mode": count_mode,
+        "indexed_height": indexed_height,
+        "indexed_block_hash": indexed_block_hash,
+        "query_source": query_source,
+    }
+
+
+def _normalize_count_mode_arg(count_mode: Optional[str]) -> Optional[str]:
+    if count_mode is None:
+        return None
+    value = str(count_mode).strip().lower()
+    if value not in {"bounded", "exact"}:
+        raise ValueError("count_mode must be 'bounded' or 'exact'")
+    return value
 
 
 def _asset_entry_matches_definition(
@@ -2866,7 +2933,7 @@ class AccountAsset:
     def from_payload(cls, payload: Mapping[str, Any]) -> "AccountAsset":
         if not isinstance(payload, Mapping):
             raise TypeError("account asset entry must be an object")
-        asset_id = payload.get("asset_id")
+        asset_id = payload.get("asset_id") or payload.get("asset")
         quantity = payload.get("quantity")
         if not isinstance(asset_id, str):
             raise TypeError("account asset entry missing string `asset_id` field")
@@ -2880,7 +2947,12 @@ class AccountAssetsPage:
     """Paginated account asset list."""
 
     items: List[AccountAsset]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "AccountAssetsPage":
@@ -2889,12 +2961,11 @@ class AccountAssetsPage:
         items_raw = payload.get("items", [])
         if not isinstance(items_raw, list):
             raise TypeError("account assets response `items` must be a list")
-        try:
-            total = int(payload.get("total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("account assets response `total` must be numeric") from exc
         items = [AccountAsset.from_payload(entry) for entry in items_raw]
-        return cls(items=items, total=total)
+        return cls(
+            items=items,
+            **_page_metadata(payload, len(items), "account assets response"),
+        )
 
 
 @dataclass(frozen=True)
@@ -2940,7 +3011,12 @@ class AccountTransactionsPage:
     """Paginated account transaction list."""
 
     items: List[AccountTransaction]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "AccountTransactionsPage":
@@ -2949,12 +3025,11 @@ class AccountTransactionsPage:
         items_raw = payload.get("items", [])
         if not isinstance(items_raw, list):
             raise TypeError("account transactions response `items` must be a list")
-        try:
-            total = int(payload.get("total", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("account transactions response `total` must be numeric") from exc
         items = [AccountTransaction.from_payload(entry) for entry in items_raw]
-        return cls(items=items, total=total)
+        return cls(
+            items=items,
+            **_page_metadata(payload, len(items), "account transactions response"),
+        )
 
 
 @dataclass(frozen=True)
@@ -3002,7 +3077,12 @@ class AccountListPage:
     """Paginated account query result."""
 
     items: List[AccountRecord]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "AccountListPage":
@@ -3013,12 +3093,8 @@ class AccountListPage:
             items_payload = []
         if not isinstance(items_payload, list):
             raise TypeError("account query `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("account query `total` must be numeric") from exc
         items = [AccountRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
+        return cls(items=items, **_page_metadata(payload, len(items), "account query"))
 
 
 @dataclass(frozen=True)
@@ -3055,7 +3131,12 @@ class DomainListPage:
     """Paginated domain query result."""
 
     items: List[DomainRecord]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "DomainListPage":
@@ -3066,12 +3147,8 @@ class DomainListPage:
             items_payload = []
         if not isinstance(items_payload, list):
             raise TypeError("domain query `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("domain query `total` must be numeric") from exc
         items = [DomainRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
+        return cls(items=items, **_page_metadata(payload, len(items), "domain query"))
 
 
 @dataclass(frozen=True)
@@ -3108,7 +3185,12 @@ class AssetDefinitionListPage:
     """Paginated asset definition query result."""
 
     items: List[AssetDefinitionRecord]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "AssetDefinitionListPage":
@@ -3119,12 +3201,11 @@ class AssetDefinitionListPage:
             items_payload = []
         if not isinstance(items_payload, list):
             raise TypeError("asset definition query `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("asset definition query `total` must be numeric") from exc
         items = [AssetDefinitionRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
+        return cls(
+            items=items,
+            **_page_metadata(payload, len(items), "asset definition query"),
+        )
 
 
 @dataclass(frozen=True)
@@ -3153,7 +3234,12 @@ class AssetHolderListPage:
     """Paginated asset holder query result."""
 
     items: List[AssetHolderRecord]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "AssetHolderListPage":
@@ -3164,12 +3250,8 @@ class AssetHolderListPage:
             items_payload = []
         if not isinstance(items_payload, list):
             raise TypeError("asset holder query `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("asset holder query `total` must be numeric") from exc
         items = [AssetHolderRecord.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
+        return cls(items=items, **_page_metadata(payload, len(items), "asset holder query"))
 
 
 @dataclass(frozen=True)
@@ -3194,7 +3276,12 @@ class RwaListPage:
     """Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`."""
 
     items: List[RwaListItem]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListPage":
@@ -3205,12 +3292,8 @@ class RwaListPage:
             items_payload = []
         if not isinstance(items_payload, list):
             raise TypeError("RWA list `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_payload)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("RWA list `total` must be numeric") from exc
         items = [RwaListItem.from_payload(entry) for entry in items_payload]
-        return cls(items=items, total=total)
+        return cls(items=items, **_page_metadata(payload, len(items), "RWA list"))
 
 
 @dataclass(frozen=True)
@@ -7313,6 +7396,7 @@ class ToriiClient(_BaseToriiClient):
             self.set_api_token(api_token)
         if backoff_initial_ms is not None or max_backoff_ms is not None or backoff_multiplier is not None:
             self._backoff_initial = max(0.0, (backoff_initial_ms or 0) / 1000.0)
+
             self._backoff_multiplier = max(1.0, backoff_multiplier if backoff_multiplier is not None else 2.0)
             if max_backoff_ms is None or max_backoff_ms <= 0:
                 self._backoff_cap = math.inf
@@ -7331,6 +7415,16 @@ class ToriiClient(_BaseToriiClient):
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
         self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
+
+    def privacy_capabilities(self) -> Dict[str, Any]:
+        """Return SDK privacy catalog and implementation capability metadata."""
+
+        return _privacy_capabilities(self)
+
+    def privacy_algorithm_descriptors(self) -> List[Dict[str, Any]]:
+        """Return defensive-copy privacy algorithm descriptors."""
+
+        return get_privacy_algorithm_descriptors()
 
     @property
     def sorafs_alias_policy(self) -> SorafsAliasPolicy:
@@ -7372,7 +7466,7 @@ class ToriiClient(_BaseToriiClient):
             raise DataModelMismatchError(DATA_MODEL_VERSION, self._data_model_actual)
 
         try:
-            capabilities = self.get_node_capabilities()
+            capabilities = self.get_node_capabilities_typed()
         except RuntimeError as error:
             if "data_model_version" in str(error):
                 self._data_model_validation = "mismatched"
@@ -7998,10 +8092,15 @@ class ToriiClient(_BaseToriiClient):
     def list_repo_agreements(self, **params: Any) -> RepoAgreementListPage:
         """List repo agreements (`GET /v1/repo/agreements`)."""
 
+        cleaned_params = self._clean_params(params)
+        if "count_mode" in cleaned_params:
+            cleaned_params["count_mode"] = _normalize_count_mode_arg(
+                cleaned_params["count_mode"]
+            )
         response = self._request(
             "GET",
             "/v1/repo/agreements",
-            params=self._clean_params(params),
+            params=cleaned_params,
         )
         self._expect_status(response, (200,))
         payload = type(self)._maybe_json(response)
@@ -8014,9 +8113,12 @@ class ToriiClient(_BaseToriiClient):
     def query_repo_agreements(self, envelope: Mapping[str, Any]) -> RepoAgreementListPage:
         """Query repo agreements (`POST /v1/repo/agreements/query`)."""
 
+        body = dict(envelope)
+        if body.get("count_mode") is not None:
+            body["count_mode"] = _normalize_count_mode_arg(body["count_mode"])
         payload = self._post_json(
             "/v1/repo/agreements/query",
-            dict(envelope),
+            body,
             context="repo agreements query",
         )
         return RepoAgreementListPage.from_payload(payload)
@@ -9052,6 +9154,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         asset_id: Optional[str] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
 
@@ -9059,6 +9162,8 @@ class ToriiClient(_BaseToriiClient):
             account_id, "account_id"
         )
         params = self._pagination_params(limit=limit, offset=offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
@@ -9076,6 +9181,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         asset_id: Optional[str] = None,
+        count_mode: Optional[str] = None,
     ) -> AccountAssetsPage:
         """Typed wrapper for :meth:`list_account_assets`."""
 
@@ -9084,6 +9190,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             asset_id=asset_id,
+            count_mode=count_mode,
         )
         if payload is None:
             raise RuntimeError("account assets endpoint returned no payload")
@@ -9098,6 +9205,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         asset_id: Optional[str] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
 
@@ -9149,6 +9257,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
         envelope: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -9165,6 +9274,7 @@ class ToriiClient(_BaseToriiClient):
                 limit=limit,
                 offset=offset,
                 fetch_size=fetch_size,
+                count_mode=count_mode,
                 query_name=query_name,
             )
             body = dict(envelope)
@@ -9175,6 +9285,7 @@ class ToriiClient(_BaseToriiClient):
                 limit=limit,
                 offset=offset,
                 fetch_size=fetch_size,
+                count_mode=count_mode,
                 query_name=query_name,
             )
         response = self._request(
@@ -9198,6 +9309,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
         envelope: Optional[Mapping[str, Any]] = None,
     ) -> AccountAssetsPage:
@@ -9212,6 +9324,7 @@ class ToriiClient(_BaseToriiClient):
             fetch_size=fetch_size,
             query_name=query_name,
             envelope=envelope,
+            count_mode=count_mode,
         )
         return AccountAssetsPage.from_payload(payload)
 
@@ -9224,6 +9337,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
         envelope: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -9240,6 +9354,7 @@ class ToriiClient(_BaseToriiClient):
                 limit=limit,
                 offset=offset,
                 fetch_size=fetch_size,
+                count_mode=count_mode,
                 query_name=query_name,
             )
             body = dict(envelope)
@@ -9250,6 +9365,7 @@ class ToriiClient(_BaseToriiClient):
                 limit=limit,
                 offset=offset,
                 fetch_size=fetch_size,
+                count_mode=count_mode,
                 query_name=query_name,
             )
         response = self._request(
@@ -10337,6 +10453,132 @@ class ToriiClient(_BaseToriiClient):
             interval=interval,
         )
 
+    def register_zk_ace_identity_commitment_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        identity_commitment: Union[str, bytes, bytearray, memoryview],
+        policy_hash: Union[str, bytes, bytearray, memoryview],
+        allowed_accounts: Sequence[str],
+        verifier_key: Union[str, Mapping[str, Any]],
+        action_class: Optional[str] = None,
+        domain_tag: Optional[str] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Register a ZK-ACE identity commitment for transparent-transfer authorization."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.register_zk_ace_identity_commitment(
+            asset_definition_id,
+            identity_commitment=identity_commitment,
+            policy_hash=policy_hash,
+            allowed_accounts=allowed_accounts,
+            verifier_key=verifier_key,
+            action_class=action_class,
+            domain_tag=domain_tag,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def rotate_zk_ace_identity_commitment_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        old_identity_commitment: Union[str, bytes, bytearray, memoryview],
+        new_identity_commitment: Union[str, bytes, bytearray, memoryview],
+        policy_hash: Union[str, bytes, bytearray, memoryview],
+        allowed_accounts: Sequence[str],
+        verifier_key: Union[str, Mapping[str, Any]],
+        action_class: Optional[str] = None,
+        domain_tag: Optional[str] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Rotate an active ZK-ACE identity commitment to a replacement commitment."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.rotate_zk_ace_identity_commitment(
+            asset_definition_id,
+            old_identity_commitment=old_identity_commitment,
+            new_identity_commitment=new_identity_commitment,
+            policy_hash=policy_hash,
+            allowed_accounts=allowed_accounts,
+            verifier_key=verifier_key,
+            action_class=action_class,
+            domain_tag=domain_tag,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def revoke_zk_ace_identity_commitment_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        asset_definition_id: str,
+        identity_commitment: Union[str, bytes, bytearray, memoryview],
+        reason_hash: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Revoke an active ZK-ACE identity commitment."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.revoke_zk_ace_identity_commitment(
+            asset_definition_id,
+            identity_commitment=identity_commitment,
+            reason_hash=reason_hash,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
     def shield_asset_and_wait(
         self,
         *,
@@ -10457,6 +10699,59 @@ class ToriiClient(_BaseToriiClient):
             proof=proof,
             outputs=outputs,
             root_hint=root_hint,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def zk_ace_authorized_transfer_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        from_account_id: str,
+        to_account_id: str,
+        asset_definition_id: str,
+        amount: Union[str, int, float, Decimal],
+        identity_commitment: Union[str, bytes, bytearray, memoryview],
+        tx_digest: Union[str, bytes, bytearray, memoryview],
+        domain_tag: str,
+        action_class: str,
+        replay_nullifier: Union[str, bytes, bytearray, memoryview],
+        policy_hash: Union[str, bytes, bytearray, memoryview],
+        proof: Mapping[str, Any],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Submit a prepared ZK-ACE-authorized transparent transfer."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.zk_ace_authorized_transfer(
+            from_account_id=from_account_id,
+            to_account_id=to_account_id,
+            asset_definition_id=asset_definition_id,
+            amount=amount,
+            identity_commitment=identity_commitment,
+            tx_digest=tx_digest,
+            chain_id=chain_id,
+            domain_tag=domain_tag,
+            action_class=action_class,
+            replay_nullifier=replay_nullifier,
+            policy_hash=policy_hash,
+            proof=proof,
         )
         return self._submit_transaction_draft_result(
             draft,
@@ -11046,6 +11341,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute POST `/v1/rwas/query` with a structured envelope."""
@@ -11056,6 +11352,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         response = self._request(
@@ -11078,6 +11375,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> RwaListPage:
         """Typed wrapper for :meth:`query_rwas`."""
@@ -11088,6 +11386,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return RwaListPage.from_payload(payload)
@@ -11099,6 +11398,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List chain-state RWAs via `GET /v1/rwas`."""
 
@@ -11107,6 +11407,8 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         filter_arg = _encode_filter_arg(filter)
         if filter_arg is not None:
             params["filter"] = filter_arg
@@ -11127,6 +11429,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> RwaListPage:
         """Typed wrapper for :meth:`list_rwas`."""
 
@@ -11135,6 +11438,7 @@ class ToriiClient(_BaseToriiClient):
             sort=sort,
             limit=limit,
             offset=offset,
+            count_mode=count_mode,
         )
         if payload is None:
             return RwaListPage(items=[], total=0)
@@ -11153,6 +11457,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Execute POST `/v1/accounts/query` with a structured envelope."""
@@ -11163,6 +11468,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         response = self._request(
@@ -11185,6 +11491,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> AccountListPage:
         """Typed wrapper for :meth:`query_accounts`."""
@@ -11195,6 +11502,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return AccountListPage.from_payload(payload)
@@ -11206,6 +11514,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List accounts via `GET /v1/accounts`."""
 
@@ -11214,6 +11523,8 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         filter_arg = _encode_filter_arg(filter)
         if filter_arg is not None:
             params["filter"] = filter_arg
@@ -11234,6 +11545,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> AccountListPage:
         """Typed wrapper for :meth:`list_accounts`."""
 
@@ -11242,6 +11554,7 @@ class ToriiClient(_BaseToriiClient):
             sort=sort,
             limit=limit,
             offset=offset,
+            count_mode=count_mode,
         )
         if payload is None:
             return AccountListPage(items=[], total=0)
@@ -11256,6 +11569,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List domains via `GET /v1/domains`."""
 
@@ -11264,6 +11578,8 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         filter_arg = _encode_filter_arg(filter)
         if filter_arg is not None:
             params["filter"] = filter_arg
@@ -11284,6 +11600,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> DomainListPage:
         """Typed wrapper for :meth:`list_domains`."""
 
@@ -11292,6 +11609,7 @@ class ToriiClient(_BaseToriiClient):
             sort=sort,
             limit=limit,
             offset=offset,
+            count_mode=count_mode,
         )
         if payload is None:
             return DomainListPage(items=[], total=0)
@@ -11307,6 +11625,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST `/v1/assets/definitions/query` with a structured envelope."""
@@ -11317,6 +11636,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         response = self._request(
@@ -11339,6 +11659,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> AssetDefinitionListPage:
         """Typed wrapper for :meth:`query_asset_definitions`."""
@@ -11349,6 +11670,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return AssetDefinitionListPage.from_payload(payload)
@@ -11360,6 +11682,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List asset definitions via `GET /v1/assets/definitions`."""
 
@@ -11368,6 +11691,8 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         filter_arg = _encode_filter_arg(filter)
         if filter_arg is not None:
             params["filter"] = filter_arg
@@ -11388,6 +11713,7 @@ class ToriiClient(_BaseToriiClient):
         sort: Optional[Any] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
+        count_mode: Optional[str] = None,
     ) -> AssetDefinitionListPage:
         """Typed wrapper for :meth:`list_asset_definitions`."""
 
@@ -11396,6 +11722,7 @@ class ToriiClient(_BaseToriiClient):
             sort=sort,
             limit=limit,
             offset=offset,
+            count_mode=count_mode,
         )
         if payload is None:
             return AssetDefinitionListPage(items=[], total=0)
@@ -11411,6 +11738,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST `/v1/domains/query` with a structured envelope."""
@@ -11421,6 +11749,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         response = self._request(
@@ -11443,6 +11772,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> DomainListPage:
         """Typed wrapper for :meth:`query_domains`."""
@@ -11453,6 +11783,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return DomainListPage.from_payload(payload)
@@ -11466,6 +11797,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST `/v1/assets/{definition}/holders/query` with a structured envelope."""
@@ -11476,6 +11808,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         response = self._request(
@@ -11499,6 +11832,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: int = 0,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> AssetHolderListPage:
         """Typed wrapper for :meth:`query_asset_holders`."""
@@ -11510,6 +11844,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             fetch_size=fetch_size,
+            count_mode=count_mode,
             query_name=query_name,
         )
         return AssetHolderListPage.from_payload(payload)
@@ -11521,6 +11856,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         asset_id: Optional[str] = None,
+        count_mode: Optional[str] = None,
     ) -> Optional[Any]:
         """List asset holders via `GET /v1/assets/{definition}/holders` (optional `asset_id`)."""
 
@@ -11529,6 +11865,8 @@ class ToriiClient(_BaseToriiClient):
             params["limit"] = int(limit)
         if offset is not None:
             params["offset"] = int(offset)
+        if count_mode is not None:
+            params["count_mode"] = _normalize_count_mode_arg(count_mode)
         asset_id_value = _normalize_optional_string(
             asset_id,
             "list_asset_holders.asset_id",
@@ -11549,6 +11887,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         asset_id: Optional[str] = None,
+        count_mode: Optional[str] = None,
     ) -> AssetHolderListPage:
         """Typed wrapper for :meth:`list_asset_holders`."""
 
@@ -11557,6 +11896,7 @@ class ToriiClient(_BaseToriiClient):
             limit=limit,
             offset=offset,
             asset_id=asset_id,
+            count_mode=count_mode,
         )
         if payload is None:
             return AssetHolderListPage(items=[], total=0)
@@ -13249,6 +13589,7 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fetch_size: Optional[int] = None,
+        count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """POST `/v1/triggers/query` with a structured envelope."""
@@ -13505,6 +13846,8 @@ class ToriiClient(_BaseToriiClient):
             body["offset"] = int(offset)
         if fetch_size is not None:
             body["fetch_size"] = int(fetch_size)
+        if count_mode is not None:
+            body["count_mode"] = _normalize_count_mode_arg(count_mode)
         if query_name is not None:
             body["query_name"] = query_name
         return body
@@ -13518,14 +13861,15 @@ class ToriiClient(_BaseToriiClient):
         limit: Optional[int],
         offset: Optional[int],
         fetch_size: Optional[int],
+        count_mode: Optional[str],
         query_name: Optional[str],
     ) -> None:
         if any(
             value is not None
-            for value in (filter, sort, limit, offset, fetch_size, query_name)
+            for value in (filter, sort, limit, offset, fetch_size, count_mode, query_name)
         ):
             raise ValueError(
-                "provide either `envelope` or builder arguments (filter/sort/limit/offset/fetch_size/query_name), not both"
+                "provide either `envelope` or builder arguments (filter/sort/limit/offset/fetch_size/count_mode/query_name), not both"
             )
 
 

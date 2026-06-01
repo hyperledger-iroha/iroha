@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-05-19
+Last updated: 2026-06-01
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -21,15 +21,40 @@ track detailed unfinished engineering work.
   Galois-switching circuit.
 - Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
   Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
-  claim/resolve helpers and their focused suites are green, but shared release
-  vectors still need to cover the full RNS parameter/key bundle and Soracloud
-  Bootstrap output shape.
+  claim/resolve helpers, and a shared Soracloud BFV identifier-envelope fixture
+  now covers the baseline encrypted identifier plus three-input Add and
+  Multiply operand payloads. The same fixture now pins Rust executor output
+  lengths, SHA-256 digests, and plaintext slots for Soracloud Add, Multiply,
+  RotateLeft, and Bootstrap operation vectors, as well as deterministic public
+  key/public-parameter byte lengths and SHA-256 digests, evaluation-key bundle
+  byte length, SHA-256 digest, domain-separated digest, decomposition metadata,
+  relinearization entry count, per-relinearization-entry `b`/`a`
+  coefficient-vector digests, rotation key count, bootstrap key id,
+  rotation/bootstrap encrypted-zero refresh digests, and refresh `c0`/`c1`
+  coefficient-vector digests. JavaScript, Swift, Kotlin/JVM, and Java Android
+  now validate those component-vector fields from the shared fixture, and the
+  JavaScript lane also carries adversarial fixture mutations for missing,
+  duplicate, zeroed, and count-drifted component metadata. A shared
+  signed/proof-attestation identifier receipt fixture now pins canonical payload
+  bytes, Iroha prehash, resolver signature, signed/proof attestation bytes, and
+  adversarial receipt/policy mutations across the Rust data model, JavaScript,
+  Swift, Kotlin/JVM, Java Android, and Torii runtime claim-receipt signing path.
+  The Soracloud FHE governance fixtures now bind the canonical parameter set,
+  execution policy, governance bundle, and job spec to the registered
+  `bfv-default` RAM-LFE BFV runtime descriptor and reject descriptor drift in
+  core admission. The execution policy now also carries the canonical
+  evaluation-key bundle digest from the shared operation fixture, and
+  `RunSoracloudFheJob` rejects structurally valid but ungoverned key material
+  before output state is emitted. Shared release vectors still need to cover
+  the full BFV-RNS modulus-chain, packed Galois-switching, and bootstrapping
+  key bundle.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
   checks into the next full workspace and SDK corridor. Focused adversarial
   tests now cover malformed/truncated ciphertext envelopes, hidden-program
   shape/overflow rejection, replayed/tampered/future/expired/wrong-verifier
   openings, receipt-signing/backend mismatch refusal, adversarial BFV public
-  parameters and evaluation-key metadata, unregistered BFV parameter sets,
+  parameters and evaluation-key metadata, execution-policy evaluation-key
+  digest mismatches, unregistered BFV parameter sets,
   impossible decrypted identifier envelopes, FHE governance lifecycle/linkage
   abuse, operation-shape and budget-smuggling jobs, encrypted-only Torii DTO
   rejection, duplicate JSON encrypted/opening-field and nested shadow-field
@@ -39,16 +64,28 @@ track detailed unfinished engineering work.
   wrong resolver keys, mismatched receipt policy ids, validly re-signed but
   execution-mismatched output openings on `ClaimIdentifier`, missing/malformed
   Soracloud evaluation keys, empty/malformed ciphertext slots, malformed
-  relinearization keys, malformed SDK ciphertext hex, plaintext-only policy
-  misuse, and slot-count/digest mismatches;
-  remaining breadth should emphasize full cross-SDK RNS vectors and Soracloud
-  Add/Multiply/RotateLeft/Bootstrap multi-input fixtures.
+  relinearization keys, structurally valid wrong BFV key-bundle component
+  material, malformed SDK ciphertext hex, plaintext-only policy misuse,
+  slot-count/digest mismatches, shared signed receipt canonical payload
+  drift, shared signed/proof attestation canonical byte drift, malformed
+  signatures, wrong resolver keys, wrong policy ids, tampered output ciphertext
+  hashes, proof-only attestations, ZK-ACE public-input version drift, and
+  ZK-ACE prepared authorization proofs rebound to a different transfer digest,
+  chain id, receiver, amount, or policy hash across the Rust data-model, JS,
+  Swift, Kotlin/JVM, Java Android, and Torii runtime fixture corridor, plus
+  core ZK-ACE rotated/revoked identity state, unsupported action classes,
+  transaction digest/account substitution, and mutated ZK-ACE/STARK public
+  inputs;
+  remaining breadth should emphasize full cross-SDK RNS vectors and broader
+  release validation.
 
 ## Kotodama first-release follow-ups
 
-- Add precise compiler-derived access descriptors for the remaining opaque host
-  helper syscalls so they can graduate from test-mode-only diagnostics into
-  production-safe manifests without wildcard fallbacks.
+- Completed 2026-06-01: static compiler-derived access descriptors now cover
+  the formerly opaque peer, subscription, VRF epoch seed, AXT, and Soracloud
+  host helper syscalls. Dynamic, malformed, and syscall/operation-mismatched
+  payloads stay in the incomplete-hint path and are rejected by production
+  compilation instead of being represented with wildcard fallbacks.
 
 ## Nexus independent lane consensus follow-ups
 
@@ -91,18 +128,30 @@ track detailed unfinished engineering work.
 
 ## Torii query API follow-ups
 
-- Audit endpoint-specific OpenAPI schemas and SDK convenience parsers for app
-  endpoints that expose concrete response models instead of generic JSON, so
-  every bounded response documents `has_more`, optional `total`, and
-  `count_mode` consistently.
-- Add sustained load benchmarks for signed iterable queries, account alias
-  projections, asset holders, and generic aggregate queries under concurrent
-  HTTP clients, including deep stored-cursor continuation runs over the
-  Arc-backed bounded replay path. The current coverage is focused
-  micro-benchmarking of first-batch count-mode cost in the core snapshot path.
-- Profile whether asset-holder, account-asset, and contract-activity predicates
-  need explicit indexes or materialized views after the bounded-count path is
-  deployed under realistic Torii traffic.
+- Completed 2026-06-01: audited endpoint-specific OpenAPI schemas and SDK
+  convenience parsers for app endpoints that expose concrete response models.
+  Account, domain, account-asset, asset-definition, NFT, RWA, asset-holder, and
+  repo-agreement list/query responses now share concrete page schemas that
+  document required `has_more`, required `count_mode`, and optional `total`;
+  JavaScript and Python convenience parsers preserve bounded page metadata and
+  reject malformed count flags before treating a response as valid.
+- Completed 2026-06-01: added sustained Torii query-load profiles to
+  `torii_hot_paths` for signed iterable `/query` in stored-cursor bounded mode,
+  primary account-alias projections, account-asset predicates, asset-holder
+  scans, committed-history contract-activity predicates, and generic aggregate
+  queries under concurrent in-process HTTP clients. The signed profile walks
+  deep continuation chains over the Arc-backed snapshot replay path, the
+  contract-activity profile builds real committed transactions with contract
+  metadata, and `query_load_profiles` rejects malformed or adversarial
+  benchmark shapes before fixture construction.
+- Completed 2026-06-01: added a localhost socket transport group for the same
+  sustained Torii query profiles. The socket group binds ephemeral Axum
+  listeners and drives them with pooled `reqwest` clients so handler-only
+  measurements can be compared with real HTTP transport and body IO overhead.
+- Run the full signed/app socket profile suite under production-like datasets
+  and longer measurement windows to decide whether the existing account-asset,
+  asset-holder, and contract-activity predicates need additional indexes or
+  materialized views.
 
 ## SoraFS paid pin validation follow-ups
 
@@ -120,15 +169,28 @@ track detailed unfinished engineering work.
 
 ## TradFi ISO 20022 interop follow-ups
 
-- Add inbound lifecycle endpoints for `pacs.002`, `pacs.004`, `camt.056`,
-  `sese.023`, `sese.024`, and `sese.025`. `sese.023` should map to settlement
-  instructions only when all account, instrument, venue, CSD, and cash-leg
-  crosswalks are configured.
-- Add outbox helpers for `pacs.004`, `camt.029`, `sese.024`, and `sese.025`
-  using the same durable ISO bridge record model as `pacs.002`.
-- Implement deterministic XMLDSig/XAdES verification for profiles that require
-  embedded signatures. Until then, live rail profiles should keep rejecting
-  unsupported embedded signature blocks.
+- Completed 2026-06-01: added inbound lifecycle endpoints for `pacs.002`,
+  `pacs.004`, `camt.056`, `sese.023`, `sese.024`, and `sese.025`, with OpenAPI
+  and MCP submission surfaces. The bridge records each lifecycle message in the
+  durable ISO record model, rejects duplicate payload/UETR replays, applies
+  `pacs.002`/`pacs.004`/`camt.056` and `sese.024`/`sese.025` updates only when
+  the referenced durable record is known, and keeps `sese.023` as a recorded
+  settlement instruction until all account, instrument, venue, CSD, and
+  cash-leg crosswalks are configured for ledger instruction mapping.
+- Completed 2026-06-01: added durable-record outbox helpers for `pacs.004`,
+  `camt.029`, `sese.024`, and `sese.025`. Payment returns require recorded
+  settlement amount/currency from the original payment message; securities
+  confirmations require captured `sese.023` amount, currency, quantity, movement,
+  payment, and execution-plan fields rather than fabricating missing data.
+- Completed 2026-06-01: added a fail-closed Torii verification path for
+  `require-verified` embedded-signature profiles. The bridge now accepts the
+  supported P-256/SHA-256 enveloped XMLDSig/XAdES subset only after payload
+  digest and signature verification, rejects tampered digests/signatures and
+  unsupported algorithms, and keeps live `reject-unsupported` profiles rejecting
+  embedded signature blocks.
+- Broaden deterministic XMLDSig/XAdES coverage beyond the supported P-256
+  enveloped subset, including profile-specific trust anchors, certificate-chain
+  fixtures, and canonicalization edge cases.
 - Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
   profile mismatch, cancellation/return transitions, reference snapshot
   checksum expectations, and replay by business message id/UETR.

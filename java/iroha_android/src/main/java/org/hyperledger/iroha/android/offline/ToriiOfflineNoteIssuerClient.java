@@ -461,7 +461,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
 
   private static OfflineNote.KeyCertificate parseKeyCertificate(final Map<String, Object> value) {
     return new OfflineNote.KeyCertificate(
-        Math.toIntExact(requiredLong(value, "version")),
+        requiredKeyCertificateVersion(value),
         requiredString(value, "platform"),
         requiredString(value, "key_id"),
         requiredString(value, "device_id"),
@@ -470,9 +470,7 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
         requiredString(value, "assertion_scheme"),
         requiredString(value, "assertion_key_algorithm"),
         decodeBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
-        optionalLong(value.get("assertion_usage_count_limit")) == null
-            ? null
-            : Math.toIntExact(optionalLong(value.get("assertion_usage_count_limit"))),
+        optionalAssertionUsageCountLimit(value.get("assertion_usage_count_limit")),
         requiredBoolean(value, "one_use"),
         decodeBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"));
   }
@@ -554,6 +552,25 @@ public final class ToriiOfflineNoteIssuerClient implements OfflineNoteIssuerClie
       throw new IllegalStateException(field + " must be an integer");
     }
     return result;
+  }
+
+  private static int requiredKeyCertificateVersion(final Map<String, Object> value) {
+    final long version = requiredLong(value, "version");
+    if (version != OfflineNote.KEY_CERTIFICATE_VERSION) {
+      throw new IllegalStateException("version must be " + OfflineNote.KEY_CERTIFICATE_VERSION);
+    }
+    return OfflineNote.KEY_CERTIFICATE_VERSION;
+  }
+
+  private static Integer optionalAssertionUsageCountLimit(final Object value) {
+    final Long limit = optionalLong(value);
+    if (limit == null) {
+      return null;
+    }
+    if (limit.longValue() != 1L) {
+      throw new IllegalStateException("assertion_usage_count_limit must be exactly 1");
+    }
+    return Integer.valueOf(1);
   }
 
   private static Long optionalLong(final Object value) {

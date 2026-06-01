@@ -286,6 +286,12 @@ from .privacy import (
     fetch_privacy_events,
     stream_privacy_events,
 )
+from .privacy_catalog import (
+    get_privacy_algorithm_descriptor,
+    get_privacy_algorithm_descriptors,
+    get_privacy_criteria,
+    privacy_capabilities,
+)
 from .dataspaces import (
     RuntimeUpgradeHook,
     DataspaceSpec,
@@ -539,6 +545,10 @@ _BASE_EXPORTS = [
     "load_privacy_events_from_ndjson",
     "fetch_privacy_events",
     "stream_privacy_events",
+    "get_privacy_algorithm_descriptor",
+    "get_privacy_algorithm_descriptors",
+    "get_privacy_criteria",
+    "privacy_capabilities",
     "RuntimeUpgradeHook",
     "DataspaceSpec",
     "DataspacePlan",
@@ -630,7 +640,17 @@ _CRYPTO_EXPORTS: List[str] = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
+    "zk_ace_build_transfer_authorization_v1",
     "sm2_fixture_from_seed",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    "KagemushaOfflineSpendMode",
+    "is_kagemusha_recursive_spend_available",
+    "preferred_kagemusha_offline_spend_mode",
+    "kagemusha_recursive_spend_init",
+    "kagemusha_recursive_spend_append",
+    "kagemusha_recursive_spend_verify",
+    "kagemusha_recursive_spend_redeem",
     "cuda_available",
     "cuda_disabled",
     "poseidon2_cuda",
@@ -755,7 +775,19 @@ try:
         verify_sm2,
         derive_confidential_keyset,
         derive_confidential_keyset_from_hex,
+        zk_ace_build_transfer_authorization_v1,
         sm2_fixture_from_seed,
+    )
+    from .kagemusha import (
+        KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+        KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+        KagemushaOfflineSpendMode,
+        is_kagemusha_recursive_spend_available,
+        kagemusha_recursive_spend_init,
+        kagemusha_recursive_spend_append,
+        kagemusha_recursive_spend_verify,
+        kagemusha_recursive_spend_redeem,
+        preferred_kagemusha_offline_spend_mode,
     )
     from .sorafs import (
         SorafsAliasPolicy,

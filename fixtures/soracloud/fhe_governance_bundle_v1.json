@@ -2,43 +2,43 @@
   "schema_version": 1,
   "param_set": {
     "schema_version": 1,
-    "param_set": "fhe_bfv_med",
-    "version": 2,
-    "backend": "fhe/bfv-rns/v2",
+    "param_set": "bfv-default",
+    "version": 1,
+    "backend": "fhe/bfv-rns/v1",
     "scheme": {
       "scheme": "Bfv",
       "value": null
     },
     "ciphertext_modulus_bits": [
-      60,
-      50,
-      40
+      53,
+      52
     ],
-    "plaintext_modulus_bits": 20,
-    "polynomial_modulus_degree": 8192,
-    "slot_count": 4096,
+    "plaintext_modulus_bits": 9,
+    "polynomial_modulus_degree": 64,
+    "slot_count": 64,
     "security_level_bits": 128,
-    "max_multiplicative_depth": 2,
+    "max_multiplicative_depth": 1,
     "lifecycle": {
       "lifecycle": "Active",
       "value": null
     },
-    "activation_height": 10000,
-    "deprecation_height": 20000,
-    "withdraw_height": 40000,
-    "parameter_digest": "hash:4D4E4F505152535455565758595A5B5C5D5E5F606162636465666768696A6B6D#842E"
+    "activation_height": 1,
+    "deprecation_height": null,
+    "withdraw_height": null,
+    "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E"
   },
   "execution_policy": {
     "schema_version": 1,
-    "policy_name": "fhe_policy_med",
-    "param_set": "fhe_bfv_med",
-    "param_set_version": 2,
+    "policy_name": "analytics",
+    "param_set": "bfv-default",
+    "param_set_version": 1,
+    "evaluation_key_digest": "hash:6018ED3CB8315DF01D8E1F7910AFAB8BD02C978CBF96570FF9561F5812A8874B#00FA",
     "max_ciphertext_bytes": 131072,
-    "max_plaintext_bytes": 16384,
-    "max_input_ciphertexts": 8,
-    "max_output_ciphertexts": 4,
-    "max_multiplication_depth": 2,
-    "max_rotation_count": 128,
+    "max_plaintext_bytes": 512,
+    "max_input_ciphertexts": 4,
+    "max_output_ciphertexts": 1,
+    "max_multiplication_depth": 1,
+    "max_rotation_count": 16,
     "max_bootstrap_count": 1,
     "rounding_mode": {
       "rounding_mode": "NearestTiesToEven",

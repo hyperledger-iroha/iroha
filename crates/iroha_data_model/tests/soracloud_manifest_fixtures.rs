@@ -8,7 +8,10 @@ use std::{
     path::Path,
 };
 
-use iroha_crypto::Hash;
+use iroha_crypto::{
+    Hash,
+    fhe_bfv::{ram_lfe_bfv_parameters_v1, registered_bfv_parameter_digest},
+};
 #[cfg(feature = "json")]
 use iroha_data_model::soracloud::SoraInrouManifestV1;
 use iroha_data_model::soracloud::SoracloudManifestError;
@@ -111,6 +114,12 @@ fn sample_hash(seed: u8) -> Hash {
         *byte = seed.wrapping_add(u8::try_from(index).expect("index fits in u8"));
     }
     Hash::prehashed(bytes)
+}
+
+fn expected_fhe_evaluation_key_digest() -> Hash {
+    "6018ed3cb8315df01d8e1f7910afab8bd02c978cbf96570ff9561f5812a8874b"
+        .parse()
+        .expect("fixture evaluation-key digest")
 }
 
 fn expected_state_binding() -> SoraStateBindingV1 {
@@ -398,42 +407,47 @@ fn expected_agent_apartment_manifest() -> AgentApartmentManifestV1 {
 }
 
 fn expected_fhe_param_set() -> FheParamSetV1 {
+    let registered_params = ram_lfe_bfv_parameters_v1();
+    let parameter_digest =
+        registered_bfv_parameter_digest(&registered_params).expect("registered BFV digest");
     FheParamSetV1 {
         schema_version: FHE_PARAM_SET_VERSION_V1,
-        param_set: "fhe_bfv_med".parse().expect("valid name"),
-        version: NonZeroU32::new(2).expect("nonzero"),
-        backend: "fhe/bfv-rns/v2".to_string(),
+        param_set: "bfv-default".parse().expect("valid name"),
+        version: NonZeroU32::new(1).expect("nonzero"),
+        backend: "fhe/bfv-rns/v1".to_string(),
         scheme: FheSchemeV1::Bfv,
         ciphertext_modulus_bits: vec![
-            NonZeroU16::new(60).expect("nonzero"),
-            NonZeroU16::new(50).expect("nonzero"),
-            NonZeroU16::new(40).expect("nonzero"),
+            NonZeroU16::new(53).expect("nonzero"),
+            NonZeroU16::new(52).expect("nonzero"),
         ],
-        plaintext_modulus_bits: NonZeroU16::new(20).expect("nonzero"),
-        polynomial_modulus_degree: NonZeroU32::new(8_192).expect("nonzero"),
-        slot_count: NonZeroU32::new(4_096).expect("nonzero"),
+        plaintext_modulus_bits: NonZeroU16::new(9).expect("nonzero"),
+        polynomial_modulus_degree: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
+            .expect("nonzero"),
+        slot_count: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
+            .expect("nonzero"),
         security_level_bits: NonZeroU16::new(128).expect("nonzero"),
-        max_multiplicative_depth: NonZeroU16::new(2).expect("nonzero"),
+        max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
         lifecycle: FheParamLifecycleV1::Active,
-        activation_height: Some(10_000),
-        deprecation_height: Some(20_000),
-        withdraw_height: Some(40_000),
-        parameter_digest: sample_hash(77),
+        activation_height: Some(1),
+        deprecation_height: None,
+        withdraw_height: None,
+        parameter_digest,
     }
 }
 
 fn expected_fhe_execution_policy() -> FheExecutionPolicyV1 {
     FheExecutionPolicyV1 {
         schema_version: FHE_EXECUTION_POLICY_VERSION_V1,
-        policy_name: "fhe_policy_med".parse().expect("valid name"),
-        param_set: "fhe_bfv_med".parse().expect("valid name"),
-        param_set_version: NonZeroU32::new(2).expect("nonzero"),
+        policy_name: "analytics".parse().expect("valid name"),
+        param_set: "bfv-default".parse().expect("valid name"),
+        param_set_version: NonZeroU32::new(1).expect("nonzero"),
+        evaluation_key_digest: expected_fhe_evaluation_key_digest(),
         max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
-        max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
-        max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
-        max_output_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
-        max_multiplication_depth: NonZeroU16::new(2).expect("nonzero"),
-        max_rotation_count: NonZeroU32::new(128).expect("nonzero"),
+        max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
+        max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
+        max_output_ciphertexts: NonZeroU16::new(1).expect("nonzero"),
+        max_multiplication_depth: NonZeroU16::new(1).expect("nonzero"),
+        max_rotation_count: NonZeroU32::new(16).expect("nonzero"),
         max_bootstrap_count: 1,
         rounding_mode: FheDeterministicRoundingModeV1::NearestTiesToEven,
     }
@@ -451,9 +465,9 @@ fn expected_fhe_job_spec() -> FheJobSpecV1 {
     FheJobSpecV1 {
         schema_version: FHE_JOB_SPEC_VERSION_V1,
         job_id: "job-add-001".to_string(),
-        policy_name: "fhe_policy_med".parse().expect("valid name"),
-        param_set: "fhe_bfv_med".parse().expect("valid name"),
-        param_set_version: NonZeroU32::new(2).expect("nonzero"),
+        policy_name: "analytics".parse().expect("valid name"),
+        param_set: "bfv-default".parse().expect("valid name"),
+        param_set_version: NonZeroU32::new(1).expect("nonzero"),
         operation: FheJobOperationV1::Add,
         inputs: vec![
             FheJobInputRefV1 {
@@ -1895,6 +1909,87 @@ fn fhe_governance_bundle_fixture_is_canonical() {
     bundle
         .validate_for_admission()
         .expect("fixture should validate");
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn fhe_governance_bundle_fixture_rejects_adversarial_parameter_drift() {
+    let bundle: FheGovernanceBundleV1 =
+        json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode");
+
+    let mut wrong_bundle_schema = bundle.clone();
+    wrong_bundle_schema.schema_version = wrong_bundle_schema.schema_version.saturating_add(1);
+    let error = wrong_bundle_schema
+        .validate_for_admission()
+        .expect_err("bundle schema drift must be rejected");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::UnsupportedVersion {
+            manifest: "fhe governance bundle",
+            expected: FHE_GOVERNANCE_BUNDLE_VERSION_V1,
+            ..
+        }
+    ));
+
+    let mut wrong_policy_version = bundle.clone();
+    wrong_policy_version.execution_policy.param_set_version =
+        NonZeroU32::new(bundle.param_set.version.get() + 1).expect("nonzero");
+    let error = wrong_policy_version
+        .validate_for_admission()
+        .expect_err("policy version drift must be rejected");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "param_set_version",
+            ..
+        }
+    ));
+
+    let mut wrong_chain = bundle.clone();
+    wrong_chain.param_set.ciphertext_modulus_bits = vec![
+        NonZeroU16::new(52).expect("nonzero"),
+        NonZeroU16::new(53).expect("nonzero"),
+    ];
+    let error = wrong_chain
+        .validate_for_admission()
+        .expect_err("ascending ciphertext modulus chains must be rejected");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "ciphertext_modulus_bits",
+            ..
+        }
+    ));
+
+    let mut output_overflow = bundle.clone();
+    output_overflow.execution_policy.max_output_ciphertexts =
+        NonZeroU16::new(output_overflow.execution_policy.max_input_ciphertexts.get() + 1)
+            .expect("nonzero");
+    let error = output_overflow
+        .validate_for_admission()
+        .expect_err("policy output-count overflow must be rejected");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "max_output_ciphertexts",
+            ..
+        }
+    ));
+
+    let mut proposed_param_set = bundle.clone();
+    proposed_param_set.param_set.lifecycle = FheParamLifecycleV1::Proposed;
+    proposed_param_set.param_set.deprecation_height = None;
+    proposed_param_set.param_set.withdraw_height = None;
+    let error = proposed_param_set
+        .validate_for_admission()
+        .expect_err("proposed parameter sets must not admit execution");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "param_set.lifecycle",
+            ..
+        }
+    ));
 }
 
 #[cfg(feature = "json")]

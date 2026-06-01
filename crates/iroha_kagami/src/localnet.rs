@@ -416,6 +416,8 @@ const LOCALNET_QUEUE_TTL_MS: u64 = 600_000;
 const LOCALNET_LANE_TEU_CAPACITY: u32 = 50_000_000;
 /// Default IVM gas budget per block for Taira/localnet stress profiles.
 const LOCALNET_IVM_GAS_LIMIT_PER_BLOCK: u64 = 50_000_000;
+/// Default IVM gas price for localnet fee assets.
+const LOCALNET_IVM_GAS_UNITS_PER_GAS: u64 = 1;
 /// Default multiplier for proposal queue scan budgets on localnet.
 const LOCALNET_PROPOSAL_QUEUE_SCAN_MULTIPLIER: usize = 4;
 /// Default Torii tx rate limit (per authority) for localnet.
@@ -1235,7 +1237,13 @@ fn generate_localnet_with_line<T: Write>(
     copy_rans_tables(&out_dir)?;
 
     tui::status("Writing client config");
-    write_client_config(&out_dir, opts.base_api_port, &hosts.public, &chain_id)?;
+    write_client_config(
+        &out_dir,
+        opts.base_api_port,
+        &hosts.public,
+        &chain_id,
+        chain_discriminant,
+    )?;
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
     let start_path = out_dir.join("start.sh");
@@ -1935,7 +1943,7 @@ fn render_peer_config(
             "per_gas_unit_fee".into(),
             Value::String("0.000001".to_owned()),
         );
-        fees.insert("sponsorship_enabled".into(), Value::Boolean(false));
+        fees.insert("sponsorship_enabled".into(), Value::Boolean(true));
         fees.insert("external_settlement_enabled".into(), Value::Boolean(false));
         fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
         fees.insert(
@@ -2315,6 +2323,12 @@ fn render_peer_config(
         Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
     );
     onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
+    if npos_bootstrap {
+        onboarding.insert(
+            "fee_sponsor_account".into(),
+            Value::String(localnet_client_account.clone()),
+        );
+    }
     torii.insert("onboarding".into(), Value::Table(onboarding));
 
     let mut faucet = Table::new();
@@ -2530,14 +2544,45 @@ fn apply_localnet_npos_overrides(
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 }
 
-fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
-    let gas_param_id = CustomParameterId::new(
-        "ivm_gas_limit_per_block"
-            .parse()
+fn localnet_custom_parameter_id(name: &str) -> CustomParameterId {
+    CustomParameterId::new(
+        name.parse()
             .expect("constant custom parameter name is valid"),
+    )
+}
+
+fn localnet_ivm_gas_units_per_gas_payload(asset: &str) -> Json {
+    let payload = format!(
+        concat!(
+            r#"[{{"asset":"{asset}","#,
+            r#""units_per_gas":{units},"#,
+            r#""twap_local_per_xor":"1","#,
+            r#""liquidity_profile":"tier2","#,
+            r#""volatility_class":"stable"}}]"#
+        ),
+        asset = asset,
+        units = LOCALNET_IVM_GAS_UNITS_PER_GAS
     );
+    Json::from_str_norito(&payload).expect("localnet gas-rate payload must be valid JSON")
+}
+
+fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
+    let gas_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let gas_param = CustomParameter::new(gas_param_id, Json::new(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK));
     parameters.set_parameter(Parameter::Custom(gas_param));
+
+    let fee_asset_id = localnet_fee_asset_literal();
+    let accepted_assets = CustomParameter::new(
+        localnet_custom_parameter_id("ivm_gas_accepted_assets"),
+        Json::new(vec![fee_asset_id.clone()]),
+    );
+    parameters.set_parameter(Parameter::Custom(accepted_assets));
+
+    let units_per_gas = CustomParameter::new(
+        localnet_custom_parameter_id("ivm_gas_units_per_gas"),
+        localnet_ivm_gas_units_per_gas_payload(&fee_asset_id),
+    );
+    parameters.set_parameter(Parameter::Custom(units_per_gas));
 }
 
 fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> u64 {
@@ -2618,6 +2663,12 @@ fn apply_parameter_overrides(
         || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
     let previous_parameters = genesis.effective_parameters();
     let mut parameters = previous_parameters.clone();
+    let fee_asset_id = localnet_fee_asset_literal();
+    let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
+    let accepted_assets_param_id = localnet_custom_parameter_id("ivm_gas_accepted_assets");
+    let units_per_gas_param_id = localnet_custom_parameter_id("ivm_gas_units_per_gas");
+    let accepted_assets_payload = Json::new(vec![fee_asset_id.clone()]);
+    let units_per_gas_payload = localnet_ivm_gas_units_per_gas_payload(&fee_asset_id);
     let block_max_transactions =
         NonZeroU64::new(block_max_transactions).expect("block_max_transactions must be non-zero");
     let should_update = block_time_ms.is_some()
@@ -2627,13 +2678,19 @@ fn apply_parameter_overrides(
         || include_npos
         || parameters
             .custom()
-            .get(&CustomParameterId::new(
-                "ivm_gas_limit_per_block"
-                    .parse()
-                    .expect("constant custom parameter name is valid"),
-            ))
+            .get(&gas_limit_param_id)
             .and_then(|custom| custom.payload().try_into_any_norito::<u64>().ok())
             != Some(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK)
+        || parameters
+            .custom()
+            .get(&accepted_assets_param_id)
+            .map(CustomParameter::payload)
+            != Some(&accepted_assets_payload)
+        || parameters
+            .custom()
+            .get(&units_per_gas_param_id)
+            .map(CustomParameter::payload)
+            != Some(&units_per_gas_payload)
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
         return genesis;
@@ -3457,10 +3514,14 @@ fn write_client_config(
     base_api_port: u16,
     torii_host: &CanonicalHost,
     chain_id: &str,
+    chain_discriminant: Option<u16>,
 ) -> Result<()> {
     let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
     let torii_host = torii_host.url_host();
+    let chain_discriminant_line = chain_discriminant.map_or_else(String::new, |value| {
+        format!("chain_discriminant = {value}\n")
+    });
     let rendered = format!(
         concat!(
             "chain = \"{chain}\"\n",
@@ -3473,6 +3534,7 @@ fn write_client_config(
             "\n",
             "[account]\n",
             "domain = \"{domain}\"\n",
+            "{chain_discriminant_line}",
             "private_key = \"{private_key}\"\n",
             "public_key  = \"{public_key}\"\n",
             "\n",
@@ -3486,6 +3548,7 @@ fn write_client_config(
         ttl_ms = LOCALNET_CLIENT_TTL_MS,
         status_timeout_ms = LOCALNET_CLIENT_STATUS_TIMEOUT_MS,
         domain = CLIENT_ACCOUNT_DOMAIN,
+        chain_discriminant_line = chain_discriminant_line,
         private_key = CLIENT_ACCOUNT_PRIVATE,
         public_key = CLIENT_ACCOUNT_PUBLIC,
     );
@@ -4052,6 +4115,12 @@ mod tests {
             .expect("torii.onboarding table");
         assert_eq!(
             onboarding.get("authority").and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
+        assert_eq!(
+            onboarding
+                .get("fee_sponsor_account")
+                .and_then(toml::Value::as_str),
             Some(client_account_id.as_str())
         );
 
@@ -5711,11 +5780,7 @@ mod tests {
         let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_time_ms(), 1_000);
         assert_eq!(params.sumeragi().commit_time_ms(), 1_000);
-        let gas_param_id = CustomParameterId::new(
-            "ivm_gas_limit_per_block"
-                .parse()
-                .expect("constant custom parameter name is valid"),
-        );
+        let gas_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
         let gas_limit: u64 = params
             .custom()
             .get(&gas_param_id)
@@ -5724,6 +5789,26 @@ mod tests {
             .try_into_any_norito()
             .expect("gas limit payload should decode");
         assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
+
+        let expected_fee_asset = localnet_fee_asset_literal();
+        let accepted_assets: Vec<String> = params
+            .custom()
+            .get(&localnet_custom_parameter_id("ivm_gas_accepted_assets"))
+            .expect("localnet should pin accepted IVM gas assets")
+            .payload()
+            .try_into_any_norito()
+            .expect("accepted assets payload should decode");
+        assert_eq!(accepted_assets, vec![expected_fee_asset.clone()]);
+
+        let units_per_gas = params
+            .custom()
+            .get(&localnet_custom_parameter_id("ivm_gas_units_per_gas"))
+            .expect("localnet should pin IVM gas rates")
+            .payload();
+        assert_eq!(
+            units_per_gas,
+            &localnet_ivm_gas_units_per_gas_payload(&expected_fee_asset)
+        );
     }
 
     #[test]
@@ -6084,7 +6169,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
-        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID)
+        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, None)
             .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
@@ -6104,6 +6189,32 @@ mod tests {
         assert_eq!(
             account.get("domain").and_then(toml::Value::as_str),
             Some(CLIENT_ACCOUNT_DOMAIN)
+        );
+        assert!(
+            !account.contains_key("chain_discriminant"),
+            "default localnet client config should not force an I105 prefix"
+        );
+    }
+
+    #[test]
+    fn client_config_records_chain_discriminant_when_known() {
+        let tmp = tempfile::tempdir().expect("tmp dir");
+        let host =
+            CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
+        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, Some(369))
+            .expect("write client config");
+        let contents =
+            fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
+        let value: toml::Value = toml::from_str(&contents).expect("parse client config");
+        let account = value
+            .get("account")
+            .and_then(toml::Value::as_table)
+            .expect("account table");
+        assert_eq!(
+            account
+                .get("chain_discriminant")
+                .and_then(toml::Value::as_integer),
+            Some(369)
         );
     }
 
@@ -6415,7 +6526,7 @@ mod tests {
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
-        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID)
+        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, None)
             .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
@@ -6996,6 +7107,11 @@ mod tests {
         assert_eq!(
             fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
             Some("0.000001")
+        );
+        assert_eq!(
+            fees.get("sponsorship_enabled")
+                .and_then(toml::Value::as_bool),
+            Some(true)
         );
         assert_eq!(
             fees.get("external_settlement_enabled")

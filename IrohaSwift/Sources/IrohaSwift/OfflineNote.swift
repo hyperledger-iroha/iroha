@@ -50,7 +50,7 @@ public enum OfflineNoteError: Error, LocalizedError, Equatable {
         case let .invalidCertificateVersion(version):
             return "Offline key certificate version must be \(OfflineNoteConstants.keyCertificateVersion) (found \(version))."
         case .certificateMustBeOneUse:
-            return "Offline key certificate must be marked one-use."
+            return "Offline key certificate must be marked one-use and expose usage limit 1 when present."
         case let .invalidNotePublicKeyLength(expected, actual):
             return "Offline note public key must be \(expected) bytes (found \(actual))."
         case let .invalidIssuerSignatureLength(expected, actual):
@@ -179,6 +179,7 @@ public struct OfflineNoteKeyCertificatePayload: Equatable, Sendable {
             version: version,
             accountId: accountId,
             publicKey: publicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse
         )
         self.domain = domain
@@ -233,6 +234,7 @@ public struct OfflineNoteKeyCertificate: Equatable, Sendable {
             version: version,
             accountId: accountId,
             publicKey: publicKey,
+            assertionUsageCountLimit: assertionUsageCountLimit,
             oneUse: oneUse
         )
         guard issuerSignature.count == 64 else {
@@ -1078,11 +1080,15 @@ enum OfflineNoteValidation {
     static func validateCertificateCore(version: UInt16,
                                         accountId: String,
                                         publicKey: Data,
+                                        assertionUsageCountLimit: UInt32?,
                                         oneUse: Bool) throws {
         guard version == OfflineNoteConstants.keyCertificateVersion else {
             throw OfflineNoteError.invalidCertificateVersion(version)
         }
         guard oneUse else {
+            throw OfflineNoteError.certificateMustBeOneUse
+        }
+        guard assertionUsageCountLimit == nil || assertionUsageCountLimit == 1 else {
             throw OfflineNoteError.certificateMustBeOneUse
         }
         guard publicKey.count == 32 else {

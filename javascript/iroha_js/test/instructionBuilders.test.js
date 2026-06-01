@@ -49,7 +49,13 @@ import {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
+  buildPrivacyProofEnvelope,
+  buildRegisterPrivacyVerifierKeyInstruction,
+  buildRetirePrivacyVerifierKeyInstruction,
   buildRegisterAssetHiddenZkPoolInstruction,
+  buildRegisterZkAceIdentityCommitmentInstruction,
+  buildRotateZkAceIdentityCommitmentInstruction,
+  buildRevokeZkAceIdentityCommitmentInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
@@ -57,6 +63,8 @@ import {
   buildZkTransferInstruction,
   buildAssetHiddenZkTransferInstruction,
   buildUnshieldInstruction,
+  buildZkAceAuthorizedTransferInstruction,
+  buildZkAceAuthorizationProofV1,
   buildCreateElectionInstruction,
   buildSubmitBallotInstruction,
   buildFinalizeElectionInstruction,
@@ -67,10 +75,19 @@ import {
   getPrivacyAlgorithmDescriptors,
   getPrivacyCriteria,
 } from "../src/privacyAlgorithms.js";
-import { noritoDecodeInstruction, noritoEncodeInstruction } from "../src/norito.js";
+import { buildZkAceTransferAuthorizationV1 } from "../src/crypto.js";
+import {
+  noritoDecodeInstruction,
+  noritoDecodePrivacyProofEnvelope,
+  noritoEncodeInstruction,
+} from "../src/norito.js";
 import { hasNoritoBinding, makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
+const zkAceNativeTest = makeNativeTest(baseTest, {
+  require: [...noritoRequiredMethods, "zkAceBuildTransferAuthorizationV1"],
+});
+const descriptorTest = baseTest;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
@@ -1736,6 +1753,428 @@ test("buildRegisterAssetHiddenZkPoolInstruction rejects adversarial pool registr
   }
 });
 
+test("ZK-ACE builders encode identity lifecycle and authorized transfers", () => {
+  const identityCommitment = Buffer.alloc(32, 0x11);
+  const rotatedCommitment = Buffer.alloc(32, 0x12);
+  const policyHash = Buffer.alloc(32, 0x22);
+  const txDigest = Buffer.alloc(32, 0x33);
+  const replayNullifier = Buffer.alloc(32, 0x44);
+  const vkCommitment = Buffer.alloc(32, 0x55);
+  const verifierKey = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
+  const proofBundle = buildZkAceAuthorizationProofV1({
+    publicInputs: {
+      identityCommitment,
+      txDigest,
+      chainId: "00000000-0000-0000-0000-000000000000",
+      replayNullifier,
+      policyHash,
+      fromAccountId: ACCOUNT_ID_INPUT,
+      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      amount: "17",
+      verifierKeyId: verifierKey,
+    },
+    proofBytes: Buffer.from("zk-ace-proof"),
+    verifyingKeyCommitment: vkCommitment,
+  });
+
+  const register = encodeAndDecode(
+    buildRegisterZkAceIdentityCommitmentInstruction({
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      identityCommitment,
+      policyHash,
+      allowedAccounts: [ACCOUNT_ID_INPUT],
+      verifierKey,
+    }),
+  ).zk.RegisterZkAceIdentityCommitment;
+  assert.deepEqual(register.identity_commitment, Array.from(identityCommitment));
+  assert.deepEqual(register.policy_hash, Array.from(policyHash));
+  assert.deepEqual(register.allowed_accounts, [ACCOUNT_ID_INPUT]);
+  assert.equal(register.action_class, "transparent_asset_transfer");
+  assert.equal(register.domain_tag, "iroha:zk-ace:pq-authorization:v0");
+  assert.deepEqual(register.verifier_key, {
+    backend: "stark/fri/sha256-goldilocks",
+    name: "zk_ace_pq_authorization_v0",
+  });
+
+  const rotate = encodeAndDecode(
+    buildRotateZkAceIdentityCommitmentInstruction({
+      asset: ASSET_DEFINITION_ID,
+      oldIdentityCommitment: identityCommitment,
+      newIdentityCommitment: rotatedCommitment,
+      policyHash,
+      allowedAccounts: [ACCOUNT_ID_INPUT],
+      verifierKey,
+    }),
+  ).zk.RotateZkAceIdentityCommitment;
+  assert.deepEqual(rotate.old_identity_commitment, Array.from(identityCommitment));
+  assert.deepEqual(rotate.new_identity_commitment, Array.from(rotatedCommitment));
+  assert.deepEqual(rotate.allowed_accounts, [ACCOUNT_ID_INPUT]);
+
+  const revoke = encodeAndDecode(
+    buildRevokeZkAceIdentityCommitmentInstruction({
+      asset: ASSET_DEFINITION_ID,
+      identityCommitment: rotatedCommitment,
+      reasonHash: Buffer.alloc(32, 0x66),
+    }),
+  ).zk.RevokeZkAceIdentityCommitment;
+  assert.deepEqual(revoke.identity_commitment, Array.from(rotatedCommitment));
+  assert.deepEqual(revoke.reason_hash, Array.from(Buffer.alloc(32, 0x66)));
+
+  const transfer = encodeAndDecode(
+    buildZkAceAuthorizedTransferInstruction({
+      fromAccountId: ACCOUNT_ID_INPUT,
+      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      amount: "17",
+      identityCommitment,
+      txDigest,
+      chainId: "00000000-0000-0000-0000-000000000000",
+      replayNullifier,
+      policyHash,
+      authorizationProof: proofBundle,
+    }),
+  ).zk.SubmitZkAceAuthorizedTransfer;
+  assert.equal(transfer.amount, 17);
+  assert.deepEqual(transfer.identity_commitment, Array.from(identityCommitment));
+  assert.deepEqual(transfer.tx_digest, Array.from(txDigest));
+  assert.deepEqual(transfer.replay_nullifier, Array.from(replayNullifier));
+  assert.equal(transfer.proof.backend, "stark/fri/sha256-goldilocks");
+  assert.equal(transfer.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
+  assert.deepEqual(transfer.proof.vk_commitment, Array.from(vkCommitment));
+});
+
+zkAceNativeTest("ZK-ACE native transfer authorization feeds authorized transfer builder", () => {
+  const authorization = buildZkAceTransferAuthorizationV1({
+    fromAccountId: ACCOUNT_ID_INPUT,
+    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    amount: "17",
+    chainId: "taira",
+    identityRoot: Buffer.alloc(32, 0x31),
+    identityBlinding: Buffer.alloc(32, 0x32),
+    replaySecret: Buffer.alloc(32, 0x33),
+    policyHash: Buffer.alloc(32, 0x34),
+  });
+
+  assert.equal(
+    authorization.verifierKeyId,
+    "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+  );
+  assert.ok(authorization.authorizationProofBytes > 0);
+  assert.ok(authorization.authorizationPublicInputBytes > 0);
+  assert.equal(authorization.replayNullifierBytes, 32);
+  assert.equal(authorization.proof.backend, "stark/fri/sha256-goldilocks");
+  assert.equal(authorization.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
+  assert.equal(authorization.public_inputs.chain_id, "taira");
+  assert.deepEqual(
+    authorization.public_inputs.identity_commitment,
+    Array.from(Buffer.from(authorization.identityCommitment, "hex")),
+  );
+  assert.deepEqual(
+    authorization.public_inputs.replay_nullifier,
+    Array.from(Buffer.from(authorization.replayNullifier, "hex")),
+  );
+
+  const transfer = encodeAndDecode(
+    buildZkAceAuthorizedTransferInstruction({
+      fromAccountId: ACCOUNT_ID_INPUT,
+      toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      amount: "17",
+      identityCommitment: authorization.identityCommitment,
+      txDigest: authorization.txDigest,
+      chainId: "taira",
+      replayNullifier: authorization.replayNullifier,
+      policyHash: authorization.policyHash,
+      proof: authorization.proof,
+    }),
+  ).zk.SubmitZkAceAuthorizedTransfer;
+
+  assert.equal(transfer.amount, 17);
+  assert.deepEqual(
+    transfer.identity_commitment,
+    Array.from(Buffer.from(authorization.identityCommitment, "hex")),
+  );
+  assert.deepEqual(
+    transfer.tx_digest,
+    Array.from(Buffer.from(authorization.txDigest, "hex")),
+  );
+  assert.deepEqual(
+    transfer.replay_nullifier,
+    Array.from(Buffer.from(authorization.replayNullifier, "hex")),
+  );
+  assert.equal(transfer.proof.backend, "stark/fri/sha256-goldilocks");
+  assert.equal(transfer.proof.vk_ref.name, "zk_ace_pq_authorization_v0");
+});
+
+test("ZK-ACE builders reject malformed proof and replay inputs", () => {
+  const verifierKey = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
+  const publicInputs = {
+    identityCommitment: Buffer.alloc(32, 0x11),
+    txDigest: Buffer.alloc(32, 0x33),
+    chainId: "00000000-0000-0000-0000-000000000000",
+    replayNullifier: Buffer.alloc(32, 0x44),
+    policyHash: Buffer.alloc(32, 0x22),
+    fromAccountId: ACCOUNT_ID_INPUT,
+    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    amount: "17",
+    verifierKeyId: verifierKey,
+  };
+  const proofBundle = buildZkAceAuthorizationProofV1({
+    publicInputs,
+    proofBytes: Buffer.from("proof"),
+    verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+  });
+
+  assert.throws(
+    () =>
+      buildRegisterZkAceIdentityCommitmentInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        identityCommitment: Buffer.alloc(32),
+        policyHash: Buffer.alloc(32, 0x22),
+        allowedAccounts: [ACCOUNT_ID_INPUT],
+        verifierKey,
+      }),
+    /identityCommitment.*nonzero/,
+  );
+  assert.throws(
+    () =>
+      buildRegisterZkAceIdentityCommitmentInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        identityCommitment: Buffer.alloc(32, 0x11),
+        policyHash: Buffer.alloc(32, 0x22),
+        allowedAccounts: [],
+        verifierKey,
+      }),
+    /allowedAccounts.*non-empty/,
+  );
+  assert.throws(
+    () =>
+      buildRegisterZkAceIdentityCommitmentInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        identityCommitment: Buffer.alloc(32, 0x11),
+        policyHash: Buffer.alloc(32, 0x22),
+        allowedAccounts: [ACCOUNT_ID_INPUT, ACCOUNT_ID_INPUT],
+        verifierKey,
+      }),
+    /allowedAccounts.*duplicates/,
+  );
+  assert.throws(
+    () =>
+      buildZkAceAuthorizationProofV1({
+        publicInputs,
+        proofBytes: Buffer.from("proof"),
+        verifyingKeyRef: "halo2/ipa:wrong_vk",
+        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+      }),
+    /must be stark\/fri\/sha256-goldilocks|proof verifier must match public inputs|verifyingKeyRef\.backend must match/,
+  );
+  assert.throws(
+    () =>
+      buildZkAceAuthorizationProofV1({
+        publicInputs: { ...publicInputs, version: 2 },
+        proofBytes: Buffer.from("proof"),
+        verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+      }),
+    /publicInputs\.version must be 1/,
+  );
+  assert.throws(
+    () =>
+      buildZkAceAuthorizedTransferInstruction({
+        fromAccountId: ACCOUNT_ID_INPUT,
+        toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        amount: "17",
+        identityCommitment: Buffer.alloc(32, 0x11),
+        txDigest: Buffer.alloc(32, 0x33),
+        chainId: "00000000-0000-0000-0000-000000000000",
+        replayNullifier: Buffer.alloc(32),
+        policyHash: Buffer.alloc(32, 0x22),
+        proof: {
+          backend: "stark/fri/sha256-goldilocks",
+          proofBytes: Buffer.from("proof"),
+          verifyingKeyRef: verifierKey,
+          verifyingKeyCommitment: Buffer.alloc(32, 0x55),
+        },
+      }),
+    /replayNullifier.*nonzero/,
+  );
+  const baseTransfer = {
+    fromAccountId: ACCOUNT_ID_INPUT,
+    toAccountId: SAMPLE_ACCOUNT_I105_LITERAL,
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    amount: "17",
+    identityCommitment: Buffer.alloc(32, 0x11),
+    txDigest: Buffer.alloc(32, 0x33),
+    chainId: "00000000-0000-0000-0000-000000000000",
+    replayNullifier: Buffer.alloc(32, 0x44),
+    policyHash: Buffer.alloc(32, 0x22),
+    authorizationProof: proofBundle,
+  };
+  for (const [patch, pattern] of [
+    [{ txDigest: Buffer.alloc(32, 0x77) }, /publicInputs\.tx_digest/],
+    [{ chainId: "different-chain" }, /publicInputs\.chain_id/],
+    [{ toAccountId: ACCOUNT_ID_INPUT }, /publicInputs\.to/],
+    [{ amount: "18" }, /publicInputs\.amount/],
+    [{ policyHash: Buffer.alloc(32, 0x88) }, /publicInputs\.policy_hash/],
+  ]) {
+    assert.throws(
+      () =>
+        buildZkAceAuthorizedTransferInstruction({
+          ...baseTransfer,
+          ...patch,
+        }),
+      pattern,
+    );
+  }
+});
+
+descriptorTest("privacy proof envelopes encode canonical open-verify metadata", () => {
+  const vkHash = Buffer.alloc(32, 0x55);
+  const publicInputs = Buffer.from([0x01, 0x02, 0x03]);
+  const proofBytes = Buffer.from("stark-proof");
+  const aux = Buffer.from("{}");
+  const encoded = buildPrivacyProofEnvelope({
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash,
+    publicInputs,
+    proofBytes,
+    aux,
+    maxProofBytes: 64,
+    maxPublicInputBytes: 16,
+  });
+  assert.ok(Buffer.isBuffer(encoded));
+  const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+  assert.equal(decoded.backend, "Stark");
+  assert.equal(
+    decoded.circuit_id,
+    "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+  );
+  assert.deepEqual(decoded.vk_hash, Array.from(vkHash));
+  assert.deepEqual(decoded.public_inputs, Array.from(publicInputs));
+  assert.deepEqual(decoded.proof_bytes, Array.from(proofBytes));
+  assert.deepEqual(decoded.aux, Array.from(aux));
+});
+
+descriptorTest("privacy verifier key builders encode register and retire instructions", () => {
+  const id = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0";
+  const schemaHash = Buffer.alloc(32, 0x11);
+  const commitment = Buffer.alloc(32, 0x22);
+  const keyBytes = Buffer.from("dev-stark-vk");
+  const register = buildRegisterPrivacyVerifierKeyInstruction({
+    id,
+    version: 1,
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    namespace: "zk",
+    publicInputsSchemaHash: schemaHash,
+    commitment,
+    verifyingKeyBytes: keyBytes,
+    maxProofBytes: 4096,
+    gasScheduleId: "privacy.verify.stark.dev",
+    metadataUriCid: "bafy-metadata",
+    vkBytesCid: "bafy-vk",
+    activationHeight: "7",
+    status: "Active",
+  });
+  const registered =
+    encodeAndDecode(register).verifying_keys.RegisterVerifyingKey;
+  assert.deepEqual(registered.id, {
+    backend: "stark/fri/sha256-goldilocks",
+    name: "zk_ace_pq_authorization_v0",
+  });
+  assert.equal(registered.record.version, 1);
+  assert.equal(registered.record.backend, "Stark");
+  assert.equal(registered.record.curve, "goldilocks");
+  assert.equal(registered.record.namespace, "zk");
+  assert.equal(registered.record.status, "Active");
+  assert.deepEqual(
+    registered.record.public_inputs_schema_hash,
+    Array.from(schemaHash),
+  );
+  assert.deepEqual(registered.record.commitment, Array.from(commitment));
+  assert.equal(registered.record.vk_len, keyBytes.length);
+  assert.equal(registered.record.max_proof_bytes, 4096);
+  assert.equal(registered.record.gas_schedule_id, "privacy.verify.stark.dev");
+  assert.equal(registered.record.activation_height, 7);
+  assert.deepEqual(registered.record.key, {
+    backend: "stark/fri/sha256-goldilocks",
+    bytes: Array.from(keyBytes),
+  });
+
+  const retire = buildRetirePrivacyVerifierKeyInstruction({
+    id,
+    record: {
+      ...register.verifying_keys.RegisterVerifyingKey.record,
+      version: 2,
+      withdraw_height: 12,
+      status: "Active",
+    },
+  });
+  const retired = encodeAndDecode(retire).verifying_keys.UpdateVerifyingKey;
+  assert.equal(retired.record.version, 2);
+  assert.equal(retired.record.status, "Withdrawn");
+  assert.equal(retired.record.withdraw_height, 12);
+});
+
+descriptorTest("privacy proof envelope builder rejects malformed and oversized inputs", () => {
+  const base = {
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash: Buffer.alloc(32, 0x55),
+    publicInputs: Buffer.from([1, 2]),
+    proofBytes: Buffer.from("proof"),
+  };
+  for (const payload of [
+    { ...base, backend: "mock/dev" },
+    { ...base, circuitId: " " },
+    { ...base, vkHash: Buffer.alloc(32) },
+    { ...base, publicInputs: Buffer.alloc(0) },
+    { ...base, proofBytes: Buffer.alloc(0) },
+    { ...base, proofBytes: Buffer.from("proof"), maxProofBytes: 2 },
+    { ...base, publicInputs: Buffer.from([1, 2]), maxPublicInputBytes: 1 },
+    { ...base, vkHash: Buffer.alloc(32, 0x55), vk_hash: Buffer.alloc(32, 0x66) },
+  ]) {
+    assert.throws(
+      () => buildPrivacyProofEnvelope(payload),
+      /privacyProofEnvelope/,
+    );
+  }
+});
+
+descriptorTest("privacy verifier key builders reject unsafe registry records", () => {
+  const base = {
+    id: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    version: 1,
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    publicInputsSchemaHash: Buffer.alloc(32, 0x11),
+    commitment: Buffer.alloc(32, 0x22),
+    verifyingKeyBytes: Buffer.from("dev-stark-vk"),
+    maxProofBytes: 4096,
+    gasScheduleId: "privacy.verify.stark.dev",
+  };
+  for (const payload of [
+    { ...base, id: "mock/dev:vk" },
+    { ...base, backendTag: "Groth16" },
+    { ...base, curve: "Pallas" },
+    { ...base, publicInputsSchemaHash: Buffer.alloc(32) },
+    { ...base, commitment: Buffer.alloc(32) },
+    { ...base, maxProofBytes: 0 },
+    { ...base, gasScheduleId: " " },
+    { ...base, status: "Withdrawn" },
+    { ...base, key: { backend: "halo2/ipa", bytes: Buffer.from("vk") } },
+    { ...base, verifyingKeyBytes: Buffer.from("vk"), vkLen: 999 },
+    { ...base, circuitId: "a", circuit_id: "b" },
+  ]) {
+    assert.throws(
+      () => buildRegisterPrivacyVerifierKeyInstruction(payload),
+      /registerPrivacyVerifierKey/,
+    );
+  }
+});
+
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
   const transitionId = Buffer.alloc(32, 0xaa);
   const instruction = buildScheduleConfidentialPolicyTransitionInstruction({
@@ -1870,7 +2309,7 @@ test("buildAssetHiddenZkTransferInstruction rejects adversarial pool payloads", 
   }
 });
 
-test("privacy algorithm descriptors expose strict post-quantum MASP semantics", () => {
+descriptorTest("privacy algorithm descriptors expose strict post-quantum MASP semantics", () => {
   assert.deepEqual(getPrivacyCriteria(), [
     "hide_amount",
     "hide_sender",
@@ -1936,8 +2375,93 @@ test("privacy algorithm descriptors expose strict post-quantum MASP semantics", 
   assert.equal(pq.coveredCriteria.includes("post_quantum"), true);
 });
 
-test("privacy algorithm descriptors only advertise exported SDK entrypoints", () => {
+descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targets", () => {
+  const zkAce = getPrivacyAlgorithmDescriptor("zk-ace-pq-authorization-v0");
+  const anonymousPgc = getPrivacyAlgorithmDescriptor("anonymous-pgc-k-out-of-n-v1");
+  const verange = getPrivacyAlgorithmDescriptor("verange-transparent-range-v1");
+  const zkat = getPrivacyAlgorithmDescriptor("zkat-policy-private-auth-v1");
+  const zkAms = getPrivacyAlgorithmDescriptor("zk-ams-recursive-admission-v0");
+  const vega = getPrivacyAlgorithmDescriptor("vega-existing-credential-zk-v0");
+  const silentThreshold = getPrivacyAlgorithmDescriptor("silent-threshold-anoncred-v0");
+  const zkX509 = getPrivacyAlgorithmDescriptor("zk-x509-onchain-identity-v0");
+  const jindo = getPrivacyAlgorithmDescriptor("jindo-lattice-pcs-zk-v0");
+  const sisHints = getPrivacyAlgorithmDescriptor("sis-hints-anoncred-pq-v0");
+
+  for (const descriptor of [
+    anonymousPgc,
+    verange,
+    zkat,
+    zkAms,
+    vega,
+    silentThreshold,
+    zkX509,
+    jindo,
+    sisHints,
+  ]) {
+    assert.ok(descriptor);
+    assert.equal(descriptor.implementationStage, "catalog-as-of-2026-05");
+    assert.ok(descriptor.sourceReferences.length > 0);
+    assert.ok(descriptor.securityNotes.length > 0);
+    assert.ok(descriptor.requiredState.length > 0);
+    assert.ok(descriptor.failureModes.length > 0);
+    assert.deepEqual(descriptor.sdkEntrypoints, []);
+    assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
+  }
+
+  assert.ok(zkAce);
+  assert.equal(zkAce.category, "authorization");
+  assert.equal(zkAce.maturity, "arxiv_preprint");
+  assert.equal(zkAce.implementationStage, "chain-executable");
+  assert.deepEqual(zkAce.coveredCriteria, []);
+  assert.equal(zkAce.pqLayers.proof, true);
+  assert.equal(zkAce.pqLayers.authorization, true);
+  assert.equal(zkAce.pqLayers.noteEncryption, false);
+  assert.equal(zkAce.coveredCriteria.includes("post_quantum"), false);
+  assert.deepEqual(zkAce.sdkEntrypoints, [
+    "buildRegisterZkAceIdentityCommitmentInstruction",
+    "buildRotateZkAceIdentityCommitmentInstruction",
+    "buildRevokeZkAceIdentityCommitmentInstruction",
+    "buildZkAceAuthorizedTransferInstruction",
+    "buildZkAceAuthorizationProofV1",
+  ]);
+  assert.ok(zkAce.plannedSdkEntrypoints.includes("buildShieldedZkAceAuthorizedTransferInstruction"));
+  assert.equal(zkAce.plannedSdkEntrypoints.includes("buildZkAceAuthorizationProofV0"), false);
+  assert.ok(zkAce.chainRequirements.includes("zk::SubmitZkAceAuthorizedTransfer"));
+
+  assert.equal(anonymousPgc.category, "payment");
+  assert.equal(anonymousPgc.maturity, "accepted_conference");
+  assert.deepEqual(anonymousPgc.coveredCriteria, [
+    "hide_amount",
+    "hide_sender",
+    "hide_receiver",
+  ]);
+
+  assert.equal(verange.category, "proof_backend");
+  assert.equal(verange.coveredCriteria.includes("hide_amount"), true);
+  assert.equal(zkat.category, "authorization");
+  assert.equal(zkAms.category, "admission");
+  assert.equal(vega.category, "credential");
+  assert.equal(silentThreshold.category, "credential");
+  assert.equal(zkX509.category, "identity");
+  assert.equal(jindo.category, "proof_backend");
+  assert.equal(jindo.maturity, "technical_report");
+  assert.equal(jindo.pqLayers.proof, true);
+  assert.equal(jindo.coveredCriteria.includes("post_quantum"), false);
+  assert.equal(sisHints.category, "credential");
+  assert.equal(sisHints.pqLayers.proof, true);
+  assert.equal(sisHints.coveredCriteria.includes("post_quantum"), false);
+});
+
+descriptorTest("privacy algorithm descriptors only advertise exported SDK entrypoints", () => {
   for (const descriptor of getPrivacyAlgorithmDescriptors()) {
+    assert.match(
+      descriptor.category,
+      /^(payment|authorization|credential|admission|identity|proof_backend)$/,
+    );
+    assert.match(
+      descriptor.maturity,
+      /^(peer_reviewed|accepted_conference|technical_report|arxiv_preprint|specification)$/,
+    );
     for (const entrypoint of descriptor.sdkEntrypoints) {
       assert.equal(
         typeof sdkExports[entrypoint],
@@ -1960,7 +2484,77 @@ test("privacy algorithm descriptors only advertise exported SDK entrypoints", ()
   );
 });
 
-test("privacy algorithm descriptors return defensive copies", () => {
+descriptorTest("privacy algorithm descriptors enforce PQ and catalog availability invariants", () => {
+  const criteria = new Set(getPrivacyCriteria());
+  const ids = new Set();
+  const allowedCategories = new Set([
+    "payment",
+    "authorization",
+    "credential",
+    "admission",
+    "identity",
+    "proof_backend",
+  ]);
+  const allowedMaturities = new Set([
+    "peer_reviewed",
+    "accepted_conference",
+    "technical_report",
+    "arxiv_preprint",
+    "specification",
+  ]);
+
+  for (const descriptor of getPrivacyAlgorithmDescriptors()) {
+    assert.equal(ids.has(descriptor.id), false, `${descriptor.id} must be unique`);
+    ids.add(descriptor.id);
+    assert.equal(allowedCategories.has(descriptor.category), true, `${descriptor.id} category`);
+    assert.equal(allowedMaturities.has(descriptor.maturity), true, `${descriptor.id} maturity`);
+    assert.match(descriptor.implementationStage ?? "implementation-stage-unset", /^[a-z0-9][a-z0-9-]*(?:-[a-z0-9]+)*(?:-as-of-\d{4}-\d{2})?$/);
+    for (const criterion of descriptor.coveredCriteria) {
+      assert.equal(criteria.has(criterion), true, `${descriptor.id} criterion ${criterion}`);
+    }
+    const fullyPostQuantum =
+      descriptor.pqLayers.proof &&
+      descriptor.pqLayers.authorization &&
+      descriptor.pqLayers.noteEncryption;
+    assert.equal(
+      descriptor.coveredCriteria.includes("post_quantum"),
+      fullyPostQuantum,
+      `${descriptor.id} must only claim post_quantum when proof, authorization, and note encryption are PQ-ready`,
+    );
+    if (descriptor.implementationStage === "catalog-as-of-2026-05") {
+      assert.deepEqual(
+        descriptor.sdkEntrypoints,
+        [],
+        `${descriptor.id} catalog-only targets cannot advertise executable SDK entrypoints`,
+      );
+      assert.ok(
+        descriptor.plannedSdkEntrypoints.length > 0,
+        `${descriptor.id} catalog-only targets should expose planned entrypoints`,
+      );
+    }
+    for (const reference of descriptor.sourceReferences) {
+      assert.match(reference.label, /\S/, `${descriptor.id} reference label`);
+      assert.match(reference.url, /^https:\/\//, `${descriptor.id} reference URL`);
+    }
+    for (const listName of [
+      "recommendedFor",
+      "securityNotes",
+      "requiredState",
+      "failureModes",
+      "setupSteps",
+      "executionSteps",
+      "sdkEntrypoints",
+      "plannedSdkEntrypoints",
+      "chainRequirements",
+    ]) {
+      for (const value of descriptor[listName]) {
+        assert.match(value, /\S/, `${descriptor.id} ${listName} item`);
+      }
+    }
+  }
+});
+
+descriptorTest("privacy algorithm descriptors return defensive copies", () => {
   const first = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
   assert.ok(first);
   first.coveredCriteria.length = 0;
@@ -1985,6 +2579,24 @@ test("privacy algorithm descriptors return defensive copies", () => {
   assert.equal(second.recommendedFor.includes("malicious recommendation"), false);
   assert.equal(second.setupSteps.includes("malicious setup"), false);
   assert.equal(second.sourceReferences[0].url.startsWith("https://www.nist.gov/"), true);
+
+  const catalog = getPrivacyAlgorithmDescriptors();
+  catalog.push({ id: "malicious" });
+  const zkAce = catalog.find((descriptor) => descriptor.id === "zk-ace-pq-authorization-v0");
+  assert.ok(zkAce);
+  zkAce.sourceReferences[0].url = "https://malicious.invalid";
+  zkAce.securityNotes.push("malicious note");
+  zkAce.requiredState.push("malicious state");
+  zkAce.failureModes.push("malicious failure");
+
+  const freshCatalog = getPrivacyAlgorithmDescriptors();
+  assert.equal(freshCatalog.some((descriptor) => descriptor.id === "malicious"), false);
+  const freshZkAce = freshCatalog.find((descriptor) => descriptor.id === "zk-ace-pq-authorization-v0");
+  assert.ok(freshZkAce);
+  assert.equal(freshZkAce.sourceReferences[0].url, "https://arxiv.org/abs/2603.07974");
+  assert.equal(freshZkAce.securityNotes.includes("malicious note"), false);
+  assert.equal(freshZkAce.requiredState.includes("malicious state"), false);
+  assert.equal(freshZkAce.failureModes.includes("malicious failure"), false);
   assert.equal(getPrivacyAlgorithmDescriptor("missing"), null);
 });
 

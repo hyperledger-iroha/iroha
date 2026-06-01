@@ -17,7 +17,8 @@ RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus.universal}"
 BOOTSTRAP_AUTHORITY_DOMAIN="${IROHA_TAIRA_KAIGI_BOOTSTRAP_AUTHORITY_DOMAIN:-nexus.universal}"
 KAIGI_HELPER_BIN="${IROHA_TAIRA_KAIGI_HELPER_BIN:-}"
 DPN_DATASPACE_ID="${IROHA_TAIRA_DPN_DATASPACE_ID:-10}"
-DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.is}"
+DPN_DATASPACE_ALIAS="${IROHA_TAIRA_DPN_DATASPACE_ALIAS:-dpn}"
+DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.dpn}"
 DPN_SPONSOR_ACCOUNT_ID="${IROHA_TAIRA_DPN_SPONSOR_ACCOUNT_ID:-}"
 DPN_SPONSOR_FUND_AMOUNT="${IROHA_TAIRA_DPN_SPONSOR_FUND_AMOUNT:-1000}"
 TAIRA_AUTHORITY_FUND_AMOUNT="${IROHA_TAIRA_AUTHORITY_FUND_AMOUNT:-1000000000}"
@@ -188,6 +189,7 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_STORAGE_PIN_MAX_EVENTS="$TAIRA_STORAGE_PIN_MAX_EVENTS" \
   TAIRA_STORAGE_PIN_WINDOW_SECS="$TAIRA_STORAGE_PIN_WINDOW_SECS" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
+  TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT="${DPN_SPONSOR_ACCOUNT_ID:-$TAIRA_AUTHORITY}" \
   LOCALNET_DIR="$LOCALNET_DIR" \
   python3 <<'PY'
 from pathlib import Path
@@ -201,11 +203,13 @@ max_content_len = os.environ["TAIRA_TORII_MAX_CONTENT_LEN"]
 storage_pin_max_events = os.environ["TAIRA_STORAGE_PIN_MAX_EVENTS"]
 storage_pin_window_secs = os.environ["TAIRA_STORAGE_PIN_WINDOW_SECS"]
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
+fee_sponsor_account = os.environ["TAIRA_ONBOARDING_FEE_SPONSOR_ACCOUNT"]
 
 onboarding_block = f"""[torii.onboarding]
 enabled = true
 authority = "{authority}"
 private_key = "{private_key}"
+fee_sponsor_account = "{fee_sponsor_account}"
 allowed_permissions = []
 """
 
@@ -264,13 +268,64 @@ def ensure_torii_max_content_len(text: str) -> str:
 
     return text[: match.start()] + updated + text[match.end() :]
 
+def ensure_zk_localnet_overrides(text: str) -> str:
+    section = re.compile(r"(?ms)^\[zk\]\n.*?(?=^\[|\Z)")
+    match = section.search(text)
+    if match:
+        block = match.group(0)
+        if re.search(r"(?m)^sccp_allow_unready_transparent_proofs\s*=", block):
+            updated = re.sub(
+                r"(?m)^sccp_allow_unready_transparent_proofs\s*=.*$",
+                "sccp_allow_unready_transparent_proofs = true",
+                block,
+                count=1,
+            )
+        else:
+            lines = block.rstrip().splitlines()
+            lines.append("sccp_allow_unready_transparent_proofs = true")
+            updated = "\n".join(lines) + "\n"
+        return text[: match.start()] + updated + text[match.end() :]
+
+    anchor = re.search(r"(?m)^\[zk\.halo2\]$", text)
+    block = "[zk]\nsccp_allow_unready_transparent_proofs = true\n\n"
+    if anchor:
+        return text[: anchor.start()] + block + text[anchor.start() :]
+    return text.rstrip() + "\n\n" + block
+
 for path in sorted(localnet_dir.glob("peer*.toml")):
     text = path.read_text()
     text = ensure_torii_max_content_len(text)
+    text = ensure_zk_localnet_overrides(text)
     text = replace_or_insert(text, "sorafs.quota", quota_block)
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)
     text = replace_or_insert(text, "torii.faucet", faucet_block)
     path.write_text(text)
+PY
+}
+
+patch_peer_configs_for_dpn_dataspace_alias() {
+  DPN_DATASPACE_ALIAS="$DPN_DATASPACE_ALIAS" \
+  LOCALNET_DIR="$LOCALNET_DIR" \
+  python3 <<'PY'
+from pathlib import Path
+import os
+
+localnet_dir = Path(os.environ["LOCALNET_DIR"])
+alias = os.environ["DPN_DATASPACE_ALIAS"].strip()
+if not alias:
+    raise SystemExit("DPN dataspace alias must not be empty")
+
+for path in sorted(localnet_dir.glob("peer*.toml")):
+    text = path.read_text(encoding="utf-8")
+    text = text.replace('alias = "paynet"', f'alias = "{alias}"')
+    text = text.replace('dataspace = "paynet"', f'dataspace = "{alias}"')
+    text = text.replace('account = "*@paynet"', f'account = "*@{alias}"')
+    text = text.replace('account = "*@*.paynet"', f'account = "*@*.{alias}"')
+    text = text.replace("PayNet private dataspace lane", "DPN private dataspace lane")
+    text = text.replace("PayNet private dataspace", "DPN private dataspace")
+    text = text.replace("Route *@paynet account traffic to paynet lane", f"Route *@{alias} account traffic to {alias} lane")
+    text = text.replace("Route *@*.paynet account traffic to paynet lane", f"Route *@*.{alias} account traffic to {alias} lane")
+    path.write_text(text, encoding="utf-8")
 PY
 }
 
@@ -373,13 +428,17 @@ if not has_manifest_permission:
 if not instructions:
     print("private dataspace onboarding permissions already present")
 else:
-    genesis.setdefault("transactions", []).append(
-        {
-            "instructions": instructions,
-            "ivm_triggers": [],
-            "topology": [],
-        }
-    )
+    transactions = genesis.setdefault("transactions", [])
+    if transactions:
+        transactions[-1].setdefault("instructions", []).extend(instructions)
+    else:
+        transactions.append(
+            {
+                "instructions": instructions,
+                "ivm_triggers": [],
+                "topology": [],
+            }
+        )
     path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(
         f"seeded onboarding permissions for dataspaces {universal_dataspace_id} and {dataspace_id}"
@@ -472,13 +531,17 @@ if not has_funding:
 if not instructions:
     print("DPN domain/account/funding already present in genesis")
 else:
-    genesis.setdefault("transactions", []).append(
-        {
-            "instructions": instructions,
-            "ivm_triggers": [],
-            "topology": [],
-        }
-    )
+    transactions = genesis.setdefault("transactions", [])
+    if transactions:
+        transactions[-1].setdefault("instructions", []).extend(instructions)
+    else:
+        transactions.append(
+            {
+                "instructions": instructions,
+                "ivm_triggers": [],
+                "topology": [],
+            }
+        )
     path.write_text(json.dumps(genesis, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(
         "seeded DPN genesis state "
@@ -636,6 +699,7 @@ if [[ -z "$HOST_PUBLIC_KEY" || -z "$FEE_ASSET_ID" || -z "$LOCALNET_GENESIS_PUBLI
   exit 1
 fi
 
+patch_peer_configs_for_dpn_dataspace_alias
 patch_peer_configs_for_taira_authority "$FEE_ASSET_ID"
 ensure_private_dataspace_onboarding_permissions
 ensure_dpn_genesis_seed_state "$FEE_ASSET_ID"

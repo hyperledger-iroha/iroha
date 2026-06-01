@@ -36,11 +36,28 @@ export interface PrivacyPqLayers {
   noteEncryption: boolean;
 }
 
+export type PrivacyAlgorithmCategory =
+  | "payment"
+  | "authorization"
+  | "credential"
+  | "admission"
+  | "identity"
+  | "proof_backend";
+
+export type PrivacyAlgorithmMaturity =
+  | "peer_reviewed"
+  | "accepted_conference"
+  | "technical_report"
+  | "arxiv_preprint"
+  | "specification";
+
 export interface PrivacyAlgorithmDescriptor {
   id: string;
   name: string;
   shortName: string;
   summary: string;
+  category: PrivacyAlgorithmCategory;
+  maturity: PrivacyAlgorithmMaturity;
   coveredCriteria: PrivacyCriterionKey[];
   proofFamily: string;
   publicInputsSchema: string | null;
@@ -49,6 +66,9 @@ export interface PrivacyAlgorithmDescriptor {
   implementationStage?: string | null;
   recommendedFor?: string[];
   sourceReferences?: Array<{ label: string; url: string }>;
+  securityNotes?: string[];
+  requiredState?: string[];
+  failureModes?: string[];
   setupSteps?: string[];
   executionSteps?: string[];
   sdkEntrypoints: string[];
@@ -4789,6 +4809,23 @@ export type BinaryLike =
 
 export type VerifyingKeyIdLike = string | { backend: string; name: string };
 
+export type PrivacyBackendTag =
+  | "Halo2IpaPasta"
+  | "Halo2Bn254"
+  | "Groth16"
+  | "Stark"
+  | "Unsupported"
+  | "halo2-ipa-pasta"
+  | "halo2/ipa"
+  | "halo2/pasta/ipa"
+  | "halo2-bn254"
+  | "groth16"
+  | "stark"
+  | "stark/fri"
+  | "stark/fri/sha256-goldilocks"
+  | "unsupported"
+  | string;
+
 export interface ConfidentialEncryptedPayloadInput {
   version?: number;
   ephemeralPublicKey: BinaryLike;
@@ -4810,6 +4847,99 @@ export interface ProofAttachmentInput {
     };
   } | null;
 }
+
+export interface PrivacyProofEnvelopeInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  publicInputs?: BinaryLike;
+  public_inputs?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface PrivacyVerifierKeyBoxInput {
+  backend?: string;
+  backendId?: string;
+  bytes?: BinaryLike;
+  keyBytes?: BinaryLike;
+  verifyingKeyBytes?: BinaryLike;
+  vkBytes?: BinaryLike;
+}
+
+export interface PrivacyVerifierKeyRecordInput {
+  version: NumericLike;
+  circuitId?: string;
+  circuit_id?: string;
+  ownerManifestId?: string | null;
+  owner_manifest_id?: string | null;
+  owner?: string | null;
+  namespace?: string;
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  curve?: string;
+  publicInputsSchemaHash?: BinaryLike;
+  public_inputs_schema_hash?: BinaryLike;
+  schemaHash?: BinaryLike;
+  schema_hash?: BinaryLike;
+  commitment?: BinaryLike;
+  verifyingKeyCommitment?: BinaryLike;
+  vkCommitment?: BinaryLike;
+  vk_commitment?: BinaryLike;
+  vkLen?: NumericLike;
+  vk_len?: NumericLike;
+  verifyingKeyLength?: NumericLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  gasScheduleId?: string;
+  gas_schedule_id?: string;
+  metadataUriCid?: string | null;
+  metadata_uri_cid?: string | null;
+  vkBytesCid?: string | null;
+  vk_bytes_cid?: string | null;
+  activationHeight?: NumericLike | null;
+  activation_height?: NumericLike | null;
+  withdrawHeight?: NumericLike | null;
+  withdraw_height?: NumericLike | null;
+  key?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
+  verifyingKey?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
+  verifying_key?: PrivacyVerifierKeyBoxInput | BinaryLike | null;
+  verifyingKeyBytes?: BinaryLike | null;
+  verifying_key_bytes?: BinaryLike | null;
+  vkBytes?: BinaryLike | null;
+  vk_bytes?: BinaryLike | null;
+  status?: "Proposed" | "Active" | "Withdrawn" | string;
+}
+
+export interface RegisterPrivacyVerifierKeyInstructionInput
+  extends PrivacyVerifierKeyRecordInput {
+  id?: VerifyingKeyIdLike;
+  verifierKey?: VerifyingKeyIdLike;
+  verifierKeyId?: VerifyingKeyIdLike;
+  verifyingKeyId?: VerifyingKeyIdLike;
+  keyId?: VerifyingKeyIdLike;
+  vkRef?: VerifyingKeyIdLike;
+  verifyingKeyRef?: VerifyingKeyIdLike;
+  record?: PrivacyVerifierKeyRecordInput;
+  verifierRecord?: PrivacyVerifierKeyRecordInput;
+  verifyingKeyRecord?: PrivacyVerifierKeyRecordInput;
+}
+
+export interface RetirePrivacyVerifierKeyInstructionInput
+  extends RegisterPrivacyVerifierKeyInstructionInput {}
 
 /**
  * Canonicalise an account identifier to i105.
@@ -9035,6 +9165,42 @@ export interface KaigiRosterJoinProofOptions {
   roster_root_hex?: string | null;
 }
 
+export interface ZkAceTransferAuthorizationV1Options {
+  fromAccountId: string;
+  toAccountId: string;
+  assetDefinitionId: string;
+  amount: NumericLike;
+  chainId: string;
+  identityRoot: BinaryLike;
+  identityBlinding: BinaryLike;
+  replaySecret: BinaryLike;
+  policyHash: BinaryLike;
+  verifierKeyId?: string | null;
+  verifyingKeyCommitment?: BinaryLike | null;
+}
+
+export interface ZkAceTransferAuthorizationV1 {
+  publicInputs: object;
+  public_inputs: object;
+  proof: ProofAttachmentInput;
+  identityCommitment: string;
+  identity_commitment: string;
+  txDigest: string;
+  tx_digest: string;
+  replayNullifier: string;
+  replay_nullifier: string;
+  policyHash: string;
+  policy_hash: string;
+  verifierKeyId: string;
+  verifier_key_id: string;
+  authorizationProofBytes: number;
+  authorization_proof_bytes: number;
+  authorizationPublicInputBytes: number;
+  authorization_public_input_bytes: number;
+  replayNullifierBytes: number;
+  replay_nullifier_bytes: number;
+}
+
 export interface RegisterDomainInput {
   chainId: string;
   authority: string;
@@ -9683,6 +9849,82 @@ export interface RegisterAssetHiddenZkPoolInstructionInput {
   storageAssetDefinitionId: string;
   assetSetRoot: BinaryLike;
   transferVerifyingKey: VerifyingKeyIdLike;
+}
+
+export interface RegisterZkAceIdentityCommitmentInstructionInput {
+  assetDefinitionId: string;
+  identityCommitment: BinaryLike;
+  policyHash: BinaryLike;
+  allowedAccounts: string[];
+  actionClass?: string;
+  domainTag?: string;
+  verifierKey: VerifyingKeyIdLike;
+}
+
+export interface RotateZkAceIdentityCommitmentInstructionInput {
+  assetDefinitionId: string;
+  oldIdentityCommitment: BinaryLike;
+  newIdentityCommitment: BinaryLike;
+  policyHash: BinaryLike;
+  allowedAccounts: string[];
+  actionClass?: string;
+  domainTag?: string;
+  verifierKey: VerifyingKeyIdLike;
+}
+
+export interface RevokeZkAceIdentityCommitmentInstructionInput {
+  assetDefinitionId: string;
+  identityCommitment: BinaryLike;
+  reasonHash?: BinaryLike | null;
+}
+
+export interface ZkAcePublicInputsV1Input {
+  version?: NumericLike;
+  identityCommitment: BinaryLike;
+  txDigest: BinaryLike;
+  chainId: string;
+  domainTag?: string;
+  actionClass?: string;
+  replayNullifier: BinaryLike;
+  policyHash: BinaryLike;
+  fromAccountId: string;
+  toAccountId: string;
+  assetDefinitionId: string;
+  amount: NumericLike;
+  verifierKeyId: VerifyingKeyIdLike;
+}
+
+export interface ZkAceAuthorizationProofV1Input {
+  publicInputs: ZkAcePublicInputsV1Input;
+  witness?: ZkAceWitnessV1Input;
+  proof?: ProofAttachmentInput | BinaryLike;
+  proofBytes?: BinaryLike;
+  proofAttachment?: ProofAttachmentInput;
+  verifyingKeyRef?: VerifyingKeyIdLike;
+  verifyingKeyCommitment?: BinaryLike | null;
+  envelopeHash?: BinaryLike | null;
+}
+
+export interface ZkAceWitnessV1Input {
+  identityRoot: BinaryLike;
+  identityBlinding: BinaryLike;
+  replaySecret: BinaryLike;
+}
+
+export interface ZkAceAuthorizedTransferInstructionInput {
+  fromAccountId: string;
+  toAccountId: string;
+  assetDefinitionId: string;
+  amount: NumericLike;
+  identityCommitment: BinaryLike;
+  txDigest: BinaryLike;
+  chainId: string;
+  domainTag?: string;
+  actionClass?: string;
+  replayNullifier: BinaryLike;
+  policyHash: BinaryLike;
+  proof?: ProofAttachmentInput;
+  authorizationProof?: ZkAceAuthorizationProofV1Input;
 }
 
 export interface UnshieldInstructionInput {
@@ -12413,6 +12655,10 @@ export function buildKaigiRosterJoinProof(
   options: KaigiRosterJoinProofOptions,
 ): KaigiRosterJoinProof;
 
+export function buildZkAceTransferAuthorizationV1(
+  options: ZkAceTransferAuthorizationV1Options,
+): ZkAceTransferAuthorizationV1;
+
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
@@ -12539,6 +12785,20 @@ export function deriveConfidentialNullifierV2(input: {
   rho?: ArrayBufferView | ArrayBuffer | Buffer;
 }): { nullifier: Buffer; nullifierHex: string };
 
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
+export type KagemushaOfflineSpendMode =
+  | "recursive_spend_v1"
+  | "checked_prefold_v1";
+export function preferredKagemushaOfflineSpendMode(
+  recursiveSpendAvailable?: boolean,
+): KagemushaOfflineSpendMode;
+export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
+export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendAppend(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendVerify(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendRedeem(requestArchive: BinaryLike): Buffer;
+
 export interface Sm2Fixture {
   distid: string;
   seedHex: string;
@@ -12560,6 +12820,12 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export function noritoEncodePrivacyProofEnvelope(
+  envelope: object,
+): Buffer;
+export function noritoDecodePrivacyProofEnvelope(
+  bytes: ArrayBufferView | ArrayBuffer | Buffer | string,
+): object;
 export interface MultisigProposeNoritoRequest {
   multisig_account_id?: string | null;
   multisigAccountId?: string | null;
@@ -13613,8 +13879,40 @@ export function buildCancelTwitterEscrowInstruction(
   input: CancelTwitterEscrowInstructionInput,
 ): object;
 
+export function buildPrivacyProofEnvelope(
+  input: PrivacyProofEnvelopeInput,
+): Buffer;
+
+export function buildRegisterPrivacyVerifierKeyInstruction(
+  input: RegisterPrivacyVerifierKeyInstructionInput,
+): object;
+
+export function buildRetirePrivacyVerifierKeyInstruction(
+  input: RetirePrivacyVerifierKeyInstructionInput,
+): object;
+
 export function buildRegisterZkAssetInstruction(
   input: RegisterZkAssetInstructionInput,
+): object;
+
+export function buildRegisterZkAceIdentityCommitmentInstruction(
+  input: RegisterZkAceIdentityCommitmentInstructionInput,
+): object;
+
+export function buildRotateZkAceIdentityCommitmentInstruction(
+  input: RotateZkAceIdentityCommitmentInstructionInput,
+): object;
+
+export function buildRevokeZkAceIdentityCommitmentInstruction(
+  input: RevokeZkAceIdentityCommitmentInstructionInput,
+): object;
+
+export function buildZkAceAuthorizationProofV1(
+  input: ZkAceAuthorizationProofV1Input,
+): { public_inputs: object; proof: object };
+
+export function buildZkAceAuthorizedTransferInstruction(
+  input: ZkAceAuthorizedTransferInstructionInput,
 ): object;
 
 export function buildScheduleConfidentialPolicyTransitionInstruction(

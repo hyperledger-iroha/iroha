@@ -551,6 +551,10 @@ final class ToriiClientTests: XCTestCase {
             .deletingLastPathComponent() // Tests
     }
 
+    private func repositoryRootURL() -> URL {
+        irohaSwiftPackageRootURL().deletingLastPathComponent()
+    }
+
     private func makeClient(baseURL: URL = URL(string: "https://example.test")!) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
@@ -2069,6 +2073,99 @@ final class ToriiClientTests: XCTestCase {
         }
     }
 
+    func testIdentifierReceiptVerifierMatchesSharedReceiptVectors() throws {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/identifier_receipt_vectors_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        )
+        XCTAssertEqual(try string(fixture, "vector_set"), "identifier-receipt-attestation-v1")
+        let receiptObject = try object(fixture, "receipt")
+        let policyObject = try object(fixture, "policy")
+        let receipt = try identifierReceipt(fromFixture: receiptObject)
+        let policy = try identifierReceiptPolicy(fromFixture: policyObject)
+
+        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)
+        XCTAssertEqual(sha256Hex(payloadBytes), try string(fixture, "canonical_payload_sha256"))
+        XCTAssertEqual(try receipt.verifyAttestation(using: policy), true)
+
+        for vector in try objectArray(fixture, "attestation_vectors") {
+            let name = try string(vector, "name")
+            let attestationObject = try object(vector, "attestation")
+            let attestation = try identifierReceiptAttestation(fromFixture: attestationObject)
+            let encoded = try ToriiIdentifierReceiptCanonicalEncoder.encodeAttestation(attestation)
+            XCTAssertEqual(
+                encoded.count,
+                try int(vector, "expected_attestation_bytes"),
+                "\(name) attestation byte length"
+            )
+            XCTAssertEqual(
+                sha256Hex(encoded),
+                try string(vector, "expected_attestation_sha256"),
+                "\(name) attestation digest"
+            )
+            if attestation.kind == "proof" {
+                var proofReceiptObject = receiptObject
+                proofReceiptObject["attestation"] = attestationObject
+                let proofReceipt = try identifierReceipt(fromFixture: proofReceiptObject)
+                XCTAssertThrowsError(
+                    try proofReceipt.verifyAttestation(using: policy),
+                    "\(name) proof verifier gate"
+                ) { error in
+                    guard case let ToriiClientError.invalidPayload(reason) = error else {
+                        XCTFail("expected invalid payload error, got \(error)")
+                        return
+                    }
+                    XCTAssertTrue(reason.contains("Only signed identifier receipt attestations"))
+                }
+            }
+        }
+
+        for negative in try objectArray(fixture, "negative_cases") {
+            let negativeName = try string(negative, "name")
+            let mutation = try string(negative, "mutation")
+            var mutatedReceiptObject = receiptObject
+            var mutatedPolicyObject = policyObject
+            switch mutation {
+            case "receipt.payload.execution.output_ciphertext_hash":
+                var payload = try object(mutatedReceiptObject, "payload")
+                var execution = try object(payload, "execution")
+                execution["output_ciphertext_hash"] = try string(negative, "value")
+                payload["execution"] = execution
+                mutatedReceiptObject["payload"] = payload
+            case "policy.resolver_public_key":
+                mutatedPolicyObject["resolver_public_key"] = try string(negative, "value")
+            case "policy.policy_id":
+                mutatedPolicyObject["policy_id"] = try string(negative, "value")
+            case "receipt.attestation.signature":
+                var attestation = try object(mutatedReceiptObject, "attestation")
+                attestation["signature"] = try string(negative, "value")
+                mutatedReceiptObject["attestation"] = attestation
+            case "receipt.attestation":
+                mutatedReceiptObject["attestation"] = try object(negative, "value")
+            default:
+                XCTFail("Unhandled receipt vector mutation \(mutation)")
+                continue
+            }
+
+            let mutatedReceipt = try identifierReceipt(fromFixture: mutatedReceiptObject)
+            let mutatedPolicy = try identifierReceiptPolicy(fromFixture: mutatedPolicyObject)
+            if negative["expected_error_contains"] is String {
+                XCTAssertThrowsError(
+                    try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
+                    negativeName
+                )
+            } else {
+                XCTAssertEqual(
+                    try mutatedReceipt.verifyAttestation(using: mutatedPolicy),
+                    try bool(negative, "expected_result"),
+                    negativeName
+                )
+            }
+        }
+    }
+
     func testIdentifierReceiptRejectsSignedAttestationMissingSignatureDuringDecode() throws {
         let accountId = try canonicalOwnerLiteral()
         let payload = makeSignedIdentifierReceiptPayload(
@@ -2572,6 +2669,55 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(request.encryptedInputHex, expected)
     }
 
+    func testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors() throws {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        )
+        XCTAssertEqual(try string(fixture, "vector_set"), "soracloud-bfv-identifier-envelope-v1")
+        try assertBfvOperationKeyComponentVectors(try object(fixture, "operation_vectors"))
+        let policy = try bfvPolicy(fromFixture: object(fixture, "policy"))
+        let vectors = try objectArray(fixture, "vectors")
+        var observedDigests = Set<String>()
+
+        for vector in vectors {
+            let vectorName = try string(vector, "name")
+            let ciphertextHex = try policy.encryptInput(
+                string(vector, "input_utf8"),
+                seedHex: string(vector, "seed_hex")
+            )
+            XCTAssertEqual(
+                ciphertextHex.count / 2,
+                try int(vector, "expected_ciphertext_bytes"),
+                "\(vectorName) ciphertext byte length"
+            )
+            let ciphertext = try XCTUnwrap(Data(hexString: ciphertextHex))
+            let digest = sha256Hex(ciphertext)
+            XCTAssertEqual(
+                digest,
+                try string(vector, "expected_ciphertext_sha256"),
+                "\(vectorName) ciphertext digest"
+            )
+            XCTAssertTrue(
+                observedDigests.insert(digest).inserted,
+                "fixture ciphertext digest must be unique: \(digest)"
+            )
+        }
+    }
+
+    func testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete() throws {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        )
+
+        try assertBfvOperationKeyComponentVectors(try object(fixture, "operation_vectors"))
+    }
+
     func testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector() throws {
         let fixtureURL = irohaSwiftPackageRootURL()
             .appendingPathComponent("Fixtures/js_email_identifier_request.json")
@@ -2780,6 +2926,162 @@ final class ToriiClientTests: XCTestCase {
 
     private func hexString(_ data: Data) -> String {
         data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02X", $0) }.joined()
+    }
+
+    private func identifierReceiptPolicy(
+        fromFixture policy: [String: Any]
+    ) throws -> ToriiIdentifierPolicySummary {
+        ToriiIdentifierPolicySummary(
+            policyId: try string(policy, "policy_id"),
+            owner: try string(policy, "owner"),
+            active: try bool(policy, "active"),
+            normalization: .phoneE164,
+            resolverPublicKey: try string(policy, "resolver_public_key"),
+            backend: try string(policy, "backend"),
+            inputEncryption: policy["input_encryption"] as? String,
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: nil,
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+    }
+
+    private func identifierReceipt(
+        fromFixture receipt: [String: Any]
+    ) throws -> ToriiIdentifierResolutionReceipt {
+        let data = try JSONSerialization.data(withJSONObject: receipt)
+        return try JSONDecoder().decode(ToriiIdentifierResolutionReceipt.self, from: data)
+    }
+
+    private func identifierReceiptAttestation(
+        fromFixture attestation: [String: Any]
+    ) throws -> ToriiIdentifierReceiptAttestation {
+        let data = try JSONSerialization.data(withJSONObject: attestation)
+        return try JSONDecoder().decode(ToriiIdentifierReceiptAttestation.self, from: data)
+    }
+
+    private func bfvPolicy(fromFixture policy: [String: Any]) throws -> ToriiIdentifierPolicySummary {
+        ToriiIdentifierPolicySummary(
+            policyId: try string(policy, "policy_id"),
+            owner: try string(policy, "owner"),
+            active: try bool(policy, "active"),
+            normalization: .exact,
+            resolverPublicKey: try string(policy, "resolver_public_key"),
+            backend: try string(policy, "backend"),
+            inputEncryption: try string(policy, "input_encryption"),
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: try bfvParameters(
+                fromFixture: object(policy, "input_encryption_public_parameters_decoded")
+            ),
+            ramFheProfile: nil,
+            proofVerifier: nil,
+            note: nil
+        )
+    }
+
+    private func bfvParameters(fromFixture params: [String: Any]) throws -> ToriiIdentifierBfvPublicParameters {
+        let rawParameters = try object(params, "parameters")
+        let rawPublicKey = try object(params, "public_key")
+        return ToriiIdentifierBfvPublicParameters(
+            parameters: ToriiIdentifierBfvParameters(
+                polynomialDegree: UInt32(try int(rawParameters, "polynomial_degree")),
+                plaintextModulus: UInt64(try int(rawParameters, "plaintext_modulus")),
+                ciphertextModulus: UInt64(try int(rawParameters, "ciphertext_modulus")),
+                decompositionBaseLog: UInt8(try int(rawParameters, "decomposition_base_log"))
+            ),
+            publicKey: ToriiIdentifierBfvPublicKey(
+                b: try uint64Array(rawPublicKey, "b"),
+                a: try uint64Array(rawPublicKey, "a")
+            ),
+            maxInputBytes: UInt16(try int(params, "max_input_bytes"))
+        )
+    }
+
+    private func object(_ root: [String: Any], _ key: String) throws -> [String: Any] {
+        guard let value = root[key] as? [String: Any] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be an object"])
+        }
+        return value
+    }
+
+    private func objectArray(_ root: [String: Any], _ key: String) throws -> [[String: Any]] {
+        guard let value = root[key] as? [[String: Any]] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be an object array"])
+        }
+        return value
+    }
+
+    private func string(_ root: [String: Any], _ key: String) throws -> String {
+        guard let value = root[key] as? String else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a string"])
+        }
+        return value
+    }
+
+    private func assertBfvOperationKeyComponentVectors(_ operationVectors: [String: Any]) throws {
+        XCTAssertEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1")
+        let publicParameters = try object(operationVectors, "public_parameters")
+        let publicDegree = try int(publicParameters, "polynomial_degree")
+        let evaluationKey = try object(operationVectors, "evaluation_key_bundle")
+        XCTAssertEqual(try int(evaluationKey, "decomposition_base_log"), try int(publicParameters, "decomposition_base_log"))
+        XCTAssertEqual(try int(evaluationKey, "decomposition_digit_count"), try int(evaluationKey, "relinearization_entry_count"))
+        let entries = try objectArray(evaluationKey, "relinearization_entries")
+        XCTAssertEqual(entries.count, try int(evaluationKey, "relinearization_entry_count"))
+        var componentDigests = Set<String>()
+        for (index, entry) in entries.enumerated() {
+            XCTAssertEqual(try int(entry, "index"), index)
+            XCTAssertEqual(try int(entry, "coefficient_count"), publicDegree)
+            assertBfvComponentDigest("relinearization entry \(index) b", try string(entry, "b_sha256"), seen: &componentDigests)
+            assertBfvComponentDigest("relinearization entry \(index) a", try string(entry, "a_sha256"), seen: &componentDigests)
+        }
+        let rotationKeys = try objectArray(operationVectors, "rotation_keys")
+        XCTAssertEqual(rotationKeys.count, try int(evaluationKey, "rotation_key_count"))
+        for key in rotationKeys {
+            let components = try object(key, "zero_refresh_components")
+            let steps = try int(key, "rotation_steps")
+            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
+            assertBfvComponentDigest("rotation key \(steps) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+            assertBfvComponentDigest("rotation key \(steps) c1", try string(components, "c1_sha256"), seen: &componentDigests)
+        }
+        let bootstrap = try object(operationVectors, "bootstrap_key")
+        XCTAssertEqual(try string(bootstrap, "key_id"), try string(evaluationKey, "bootstrap_key_id"))
+        let bootstrapComponents = try object(bootstrap, "zero_refresh_components")
+        XCTAssertEqual(try int(bootstrapComponents, "coefficient_count"), publicDegree)
+        assertBfvComponentDigest("bootstrap c0", try string(bootstrapComponents, "c0_sha256"), seen: &componentDigests)
+        assertBfvComponentDigest("bootstrap c1", try string(bootstrapComponents, "c1_sha256"), seen: &componentDigests)
+    }
+
+    private func assertBfvComponentDigest(_ label: String, _ value: String, seen: inout Set<String>) {
+        XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
+        XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789ABCDEF").inverted), "\(label) must be uppercase hex")
+        XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
+        XCTAssertTrue(seen.insert(value).inserted, "\(label) must be unique")
+    }
+
+    private func bool(_ root: [String: Any], _ key: String) throws -> Bool {
+        guard let value = root[key] as? Bool else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a bool"])
+        }
+        return value
+    }
+
+    private func int(_ root: [String: Any], _ key: String) throws -> Int {
+        guard let value = root[key] as? NSNumber else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a number"])
+        }
+        return value.intValue
+    }
+
+    private func uint64Array(_ root: [String: Any], _ key: String) throws -> [UInt64] {
+        guard let values = root[key] as? [NSNumber] else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(key) must be a number array"])
+        }
+        return values.map { UInt64(truncating: $0) }
     }
 
     private func sccpSampleProofHex(messageId: String = String(repeating: "11", count: 32),

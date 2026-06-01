@@ -2523,7 +2523,8 @@ mod measured_bytes_impls {
             GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
             GovernanceReferendumStatus, GovernanceSlashEntry, GovernanceSlashLedger,
             GovernanceStage, GovernanceStageApproval, GovernanceStageApprovals,
-            GovernanceStageFailure, GovernanceStageRecord, ZkAssetState, ZkAssetVerifierBinding,
+            GovernanceStageFailure, GovernanceStageRecord, ZkAceIdentityRecord,
+            ZkAceIdentityStatus, ZkAssetState, ZkAssetVerifierBinding,
         },
     };
 
@@ -3407,6 +3408,26 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for ZkAceIdentityStatus {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ZkAceIdentityStatus>()
+        }
+    }
+
+    impl MeasuredBytes for ZkAceIdentityRecord {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ZkAceIdentityRecord>();
+            total = total.saturating_add(self.policy_hash.measured_bytes_extra());
+            total = total.saturating_add(self.allowed_accounts.measured_bytes_extra());
+            total = total.saturating_add(self.action_class.measured_bytes_extra());
+            total = total.saturating_add(self.domain_tag.measured_bytes_extra());
+            total = total.saturating_add(self.verifier.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.successor.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for FrontierCheckpoint {
         fn measured_bytes(&self) -> usize {
             size_of::<FrontierCheckpoint>()
@@ -3427,6 +3448,8 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.vk_shield.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_pool_id.measured_bytes_extra());
             total = total.saturating_add(self.asset_hidden_asset_set_root.measured_bytes_extra());
+            total = total.saturating_add(self.zk_ace_identities.measured_bytes_extra());
+            total = total.saturating_add(self.zk_ace_replay_nullifiers.measured_bytes_extra());
             total = total.saturating_add(self.frontier_checkpoints.measured_bytes_extra());
             total = total.saturating_add(self.tree.measured_bytes_extra());
             total

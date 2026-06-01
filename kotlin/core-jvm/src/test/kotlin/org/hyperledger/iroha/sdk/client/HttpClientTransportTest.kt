@@ -2,6 +2,9 @@ package org.hyperledger.iroha.sdk.client
 
 import java.net.URI
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Paths
+import java.security.MessageDigest
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -124,6 +127,133 @@ class HttpClientTransportTest {
                 IdentifierReceiptAttestation("signed", "abc", null, null),
             ).verifyAttestation(policy)
         }
+    }
+
+    @Test
+    fun identifierReceiptVerifierMatchesSharedReceiptVectors() {
+        val fixture = loadSharedReceiptFixture()
+        assertEquals("identifier-receipt-attestation-v1", fixture["vector_set"])
+        val policy = identifierPolicyFromReceiptFixture(obj(fixture, "policy"))
+        val receipt = identifierReceiptFromFixture(obj(fixture, "receipt"))
+
+        assertEquals(
+            string(fixture, "canonical_payload_sha256"),
+            sha256Hex(IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload)),
+        )
+        assertTrue(receipt.verifyAttestation(policy))
+
+        for (vector in listOfMaps(fixture, "attestation_vectors")) {
+            val name = string(vector, "name")
+            val attestation = identifierAttestationFromFixture(obj(vector, "attestation"))
+            val encoded = IdentifierReceiptCanonicalEncoder.encodeAttestation(attestation)
+            assertEquals(
+                long(vector, "expected_attestation_bytes").toInt(),
+                encoded.size,
+                "$name attestation byte length",
+            )
+            assertEquals(
+                string(vector, "expected_attestation_sha256"),
+                sha256Hex(encoded),
+                "$name attestation digest",
+            )
+            val decoded = IdentifierReceiptCanonicalEncoder.decodeAttestation(encoded)
+            assertEquals(attestation.kind, decoded.kind, "$name attestation kind")
+            when (attestation.kind) {
+                "signed" -> assertEquals(
+                    attestation.signature?.lowercase(),
+                    decoded.signature,
+                    "$name signature roundtrip",
+                )
+                "proof" -> {
+                    assertEquals(attestation.proofBackend, decoded.proofBackend, "$name proof backend")
+                    assertEquals(attestation.proofB64, decoded.proofB64, "$name proof payload")
+                    assertFailsWith<IllegalArgumentException>("$name proof verifier gate") {
+                        IdentifierResolutionReceipt(receipt.payload, attestation).verifyAttestation(policy)
+                    }
+                }
+                else -> error("Unhandled attestation kind ${attestation.kind}")
+            }
+        }
+
+        for (negative in listOfMaps(fixture, "negative_cases")) {
+            val mutation = string(negative, "mutation")
+            val mutatedPolicy = when (mutation) {
+                "policy.resolver_public_key" -> identifierPolicyFromReceiptFixture(
+                    obj(fixture, "policy"),
+                    resolverPublicKeyOverride = string(negative, "value"),
+                )
+                "policy.policy_id" -> identifierPolicyFromReceiptFixture(
+                    obj(fixture, "policy"),
+                    policyIdOverride = string(negative, "value"),
+                )
+                else -> policy
+            }
+            val mutatedReceipt = when (mutation) {
+                "receipt.payload.execution.output_ciphertext_hash" -> identifierReceiptFromFixture(
+                    obj(fixture, "receipt"),
+                    outputCiphertextHashOverride = string(negative, "value"),
+                )
+                "receipt.attestation.signature" -> identifierReceiptFromFixture(
+                    obj(fixture, "receipt"),
+                    signatureOverride = string(negative, "value"),
+                )
+                "receipt.attestation" -> identifierReceiptFromFixture(
+                    obj(fixture, "receipt"),
+                    attestationOverride = obj(negative, "value"),
+                )
+                else -> receipt
+            }
+
+            if (negative["expected_error_contains"] is String) {
+                assertFailsWith<IllegalArgumentException>(string(negative, "name")) {
+                    mutatedReceipt.verifyAttestation(mutatedPolicy)
+                }
+            } else {
+                assertEquals(
+                    negative["expected_result"],
+                    mutatedReceipt.verifyAttestation(mutatedPolicy),
+                    string(negative, "name"),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors() {
+        val fixture = loadSharedBfvFixture()
+        assertEquals("soracloud-bfv-identifier-envelope-v1", fixture["vector_set"])
+        assertBfvOperationKeyComponentVectors(obj(fixture, "operation_vectors"))
+        val policy = bfvPolicyFromFixture(obj(fixture, "policy"))
+        val vectors = listOfMaps(fixture, "vectors")
+        val observedDigests = mutableSetOf<String>()
+
+        for (vector in vectors) {
+            val ciphertextHex = policy.encryptInput(
+                string(vector, "input_utf8"),
+                hexToBytes(string(vector, "seed_hex")),
+            )
+            assertEquals(
+                long(vector, "expected_ciphertext_bytes").toInt(),
+                ciphertextHex.length / 2,
+                "${string(vector, "name")}: ciphertext byte length",
+            )
+            val digest = sha256Hex(hexToBytes(ciphertextHex))
+            assertEquals(
+                string(vector, "expected_ciphertext_sha256"),
+                digest,
+                "${string(vector, "name")}: ciphertext digest",
+            )
+            observedDigests.add(digest)
+        }
+
+        assertEquals(vectors.size, observedDigests.size, "fixture ciphertext digests must be unique")
+    }
+
+    @Test
+    fun sharedSoracloudBfvKeyBundleComponentVectorsAreComplete() {
+        val fixture = loadSharedBfvFixture()
+
+        assertBfvOperationKeyComponentVectors(obj(fixture, "operation_vectors"))
     }
 
     @Test
@@ -1934,6 +2064,218 @@ class HttpClientTransportTest {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02X".format(it.toInt() and 0xFF) }
+
+    private fun sha256Hex(bytes: ByteArray): String =
+        hex(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+    private fun assertBfvOperationKeyComponentVectors(operationVectors: Map<String, Any?>) {
+        assertEquals("soracloud-bfv-operation-v1", operationVectors["vector_set"])
+        val publicParameters = obj(operationVectors, "public_parameters")
+        val publicDegree = long(publicParameters, "polynomial_degree")
+        val evaluationKey = obj(operationVectors, "evaluation_key_bundle")
+        assertEquals(long(publicParameters, "decomposition_base_log"), long(evaluationKey, "decomposition_base_log"))
+        assertEquals(long(evaluationKey, "relinearization_entry_count"), long(evaluationKey, "decomposition_digit_count"))
+        val relinearizationEntries = listOfMaps(evaluationKey, "relinearization_entries")
+        assertEquals(long(evaluationKey, "relinearization_entry_count").toInt(), relinearizationEntries.size)
+        val componentDigests = mutableSetOf<String>()
+        for ((index, entry) in relinearizationEntries.withIndex()) {
+            assertEquals(index.toLong(), long(entry, "index"), "relinearization entry index")
+            assertEquals(publicDegree, long(entry, "coefficient_count"), "relinearization entry coefficient count")
+            assertBfvComponentDigest("relinearization entry $index b", string(entry, "b_sha256"), componentDigests)
+            assertBfvComponentDigest("relinearization entry $index a", string(entry, "a_sha256"), componentDigests)
+        }
+        val rotationKeys = listOfMaps(operationVectors, "rotation_keys")
+        assertEquals(long(evaluationKey, "rotation_key_count").toInt(), rotationKeys.size)
+        for (key in rotationKeys) {
+            val components = obj(key, "zero_refresh_components")
+            val steps = long(key, "rotation_steps")
+            assertEquals(publicDegree, long(components, "coefficient_count"), "rotation key $steps coefficient count")
+            assertBfvComponentDigest("rotation key $steps c0", string(components, "c0_sha256"), componentDigests)
+            assertBfvComponentDigest("rotation key $steps c1", string(components, "c1_sha256"), componentDigests)
+        }
+        val bootstrap = obj(operationVectors, "bootstrap_key")
+        assertEquals(string(evaluationKey, "bootstrap_key_id"), string(bootstrap, "key_id"))
+        val bootstrapComponents = obj(bootstrap, "zero_refresh_components")
+        assertEquals(publicDegree, long(bootstrapComponents, "coefficient_count"), "bootstrap coefficient count")
+        assertBfvComponentDigest("bootstrap c0", string(bootstrapComponents, "c0_sha256"), componentDigests)
+        assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests)
+    }
+
+    private fun assertBfvComponentDigest(label: String, value: String, seen: MutableSet<String>) {
+        assertTrue(Regex("[0-9A-F]{64}").matches(value), "$label must be canonical uppercase SHA-256")
+        assertFalse(value == "0".repeat(64), "$label must not be zero")
+        assertTrue(seen.add(value), "$label must be unique")
+    }
+
+    private fun loadSharedFixture(relativePath: String): Map<String, Any?> {
+        var cursor = Paths.get("").toAbsolutePath()
+        while (true) {
+            val candidate = cursor.resolve(relativePath)
+            if (Files.exists(candidate)) {
+                @Suppress("UNCHECKED_CAST")
+                return JsonParser.parse(String(Files.readAllBytes(candidate), StandardCharsets.UTF_8)) as Map<String, Any?>
+            }
+            cursor = cursor.parent ?: break
+        }
+        error("$relativePath was not found")
+    }
+
+    private fun loadSharedBfvFixture(): Map<String, Any?> =
+        loadSharedFixture("fixtures/soracloud/bfv_identifier_vectors_v1.json")
+
+    private fun loadSharedReceiptFixture(): Map<String, Any?> =
+        loadSharedFixture("fixtures/soracloud/identifier_receipt_vectors_v1.json")
+
+    private fun identifierPolicyFromReceiptFixture(
+        policy: Map<String, Any?>,
+        policyIdOverride: String? = null,
+        resolverPublicKeyOverride: String? = null,
+    ): IdentifierPolicySummary =
+        IdentifierPolicySummary(
+            policyId = policyIdOverride ?: string(policy, "policy_id"),
+            owner = string(policy, "owner"),
+            active = policy["active"] == true,
+            normalization = IdentifierNormalization.PHONE_E164,
+            resolverPublicKey = resolverPublicKeyOverride ?: string(policy, "resolver_public_key"),
+            backend = string(policy, "backend"),
+            inputEncryption = policy["input_encryption"] as? String,
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = null,
+            note = null,
+        )
+
+    private fun identifierReceiptFromFixture(
+        receipt: Map<String, Any?>,
+        outputCiphertextHashOverride: String? = null,
+        signatureOverride: String? = null,
+        attestationOverride: Map<String, Any?>? = null,
+    ): IdentifierResolutionReceipt =
+        IdentifierResolutionReceipt(
+            identifierPayloadFromFixture(obj(receipt, "payload"), outputCiphertextHashOverride),
+            identifierAttestationFromFixture(
+                attestationOverride ?: obj(receipt, "attestation"),
+                signatureOverride,
+            ),
+        )
+
+    private fun identifierPayloadFromFixture(
+        payload: Map<String, Any?>,
+        outputCiphertextHashOverride: String? = null,
+    ): IdentifierResolutionPayload =
+        IdentifierResolutionPayload(
+            policyId = string(payload, "policy_id"),
+            execution = identifierExecutionFromFixture(obj(payload, "execution"), outputCiphertextHashOverride),
+            opening = outputOpeningFromFixture(obj(payload, "opening")),
+            opaqueId = string(payload, "opaque_id"),
+            receiptHash = string(payload, "receipt_hash"),
+            uaid = string(payload, "uaid"),
+            accountId = string(payload, "account_id"),
+        )
+
+    private fun identifierExecutionFromFixture(
+        execution: Map<String, Any?>,
+        outputCiphertextHashOverride: String? = null,
+    ): IdentifierResolutionExecutionPayload =
+        IdentifierResolutionExecutionPayload(
+            programId = string(execution, "program_id"),
+            programDigest = string(execution, "program_digest"),
+            backend = string(execution, "backend"),
+            verificationMode = string(execution, "verification_mode"),
+            inputCiphertextHash = string(execution, "input_ciphertext_hash"),
+            outputCiphertextHash = outputCiphertextHashOverride ?: string(execution, "output_ciphertext_hash"),
+            parameterDigest = string(execution, "parameter_digest"),
+            evaluationKeyDigest = string(execution, "evaluation_key_digest"),
+            outputHash = string(execution, "output_hash"),
+            associatedDataHash = string(execution, "associated_data_hash"),
+            executedAtMs = long(execution, "executed_at_ms"),
+            expiresAtMs = optionalLong(execution, "expires_at_ms"),
+        )
+
+    private fun outputOpeningFromFixture(opening: Map<String, Any?>): RamLfeOutputOpening {
+        val payload = obj(opening, "payload")
+        return RamLfeOutputOpening(
+            RamLfeOutputOpeningPayload(
+                programId = string(payload, "program_id"),
+                inputCiphertextHash = string(payload, "input_ciphertext_hash"),
+                outputCiphertextHash = string(payload, "output_ciphertext_hash"),
+                parameterDigest = string(payload, "parameter_digest"),
+                evaluationKeyDigest = string(payload, "evaluation_key_digest"),
+                openedOutputHash = string(payload, "opened_output_hash"),
+                openedAtMs = long(payload, "opened_at_ms"),
+                expiresAtMs = optionalLong(payload, "expires_at_ms"),
+            ),
+            signature = string(opening, "signature"),
+        )
+    }
+
+    private fun identifierAttestationFromFixture(
+        attestation: Map<String, Any?>,
+        signatureOverride: String? = null,
+    ): IdentifierReceiptAttestation =
+        IdentifierReceiptAttestation(
+            kind = string(attestation, "kind"),
+            signature = signatureOverride ?: attestation["signature"] as? String,
+            proofBackend = attestation["proof_backend"] as? String,
+            proofB64 = attestation["proof_b64"] as? String,
+        )
+
+    private fun bfvPolicyFromFixture(policy: Map<String, Any?>): IdentifierPolicySummary =
+        IdentifierPolicySummary(
+            policyId = string(policy, "policy_id"),
+            owner = string(policy, "owner"),
+            active = policy["active"] == true,
+            normalization = IdentifierNormalization.EXACT,
+            resolverPublicKey = string(policy, "resolver_public_key"),
+            backend = string(policy, "backend"),
+            inputEncryption = string(policy, "input_encryption"),
+            inputEncryptionPublicParameters = null,
+            inputEncryptionPublicParametersDecoded = bfvParametersFromFixture(
+                obj(policy, "input_encryption_public_parameters_decoded"),
+            ),
+            note = null,
+        )
+
+    private fun bfvParametersFromFixture(params: Map<String, Any?>): IdentifierBfvPublicParameters {
+        val parameters = obj(params, "parameters")
+        val publicKey = obj(params, "public_key")
+        return IdentifierBfvPublicParameters(
+            IdentifierBfvPublicParameters.Parameters(
+                long(parameters, "polynomial_degree"),
+                long(parameters, "plaintext_modulus"),
+                long(parameters, "ciphertext_modulus"),
+                long(parameters, "decomposition_base_log").toInt(),
+            ),
+            IdentifierBfvPublicParameters.PublicKey(
+                longList(publicKey, "b"),
+                longList(publicKey, "a"),
+            ),
+            long(params, "max_input_bytes").toInt(),
+        )
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun obj(root: Map<String, Any?>, key: String): Map<String, Any?> =
+        root[key] as? Map<String, Any?>
+            ?: error("$key must be an object")
+
+    @Suppress("UNCHECKED_CAST")
+    private fun listOfMaps(root: Map<String, Any?>, key: String): List<Map<String, Any?>> =
+        root[key] as? List<Map<String, Any?>>
+            ?: error("$key must be a list of objects")
+
+    private fun string(root: Map<String, Any?>, key: String): String =
+        root[key] as? String ?: error("$key must be a string")
+
+    private fun long(root: Map<String, Any?>, key: String): Long =
+        (root[key] as? Number)?.toLong() ?: error("$key must be a number")
+
+    private fun optionalLong(root: Map<String, Any?>, key: String): Long? =
+        (root[key] as? Number)?.toLong()
+
+    private fun longList(root: Map<String, Any?>, key: String): List<Long> =
+        (root[key] as? List<*> ?: error("$key must be a list")).mapIndexed { index, value ->
+            (value as? Number)?.toLong() ?: error("$key[$index] must be a number")
+        }
 
     private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =
         IdentifierPolicySummary(

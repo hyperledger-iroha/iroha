@@ -411,7 +411,7 @@ private func sortedJSONData(_ value: [String: Any]) throws -> Data {
 
 private func parseKeyCertificate(_ value: [String: Any]) throws -> OfflineNoteKeyCertificate {
     try OfflineNoteKeyCertificate(
-        version: UInt16(try requiredUInt64(value, "version")),
+        version: try requiredKeyCertificateVersion(value),
         platform: try requiredString(value, "platform"),
         keyId: try requiredString(value, "key_id"),
         deviceId: try requiredString(value, "device_id"),
@@ -420,7 +420,7 @@ private func parseKeyCertificate(_ value: [String: Any]) throws -> OfflineNoteKe
         assertionScheme: try requiredString(value, "assertion_scheme"),
         assertionKeyAlgorithm: try requiredString(value, "assertion_key_algorithm"),
         assertionPublicKey: try requiredBase64(value, "assertion_public_key"),
-        assertionUsageCountLimit: try optionalUInt64(value["assertion_usage_count_limit"]).map { UInt32($0) },
+        assertionUsageCountLimit: try optionalAssertionUsageCountLimit(value["assertion_usage_count_limit"]),
         oneUse: try requiredBool(value, "one_use"),
         issuerSignature: try requiredBase64(value, "issuer_signature_base64")
     )
@@ -468,6 +468,24 @@ private func requiredUInt64(_ value: [String: Any], _ key: String) throws -> UIn
         throw ToriiOfflineNoteIssuerClientError.invalidJSON(key)
     }
     return number
+}
+
+private func requiredKeyCertificateVersion(_ value: [String: Any]) throws -> UInt16 {
+    let version = try requiredUInt64(value, "version")
+    guard version == UInt64(OfflineNoteConstants.keyCertificateVersion) else {
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("version")
+    }
+    return OfflineNoteConstants.keyCertificateVersion
+}
+
+private func optionalAssertionUsageCountLimit(_ value: Any?) throws -> UInt32? {
+    guard let limit = try optionalUInt64(value) else {
+        return nil
+    }
+    guard limit == 1 else {
+        throw ToriiOfflineNoteIssuerClientError.invalidJSON("assertion_usage_count_limit")
+    }
+    return 1
 }
 
 private func optionalUInt64(_ value: Any?) throws -> UInt64? {

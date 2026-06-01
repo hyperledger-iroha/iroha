@@ -234,7 +234,7 @@ const MAX_PROOF_LEN: usize = 8 * 1024 * 1024; // 8 MiB
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Upper bound for parsed public instance columns. This covers current IVM
 /// proofs, Offline recursive proofs, the 30-column Kagemusha folded token
-/// statement, and the 35-column Kagemusha recursive aggregation proof
+/// statement, and the 43-column Kagemusha recursive aggregation proof
 /// statement while keeping malformed envelopes bounded.
 const MAX_INST_COLS: usize = 64;
 
@@ -1453,7 +1453,7 @@ pub const OFFLINE_NOTE_MAX_OUTPUT_AMOUNTS: usize = 2;
 /// Number of public instance columns exposed by Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_INSTANCE_COLUMNS: usize = 30;
 /// Number of public instance columns exposed by Kagemusha recursive aggregation proofs.
-pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS: usize = 35;
+pub const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS: usize = 43;
 /// Number of private boolean witness bits for `hop_count - 1` (0..=63).
 pub const KAGEMUSHA_FOLDED_HOP_COUNT_BITS: usize = 6;
 /// Number of private boolean witness bits for recursive aggregation `hop_count - 1` (0..=63).
@@ -1466,9 +1466,12 @@ const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX: u
 const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX: usize = 20;
 const KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_BASE_START_INDEX: usize = 24;
 const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_WITNESS_BATCH_START_INDEX: usize = 28;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX: usize = 32;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX: usize = 33;
-const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX: usize = 34;
+#[cfg(test)]
+const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX: usize = 32;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX: usize = 36;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX: usize = 40;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX: usize = 41;
+const KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX: usize = 42;
 const KAGEMUSHA_FOLDED_ROOT_LIMBS: usize = 4;
 const KAGEMUSHA_FOLDED_AGGREGATION_MODE_INDEX: usize = 4;
 const KAGEMUSHA_FOLDED_HOP_COUNT_INDEX: usize = 5;
@@ -1667,9 +1670,10 @@ impl KagemushaFoldedInstanceValues {
 /// The first four limbs bind the canonical recursive-proof public-input hash.
 /// The remaining columns expose the recursive evidence digest, aggregation
 /// transcript digest, Pallas parameter fingerprint, fixed-window schedule and
-/// shared-table commitments, native verifier-witness batch digest, verifier
-/// opening length, witness count, and hop count that the proof envelope must
-/// match.
+/// shared-table commitments, native verifier-witness batch digest, recursive
+/// spend proof-chain digest, recursive verifier scalar-projection digest,
+/// verifier opening length, witness count, and hop count that the proof
+/// envelope must match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KagemushaRecursiveAggregationProofInstanceValues {
     /// Public instance values encoded as single-row Pasta field columns.
@@ -2481,6 +2485,9 @@ pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(
         bytes_to_u64_limbs_le(&public_inputs.fixed_window_shared_table_manifest_digest);
     let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
     let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
+    let proof_chain_limbs = bytes_to_u64_limbs_le(&public_inputs.recursive_proof_chain_digest);
+    let scalar_projection_limbs =
+        bytes_to_u64_limbs_le(&public_inputs.recursive_verifier_scalar_projection_digest);
 
     Ok(KagemushaRecursiveAggregationProofInstanceValues {
         public_values: [
@@ -2516,6 +2523,14 @@ pub fn kagemusha_recursive_aggregation_proof_public_input_instance_values(
             batch_limbs[1],
             batch_limbs[2],
             batch_limbs[3],
+            proof_chain_limbs[0],
+            proof_chain_limbs[1],
+            proof_chain_limbs[2],
+            proof_chain_limbs[3],
+            scalar_projection_limbs[0],
+            scalar_projection_limbs[1],
+            scalar_projection_limbs[2],
+            scalar_projection_limbs[3],
             u64::from(public_inputs.verifier_opening_len),
             u64::from(public_inputs.verifier_witness_count),
             u64::from(public_inputs.hop_count),
@@ -2534,6 +2549,23 @@ pub fn kagemusha_recursive_aggregation_proof_bundle_instance_values(
 ) -> Result<KagemushaRecursiveAggregationProofInstanceValues, String> {
     bundle
         .validate_evidence_binding()
+        .map_err(|err| err.to_string())?;
+    kagemusha_recursive_aggregation_proof_public_input_instance_values(
+        &bundle.recursive_proof.public_inputs,
+    )
+}
+
+/// Build the public instance values expected for a recursive Kagemusha spend bundle.
+///
+/// # Errors
+///
+/// Returns an error when the bundle is not canonically bound to its accumulator
+/// or when the instance layout cannot be built.
+pub fn kagemusha_recursive_spend_bundle_instance_values(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+) -> Result<KagemushaRecursiveAggregationProofInstanceValues, String> {
+    bundle
+        .validate_public_input_binding()
         .map_err(|err| err.to_string())?;
     kagemusha_recursive_aggregation_proof_public_input_instance_values(
         &bundle.recursive_proof.public_inputs,
@@ -2619,7 +2651,14 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1
         || backend
             .strip_prefix("stark/fri/")
-            .is_some_and(|profile| !profile.is_empty())
+            .is_some_and(is_stark_fri_v1_profile)
+}
+
+fn is_stark_fri_v1_profile(profile: &str) -> bool {
+    !profile.is_empty()
+        && profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not
@@ -2630,6 +2669,7 @@ pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
     let backend = backend.as_str();
     has_trusted_setup_backend_segment(backend)
+        || has_trusted_setup_backend_compact_label(backend)
         || backend == "groth16"
         || backend.starts_with("groth16/")
         || backend == "kzg"
@@ -2654,13 +2694,18 @@ pub fn is_trusted_setup_backend_label(backend: &str) -> bool {
 
 fn has_trusted_setup_backend_segment(backend: &str) -> bool {
     backend
-        .split(|ch: char| ch == '/' || ch == ':' || ch.is_ascii_whitespace())
-        .any(|segment| {
-            matches!(
-                segment,
-                "groth16" | "kzg" | "bn254" | "bn256" | "bls12" | "bls12_381" | "bls12-381"
-            )
-        })
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|segment| matches!(segment, "groth16" | "kzg" | "bn254" | "bn256" | "bls12"))
+}
+
+fn has_trusted_setup_backend_compact_label(backend: &str) -> bool {
+    let compact = backend
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    ["groth16", "kzg", "bn254", "bn256", "bls12381", "bls12"]
+        .iter()
+        .any(|token| compact.contains(token))
 }
 
 /// Returns `true` for developer-only backend labels that must not enter
@@ -2669,7 +2714,14 @@ fn has_trusted_setup_backend_segment(backend: &str) -> bool {
 #[must_use]
 pub fn is_developer_only_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
-    backend.contains("debug") || backend.contains("mock")
+    if backend.contains("debug") || backend.contains("mock") {
+        return true;
+    }
+    let compact = backend
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+    compact.contains("debug") || compact.contains("mock")
 }
 
 /// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
@@ -3588,6 +3640,55 @@ pub(crate) fn prove_kagemusha_recursive_aggregation_evidence(
     Ok(bundle)
 }
 
+/// Prove a recursive Kagemusha spend accumulator with transparent Halo2 IPA.
+///
+/// This is the production D2D spend-state proof surface: callers supply the
+/// constant-size accumulator, not the historical record bundle of prior hops.
+///
+/// # Errors
+///
+/// Returns an error if the accumulator is non-canonical, the verifier/proving
+/// key is incompatible, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) fn prove_kagemusha_recursive_spend_accumulator(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    accumulator: iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+            &accumulator,
+        )
+        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(&public_inputs)?;
+    let instance_values =
+        kagemusha_recursive_aggregation_proof_public_input_instance_values(&public_inputs)?;
+    let proof = prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
+        circuit_id,
+        vk_box,
+        instance_values,
+        proving_key_bytes,
+    )?;
+    let public_inputs_hash = public_inputs
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to hash Kagemusha recursive spend public inputs: {err}"))?;
+    let recursive_proof = iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, circuit_id),
+        public_inputs,
+        public_inputs_hash,
+        proof,
+    };
+    let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        accumulator,
+        recursive_proof,
+    };
+    bundle
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    Ok(bundle)
+}
+
 /// Prove compact Kagemusha folded public inputs with the real Halo2 IPA circuit.
 ///
 /// # Errors
@@ -4339,8 +4440,9 @@ pub use pasta_tiny::PallasIpaBatchVerifierPreflight;
 /// widths currently used by the transparent no-trusted-setup Halo2 IPA
 /// corridor, validates every native witness transcript/reduction/accumulator
 /// relation with the optimized deterministic Pallas MSM backend, and returns a
-/// streaming Poseidon2 domain-separated digest that can be bound into reserved
-/// recursive aggregation evidence. Batch length is capped to the Kagemusha
+/// streaming Poseidon2 domain-separated digest with field-labelled length
+/// encodings that can be bound into reserved recursive aggregation evidence.
+/// Batch length is capped to the Kagemusha
 /// compact-token hop corridor before per-witness validation starts.
 ///
 /// # Errors
@@ -4828,8 +4930,15 @@ fn kagemusha_recursive_poseidon_update_len(
     label: &str,
     value: usize,
 ) -> Result<(), String> {
+    if label.is_empty() {
+        return Err("Kagemusha recursive Poseidon length label must be non-empty".to_owned());
+    }
+    let label_len = u64::try_from(label.len())
+        .map_err(|_| "Kagemusha recursive Poseidon length label does not fit in u64".to_owned())?;
     let value = u64::try_from(value)
         .map_err(|_| format!("Kagemusha recursive {label} length does not fit in u64"))?;
+    kagemusha_recursive_poseidon_update_u64(hasher, label_len);
+    hasher.update(label.as_bytes());
     kagemusha_recursive_poseidon_update_u64(hasher, value);
     Ok(())
 }
@@ -4891,13 +5000,36 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
         ));
     }
     let mut preflight = kagemusha_pallas_ipa_batch_verifier_preflight(params, witnesses)?;
+    preflight.aggregate_digest =
+        kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(preflight, hop_proof_hashes)?
+            .aggregate_digest;
+    Ok(preflight)
+}
 
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
+    mut preflight: PallasIpaBatchVerifierPreflight,
+    hop_proof_hashes: &[iroha_crypto::Hash],
+) -> Result<PallasIpaBatchVerifierPreflight, String> {
+    if preflight.proof_count != hop_proof_hashes.len() {
+        return Err(format!(
+            "Kagemusha Pallas IPA hop-bound batch preflight proof/hash count mismatch: expected {}, found {}",
+            preflight.proof_count,
+            hop_proof_hashes.len()
+        ));
+    }
+    let opening_len = usize::try_from(preflight.opening_len).map_err(|_| {
+        "Kagemusha Pallas IPA hop-bound batch preflight opening length does not fit usize"
+            .to_owned()
+    })?;
     let mut hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
         b"domain",
         b"iroha:kagemusha:pallas-ipa-hop-bound-batch:v1",
     )?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "opening length", opening_len)?;
+    kagemusha_recursive_poseidon_update_len(&mut hasher, "proof count", preflight.proof_count)?;
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
         b"profile",
@@ -4917,6 +5049,11 @@ pub fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
         &mut hasher,
         b"fixed-window-shared-table-manifest",
         &preflight.fixed_window_shared_table_manifest_digest,
+    )?;
+    kagemusha_recursive_poseidon_update_tagged_bytes(
+        &mut hasher,
+        b"fixed-window-table-base",
+        &preflight.fixed_window_table_base_digest,
     )?;
     kagemusha_recursive_poseidon_update_tagged_bytes(
         &mut hasher,
@@ -5184,7 +5321,7 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         witnesses,
         &hop_proof_hashes,
     )?;
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
         bundle,
         records,
         expected_witness_count,
@@ -5194,7 +5331,9 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         preflight.fixed_window_shared_table_manifest_digest,
         preflight.fixed_window_table_base_digest,
         preflight.aggregate_digest,
-    )
+    )?;
+    validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(&evidence, &preflight)?;
+    Ok(evidence)
 }
 
 /// Verify a serializable record-backed Kagemusha fold bundle and native Pallas IPA batch.
@@ -5288,7 +5427,7 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
             envelopes,
             &hop_proof_hashes,
         )?;
-    kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
+    let evidence = kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_records(
         bundle,
         records,
         expected_witness_count,
@@ -5298,7 +5437,9 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_bundle_with_record
         preflight.fixed_window_shared_table_manifest_digest,
         preflight.fixed_window_table_base_digest,
         preflight.aggregate_digest,
-    )
+    )?;
+    validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(&evidence, &preflight)?;
+    Ok(evidence)
 }
 
 /// Verify a serializable record-backed Kagemusha fold bundle and proof-derived Pallas openings.
@@ -5326,6 +5467,54 @@ pub fn kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_
         &records,
         envelopes,
     )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+    evidence: &iroha_data_model::offline::KagemushaRecursiveAggregationEvidence,
+    preflight: &PallasIpaBatchVerifierPreflight,
+) -> Result<(), String> {
+    if evidence.aggregation_statement.steps.len() != 1 {
+        return Ok(());
+    }
+    let public_inputs =
+        iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_from_evidence(
+            evidence,
+        )
+        .map_err(|err| err.to_string())?;
+    let instance_values =
+        kagemusha_recursive_aggregation_proof_public_input_instance_values(&public_inputs)?;
+    let semantic = pasta_tiny::KagemushaRecursiveAggregationSemantic {
+        public_values: instance_values.public_scalars(),
+        opening_len_selectors: instance_values.opening_len_selectors()?,
+        hop_count_minus_one_bits: instance_values.hop_count_minus_one_bits()?,
+        non_zero_public_field_inverses: instance_values.non_zero_public_field_inverses()?,
+    };
+
+    macro_rules! validate_len {
+        ($len:literal) => {
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                $len,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(&semantic, preflight)
+        };
+    }
+
+    match usize::try_from(preflight.opening_len)
+        .map_err(|_| "Kagemusha one-hop verifier preflight opening length overflow".to_owned())?
+    {
+        2 => validate_len!(2),
+        4 => validate_len!(4),
+        8 => validate_len!(8),
+        16 => validate_len!(16),
+        32 => validate_len!(32),
+        64 => validate_len!(64),
+        128 => validate_len!(128),
+        other => Err(format!(
+            "Kagemusha one-hop verifier preflight opening length {other} is unsupported"
+        )),
+    }
 }
 
 /// Verify a record-backed Kagemusha fold bundle, derive native Pallas batch evidence, and prove it.
@@ -5489,6 +5678,100 @@ pub fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_b
         vk_box,
         proving_key_bytes,
     )
+}
+
+/// Verify the first offline Kagemusha hop and create a spendable recursive state.
+///
+/// The input record bundle must contain exactly one checked hop. The returned
+/// D2D payload is constant-size with respect to later hop count.
+///
+/// # Errors
+///
+/// Returns an error when opening-envelope preflight, verifier-record
+/// enforcement, hop proof verification, accumulator construction, or recursive
+/// proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+            record_bundle,
+            &envelopes,
+        )?;
+    if evidence.aggregation_statement.steps.len() != 1 {
+        return Err(format!(
+            "Kagemusha recursive spend init requires exactly one hop (found {})",
+            evidence.aggregation_statement.steps.len()
+        ));
+    }
+    let accumulator =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+            &evidence,
+            &current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    prove_kagemusha_recursive_spend_accumulator(circuit_id, vk_box, accumulator, proving_key_bytes)
+}
+
+/// Verify one additional offline Kagemusha hop and append it to a recursive state.
+///
+/// The previous bundle is verified before the new hop is folded into the
+/// accumulator. The new record bundle must contain exactly one checked hop that
+/// consumes the previous bundle's current note nullifier and creates the new
+/// current note commitment.
+///
+/// # Errors
+///
+/// Returns an error when the previous recursive proof is invalid, the new hop
+/// proof/evidence is invalid, lineage continuity fails, or proof generation
+/// fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+    previous_bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if !verify_kagemusha_recursive_spend_bundle(previous_bundle, vk_box) {
+        return Err("previous Kagemusha recursive spend bundle did not verify".to_owned());
+    }
+    let envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+        norito::decode_from_bytes(pallas_open_envelopes_archive).map_err(|err| {
+            format!("failed to decode Kagemusha Pallas open-envelope archive: {err}")
+        })?;
+    let evidence =
+        kagemusha_verified_recursive_aggregation_evidence_from_record_bundle_and_pallas_open_envelopes(
+            record_bundle,
+            &envelopes,
+        )?;
+    if evidence.aggregation_statement.steps.len() != 1 {
+        return Err(format!(
+            "Kagemusha recursive spend append requires exactly one hop (found {})",
+            evidence.aggregation_statement.steps.len()
+        ));
+    }
+    let accumulator =
+        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
+            &previous_bundle.accumulator,
+            &previous_bundle.recursive_proof,
+            &evidence,
+            &current_note,
+        )
+        .map_err(|err| err.to_string())?;
+    prove_kagemusha_recursive_spend_accumulator(circuit_id, vk_box, accumulator, proving_key_bytes)
 }
 
 const KAGEMUSHA_RECORD_BACKED_COMPACT_PROVER_REQUIRED: &str = "Kagemusha compact-token proving requires verifier-record trust anchors; use prove_verified_kagemusha_compact_payment_token_from_bundle_with_records or prove_verified_kagemusha_compact_payment_token_from_record_bundle";
@@ -5675,6 +5958,28 @@ pub fn verify_kagemusha_compact_payment_token_with_record(
     verify_kagemusha_compact_payment_token(token, vk_box)
 }
 
+fn ensure_kagemusha_recursive_public_instance_shape(
+    label: &str,
+    actual_instances: &[Vec<[u8; 32]>],
+) -> Result<(), String> {
+    if actual_instances.len() != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS {
+        return Err(format!(
+            "Kagemusha recursive {label} envelope must expose {} public instance columns (found {})",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS,
+            actual_instances.len()
+        ));
+    }
+    for (index, column) in actual_instances.iter().enumerate() {
+        if column.len() != 1 {
+            return Err(format!(
+                "Kagemusha recursive {label} envelope public instance column {index} must contain exactly one row (found {})",
+                column.len()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Preverify a proof-carrying Kagemusha recursive aggregation bundle.
 ///
 /// This validates every chain-visible binding needed before a future recursive
@@ -5791,6 +6096,7 @@ pub fn preverify_kagemusha_recursive_aggregation_proof_bundle(
         extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
             "Kagemusha recursive aggregation proof did not expose Pasta instance columns".to_owned()
         })?;
+    ensure_kagemusha_recursive_public_instance_shape("aggregation proof", &actual_instances)?;
     if actual_instances != expected_instances {
         return Err(
             "Kagemusha recursive aggregation envelope public instance columns mismatch".to_owned(),
@@ -5924,6 +6230,247 @@ pub fn verify_kagemusha_recursive_aggregation_proof_bundle_with_record(
     record: &iroha_data_model::proof::VerifyingKeyRecord,
 ) -> bool {
     if preverify_kagemusha_recursive_aggregation_proof_bundle_with_record(bundle, record).is_err() {
+        return false;
+    }
+    let Some(vk_box) = record.key.as_ref() else {
+        return false;
+    };
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Preverify a production recursive Kagemusha spend bundle.
+///
+/// This validates the constant-size accumulator/proof binding, canonical
+/// Halo2 IPA recursive proof metadata, public-input schema, instance columns,
+/// proof size, verifier-key hash, hop corridor, and fixed-window profile.
+///
+/// # Errors
+///
+/// Returns an error describing the first failed binding.
+pub fn preverify_kagemusha_recursive_spend_bundle(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    vk_box: &VerifyingKeyBox,
+) -> Result<(), String> {
+    bundle
+        .validate_public_input_binding()
+        .map_err(|err| err.to_string())?;
+    #[cfg(feature = "zk-halo2-ipa")]
+    ensure_kagemusha_recursive_aggregation_public_fixed_window_digests(
+        &bundle.recursive_proof.public_inputs,
+    )?;
+    ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
+    if bundle.recursive_proof.proof.bytes.len()
+        > KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES as usize
+    {
+        return Err(format!(
+            "Kagemusha recursive spend proof exceeds {} bytes",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_MAX_PROOF_BYTES
+        ));
+    }
+    if bundle.recursive_proof.proof.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive spend proof backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.proof.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive spend verifier-key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive spend verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if bundle.recursive_proof.proof.backend != bundle.recursive_proof.verifier_key_id.backend {
+        return Err(format!(
+            "Kagemusha recursive spend proof backend `{}` does not match verifier-key backend `{}`",
+            bundle.recursive_proof.proof.backend, bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.name
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive spend circuit id `{}` is not `{}`",
+            bundle.recursive_proof.verifier_key_id.name,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+
+    let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(&bundle.recursive_proof.proof.bytes)
+            .map_err(|err| format!("failed to decode recursive spend proof envelope: {err}"))?;
+    if envelope.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        return Err(format!(
+            "Kagemusha recursive spend envelope backend `{:?}` is not Halo2IpaPasta",
+            envelope.backend
+        ));
+    }
+    if envelope.circuit_id
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive spend envelope circuit id `{}` is not `{}`",
+            envelope.circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+    if envelope.circuit_id != bundle.recursive_proof.verifier_key_id.name {
+        return Err(format!(
+            "Kagemusha recursive spend envelope circuit id `{}` does not match verifier-key id `{}`",
+            envelope.circuit_id, bundle.recursive_proof.verifier_key_id.name
+        ));
+    }
+    if envelope.vk_hash != hash_vk(vk_box) {
+        return Err("Kagemusha recursive spend envelope verifier-key hash mismatch".to_owned());
+    }
+    if envelope.public_inputs.as_slice()
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+    {
+        return Err("Kagemusha recursive spend envelope public-input schema mismatch".to_owned());
+    }
+    if !envelope.aux.is_empty() {
+        return Err(
+            "Kagemusha recursive spend envelope auxiliary metadata must be empty".to_owned(),
+        );
+    }
+
+    let expected_instances =
+        kagemusha_recursive_spend_bundle_instance_values(bundle)?.public_instance_columns();
+    let actual_instances =
+        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).ok_or_else(|| {
+            "Kagemusha recursive spend proof did not expose Pasta instance columns".to_owned()
+        })?;
+    ensure_kagemusha_recursive_public_instance_shape("spend proof", &actual_instances)?;
+    if actual_instances != expected_instances {
+        return Err(
+            "Kagemusha recursive spend envelope public instance columns mismatch".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Preverify a recursive Kagemusha spend bundle against a verifier record.
+///
+/// # Errors
+///
+/// Returns an error describing the first registry or proof-binding mismatch.
+pub fn preverify_kagemusha_recursive_spend_bundle_with_record(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> Result<(), String> {
+    if !record.is_active() {
+        return Err("Kagemusha recursive spend verifier record is not active".to_owned());
+    }
+    if record.namespace != KAGEMUSHA_VERIFIER_NAMESPACE {
+        return Err(format!(
+            "Kagemusha recursive spend verifier namespace `{}` is not `{KAGEMUSHA_VERIFIER_NAMESPACE}`",
+            record.namespace
+        ));
+    }
+    if record.backend != iroha_data_model::zk::BackendTag::Halo2IpaPasta {
+        return Err(format!(
+            "Kagemusha recursive spend verifier backend `{:?}` is not Halo2IpaPasta",
+            record.backend
+        ));
+    }
+    if record.circuit_id
+        != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+    {
+        return Err(format!(
+            "Kagemusha recursive spend verifier circuit id `{}` is not `{}`",
+            record.circuit_id,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+        ));
+    }
+    if record.public_inputs_schema_hash
+        != iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash()
+    {
+        return Err("Kagemusha recursive spend verifier public-input schema hash mismatch".to_owned());
+    }
+    if record.max_proof_bytes == 0 {
+        return Err(
+            "Kagemusha recursive spend verifier max proof bytes must be non-zero".to_owned(),
+        );
+    }
+    if bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize {
+        return Err(format!(
+            "Kagemusha recursive spend proof exceeds verifier record limit of {} bytes",
+            record.max_proof_bytes
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive spend verifier-key id backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            bundle.recursive_proof.verifier_key_id.backend
+        ));
+    }
+    if bundle.recursive_proof.verifier_key_id.name != record.circuit_id {
+        return Err(format!(
+            "Kagemusha recursive spend verifier-key id `{}` does not match record circuit `{}`",
+            bundle.recursive_proof.verifier_key_id.name, record.circuit_id
+        ));
+    }
+
+    let Some(vk_box) = record.key.as_ref() else {
+        return Err("Kagemusha recursive spend verifier record has no inline key".to_owned());
+    };
+    if vk_box.backend != ZK_BACKEND_HALO2_IPA {
+        return Err(format!(
+            "Kagemusha recursive spend inline key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            vk_box.backend
+        ));
+    }
+    if vk_box.bytes.is_empty() {
+        return Err("Kagemusha recursive spend inline key is empty".to_owned());
+    }
+    if u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len) {
+        return Err("Kagemusha recursive spend inline key length mismatch".to_owned());
+    }
+    if hash_vk(vk_box) != record.commitment {
+        return Err("Kagemusha recursive spend inline key commitment mismatch".to_owned());
+    }
+
+    preverify_kagemusha_recursive_spend_bundle(bundle, vk_box)
+}
+
+/// Verify a recursive Kagemusha spend bundle against a transparent key.
+#[must_use]
+pub fn verify_kagemusha_recursive_spend_bundle(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    vk_box: &VerifyingKeyBox,
+) -> bool {
+    if ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box).is_err() {
+        return false;
+    }
+    if preverify_kagemusha_recursive_spend_bundle(bundle, vk_box).is_err() {
+        return false;
+    }
+    verify_backend(
+        bundle.recursive_proof.proof.backend.as_str(),
+        &bundle.recursive_proof.proof,
+        Some(vk_box),
+    )
+}
+
+/// Verify a recursive Kagemusha spend bundle against a verifier record.
+#[must_use]
+pub fn verify_kagemusha_recursive_spend_bundle_with_record(
+    bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    record: &iroha_data_model::proof::VerifyingKeyRecord,
+) -> bool {
+    if preverify_kagemusha_recursive_spend_bundle_with_record(bundle, record).is_err() {
         return false;
     }
     let Some(vk_box) = record.key.as_ref() else {
@@ -6161,6 +6708,101 @@ pub fn prove_stark_fri_open_verify_envelope(
         circuit_id: circuit_id.to_owned(),
         vk_hash,
         public_inputs: schema_descriptor.to_vec(),
+        proof_bytes: norito::to_bytes(&open)
+            .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
+        aux: Vec::new(),
+    };
+    let bytes = norito::to_bytes(&env)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(backend.to_owned(), bytes))
+}
+
+/// Build a ZK-ACE-specific STARK/FRI `OpenVerifyEnvelope`.
+#[cfg(feature = "zk-stark")]
+pub fn prove_stark_fri_zk_ace_open_verify_envelope(
+    backend: &str,
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
+    witness: &iroha_data_model::zk::ZkAceWitnessV1,
+) -> Result<ProofBox, String> {
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
+
+    if !is_stark_fri_v1_backend(backend) {
+        return Err("backend is not a STARK/FRI V1 backend".to_owned());
+    }
+    if circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
+        return Err("ZK-ACE STARK proof must use zk_ace_pq_authorization_v0".to_owned());
+    }
+    let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+        norito::decode_from_bytes(&vk_box.bytes)
+            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
+    if vk_payload.version != 1 {
+        return Err("unsupported STARK verifying key payload version".to_owned());
+    }
+    let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+        .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
+    let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
+        .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
+    if env_circuit_id != vk_circuit_id {
+        return Err("STARK verifying key circuit_id mismatch".to_owned());
+    }
+    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
+        vk_payload.hash_fn
+    } else if backend.contains("/sha256-") {
+        crate::zk_stark::STARK_HASH_SHA256_V1
+    } else if backend.contains("/poseidon2-") {
+        crate::zk_stark::STARK_HASH_POSEIDON2_V1
+    } else {
+        return Err("unsupported STARK/FRI backend variant".to_owned());
+    };
+    if vk_payload.hash_fn != expected_hash_fn {
+        return Err("STARK verifying key hash_fn mismatch".to_owned());
+    }
+
+    let public_inputs_bytes = norito::to_bytes(public_inputs)
+        .map_err(|err| format!("failed to encode ZK-ACE public inputs: {err}"))?;
+    let stark_public_word = iroha_data_model::zk::derive_zk_ace_public_inputs_digest(public_inputs)
+        .map_err(|err| format!("failed to digest ZK-ACE public inputs: {err}"))?;
+    let stark_public_inputs = vec![vec![stark_public_word]];
+    let vk_hash = hash_vk(vk_box);
+    let domain_tag = stark_open_verify_domain_tag_current(
+        backend,
+        circuit_id,
+        vk_hash,
+        &public_inputs_bytes,
+        &stark_public_inputs,
+    );
+    let params = crate::zk_stark::StarkFriParamsV1 {
+        version: 1,
+        n_log2: vk_payload.n_log2,
+        blowup_log2: vk_payload.blowup_log2,
+        fold_arity: vk_payload.fold_arity,
+        queries: vk_payload.queries,
+        merkle_arity: vk_payload.merkle_arity,
+        hash_fn: vk_payload.hash_fn,
+        domain_tag,
+    };
+    let air_public_digest = iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs)
+        .map_err(|err| format!("failed to derive ZK-ACE AIR public digest: {err}"))?;
+    let envelope_bytes = crate::zk_stark::prove_stark_fri_zk_ace_air_envelope_bytes(
+        params,
+        "IROHA-STARK-ZK-ACE-AIR-V1".to_owned(),
+        env_circuit_id,
+        air_public_digest,
+        public_inputs,
+        witness,
+    )?;
+    let open = StarkFriOpenProofV1 {
+        version: 1,
+        public_inputs: stark_public_inputs,
+        envelope_bytes,
+    };
+    let env = OpenVerifyEnvelope {
+        backend: BackendTag::Stark,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash,
+        public_inputs: public_inputs_bytes,
         proof_bytes: norito::to_bytes(&open)
             .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
         aux: Vec::new(),
@@ -10334,20 +10976,38 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
         return reject("domain tag integrity mismatch");
     }
 
-    let expected_terms = stark_binding_air_terms(
-        backend,
-        &env.circuit_id,
-        env.vk_hash,
-        &env.public_inputs,
-        &open.public_inputs,
-    );
-    let expected_public_digest = match crate::zk_stark::stark_air_public_digest_from_composition(
-        STARK_BINDING_AIR_CONSTANT,
-        STARK_BINDING_AIR_Z_COEFF,
-        &expected_terms,
-    ) {
-        Ok(digest) => digest,
-        Err(_) => return reject("STARK AIR public digest reconstruction failed"),
+    let zk_ace_public_inputs =
+        if env.circuit_id == iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
+            match norito::decode_from_bytes::<iroha_data_model::zk::ZkAcePublicInputsV1>(
+                &env.public_inputs,
+            ) {
+                Ok(public_inputs) => Some(public_inputs),
+                Err(_) => return reject("invalid ZK-ACE public inputs payload"),
+            }
+        } else {
+            None
+        };
+    let expected_public_digest = if let Some(public_inputs) = zk_ace_public_inputs.as_ref() {
+        match iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs) {
+            Ok(digest) => digest,
+            Err(_) => return reject("ZK-ACE AIR public digest reconstruction failed"),
+        }
+    } else {
+        let expected_terms = stark_binding_air_terms(
+            backend,
+            &env.circuit_id,
+            env.vk_hash,
+            &env.public_inputs,
+            &open.public_inputs,
+        );
+        match crate::zk_stark::stark_air_public_digest_from_composition(
+            STARK_BINDING_AIR_CONSTANT,
+            STARK_BINDING_AIR_Z_COEFF,
+            &expected_terms,
+        ) {
+            Ok(digest) => digest,
+            Err(_) => return reject("STARK AIR public digest reconstruction failed"),
+        }
     };
     let Some(air) = inner.proof.air.as_ref() else {
         return reject("missing STARK AIR section");
@@ -10363,7 +11023,16 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if air.public_digest != expected_public_digest {
         return reject("STARK AIR public digest mismatch");
     }
-    if !crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits) {
+    let stark_ok = if let Some(public_inputs) = zk_ace_public_inputs.as_ref() {
+        crate::zk_stark::verify_stark_fri_zk_ace_envelope_with_limits(
+            &open.envelope_bytes,
+            limits,
+            public_inputs,
+        )
+    } else {
+        crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits)
+    };
+    if !stark_ok {
         return reject("inner STARK/FRI verifier rejected proof");
     }
     true
@@ -10491,20 +11160,38 @@ mod stark_backend_tag_tests {
         assert!(is_stark_fri_v1_backend("stark/fri"));
         assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
         assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
+        assert!(is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
         assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ "));
+        assert!(!is_stark_fri_v1_backend("stark/fri/\t\n"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/ sha256-goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha256-goldilocks "));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha256 goldilocks"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod;foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod,foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod+foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod/foo"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod(foo)"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/Δ"));
         assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
         assert!(!is_stark_fri_v1_backend("stark/fri/KZG"));
         assert!(!is_stark_fri_v1_backend("stark/fri/ KZG"));
         assert!(!is_stark_fri_v1_backend("stark/fri:kzg"));
         assert!(!is_stark_fri_v1_backend("stark/fri: KZG"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-bn-254"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-groth-16"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-k-z-g"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bls12_381"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/prod-b.l.s.12.381"));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug"));
         assert!(!is_stark_fri_v1_backend("stark/fri/Debug"));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/d-e-b-u-g"));
         assert!(!is_stark_fri_v1_backend("stark/fri/mock"));
         assert!(!is_stark_fri_v1_backend("stark/fri/Mock"));
         assert!(!is_stark_fri_v1_backend("stark/fri/mock-proof"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/m-o-c-k"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v2"));
         assert!(!is_stark_fri_v1_backend("stark/fri-v10"));
     }
@@ -10515,8 +11202,11 @@ mod stark_backend_tag_tests {
         assert!(is_ivm_execution_backend("stark/fri"));
         assert!(is_ivm_execution_backend("stark/fri/sha256-goldilocks"));
         assert!(!is_ivm_execution_backend("stark/fri/kzg"));
+        assert!(!is_ivm_execution_backend("stark/fri/prod-bn-254"));
+        assert!(!is_ivm_execution_backend("stark/fri/prod-groth-16"));
         assert!(!is_ivm_execution_backend("stark/fri/debug"));
         assert!(!is_ivm_execution_backend("stark/fri/debug-proof"));
+        assert!(!is_ivm_execution_backend("stark/fri/d-e-b-u-g"));
         assert!(!is_ivm_execution_backend("groth16/bn254"));
         assert!(!is_ivm_execution_backend("halo2/kzg"));
     }
@@ -10544,10 +11234,25 @@ mod stark_backend_tag_tests {
             "stark/fri:kzg",
             "stark/fri:KZG",
             "stark/fri: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod-k-z-g",
+            "stark/fri/prod(kzg)",
             "halo2/ipa:bn254",
             "halo2/ipa:BN254",
             "halo2/ipa: BN254",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod-bn-254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bn-256",
             "stark/fri:bls12_381",
+            "stark/fri/prod-bls12-381",
+            "stark/fri/prod.bls12_381",
+            "stark/fri/prod-b.l.s.12.381",
+            "halo2/ipa;groth16",
+            "halo2/ipa:groth-16",
         ] {
             assert!(
                 is_trusted_setup_backend_label(backend),
@@ -10578,9 +11283,13 @@ mod stark_backend_tag_tests {
             "Mock",
             "MOCK",
             "halo2/ipa:Debug-Proof",
+            "halo2/ipa:D-e-b-u-g-Proof",
             "halo2/ipa:Mock-Proof",
+            "halo2/ipa:M-o-c-k-Proof",
             "stark/fri/Debug",
+            "stark/fri/D-e-b-u-g",
             "stark/fri/Mock",
+            "stark/fri/M-o-c-k",
         ] {
             assert!(
                 is_developer_only_backend_label(backend),
@@ -11027,6 +11736,20 @@ mod guardrails_tests {
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
             "halo2/ipa: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod-k-z-g",
+            "stark/fri/prod(kzg)",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod-bn-254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bn-256",
+            "stark/fri/prod-bls12-381",
+            "stark/fri/prod-b.l.s.12.381",
+            "halo2/ipa;groth16",
+            "halo2/ipa:groth-16",
             "halo2/bn254",
             "groth16/bn254",
         ] {
@@ -11059,14 +11782,18 @@ mod guardrails_tests {
             "halo2/debug",
             "halo2/ipa:debug-proof",
             "halo2/ipa:DEBUG-Proof",
+            "halo2/ipa:d-e-b-u-g-proof",
             "stark/fri/debug",
             "stark/fri/Debug",
+            "stark/fri/d-e-b-u-g",
             "mock",
             "mock-proof",
             "Mock-Proof",
             "halo2/mock",
             "halo2/ipa:mock-proof",
             "halo2/ipa:Mock-Proof",
+            "halo2/ipa:m-o-c-k-proof",
+            "stark/fri/m-o-c-k",
             "zk-trace/mock-proof",
         ] {
             let proof = ProofBox::new(backend.into(), vec![1, 2, 3]);
@@ -11994,6 +12721,7 @@ mod kagemusha_non_native_limb_circuit_tests {
             group::prime::PrimeCurveAffine as _,
             pasta::{EqAffine as VestaAffine, Fp as Scalar, Fq},
         },
+        plonk::Error as PlonkError,
     };
 
     use super::*;
@@ -13969,7 +14697,9 @@ mod kagemusha_non_native_limb_circuit_tests {
             .is_ok()
     }
 
-    fn recursive_one_hop_instance_values() -> KagemushaRecursiveAggregationProofInstanceValues {
+    fn recursive_one_hop_instance_values_for_opening_len(
+        opening_len: u64,
+    ) -> KagemushaRecursiveAggregationProofInstanceValues {
         let mut public_values = [0u64; KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS];
         for (index, value) in public_values[..KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
             .iter_mut()
@@ -13977,11 +14707,14 @@ mod kagemusha_non_native_limb_circuit_tests {
         {
             *value = 101 + u64::try_from(index).expect("test index fits u64");
         }
-        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX] = 2;
+        public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX] = opening_len;
         public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX] = 1;
         public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX] = 1;
-        let schedule_digest = kagemusha_recursive_fixed_window_table_schedule_digest(2)
-            .expect("canonical one-hop recursive fixed-window schedule digest");
+        let opening_len_usize =
+            usize::try_from(opening_len).expect("test opening length fits usize");
+        let schedule_digest =
+            kagemusha_recursive_fixed_window_table_schedule_digest(opening_len_usize)
+                .expect("canonical one-hop recursive fixed-window schedule digest");
         for (offset, limb) in bytes_to_u64_limbs_le(&schedule_digest)
             .into_iter()
             .enumerate()
@@ -13989,8 +14722,9 @@ mod kagemusha_non_native_limb_circuit_tests {
             public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX
                 + offset] = limb;
         }
-        let manifest_digest = kagemusha_recursive_fixed_window_shared_table_manifest_digest(2)
-            .expect("canonical one-hop recursive shared-table manifest digest");
+        let manifest_digest =
+            kagemusha_recursive_fixed_window_shared_table_manifest_digest(opening_len_usize)
+                .expect("canonical one-hop recursive shared-table manifest digest");
         for (offset, limb) in bytes_to_u64_limbs_le(&manifest_digest)
             .into_iter()
             .enumerate()
@@ -14000,6 +14734,10 @@ mod kagemusha_non_native_limb_circuit_tests {
                     + offset] = limb;
         }
         KagemushaRecursiveAggregationProofInstanceValues { public_values }
+    }
+
+    fn recursive_one_hop_instance_values() -> KagemushaRecursiveAggregationProofInstanceValues {
+        recursive_one_hop_instance_values_for_opening_len(2)
     }
 
     fn set_recursive_one_hop_digest_limbs(
@@ -14012,10 +14750,70 @@ mod kagemusha_non_native_limb_circuit_tests {
         }
     }
 
+    fn set_recursive_one_hop_scalar_projection_digest_limbs(
+        values: &mut KagemushaRecursiveAggregationProofInstanceValues,
+        digest: Scalar,
+    ) {
+        let mut digest_bytes = [0u8; 32];
+        digest_bytes.copy_from_slice(digest.to_repr().as_ref());
+        set_recursive_one_hop_digest_limbs(
+            values,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX,
+            &digest_bytes,
+        );
+    }
+
+    fn recursive_one_hop_scalar_projection_digest<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> Scalar {
+        pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
+            verifier.transcript_binding_digest,
+            verifier.b_reduction.vectors[0][0].value,
+            verifier.b_reduction.vectors[0][1].value,
+            verifier.b_reduction.challenges[0].value,
+            verifier.b_reduction.challenge_inverses[0].value,
+            verifier
+                .b_reduction
+                .vectors
+                .last()
+                .and_then(|layer| layer.first())
+                .expect("recursive verifier slice has one final b scalar")
+                .value,
+        ])
+    }
+
+    fn recursive_one_hop_instance_values_with_scalar_projection<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        mut values: KagemushaRecursiveAggregationProofInstanceValues,
+        verifier: &pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
+    ) -> KagemushaRecursiveAggregationProofInstanceValues {
+        set_recursive_one_hop_scalar_projection_digest_limbs(
+            &mut values,
+            recursive_one_hop_scalar_projection_digest(verifier),
+        );
+        values
+    }
+
     fn recursive_one_hop_instance_values_with_preflight(
         preflight: &pasta_tiny::PallasIpaBatchVerifierPreflight,
     ) -> KagemushaRecursiveAggregationProofInstanceValues {
-        let mut values = recursive_one_hop_instance_values();
+        let mut values =
+            recursive_one_hop_instance_values_for_opening_len(preflight.opening_len.into());
         set_recursive_one_hop_digest_limbs(
             &mut values,
             KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
@@ -14062,19 +14860,26 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     fn recursive_one_hop_verifier_slice_valid_circuit()
-    -> pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<1, 1> {
-        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
-            recursive_one_hop_semantic(recursive_one_hop_instance_values()),
-            vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
+    -> pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<2, 1, 1> {
+        let verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+        let values = recursive_one_hop_instance_values_with_scalar_projection(
+            recursive_one_hop_instance_values(),
+            &verifier,
+        );
+        pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
+            recursive_one_hop_semantic(values),
+            verifier,
         )
         .expect("valid one-hop recursive verifier slice")
     }
 
     fn recursive_one_hop_verifier_slice_instances<
+        const LEN: usize,
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
     >(
         circuit: &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            LEN,
             WINDOWS,
             WINDOW_BITS,
         >,
@@ -14090,21 +14895,22 @@ mod kagemusha_non_native_limb_circuit_tests {
             circuit.verifier.as_ref(),
         ));
         instances.push(vec![circuit.verifier.transcript_binding_digest]);
-        instances.push(vec![
-            pasta_tiny::kagemusha_one_hop_verifier_scalar_projection_digest([
-                circuit.verifier.transcript_binding_digest,
-                circuit.verifier.b_reduction.vectors[0][0].value,
-                circuit.verifier.b_reduction.vectors[0][1].value,
-                circuit.verifier.b_reduction.challenges[0].value,
-                circuit.verifier.b_reduction.challenge_inverses[0].value,
-                circuit.verifier.b_reduction.vectors[1][0].value,
-            ]),
-        ]);
+        instances.push(vec![recursive_one_hop_scalar_projection_digest(
+            circuit.verifier.as_ref(),
+        )]);
         instances
     }
 
-    fn verify_recursive_one_hop_verifier_slice<const WINDOWS: usize, const WINDOW_BITS: usize>(
-        circuit: pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>,
+    fn verify_recursive_one_hop_verifier_slice<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
+            LEN,
+            WINDOWS,
+            WINDOW_BITS,
+        >,
         instances: Vec<Vec<Scalar>>,
     ) -> bool {
         MockProver::run(8, &circuit, instances)
@@ -14323,6 +15129,41 @@ mod kagemusha_non_native_limb_circuit_tests {
         .expect("valid two-round IPA verifier composition")
     }
 
+    fn vesta_affine_ipa_verifier_two_point_valid_circuit()
+    -> pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<2, 1, 1> {
+        let g_points = [vesta_generator_multiple(1), vesta_generator_multiple(2)];
+        let h_points = [vesta_generator_multiple(3), vesta_generator_multiple(4)];
+        let u = vesta_generator_multiple(1);
+        let expected_q =
+            vesta_affine_sum(&[vesta_affine_sum(&g_points), vesta_affine_sum(&h_points), u]);
+        let challenges = vec![Scalar::from(1)];
+        let inverses = vec![Scalar::from(1)];
+        let (
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+        ) = vesta_affine_ipa_verifier_transcript_binding_args(&challenges, &inverses);
+        pasta_tiny::NonNativeVestaIpaVerifierNativeScalar::<2, 1, 1>::try_from_statement(
+            [Scalar::from(1), Scalar::from(0)],
+            challenges,
+            inverses,
+            transcript_header_projection,
+            transcript_round_projections,
+            transcript_final_projection,
+            transcript_binding_digest,
+            Scalar::from(1),
+            Scalar::from(1),
+            vec![vesta_identity_limbs()],
+            vesta_non_identity_limbs(expected_q),
+            vec![vesta_identity_limbs()],
+            g_points.map(vesta_non_identity_limbs),
+            h_points.map(vesta_non_identity_limbs),
+            vesta_non_identity_limbs(u),
+        )
+        .expect("valid one-round IPA verifier composition")
+    }
+
     fn vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit()
     -> pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar<4, 1, 1> {
         let g_points = [
@@ -14420,6 +15261,40 @@ mod kagemusha_non_native_limb_circuit_tests {
         vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit_with_profile::<1, 1>()
     }
 
+    fn vesta_affine_ipa_verifier_instances<
+        const LEN: usize,
+        const WINDOWS: usize,
+        const WINDOW_BITS: usize,
+    >(
+        circuit: &pasta_tiny::NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+    ) -> Vec<Vec<Scalar>> {
+        let mut instances = native_pasta_fp_ipa_transcript_binding_instances_from_values(
+            circuit.transcript_header_projection,
+            &circuit.transcript_round_projections,
+            &circuit.transcript_challenges,
+            &circuit.transcript_challenge_inverses,
+            circuit.transcript_final_projection,
+            circuit.transcript_binding_digest,
+        );
+        instances.extend(native_pasta_fp_ipa_b_vector_reduction_instances(
+            circuit.b_reduction.as_ref(),
+        ));
+        for round_accumulator in &circuit.round_accumulators {
+            instances.extend(vesta_affine_ipa_round_accumulator_instances(
+                round_accumulator,
+            ));
+        }
+        for generator_fold_round in &circuit.generator_folds {
+            for generator_fold in generator_fold_round {
+                instances.extend(vesta_affine_ipa_generator_fold_instances(generator_fold));
+            }
+        }
+        instances.extend(vesta_affine_ipa_final_windowed_msm_instances(
+            circuit.final_msm.as_ref(),
+        ));
+        instances
+    }
+
     fn vesta_affine_ipa_verifier_host_links_hold<
         const LEN: usize,
         const WINDOWS: usize,
@@ -14449,6 +15324,12 @@ mod kagemusha_non_native_limb_circuit_tests {
         if final_b_layer.len() != 1
             || final_b_layer[0].value != circuit.final_msm.msm.term_muls[1].scalar.scalar.value
         {
+            return false;
+        }
+        let final_a = circuit.final_msm.msm.term_muls[0].scalar.scalar.value;
+        let final_b = circuit.final_msm.msm.term_muls[1].scalar.scalar.value;
+        let final_product = circuit.final_msm.msm.term_muls[2].scalar.scalar.value;
+        if final_a * final_b != final_product {
             return false;
         }
 
@@ -14595,6 +15476,12 @@ mod kagemusha_non_native_limb_circuit_tests {
         if final_b_layer.len() != 1
             || final_b_layer[0].value != circuit.final_msm.msm.term_muls[1].scalar.scalar.value
         {
+            return false;
+        }
+        let final_a = circuit.final_msm.msm.term_muls[0].scalar.scalar.value;
+        let final_b = circuit.final_msm.msm.term_muls[1].scalar.scalar.value;
+        let final_product = circuit.final_msm.msm.term_muls[2].scalar.scalar.value;
+        if final_a * final_b != final_product {
             return false;
         }
 
@@ -19330,6 +20217,76 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy direct IPA verifier synthesis MockProver shape-rejection coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_synthesis_rejects_missing_b_reduction_layer() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            let instances = vesta_affine_ipa_verifier_instances(&circuit);
+            circuit.b_reduction.vectors[0].clear();
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("malformed native IPA verifier witness shape must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "missing b-reduction layer must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy direct IPA verifier synthesis MockProver shape-rejection coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_synthesis_rejects_missing_generator_fold_layer() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_two_point_valid_circuit();
+            let instances = vesta_affine_ipa_verifier_instances(&circuit);
+            circuit.generator_folds[0].clear();
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("malformed native IPA verifier generator shape must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "missing generator-fold layer must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy direct IPA verifier synthesis MockProver shape-rejection coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_synthesis_rejects_missing_b_reduction_layer()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            let instances = vesta_affine_ipa_verifier_shared_table_instances(&circuit);
+            circuit.b_reduction.vectors[0].clear();
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("malformed shared-table IPA verifier witness shape must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "missing shared-table b-reduction layer must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy direct IPA verifier synthesis MockProver shape-rejection coverage"]
+    fn kagemusha_non_native_vesta_ipa_verifier_shared_table_synthesis_rejects_missing_generator_fold_layer()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut circuit = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            let instances = vesta_affine_ipa_verifier_shared_table_instances(&circuit);
+            circuit.generator_folds[0].clear();
+            let err = MockProver::run(8, &circuit, instances)
+                .err()
+                .expect("malformed shared-table IPA verifier generator shape must fail synthesis");
+            assert!(
+                matches!(err, PlonkError::Synthesis),
+                "missing shared-table generator-fold layer must be rejected before assignment"
+            );
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_one_round_profile() {
         run_vesta_affine_ipa_one_round_test(|| {
             let circuit = recursive_one_hop_verifier_slice_valid_circuit();
@@ -19344,6 +20301,65 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert_eq!(
                 circuit.semantic.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX],
                 Scalar::from(1)
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_two_round_profile() {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let verifier = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
+            let values = recursive_one_hop_instance_values_with_scalar_projection(
+                recursive_one_hop_instance_values_for_opening_len(4),
+                &verifier,
+            );
+            let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                1,
+                1,
+            >::try_from_parts(recursive_one_hop_semantic(values), verifier)
+            .expect("valid LEN=4 one-hop recursive verifier slice");
+            assert_eq!(
+                circuit.semantic.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+                Scalar::from(4)
+            );
+            assert_eq!(
+                circuit.semantic.opening_len_selectors,
+                [
+                    Scalar::from(0),
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                ]
+            );
+            assert_eq!(circuit.verifier.transcript_round_projections.len(), 2);
+            assert_eq!(
+                circuit
+                    .verifier
+                    .b_reduction
+                    .vectors
+                    .last()
+                    .expect("LEN=4 verifier exposes final b layer")
+                    .len(),
+                1
+            );
+
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                1,
+                1,
+            >::try_from_parts(
+                recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+                vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit(),
+            )
+            .err()
+            .expect("LEN=4 verifier slice must reject LEN=2 semantic metadata");
+            assert!(
+                err.contains("opening length 4"),
+                "expected LEN=4 profile rejection, found {err:?}"
             );
         });
     }
@@ -19371,7 +20387,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                 let mut semantic = recursive_one_hop_semantic(recursive_one_hop_instance_values());
                 semantic.public_values[index] = value;
                 let err =
-                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
                         semantic,
                         vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
                     )
@@ -19392,7 +20408,7 @@ mod kagemusha_non_native_limb_circuit_tests {
             let cases: [(
                 &str,
                 fn(&mut pasta_tiny::KagemushaRecursiveAggregationSemantic),
-            ); 4] = [
+            ); 6] = [
                 ("opening-length selector witness mismatch", |semantic| {
                     semantic.opening_len_selectors[0] = Scalar::from(0);
                 }),
@@ -19409,12 +20425,21 @@ mod kagemusha_non_native_limb_circuit_tests {
                         [KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX] +=
                         Scalar::from(1);
                 }),
+                ("non-zero public field inverse mismatch", |semantic| {
+                    semantic.non_zero_public_field_inverses[0] = Scalar::from(0);
+                }),
+                ("public field group 0 must be non-zero", |semantic| {
+                    for index in KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS[0] {
+                        semantic.public_values[index] = Scalar::from(0);
+                    }
+                    semantic.non_zero_public_field_inverses[0] = Scalar::from(0);
+                }),
             ];
             for (expected, mutate) in cases {
                 let mut semantic = recursive_one_hop_semantic(recursive_one_hop_instance_values());
                 mutate(&mut semantic);
                 let err =
-                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                    pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
                         semantic,
                         vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
                     )
@@ -19435,12 +20460,80 @@ mod kagemusha_non_native_limb_circuit_tests {
             let mut verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
             verifier.transcript_challenges[0] += Scalar::from(1);
             let err =
-                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts(
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
                     recursive_one_hop_semantic(recursive_one_hop_instance_values()),
                     verifier,
                 )
                 .err()
                 .expect("one-hop recursive verifier slice host-link mismatch must reject");
+            assert!(
+                err.contains("verifier host-link mismatch"),
+                "expected host-link mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_final_msm_product_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            verifier.final_msm.msm.term_muls[2].scalar.scalar.value += Scalar::from(1);
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
+                    recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+                    verifier,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice final MSM product splice must reject");
+            assert!(
+                err.contains("verifier host-link mismatch"),
+                "expected host-link mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_missing_generator_fold_layer()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            verifier.generator_folds[0].clear();
+            assert!(
+                !verifier.host_links_hold(),
+                "shared-table host-link guard must reject missing generator-fold layers"
+            );
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
+                    recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+                    verifier,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice missing generator fold layer must reject");
+            assert!(
+                err.contains("verifier host-link mismatch"),
+                "expected host-link mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_missing_b_reduction_layer()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let mut verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            verifier.b_reduction.vectors[0].clear();
+            assert!(
+                !verifier.host_links_hold(),
+                "shared-table host-link guard must reject malformed b-reduction layers"
+            );
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
+                    recursive_one_hop_semantic(recursive_one_hop_instance_values()),
+                    verifier,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice missing b-reduction layer must reject");
             assert!(
                 err.contains("verifier host-link mismatch"),
                 "expected host-link mismatch, found {err:?}"
@@ -19484,6 +20577,31 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_scalar_projection_public_input_mismatch()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let verifier = vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit();
+            let mut values = recursive_one_hop_instance_values_with_scalar_projection(
+                recursive_one_hop_instance_values(),
+                &verifier,
+            );
+            values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX] += 1;
+            let err =
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts(
+                    recursive_one_hop_semantic(values),
+                    verifier,
+                )
+                .err()
+                .expect("one-hop recursive verifier slice scalar projection splice must reject");
+            assert!(
+                err.contains("scalar-projection digest mismatch"),
+                "expected scalar-projection digest mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -19498,12 +20616,516 @@ mod kagemusha_non_native_limb_circuit_tests {
                 recursive_one_hop_instance_values_with_preflight(&preflight),
             );
             pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
             >::validate_one_hop_preflight_metadata_binding(&semantic, &preflight)
             .expect("one-hop recursive verifier slice binds Pallas preflight metadata");
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_preflight_binding(
+                &params, &witness, &preflight
+            )
+            .expect("one-hop recursive verifier slice binds Pallas witness to preflight");
             assert_eq!(preflight.proof_count, 1);
             assert_eq!(preflight.opening_len, 2);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_len4_pallas_preflight_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "one-hop-recursive-pallas-len4-binding");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("LEN=4 one-hop Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            assert_eq!(preflight.opening_len, 4);
+            assert_eq!(
+                semantic.opening_len_selectors,
+                [
+                    Scalar::from(0),
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                ],
+                "LEN=4 selector must use the second recursive opening-width choice"
+            );
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(&semantic, &preflight)
+            .expect("LEN=4 one-hop recursive verifier slice binds Pallas preflight metadata");
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_preflight_binding(
+                &params, &witness, &preflight
+            )
+            .expect("LEN=4 one-hop recursive verifier slice binds Pallas witness to preflight");
+
+            let len2_err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(
+                &semantic, &preflight
+            )
+            .err()
+            .expect("LEN=2 verifier slice must reject LEN=4 semantic metadata");
+            assert!(
+                len2_err.contains("opening length 2"),
+                "expected LEN=2 profile rejection, found {len2_err:?}"
+            );
+
+            let mut bad_selector_semantic = semantic.clone();
+            bad_selector_semantic.opening_len_selectors[0] = Scalar::from(1);
+            bad_selector_semantic.opening_len_selectors[1] = Scalar::from(0);
+            let selector_err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(
+                &bad_selector_semantic, &preflight
+            )
+            .err()
+            .expect("LEN=4 verifier slice must reject selector splice");
+            assert!(
+                selector_err.contains("opening-length selector witness mismatch"),
+                "expected selector rejection, found {selector_err:?}"
+            );
+
+            let mut bad_preflight = preflight;
+            bad_preflight.opening_len = 2;
+            let preflight_len_err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(
+                &semantic, &bad_preflight
+            )
+            .err()
+            .expect("LEN=4 verifier slice must reject preflight length splice");
+            assert!(
+                preflight_len_err.contains("preflight opening length 4"),
+                "expected LEN=4 preflight length rejection, found {preflight_len_err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_hop_bound_pallas_preflight_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-hop-bound");
+            let hop_proof_hash = iroha_crypto::Hash::new(b"one-hop-recursive-hop-proof");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                std::slice::from_ref(&witness),
+                std::slice::from_ref(&hop_proof_hash),
+            )
+            .expect("one-hop hop-bound Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(&semantic, &preflight)
+            .expect("one-hop recursive verifier slice binds hop-bound Pallas preflight metadata");
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &preflight,
+            )
+            .expect("one-hop recursive verifier slice binds Pallas witness and hop proof hash to preflight");
+            let detached = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("detached one-hop Pallas verifier witness batch preflight");
+            assert_ne!(
+                detached.aggregate_digest, preflight.aggregate_digest,
+                "hop-bound preflight digest must differ from detached native batch digest"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_len4_hop_bound_pallas_preflight_binding()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "one-hop-recursive-pallas-len4-hop-bound");
+            let hop_proof_hash = iroha_crypto::Hash::new(b"one-hop-recursive-len4-hop-proof");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                std::slice::from_ref(&witness),
+                std::slice::from_ref(&hop_proof_hash),
+            )
+            .expect("LEN=4 one-hop hop-bound Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&preflight),
+            );
+            assert_eq!(preflight.proof_count, 1);
+            assert_eq!(preflight.opening_len, 4);
+            assert_eq!(
+                semantic.opening_len_selectors,
+                [
+                    Scalar::from(0),
+                    Scalar::from(1),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                    Scalar::from(0),
+                ],
+                "LEN=4 hop-bound selector must use the second recursive opening-width choice"
+            );
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_preflight_metadata_binding(&semantic, &preflight)
+            .expect(
+                "LEN=4 one-hop recursive verifier slice binds hop-bound Pallas preflight metadata",
+            );
+            pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &preflight,
+            )
+            .expect("LEN=4 one-hop recursive verifier slice binds Pallas witness and hop proof hash to preflight");
+            let detached = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("detached LEN=4 one-hop Pallas verifier witness batch preflight");
+            assert_eq!(detached.opening_len, preflight.opening_len);
+            assert_eq!(detached.params_fingerprint, preflight.params_fingerprint);
+            assert_eq!(
+                detached.fixed_window_table_schedule_digest,
+                preflight.fixed_window_table_schedule_digest
+            );
+            assert_eq!(
+                detached.fixed_window_shared_table_manifest_digest,
+                preflight.fixed_window_shared_table_manifest_digest
+            );
+            assert_eq!(
+                detached.fixed_window_table_base_digest,
+                preflight.fixed_window_table_base_digest
+            );
+            assert_ne!(
+                detached.aggregate_digest, preflight.aggregate_digest,
+                "LEN=4 hop-bound preflight digest must differ from detached native batch digest"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_on_detached_constructor()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(
+                2,
+                "one-hop-recursive-pallas-hop-bound-on-detached-constructor",
+            );
+            let hop_proof_hash =
+                iroha_crypto::Hash::new(b"one-hop-recursive-hop-proof-detached-constructor");
+            let hop_bound_preflight =
+                kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                    &params,
+                    std::slice::from_ref(&witness),
+                    std::slice::from_ref(&hop_proof_hash),
+                )
+                .expect("one-hop hop-bound Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&hop_bound_preflight),
+            );
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_witness_with_preflight(
+                semantic,
+                &params,
+                &witness,
+                &hop_bound_preflight,
+            )
+            .err()
+            .expect("detached constructor must reject hop-bound preflight");
+            assert!(
+                err.contains("Pallas witness preflight mismatch"),
+                "expected detached Pallas witness preflight mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop hop-bound constructor materializes the shared-table Vesta verifier witness"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_routes_hop_bound_pallas_preflight_constructor()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-hop-bound-constructor");
+            let hop_proof_hash =
+                iroha_crypto::Hash::new(b"one-hop-recursive-hop-proof-constructor");
+            let hop_bound_preflight =
+                kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                    &params,
+                    std::slice::from_ref(&witness),
+                    std::slice::from_ref(&hop_proof_hash),
+                )
+                .expect("one-hop hop-bound Pallas verifier witness batch preflight");
+            let verifier = pasta_tiny::NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(&params, &witness)
+            .expect("one-hop Pallas verifier witness translates to recursive Vesta verifier");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_scalar_projection(
+                    recursive_one_hop_instance_values_with_preflight(&hop_bound_preflight),
+                    &verifier,
+                ),
+            );
+            let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_witness_with_hop_bound_preflight(
+                semantic.clone(),
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &hop_bound_preflight,
+            )
+            .expect("one-hop recursive verifier slice accepts hop-bound constructor");
+            assert_eq!(circuit.semantic.public_values, semantic.public_values);
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_detached_pallas_preflight_on_hop_bound_constructor()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(
+                2,
+                "one-hop-recursive-pallas-detached-on-hop-bound-constructor",
+            );
+            let hop_proof_hash =
+                iroha_crypto::Hash::new(b"one-hop-recursive-hop-proof-detached-reject");
+            let detached = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("detached one-hop Pallas verifier witness batch preflight");
+            let semantic = recursive_one_hop_semantic(
+                recursive_one_hop_instance_values_with_preflight(&detached),
+            );
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_witness_with_hop_bound_preflight(
+                semantic,
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &detached,
+            )
+            .err()
+            .expect("hop-bound constructor must reject detached preflight");
+            assert!(
+                err.contains("hop-bound Pallas witness preflight mismatch"),
+                "expected hop-bound Pallas witness preflight mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-hop-bound-mismatch");
+            let hop_proof_hash = iroha_crypto::Hash::new(b"one-hop-recursive-hop-proof");
+            let wrong_hop_proof_hash =
+                iroha_crypto::Hash::new(b"one-hop-recursive-wrong-hop-proof");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                std::slice::from_ref(&witness),
+                std::slice::from_ref(&hop_proof_hash),
+            )
+            .expect("one-hop hop-bound Pallas verifier witness batch preflight");
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &wrong_hop_proof_hash,
+                &preflight,
+            )
+            .err()
+            .expect("one-hop recursive verifier slice must reject wrong hop-bound preflight");
+            assert!(
+                err.contains("hop-bound Pallas witness preflight mismatch"),
+                "expected hop-bound Pallas witness preflight mismatch, found {err:?}"
+            );
+
+            let detached = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("detached one-hop Pallas verifier witness batch preflight");
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &detached,
+            )
+            .err()
+            .expect("one-hop recursive verifier slice must reject detached preflight");
+            assert!(
+                err.contains("hop-bound Pallas witness preflight mismatch"),
+                "expected hop-bound Pallas witness preflight mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_len4_hop_bound_pallas_preflight_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) = sample_pallas_verifier_witness(
+                4,
+                "one-hop-recursive-pallas-len4-hop-bound-mismatch",
+            );
+            let hop_proof_hash = iroha_crypto::Hash::new(b"one-hop-recursive-len4-hop-proof");
+            let wrong_hop_proof_hash =
+                iroha_crypto::Hash::new(b"one-hop-recursive-len4-wrong-hop-proof");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                std::slice::from_ref(&witness),
+                std::slice::from_ref(&hop_proof_hash),
+            )
+            .expect("LEN=4 one-hop hop-bound Pallas verifier witness batch preflight");
+
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &wrong_hop_proof_hash,
+                &preflight,
+            )
+            .err()
+            .expect("LEN=4 one-hop recursive verifier slice must reject wrong hop-bound preflight");
+            assert!(
+                err.contains("hop-bound Pallas witness preflight mismatch"),
+                "expected hop-bound Pallas witness preflight mismatch, found {err:?}"
+            );
+
+            let detached = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness),
+            )
+            .expect("detached LEN=4 one-hop Pallas verifier witness batch preflight");
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                4,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &detached,
+            )
+            .err()
+            .expect("LEN=4 one-hop recursive verifier slice must reject detached preflight");
+            assert!(
+                err.contains("hop-bound Pallas witness preflight mismatch"),
+                "expected hop-bound Pallas witness preflight mismatch, found {err:?}"
+            );
+
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                &params,
+                &witness,
+                &hop_proof_hash,
+                &preflight,
+            )
+            .err()
+            .expect("LEN=2 one-hop recursive verifier slice must reject LEN=4 hop-bound preflight");
+            assert!(
+                err.contains("params length mismatch: expected 2, found 4"),
+                "expected typed LEN mismatch, found {err:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_pallas_witness_preflight_mismatch()
+     {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness_a) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-witness-a");
+            let (_, witness_b) =
+                sample_pallas_verifier_witness(2, "one-hop-recursive-pallas-witness-b");
+            let preflight = kagemusha_pallas_ipa_batch_verifier_preflight(
+                &params,
+                std::slice::from_ref(&witness_a),
+            )
+            .expect("one-hop Pallas verifier witness batch preflight");
+            let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::validate_one_hop_pallas_witness_preflight_binding(
+                &params, &witness_b, &preflight
+            )
+            .err()
+            .expect("one-hop recursive verifier slice must reject mismatched witness preflight");
+            assert!(
+                err.contains("Pallas witness preflight mismatch"),
+                "expected Pallas witness preflight mismatch, found {err:?}"
+            );
         });
     }
 
@@ -19522,6 +21144,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                 recursive_one_hop_instance_values_with_preflight(&preflight),
             );
             let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                 KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
             >::try_from_parts_with_preflight(
@@ -19561,14 +21184,20 @@ mod kagemusha_non_native_limb_circuit_tests {
             >::try_from_pallas_verifier_witness(&params, &witness)
             .expect("one-hop Pallas verifier witness translates to recursive Vesta verifier");
             let semantic = recursive_one_hop_semantic(
-                recursive_one_hop_instance_values_with_preflight(&preflight),
+                recursive_one_hop_instance_values_with_scalar_projection(
+                    recursive_one_hop_instance_values_with_preflight(&preflight),
+                    &verifier,
+                ),
             );
-            let circuit =
-                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
-                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
-                    KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
-                >::try_from_parts_with_preflight(semantic, verifier, &preflight)
-                .expect("one-hop recursive verifier slice binds materialized Pallas verifier");
+            let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                2,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
+            >::try_from_pallas_witness_with_preflight(
+                semantic, &params, &witness, &preflight
+            )
+            .expect("one-hop recursive verifier slice binds materialized Pallas verifier");
+            assert!(verifier.host_links_hold());
             assert_eq!(circuit.verifier.transcript_round_projections.len(), 1);
         });
     }
@@ -19584,7 +21213,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                 std::slice::from_ref(&witness),
             )
             .expect("one-hop Pallas verifier witness batch preflight");
-            let cases: [(&str, fn(&mut pasta_tiny::PallasIpaBatchVerifierPreflight)); 5] = [
+            let cases: [(&str, fn(&mut pasta_tiny::PallasIpaBatchVerifierPreflight)); 10] = [
                 ("one preflight witness", |preflight| {
                     preflight.proof_count = 2;
                 }),
@@ -19600,6 +21229,36 @@ mod kagemusha_non_native_limb_circuit_tests {
                 ("verifier-witness batch digest mismatch", |preflight| {
                     preflight.aggregate_digest[0] ^= 1;
                 }),
+                (
+                    "preflight verifier parameter fingerprint must be non-zero",
+                    |preflight| {
+                        preflight.params_fingerprint = [0u8; 32];
+                    },
+                ),
+                (
+                    "preflight fixed-window schedule digest must be non-zero",
+                    |preflight| {
+                        preflight.fixed_window_table_schedule_digest = [0u8; 32];
+                    },
+                ),
+                (
+                    "preflight shared-table manifest digest must be non-zero",
+                    |preflight| {
+                        preflight.fixed_window_shared_table_manifest_digest = [0u8; 32];
+                    },
+                ),
+                (
+                    "preflight fixed-window table-base digest must be non-zero",
+                    |preflight| {
+                        preflight.fixed_window_table_base_digest = [0u8; 32];
+                    },
+                ),
+                (
+                    "preflight verifier-witness batch digest must be non-zero",
+                    |preflight| {
+                        preflight.aggregate_digest = [0u8; 32];
+                    },
+                ),
             ];
             for (expected, mutate) in cases {
                 let mut bad_preflight = preflight;
@@ -19608,6 +21267,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                     recursive_one_hop_instance_values_with_preflight(&preflight),
                 );
                 let err = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
+                    2,
                     KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
                     KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
                 >::try_from_parts_with_preflight(
@@ -19644,7 +21304,7 @@ mod kagemusha_non_native_limb_circuit_tests {
                 recursive_one_hop_instance_values_with_preflight(&preflight),
             );
             let err =
-                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<1, 1>::try_from_parts_with_preflight(
+                pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<2, 1, 1>::try_from_parts_with_preflight(
                     semantic,
                     vesta_affine_ipa_verifier_two_point_shared_table_valid_circuit(),
                     &preflight,
@@ -19707,6 +21367,19 @@ mod kagemusha_non_native_limb_circuit_tests {
                 .last_mut()
                 .expect("one-hop verifier scalar projection digest public instance");
             digest_column[0] += Scalar::from(1);
+            assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
+        });
+    }
+
+    #[test]
+    #[ignore = "heavy one-hop recursive verifier-slice MockProver coverage"]
+    fn kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_scalar_projection_public_input_splice()
+     {
+        run_vesta_affine_ipa_one_round_test(|| {
+            let circuit = recursive_one_hop_verifier_slice_valid_circuit();
+            let mut instances = recursive_one_hop_verifier_slice_instances(&circuit);
+            instances[KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] +=
+                Scalar::from(1);
             assert!(!verify_recursive_one_hop_verifier_slice(circuit, instances));
         });
     }
@@ -19829,6 +21502,68 @@ mod kagemusha_non_native_limb_circuit_tests {
             assert!(
                 !err.contains("batch witness 0 failed preflight"),
                 "hash-count mismatch should reject before native witness validation: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs_binds_public_context() {
+        run_vesta_affine_ipa_verifier_test(|| {
+            let (params, witness) =
+                sample_pallas_verifier_witness(4, "core-pallas-hop-bound-context");
+            let witnesses = vec![witness];
+            let native = kagemusha_pallas_ipa_batch_verifier_preflight(&params, &witnesses)
+                .expect("native Pallas verifier witness batch preflight");
+            let hop_proof_hashes = [iroha_crypto::Hash::new(b"core-pallas-hop-bound-proof-hash")];
+            let public = kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(
+                &params,
+                &witnesses,
+                &hop_proof_hashes,
+            )
+            .expect("hop-bound Pallas verifier witness batch preflight");
+            let baseline =
+                kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(native, &hop_proof_hashes)
+                    .expect("direct hop-bound Pallas verifier witness batch preflight");
+            assert_eq!(public, baseline);
+            assert_ne!(
+                native.aggregate_digest, baseline.aggregate_digest,
+                "hop-bound digest must not equal the detached native batch digest"
+            );
+
+            let mut forged_table_base = native;
+            forged_table_base.fixed_window_table_base_digest[0] ^= 0x01;
+            let forged_table_base = kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
+                forged_table_base,
+                &hop_proof_hashes,
+            )
+            .expect("forged table-base digest still hashes into a different public context");
+            assert_ne!(
+                baseline.aggregate_digest, forged_table_base.aggregate_digest,
+                "hop-bound digest must explicitly bind the public table-base digest"
+            );
+
+            let mut forged_opening_len = native;
+            forged_opening_len.opening_len = forged_opening_len.opening_len.saturating_mul(2);
+            let forged_opening_len = kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
+                forged_opening_len,
+                &hop_proof_hashes,
+            )
+            .expect("forged opening length still hashes into a different public context");
+            assert_ne!(
+                baseline.aggregate_digest, forged_opening_len.aggregate_digest,
+                "hop-bound digest must explicitly bind the public opening length"
+            );
+
+            let mut forged_count = native;
+            forged_count.proof_count += 1;
+            let err = kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
+                forged_count,
+                &hop_proof_hashes,
+            )
+            .expect_err("forged proof count must reject before digest binding");
+            assert!(
+                err.contains("proof/hash count mismatch"),
+                "unexpected forged proof-count error: {err}"
             );
         });
     }
@@ -20526,6 +22261,49 @@ mod kagemusha_non_native_limb_circuit_tests {
                 "unexpected empty open-envelope batch error: {err}"
             );
         });
+    }
+
+    #[test]
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn kagemusha_recursive_poseidon_length_fields_are_label_domain_separated() {
+        let mut tag_hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+        kagemusha_recursive_poseidon_update_len(&mut tag_hasher, "tag", 4)
+            .expect("tag length field");
+        let tag_digest = tag_hasher.finalize();
+
+        let mut value_hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+        kagemusha_recursive_poseidon_update_len(&mut value_hasher, "value", 4)
+            .expect("value length field");
+        let value_digest = value_hasher.finalize();
+
+        assert_ne!(
+            tag_digest, value_digest,
+            "same numeric recursive length under different labels must not collide"
+        );
+
+        let mut empty_label_hasher = iroha_zkp_halo2::poseidon::PoseidonByteHasher::new();
+        let err = kagemusha_recursive_poseidon_update_len(&mut empty_label_hasher, "", 4)
+            .expect_err("empty recursive length labels must reject");
+        assert!(err.contains("label must be non-empty"));
+    }
+
+    #[test]
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn kagemusha_pallas_batch_digest_length_fields_are_label_domain_separated() {
+        let len_digest = pasta_tiny::pallas_batch_digest_test_length_field("LEN", 4)
+            .expect("LEN length field digest");
+        let proof_count_digest =
+            pasta_tiny::pallas_batch_digest_test_length_field("proof count", 4)
+                .expect("proof-count length field digest");
+
+        assert_ne!(
+            len_digest, proof_count_digest,
+            "same numeric Pallas batch length under different labels must not collide"
+        );
+
+        let err = pasta_tiny::pallas_batch_digest_test_length_field("", 4)
+            .expect_err("empty Pallas batch length labels must reject");
+        assert!(err.contains("label must be non-empty"));
     }
 
     #[test]
@@ -22639,6 +24417,14 @@ mod kagemusha_folded_real_prover_tests {
         proof::{ProofAttachment, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
+    use iroha_primitives::numeric::Numeric;
+
+    const RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN: u8 =
+        ((KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS - 3) / 2) as u8;
+    const RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT: u8 =
+        (KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS
+            - 3
+            - RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN as usize) as u8;
 
     fn kagemusha_vk_box() -> VerifyingKeyBox {
         kagemusha_folded_vk_box().expect("Kagemusha folded verifying key")
@@ -22788,6 +24574,130 @@ mod kagemusha_folded_real_prover_tests {
         }
     }
 
+    fn recursive_spend_note(
+        note_commitment: [u8; 32],
+        nullifier_label: &[u8],
+    ) -> iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+        iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+            note_commitment,
+            spend_nullifier: fixed_bytes(nullifier_label),
+            amount: Numeric::new(42, 0),
+        }
+    }
+
+    fn recursive_spend_proof(
+        accumulator: &iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1,
+    ) -> iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+        let public_inputs = accumulator
+            .recursive_public_inputs()
+            .expect("recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive spend public-input hash");
+        iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            ),
+            public_inputs,
+            public_inputs_hash,
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.into(), vec![0xC7; 96]),
+        }
+    }
+
+    fn recursive_spend_accumulators(
+        hop_count: usize,
+    ) -> Vec<iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1> {
+        let chain_id: ChainId = "kagemusha-recursive-spend-chain".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-recursive-spend"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let mut previous = None::<iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1>;
+        let mut previous_proof =
+            None::<iroha_data_model::offline::KagemushaRecursiveAggregationProof>;
+        let mut accumulators = Vec::with_capacity(hop_count);
+
+        for hop_index in 0..hop_count {
+            let root_before = previous.as_ref().map_or_else(
+                || fixed_bytes(b"kagemusha-recursive-spend-root-0"),
+                |accumulator| accumulator.final_root,
+            );
+            let root_after =
+                fixed_bytes(format!("kagemusha-recursive-spend-root-{}", hop_index + 1).as_bytes());
+            let proof_label = format!("kagemusha-recursive-spend-hop-proof-{hop_index}");
+            let mut step = KagemushaFoldStep {
+                root_before,
+                input_nullifiers: vec![
+                    [0x21_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                    [0x31_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                ],
+                output_commitments: vec![
+                    [0x41_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                    [0x51_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                ],
+                root_after,
+                proof_hash: Hash::new(proof_label.as_bytes()),
+                proof_public_inputs_digest: fixed_bytes(format!("{proof_label}:public").as_bytes()),
+                verifier_key_id: VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "kagemusha-hop-fixture"),
+                verifier_key_commitment: fixed_bytes(format!("{proof_label}:vk").as_bytes()),
+                verifier_key_poseidon_digest:
+                    iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                        ZK_BACKEND_HALO2_IPA,
+                        proof_label.as_bytes(),
+                    )
+                    .expect("recursive spend hop verifier-key digest"),
+            };
+            if let Some(previous) = previous.as_ref() {
+                step.input_nullifiers = vec![previous.current_note.spend_nullifier];
+            }
+            let note = recursive_spend_note(
+                step.output_commitments[0],
+                format!("kagemusha-recursive-spend-nullifier-{hop_index}").as_bytes(),
+            );
+            let evidence =
+                iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                    &chain_id,
+                    &asset,
+                    &[step],
+                    4,
+                    fixed_bytes(b"kagemusha-recursive-spend-pallas-params"),
+                    kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                        .expect("canonical recursive fixed-window schedule digest"),
+                    kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                        .expect("canonical recursive fixed-window shared-table manifest digest"),
+                    fixed_bytes(b"kagemusha-recursive-spend-table-bases"),
+                    fixed_bytes(format!("kagemusha-recursive-spend-batch-{hop_index}").as_bytes()),
+                )
+                .expect("recursive spend evidence");
+            let accumulator = match previous.as_ref() {
+                Some(previous) => {
+                    iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof
+                            .as_ref()
+                            .expect("previous recursive spend proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append recursive spend accumulator")
+                }
+                None => {
+                    iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                        &evidence, &note,
+                    )
+                    .expect("initial recursive spend accumulator")
+                }
+            };
+            previous_proof = Some(recursive_spend_proof(&accumulator));
+            previous = Some(accumulator.clone());
+            accumulators.push(accumulator);
+        }
+        accumulators
+    }
+
     #[test]
     fn kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs() {
         let bundle = sample_recursive_aggregation_proof_bundle();
@@ -22811,6 +24721,9 @@ mod kagemusha_folded_real_prover_tests {
             bytes_to_u64_limbs_le(&public_inputs.fixed_window_shared_table_manifest_digest);
         let table_base_limbs = bytes_to_u64_limbs_le(&public_inputs.fixed_window_table_base_digest);
         let batch_limbs = bytes_to_u64_limbs_le(&public_inputs.verifier_witness_batch_digest);
+        let proof_chain_limbs = bytes_to_u64_limbs_le(&public_inputs.recursive_proof_chain_digest);
+        let scalar_projection_limbs =
+            bytes_to_u64_limbs_le(&public_inputs.recursive_verifier_scalar_projection_digest);
 
         assert_eq!(&values.public_values[0..4], public_hash_limbs.as_slice());
         assert_eq!(&values.public_values[4..8], evidence_limbs.as_slice());
@@ -22820,6 +24733,17 @@ mod kagemusha_folded_real_prover_tests {
         assert_eq!(&values.public_values[20..24], manifest_limbs.as_slice());
         assert_eq!(&values.public_values[24..28], table_base_limbs.as_slice());
         assert_eq!(&values.public_values[28..32], batch_limbs.as_slice());
+        assert_eq!(
+            &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+            proof_chain_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+            scalar_projection_limbs.as_slice()
+        );
         assert_eq!(
             values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
             u64::from(public_inputs.verifier_opening_len)
@@ -22847,6 +24771,44 @@ mod kagemusha_folded_real_prover_tests {
         let err = kagemusha_recursive_aggregation_proof_bundle_instance_values(&forged)
             .expect_err("hop-count substitution must reject before instance extraction");
         assert!(err.contains("witness count"), "{err}");
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_instance_values_expose_proof_chain_digest() {
+        let accumulator = recursive_spend_accumulators(2)
+            .pop()
+            .expect("two-hop recursive spend accumulator");
+        let recursive_proof = recursive_spend_proof(&accumulator);
+        let bundle = iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof,
+        };
+        bundle
+            .validate_public_input_binding()
+            .expect("recursive spend proof-chain public input binds accumulator");
+
+        let values = kagemusha_recursive_spend_bundle_instance_values(&bundle)
+            .expect("recursive spend instance values");
+        let proof_chain_limbs =
+            bytes_to_u64_limbs_le(&bundle.accumulator.recursive_proof_chain_digest);
+        assert_eq!(
+            &values.public_values[KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CHAIN_START_INDEX
+                ..KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX],
+            proof_chain_limbs.as_slice()
+        );
+        assert_eq!(
+            &values.public_values
+                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                    ..KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX],
+            &[0u64; 4]
+        );
+        assert_eq!(
+            bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_proof_chain_digest,
+            bundle.accumulator.recursive_proof_chain_digest
+        );
     }
 
     fn recursive_aggregation_vk_box() -> VerifyingKeyBox {
@@ -22892,16 +24854,79 @@ mod kagemusha_folded_real_prover_tests {
         bundle: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
         vk_box: &VerifyingKeyBox,
     ) {
-        let proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
-            18,
-            16,
-            16,
-            iroha_zkp_halo2::FLAG_LOOKUPS,
+        attach_recursive_aggregation_halo2_envelope(
+            bundle,
+            vk_box,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT,
             recursive_aggregation_public_inputs(bundle),
             vec![0xAB; 64],
+        );
+    }
+
+    fn attach_recursive_aggregation_halo2_envelope(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+        vk_box: &VerifyingKeyBox,
+        n_in: u8,
+        n_out: u8,
+        public_inputs: Vec<[u8; 32]>,
+        proof_body: Vec<u8>,
+    ) {
+        let proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
+            18,
+            n_in,
+            n_out,
+            iroha_zkp_halo2::FLAG_LOOKUPS,
+            public_inputs,
+            proof_body,
         )
         .expect("recursive aggregation Halo2 envelope")
         .to_bytes();
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+                    .to_owned(),
+            vk_hash: hash_vk(vk_box),
+            public_inputs:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                    .to_vec(),
+            proof_bytes,
+            aux: Vec::new(),
+        };
+        bundle.recursive_proof.proof = ProofBox::new(
+            ZK_BACKEND_HALO2_IPA.into(),
+            norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
+        );
+    }
+
+    fn recursive_aggregation_fp_public_inputs(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+    ) -> Vec<halo2_proofs::halo2curves::pasta::Fp> {
+        recursive_aggregation_public_inputs(bundle)
+            .into_iter()
+            .map(|bytes| {
+                let mut repr =
+                    <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::Repr::default();
+                repr.as_mut().copy_from_slice(&bytes);
+                Option::from(
+                    <halo2_proofs::halo2curves::pasta::Fp as ff::PrimeField>::from_repr(repr),
+                )
+                .expect("canonical recursive aggregation public input")
+            })
+            .collect()
+    }
+
+    fn attach_recursive_aggregation_zk1_instance_envelope(
+        bundle: &mut iroha_data_model::offline::KagemushaRecursiveAggregationProofBundle,
+        vk_box: &VerifyingKeyBox,
+        columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>>,
+    ) {
+        let mut proof_bytes = zk1::wrap_start();
+        zk1::wrap_append_proof(&mut proof_bytes, &[0xEF; 64]);
+        let column_refs: Vec<&[halo2_proofs::halo2curves::pasta::Fp]> =
+            columns.iter().map(|column| column.as_slice()).collect();
+        zk1::wrap_append_instances_pasta_fp_cols(&column_refs, &mut proof_bytes);
         let envelope = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
             circuit_id:
@@ -23054,6 +25079,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_verifies() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -23093,6 +25119,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_proof_rejects_wrong_cid_verifier_key_replay() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -23126,6 +25153,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_real_halo2_ipa_proof_rejects_tampering() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -23166,6 +25194,370 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_spend_real_halo2_ipa_proofs_verify_for_multiple_hops() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let record =
+            kagemusha_recursive_aggregation_proof_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 11)
+                .expect("recursive spend verifier record");
+        let accumulators = recursive_spend_accumulators(3);
+        let mut encoded_lengths = Vec::new();
+
+        for (index, accumulator) in accumulators.into_iter().enumerate() {
+            let bundle = prove_kagemusha_recursive_spend_accumulator(
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &vk_box,
+                accumulator,
+                None,
+            )
+            .expect("real recursive spend proof");
+            assert_eq!(
+                bundle.accumulator.hop_count,
+                u32::try_from(index + 1).expect("hop index fits u32")
+            );
+            preverify_kagemusha_recursive_spend_bundle(&bundle, &vk_box)
+                .expect("recursive spend proof preverification");
+            assert!(verify_kagemusha_recursive_spend_bundle(&bundle, &vk_box));
+            assert!(verify_kagemusha_recursive_spend_bundle_with_record(
+                &bundle, &record
+            ));
+            assert_eq!(
+                envelope_instances(&bundle.recursive_proof.proof),
+                kagemusha_recursive_spend_bundle_instance_values(&bundle)
+                    .expect("recursive spend instance values")
+                    .public_instance_columns()
+            );
+            encoded_lengths.push(
+                bundle
+                    .norito_encoded_len()
+                    .expect("recursive spend encoded length"),
+            );
+        }
+
+        assert!(
+            encoded_lengths.windows(2).all(|pair| pair[0] == pair[1]),
+            "recursive spend D2D payload must stay constant across hops: {encoded_lengths:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs() {
+        let (chain_id, asset, first_hop, second_hop, hop_record) =
+            sample_confidential_v2_two_hop_lineage();
+        let first_record_bundle =
+            one_hop_record_bundle(chain_id.clone(), asset.clone(), &first_hop, &hop_record);
+        let second_record_bundle = one_hop_record_bundle(chain_id, asset, &second_hop, &hop_record);
+        let first_envelope_archive =
+            one_hop_pallas_open_envelope_archive(&first_record_bundle, "recursive-spend-init-hop");
+        let second_envelope_archive = one_hop_pallas_open_envelope_archive(
+            &second_record_bundle,
+            "recursive-spend-append-hop",
+        );
+        let recursive_vk =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let first_note = sample_kagemusha_recursive_spend_note(
+            first_hop.output_commitments[0],
+            second_hop.input_nullifiers[0],
+            7,
+        );
+        let second_note = sample_kagemusha_recursive_spend_note(
+            second_hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-recursive-spend-final-nullifier"),
+            7,
+        );
+
+        let first_bundle =
+            prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_record_bundle,
+                &first_envelope_archive,
+                first_note,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("real recursive spend init from record-backed hop");
+        assert_eq!(first_bundle.accumulator.hop_count, 1);
+        assert!(verify_kagemusha_recursive_spend_bundle(
+            &first_bundle,
+            &recursive_vk
+        ));
+
+        let appended =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect("real recursive spend append from record-backed hop");
+        assert_eq!(appended.accumulator.hop_count, 2);
+        assert_eq!(
+            first_bundle
+                .norito_encoded_len()
+                .expect("first recursive spend encoded length"),
+            appended
+                .norito_encoded_len()
+                .expect("second recursive spend encoded length"),
+            "recursive spend D2D payload must stay constant after append"
+        );
+        assert!(verify_kagemusha_recursive_spend_bundle(
+            &appended,
+            &recursive_vk
+        ));
+
+        let mut tampered_previous = first_bundle.clone();
+        mutate_open_verify_envelope(&mut tampered_previous.recursive_proof.proof, |envelope| {
+            envelope.proof_bytes[12] ^= 0x01;
+        });
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &tampered_previous,
+                &second_record_bundle,
+                &second_envelope_archive,
+                second_note.clone(),
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject a tampered previous recursive proof");
+        assert!(
+            err.contains("previous Kagemusha recursive spend bundle did not verify"),
+            "unexpected previous-proof tamper error: {err}"
+        );
+
+        let wrong_amount_note = sample_kagemusha_recursive_spend_note(
+            second_hop.output_commitments[0],
+            fixed_bytes(b"kagemusha-recursive-spend-wrong-amount-nullifier"),
+            8,
+        );
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                &second_record_bundle,
+                &second_envelope_archive,
+                wrong_amount_note,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject a spendable-note amount mismatch");
+        assert!(
+            err.contains("amount"),
+            "unexpected wrong-amount append error: {err}"
+        );
+
+        let mut forged_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
+            norito::decode_from_bytes(&second_envelope_archive)
+                .expect("decode second open-envelope archive");
+        forged_envelopes[0].domain_tag =
+            Some(fixed_bytes(b"kagemusha-recursive-spend-forged-hop-domain"));
+        let forged_envelope_archive =
+            norito::to_bytes(&forged_envelopes).expect("encode forged open-envelope archive");
+        let err =
+            prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+                &first_bundle,
+                &second_record_bundle,
+                &forged_envelope_archive,
+                second_note,
+                KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &recursive_vk,
+                None,
+            )
+            .expect_err("append must reject Pallas hop-domain metadata substitution");
+        assert!(
+            err.contains("hop domain metadata mismatch"),
+            "unexpected forged-envelope metadata error: {err}"
+        );
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let mut accumulators = recursive_spend_accumulators(2);
+        let accumulator = accumulators.pop().expect("two-hop accumulator");
+        let bundle = prove_kagemusha_recursive_spend_accumulator(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            accumulator,
+            None,
+        )
+        .expect("real recursive spend proof");
+
+        let mut proof_body_tamper = bundle.clone();
+        mutate_open_verify_envelope(&mut proof_body_tamper.recursive_proof.proof, |envelope| {
+            let proof_payload_start = 12;
+            envelope.proof_bytes[proof_payload_start] ^= 0x01;
+        });
+        preverify_kagemusha_recursive_spend_bundle(&proof_body_tamper, &vk_box)
+            .expect("proof-body tamper keeps public metadata preverification valid");
+        assert!(
+            !verify_kagemusha_recursive_spend_bundle(&proof_body_tamper, &vk_box),
+            "backend verifier must reject recursive spend proof body tampering"
+        );
+
+        let mut instance_tamper = bundle.clone();
+        mutate_open_verify_envelope(&mut instance_tamper.recursive_proof.proof, |envelope| {
+            let last = envelope
+                .proof_bytes
+                .last_mut()
+                .expect("recursive spend proof bytes");
+            *last ^= 0x01;
+        });
+        assert!(
+            preverify_kagemusha_recursive_spend_bundle(&instance_tamper, &vk_box).is_err(),
+            "public instance tampering must reject before backend verification"
+        );
+
+        let mut instance_count_tamper = bundle.clone();
+        mutate_open_verify_envelope(
+            &mut instance_count_tamper.recursive_proof.proof,
+            |envelope| {
+                let parsed = iroha_zkp_halo2::Halo2ProofEnvelope::from_bytes(&envelope.proof_bytes)
+                    .expect("recursive spend Halo2 proof envelope");
+                let mut public_inputs = parsed.public_inputs;
+                public_inputs.pop();
+                envelope.proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
+                    parsed.header.k,
+                    RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN,
+                    RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT - 1,
+                    parsed.header.flags,
+                    public_inputs,
+                    parsed.proof,
+                )
+                .expect("forged recursive spend Halo2 envelope with missing public instance")
+                .to_bytes();
+            },
+        );
+        let err = preverify_kagemusha_recursive_spend_bundle(&instance_count_tamper, &vk_box)
+            .expect_err("recursive spend missing public instance column must reject");
+        assert!(
+            err.contains("43 public instance columns") && err.contains("found 42"),
+            "{err}"
+        );
+
+        let mut scalar_projection_public_input_tamper = bundle.clone();
+        mutate_open_verify_envelope(
+            &mut scalar_projection_public_input_tamper.recursive_proof.proof,
+            |envelope| {
+                let mut parsed =
+                    iroha_zkp_halo2::Halo2ProofEnvelope::from_bytes(&envelope.proof_bytes)
+                        .expect("recursive spend Halo2 proof envelope");
+                parsed.public_inputs
+                    [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] ^=
+                    0x01;
+                envelope.proof_bytes = parsed.to_bytes();
+            },
+        );
+        let err = preverify_kagemusha_recursive_spend_bundle(
+            &scalar_projection_public_input_tamper,
+            &vk_box,
+        )
+        .expect_err("recursive spend scalar-projection public instance tamper must reject");
+        assert!(err.contains("public instance"), "{err}");
+
+        let mut aux_tamper = bundle.clone();
+        mutate_open_verify_envelope(&mut aux_tamper.recursive_proof.proof, |envelope| {
+            envelope.aux = b"unbound-recursive-spend-metadata".to_vec();
+        });
+        let err = preverify_kagemusha_recursive_spend_bundle(&aux_tamper, &vk_box)
+            .expect_err("non-canonical recursive spend envelope aux must reject");
+        assert!(err.contains("auxiliary metadata"), "{err}");
+
+        let mut schema_tamper = bundle.clone();
+        mutate_open_verify_envelope(&mut schema_tamper.recursive_proof.proof, |envelope| {
+            envelope.public_inputs = b"forged-recursive-spend-schema".to_vec();
+        });
+        let err = preverify_kagemusha_recursive_spend_bundle(&schema_tamper, &vk_box)
+            .expect_err("recursive spend schema substitution must reject");
+        assert!(err.contains("public-input schema"), "{err}");
+
+        let mut proof_chain_public_input_tamper = bundle.clone();
+        proof_chain_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .recursive_proof_chain_digest[0] ^= 0x01;
+        proof_chain_public_input_tamper
+            .recursive_proof
+            .public_inputs_hash = proof_chain_public_input_tamper
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("tampered recursive spend proof-chain public-input hash");
+        let err =
+            preverify_kagemusha_recursive_spend_bundle(&proof_chain_public_input_tamper, &vk_box)
+                .expect_err("recursive spend proof-chain public input tampering must reject");
+        assert!(err.contains("public input"), "{err}");
+
+        let mut note_tamper = bundle;
+        note_tamper.accumulator.current_note.spend_nullifier[0] ^= 0x01;
+        let err = preverify_kagemusha_recursive_spend_bundle(&note_tamper, &vk_box)
+            .expect_err("current-note tampering must reject public-input binding");
+        assert!(err.contains("public input"), "{err}");
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata() {
+        let vk_box =
+            kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
+        let accumulator = recursive_spend_accumulators(1)
+            .pop()
+            .expect("one-hop accumulator");
+        let bundle = prove_kagemusha_recursive_spend_accumulator(
+            KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            accumulator,
+            None,
+        )
+        .expect("real recursive spend proof");
+        let record =
+            kagemusha_recursive_aggregation_proof_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 1)
+                .expect("recursive spend verifier record");
+
+        preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &record)
+            .expect("baseline recursive spend record preverification");
+
+        let mut inactive = record.clone();
+        inactive.status = ConfidentialStatus::Withdrawn;
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &inactive)
+            .expect_err("inactive recursive spend verifier record must reject");
+        assert!(err.contains("not active"), "{err}");
+
+        let mut wrong_namespace = record.clone();
+        wrong_namespace.namespace = "offline_note".to_owned();
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &wrong_namespace)
+            .expect_err("wrong recursive spend verifier namespace must reject");
+        assert!(err.contains("namespace"), "{err}");
+
+        let mut tiny_cap = record.clone();
+        tiny_cap.max_proof_bytes = 1;
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &tiny_cap)
+            .expect_err("recursive spend proof over verifier cap must reject");
+        assert!(err.contains("record limit"), "{err}");
+
+        let mut missing_key = record.clone();
+        missing_key.key = None;
+        let err = preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &missing_key)
+            .expect_err("missing inline recursive spend key must reject");
+        assert!(err.contains("no inline key"), "{err}");
+
+        let mut wrong_commitment = record;
+        wrong_commitment.commitment[0] ^= 0x01;
+        let err =
+            preverify_kagemusha_recursive_spend_bundle_with_record(&bundle, &wrong_commitment)
+                .expect_err("wrong recursive spend key commitment must reject");
+        assert!(err.contains("commitment mismatch"), "{err}");
+    }
+
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_prover_rejects_aliases_and_cross_circuit_keys() {
         let vk_box =
             kagemusha_recursive_aggregation_proof_vk_box().expect("recursive aggregation vk");
@@ -23249,8 +25641,8 @@ mod kagemusha_folded_real_prover_tests {
             public_inputs[18][0] ^= 0x01;
             envelope.proof_bytes = iroha_zkp_halo2::Halo2ProofEnvelope::new(
                 18,
-                16,
-                16,
+                RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN,
+                RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT,
                 iroha_zkp_halo2::FLAG_LOOKUPS,
                 public_inputs,
                 vec![0xCD; 64],
@@ -23265,6 +25657,76 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_public_instance_count_mismatch() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        attach_recursive_aggregation_envelope(&mut bundle, &vk_box);
+
+        let mut missing_column = bundle.clone();
+        let mut missing_inputs = recursive_aggregation_public_inputs(&bundle);
+        missing_inputs.pop();
+        attach_recursive_aggregation_halo2_envelope(
+            &mut missing_column,
+            &vk_box,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT - 1,
+            missing_inputs,
+            vec![0xD1; 64],
+        );
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&missing_column, &vk_box)
+            .expect_err("recursive aggregation missing public instance column must reject");
+        assert!(
+            err.contains("43 public instance columns") && err.contains("found 42"),
+            "{err}"
+        );
+
+        let mut extra_column = bundle.clone();
+        let mut extra_inputs = recursive_aggregation_public_inputs(&bundle);
+        extra_inputs.push([0xA5; 32]);
+        attach_recursive_aggregation_halo2_envelope(
+            &mut extra_column,
+            &vk_box,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_IN,
+            RECURSIVE_AGGREGATION_TEST_ENVELOPE_N_OUT + 1,
+            extra_inputs,
+            vec![0xD2; 64],
+        );
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&extra_column, &vk_box)
+            .expect_err("recursive aggregation extra public instance column must reject");
+        assert!(
+            err.contains("43 public instance columns") && err.contains("found 44"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_aggregation_proof_preverify_rejects_multi_row_public_instances() {
+        let vk_box = recursive_aggregation_vk_box();
+        let mut bundle = sample_recursive_aggregation_proof_bundle();
+        let columns: Vec<Vec<halo2_proofs::halo2curves::pasta::Fp>> =
+            recursive_aggregation_fp_public_inputs(&bundle)
+                .into_iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    vec![
+                        value,
+                        halo2_proofs::halo2curves::pasta::Fp::from(index as u64 + 1),
+                    ]
+                })
+                .collect();
+        attach_recursive_aggregation_zk1_instance_envelope(&mut bundle, &vk_box, columns);
+
+        let err = preverify_kagemusha_recursive_aggregation_proof_bundle(&bundle, &vk_box)
+            .expect_err("recursive aggregation multi-row public instances must reject");
+        assert!(
+            err.contains("public instance column 0")
+                && err.contains("exactly one row")
+                && err.contains("found 2"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_aggregation_proof_preverify_rejects_non_production_backend_labels() {
         let vk_box = recursive_aggregation_vk_box();
         let mut bundle = sample_recursive_aggregation_proof_bundle();
@@ -23274,6 +25736,8 @@ mod kagemusha_folded_real_prover_tests {
             "groth16/bn254",
             "halo2/kzg",
             "halo2/bn254",
+            "stark/fri",
+            "stark/fri/transparent-v1",
             "debug-proof",
             "mock-proof",
             "halo2/ipa:mock-proof",
@@ -23478,66 +25942,143 @@ mod kagemusha_folded_real_prover_tests {
 
     fn sample_confidential_v2_verified_hop()
     -> (ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord) {
-        let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
-        let asset = AssetDefinitionId::new(
-            DomainId::try_new("offline", "universal").expect("domain id"),
-            "kgm".parse().expect("asset definition name"),
-        );
-        let record =
-            confidential_v2::confidential_transfer_v2_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3)
-                .expect("confidential transfer v2 verifier record");
-        let vk_box = record.key.clone().expect("inline transfer verifier key");
-        let spend_key = [0x11_u8; 32];
-        let input_rho = [0x21_u8; 32];
-        let input_diversifier =
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
-        let input_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &spend_key,
-            input_diversifier,
-        )
-        .expect("input owner tag");
-        let input_commitment = confidential_v2::derive_confidential_note_v2(
-            &asset.to_string(),
-            7,
-            input_rho,
-            input_owner_tag,
-        )
-        .expect("input commitment");
-        let tree_commitments = vec![input_commitment];
+        static HOP: OnceLock<(ChainId, AssetDefinitionId, OwnedFoldHop, VerifyingKeyRecord)> =
+            OnceLock::new();
+
+        HOP.get_or_init(|| {
+            let chain_id: ChainId = "kagemusha-fold-chain".parse().expect("chain id");
+            let asset = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").expect("domain id"),
+                "kgm".parse().expect("asset definition name"),
+            );
+            let record = confidential_v2::confidential_transfer_v2_vk_record(
+                KAGEMUSHA_VERIFIER_NAMESPACE,
+                3,
+            )
+            .expect("confidential transfer v2 verifier record");
+            let vk_box = record.key.clone().expect("inline transfer verifier key");
+            let spend_key = [0x11_u8; 32];
+            let input_rho = [0x21_u8; 32];
+            let input_diversifier =
+                confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-input");
+            let input_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &spend_key,
+                    input_diversifier,
+                )
+                .expect("input owner tag");
+            let input_commitment = confidential_v2::derive_confidential_note_v2(
+                &asset.to_string(),
+                7,
+                input_rho,
+                input_owner_tag,
+            )
+            .expect("input commitment");
+            let tree_commitments = vec![input_commitment];
+            let root_before = confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                .expect("root before");
+            let output_rho = [0x31_u8; 32];
+            let output_owner_tag =
+                confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &[0x41_u8; 32],
+                    confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
+                )
+                .expect("output owner tag");
+            let proof = confidential_v2::build_confidential_transfer_proof_v2(
+                &chain_id,
+                &asset.to_string(),
+                &spend_key,
+                &tree_commitments,
+                &[confidential_v2::ConfidentialTransferInputV2 {
+                    amount: 7,
+                    rho: input_rho,
+                    diversifier: input_diversifier,
+                    leaf_index: 0,
+                }],
+                &[confidential_v2::ConfidentialTransferOutputV2 {
+                    amount: 7,
+                    rho: output_rho,
+                    owner_tag: output_owner_tag,
+                }],
+                root_before,
+                &record.circuit_id,
+                &vk_box,
+            )
+            .expect("confidential transfer v2 proof");
+            let mut next_tree = tree_commitments;
+            next_tree.extend(proof.output_commitments.iter().copied());
+            let root_after =
+                confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
+            let vk_commitment = hash_vk(&vk_box);
+            let mut attachment = ProofAttachment::new_ref(
+                ZK_BACKEND_HALO2_IPA.into(),
+                proof.proof,
+                VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    "kagemusha-hop-confidential-transfer-v2",
+                ),
+            );
+            attachment.vk_commitment = Some(vk_commitment);
+            (
+                chain_id,
+                asset,
+                OwnedFoldHop {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    vk_box,
+                },
+                record,
+            )
+        })
+        .clone()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sample_confidential_v2_owned_hop_from_note(
+        chain_id: &ChainId,
+        asset: &AssetDefinitionId,
+        record: &VerifyingKeyRecord,
+        vk_box: &VerifyingKeyBox,
+        tree_commitments: &[[u8; 32]],
+        spend_key: [u8; 32],
+        amount: u128,
+        input_rho: [u8; 32],
+        input_diversifier: [u8; 32],
+        leaf_index: usize,
+        output_rho: [u8; 32],
+        output_owner_tag: [u8; 32],
+    ) -> OwnedFoldHop {
         let root_before =
-            confidential_v2::compute_confidential_root_v2(&tree_commitments).expect("root before");
-        let output_rho = [0x31_u8; 32];
-        let output_owner_tag = confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
-            &[0x41_u8; 32],
-            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-fold-output"),
-        )
-        .expect("output owner tag");
+            confidential_v2::compute_confidential_root_v2(tree_commitments).expect("root before");
         let proof = confidential_v2::build_confidential_transfer_proof_v2(
-            &chain_id,
+            chain_id,
             &asset.to_string(),
             &spend_key,
-            &tree_commitments,
+            tree_commitments,
             &[confidential_v2::ConfidentialTransferInputV2 {
-                amount: 7,
+                amount,
                 rho: input_rho,
                 diversifier: input_diversifier,
-                leaf_index: 0,
+                leaf_index,
             }],
             &[confidential_v2::ConfidentialTransferOutputV2 {
-                amount: 7,
+                amount,
                 rho: output_rho,
                 owner_tag: output_owner_tag,
             }],
             root_before,
             &record.circuit_id,
-            &vk_box,
+            vk_box,
         )
         .expect("confidential transfer v2 proof");
-        let mut next_tree = tree_commitments;
+        let mut next_tree = tree_commitments.to_vec();
         next_tree.extend(proof.output_commitments.iter().copied());
         let root_after =
             confidential_v2::compute_confidential_root_v2(&next_tree).expect("root after");
-        let vk_commitment = hash_vk(&vk_box);
+        let vk_commitment = hash_vk(vk_box);
         let mut attachment = ProofAttachment::new_ref(
             ZK_BACKEND_HALO2_IPA.into(),
             proof.proof,
@@ -23547,19 +26088,159 @@ mod kagemusha_folded_real_prover_tests {
             ),
         );
         attachment.vk_commitment = Some(vk_commitment);
-        (
-            chain_id,
-            asset,
-            OwnedFoldHop {
-                root_before,
-                input_nullifiers: proof.nullifiers,
-                output_commitments: proof.output_commitments,
-                root_after,
-                attachment,
-                vk_box,
-            },
-            record,
+        OwnedFoldHop {
+            root_before,
+            input_nullifiers: proof.nullifiers,
+            output_commitments: proof.output_commitments,
+            root_after,
+            attachment,
+            vk_box: vk_box.clone(),
+        }
+    }
+
+    fn sample_confidential_v2_two_hop_lineage() -> (
+        ChainId,
+        AssetDefinitionId,
+        OwnedFoldHop,
+        OwnedFoldHop,
+        VerifyingKeyRecord,
+    ) {
+        let chain_id: ChainId = "kagemusha-recursive-spend-real-chain"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-real-spend".parse().expect("asset definition name"),
+        );
+        let record =
+            confidential_v2::confidential_transfer_v2_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3)
+                .expect("confidential transfer v2 verifier record");
+        let vk_box = record.key.clone().expect("inline transfer verifier key");
+        let amount = 7;
+
+        let first_spend_key = [0x11_u8; 32];
+        let first_input_rho = [0x21_u8; 32];
+        let first_input_diversifier =
+            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-spend-hop-0-input");
+        let first_input_owner_tag =
+            confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                &first_spend_key,
+                first_input_diversifier,
+            )
+            .expect("first input owner tag");
+        let first_input_commitment = confidential_v2::derive_confidential_note_v2(
+            &asset.to_string(),
+            amount,
+            first_input_rho,
+            first_input_owner_tag,
         )
+        .expect("first input commitment");
+        let first_tree = vec![first_input_commitment];
+
+        let second_spend_key = [0x41_u8; 32];
+        let first_output_rho = [0x31_u8; 32];
+        let first_output_diversifier =
+            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-spend-hop-0-output");
+        let first_output_owner_tag =
+            confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                &second_spend_key,
+                first_output_diversifier,
+            )
+            .expect("first output owner tag");
+        let first_hop = sample_confidential_v2_owned_hop_from_note(
+            &chain_id,
+            &asset,
+            &record,
+            &vk_box,
+            &first_tree,
+            first_spend_key,
+            amount,
+            first_input_rho,
+            first_input_diversifier,
+            0,
+            first_output_rho,
+            first_output_owner_tag,
+        );
+
+        let mut second_tree = first_tree;
+        second_tree.extend(first_hop.output_commitments.iter().copied());
+        let final_spend_key = [0x51_u8; 32];
+        let second_output_rho = [0x61_u8; 32];
+        let second_output_diversifier =
+            confidential_v2::derive_confidential_diversifier_v2(b"kagemusha-spend-hop-1-output");
+        let second_output_owner_tag =
+            confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                &final_spend_key,
+                second_output_diversifier,
+            )
+            .expect("second output owner tag");
+        let second_hop = sample_confidential_v2_owned_hop_from_note(
+            &chain_id,
+            &asset,
+            &record,
+            &vk_box,
+            &second_tree,
+            second_spend_key,
+            amount,
+            first_output_rho,
+            first_output_diversifier,
+            1,
+            second_output_rho,
+            second_output_owner_tag,
+        );
+
+        (chain_id, asset, first_hop, second_hop, record)
+    }
+
+    fn sample_kagemusha_recursive_spend_note(
+        note_commitment: [u8; 32],
+        spend_nullifier: [u8; 32],
+        amount: u128,
+    ) -> iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+        iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+            note_commitment,
+            spend_nullifier,
+            amount: Numeric::new(amount, 0),
+        }
+    }
+
+    fn one_hop_record_bundle(
+        chain_id: ChainId,
+        asset: AssetDefinitionId,
+        hop: &OwnedFoldHop,
+        record: &VerifyingKeyRecord,
+    ) -> KagemushaVerifiedFoldRecordBundle {
+        KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: vec![hop.as_bundle_step()],
+            },
+            verifier_records: vec![KagemushaVerifiedFoldVerifierRecord {
+                id: hop.attachment.vk_ref.clone(),
+                record: record.clone(),
+            }],
+        }
+    }
+
+    fn one_hop_pallas_open_envelope_archive(
+        record_bundle: &KagemushaVerifiedFoldRecordBundle,
+        label: &str,
+    ) -> Vec<u8> {
+        let metadata = kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+            &record_bundle.bundle.chain_id,
+            &record_bundle.bundle.asset,
+            0,
+            &record_bundle.bundle.steps[0],
+        )
+        .expect("Pallas open-envelope hop metadata");
+        let envelope =
+            super::kagemusha_non_native_limb_circuit_tests::sample_pallas_open_envelope_with_metadata(
+                4,
+                label,
+                metadata,
+            );
+        norito::to_bytes(&vec![envelope]).expect("encode Pallas open-envelope archive")
     }
 
     fn envelope_instances(proof: &ProofBox) -> Vec<Vec<[u8; 32]>> {
@@ -23626,6 +26307,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_emits_real_halo2_ipa_proof() {
         let vk_box = kagemusha_vk_box();
         let proving_key = derive_halo2_ipa_kagemusha_folded_proving_key_bytes(&vk_box)
@@ -23704,6 +26386,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proving-key derivation; run explicitly with --ignored --test-threads=1"]
     fn prove_kagemusha_compact_payment_token_rejects_bad_final_proving_key_bytes() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23744,6 +26427,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_tampered_real_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23766,6 +26450,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_oversized_folded_proof() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23786,6 +26471,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_public_input_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23814,6 +26500,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_context_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23871,6 +26558,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_wrong_verifier_key_id() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -23909,6 +26597,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_cross_circuit_verifier_key() {
         let vk_box = kagemusha_vk_box();
         let recursive_vk_box = recursive_aggregation_vk_box();
@@ -23966,6 +26655,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_non_production_folded_backend_labels() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -24000,6 +26690,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_circuit_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -24018,6 +26709,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_backend_and_vk_hash_substitution() {
         let vk_box = kagemusha_vk_box();
         let public_inputs = sample_public_inputs();
@@ -24053,6 +26745,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_rejects_envelope_aux_substitution() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -24073,6 +26766,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_folded_vk_record_embeds_real_active_verifier_key() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -24098,6 +26792,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_verifies_against_active_vk_record() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -24116,6 +26811,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches() {
         let record =
             kagemusha_folded_vk_record(KAGEMUSHA_VERIFIER_NAMESPACE, 3).expect("vk record");
@@ -24779,6 +27475,36 @@ mod kagemusha_folded_real_prover_tests {
             evidence.verifier_witness_batch_digest,
             hop_bound_preflight.aggregate_digest
         );
+        validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+            &evidence,
+            &hop_bound_preflight,
+        )
+        .expect("record-backed LEN=4 evidence binds to one-hop verifier-slice metadata");
+        let mut digest_splice = hop_bound_preflight;
+        digest_splice.aggregate_digest[0] ^= 1;
+        let digest_err = validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+            &evidence,
+            &digest_splice,
+        )
+        .err()
+        .expect("one-hop verifier-slice evidence binding must reject batch digest splice");
+        assert!(
+            digest_err.contains("verifier-witness batch digest mismatch"),
+            "expected verifier-witness batch digest mismatch, found {digest_err:?}"
+        );
+        let mut opening_len_splice = hop_bound_preflight;
+        opening_len_splice.opening_len = 2;
+        let opening_len_err =
+            validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+                &evidence,
+                &opening_len_splice,
+            )
+            .err()
+            .expect("one-hop verifier-slice evidence binding must reject opening-length splice");
+        assert!(
+            opening_len_err.contains("opening length 2"),
+            "expected LEN=2 profile rejection, found {opening_len_err:?}"
+        );
         assert_eq!(evidence.aggregation_statement.initial_root, hop.root_before);
         assert_eq!(evidence.aggregation_statement.final_root, hop.root_after);
 
@@ -24871,6 +27597,24 @@ mod kagemusha_folded_real_prover_tests {
             evidence.verifier_witness_batch_digest,
             preflight.aggregate_digest
         );
+        validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+            &evidence, &preflight,
+        )
+        .expect(
+            "record-backed open-envelope LEN=4 evidence binds to one-hop verifier-slice metadata",
+        );
+        let mut table_base_splice = preflight;
+        table_base_splice.fixed_window_table_base_digest[0] ^= 1;
+        let err = validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(
+            &evidence,
+            &table_base_splice,
+        )
+        .err()
+        .expect("one-hop verifier-slice evidence binding must reject table-base splice");
+        assert!(
+            err.contains("fixed-window table-base digest mismatch"),
+            "expected table-base digest mismatch, found {err:?}"
+        );
 
         let record_bundle = KagemushaVerifiedFoldRecordBundle {
             bundle: bundle.clone(),
@@ -24890,6 +27634,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_batch_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -25059,6 +27804,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_pallas_open_envelopes_accepts_active_records()
      {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
@@ -26105,6 +28851,7 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn prove_verified_kagemusha_compact_payment_token_from_bundle_with_records_emits_real_proof() {
         let (chain_id, asset, hop, record) = sample_confidential_v2_verified_hop();
         let id = hop.attachment.vk_ref.clone();
@@ -26755,6 +29502,7 @@ mod pasta_tiny {
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::{
             CurveAffine as _,
+            ff::PrimeField as _,
             group::{Curve as _, GroupEncoding as _, prime::PrimeCurveAffine as _},
             pasta::{EqAffine as VestaAffine, Fp as Scalar},
         },
@@ -28366,6 +31114,7 @@ mod pasta_tiny {
         left_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
         right_square: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
         right_quad: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
+        digest_instance: halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>,
         step: [Selector; KAGEMUSHA_ONE_HOP_VERIFIER_SCALAR_PROJECTION_STEPS],
         input_link: Selector,
         digest_public: Selector,
@@ -28381,10 +31130,12 @@ mod pasta_tiny {
         state
     }
 
-    fn configure_kagemusha_one_hop_verifier_scalar_projection(
+    fn configure_kagemusha_one_hop_verifier_scalar_projection<const LEN: usize>(
         meta: &mut ConstraintSystem<Scalar>,
         verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalarConfig,
     ) -> KagemushaOneHopVerifierScalarProjectionConfig {
+        let rounds = ipa_power_of_two_rounds(LEN)
+            .expect("one-hop verifier slice opening length must be power-of-two");
         let inputs = std::array::from_fn(|_| meta.advice_column());
         let left = meta.advice_column();
         let right = meta.advice_column();
@@ -28462,7 +31213,7 @@ mod pasta_tiny {
             .as_ref()
             .expect("initial b scalar is public")
             .instance;
-        let final_b_instance = verifier.b_reduction.vectors[1][0]
+        let final_b_instance = verifier.b_reduction.vectors[rounds][0]
             .public
             .as_ref()
             .expect("final b scalar is public")
@@ -28530,6 +31281,7 @@ mod pasta_tiny {
             left_quad,
             right_square,
             right_quad,
+            digest_instance,
             step,
             input_link,
             digest_public,
@@ -28622,12 +31374,13 @@ mod pasta_tiny {
     ///
     /// This is not compact-token mode-2 admission. It is a bounded circuit
     /// composition target for the first private-hop recursive verifier slice:
-    /// the recursive aggregation public inputs must declare opening length `2`,
+    /// the recursive aggregation public inputs must declare opening length `LEN`,
     /// witness count `1`, and hop count `1`, while the embedded shared-table
-    /// `LEN = 2` verifier proves the corresponding IPA verifier and transcript
+    /// verifier proves the corresponding IPA verifier and transcript
     /// binding relations.
     #[derive(Clone)]
     pub struct KagemushaRecursiveAggregationOneHopVerifierSlice<
+        const LEN: usize,
         const WINDOWS: usize,
         const WINDOW_BITS: usize,
     > {
@@ -28635,11 +31388,11 @@ mod pasta_tiny {
         pub semantic: Box<KagemushaRecursiveAggregationSemantic>,
         /// One private-hop IPA verifier slice with transcript binding.
         pub verifier:
-            Box<NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>>,
+            Box<NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>>,
     }
 
-    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Default
-        for KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Default
+        for KagemushaRecursiveAggregationOneHopVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
     {
         fn default() -> Self {
             Self {
@@ -28649,18 +31402,18 @@ mod pasta_tiny {
         }
     }
 
-    impl<const WINDOWS: usize, const WINDOW_BITS: usize>
-        KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize>
+        KagemushaRecursiveAggregationOneHopVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
     {
         /// Build a one-hop recursive verifier-slice circuit from checked witnesses.
         ///
         /// # Errors
         ///
         /// Returns an error if the recursive aggregation public metadata is not
-        /// the single-hop, length-two profile matched by this verifier slice.
+        /// the single-hop profile matched by this verifier slice.
         pub fn try_from_parts(
             semantic: KagemushaRecursiveAggregationSemantic,
-            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>,
+            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
         ) -> Result<Self, String> {
             Self::validate_one_hop_semantic_profile(&semantic)?;
             if !verifier.host_links_hold() {
@@ -28668,6 +31421,7 @@ mod pasta_tiny {
                     "one-hop recursive verifier slice verifier host-link mismatch".to_owned(),
                 );
             }
+            Self::validate_one_hop_scalar_projection_public_input_binding(&semantic, &verifier)?;
             Ok(Self {
                 semantic: Box::new(semantic),
                 verifier: Box::new(verifier),
@@ -28679,12 +31433,12 @@ mod pasta_tiny {
         /// # Errors
         ///
         /// Returns an error if the recursive metadata is not the one-hop
-        /// profile, if the preflight is not a single `LEN = 2` Pallas verifier
+        /// profile, if the preflight is not a single `LEN` Pallas verifier
         /// witness, or if any preflight digest/fingerprint limb differs from
         /// the recursive aggregation public metadata.
         pub fn try_from_parts_with_preflight(
             semantic: KagemushaRecursiveAggregationSemantic,
-            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<2, WINDOWS, WINDOW_BITS>,
+            verifier: NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
             preflight: &PallasIpaBatchVerifierPreflight,
         ) -> Result<Self, String> {
             Self::validate_one_hop_preflight_metadata_binding(&semantic, preflight)?;
@@ -28693,6 +31447,7 @@ mod pasta_tiny {
                     "one-hop recursive verifier slice verifier host-link mismatch".to_owned(),
                 );
             }
+            Self::validate_one_hop_scalar_projection_public_input_binding(&semantic, &verifier)?;
             Ok(Self {
                 semantic: Box::new(semantic),
                 verifier: Box::new(verifier),
@@ -28720,16 +31475,171 @@ mod pasta_tiny {
             Self::validate_one_hop_preflight_binding(semantic, preflight)
         }
 
+        /// Validate that a one-hop native Pallas witness re-derives the supplied preflight.
+        ///
+        /// This is the host-side guard that keeps preflight metadata from being
+        /// paired with a different self-consistent verifier witness before the
+        /// full witness-batch digest relation is proved in-circuit.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the fixed-window profile is not production, the
+        /// witness fails native preflight, or the derived digest/fingerprint
+        /// fields do not exactly match `preflight`.
+        pub fn validate_one_hop_pallas_witness_preflight_binding(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<(), String> {
+            if WINDOWS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS
+                || WINDOW_BITS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+            {
+                return Err(format!(
+                    "one-hop recursive verifier slice requires production fixed-window profile {}x{} for Pallas witness preflight binding (found {WINDOWS}x{WINDOW_BITS})",
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+                ));
+            }
+            let derived_preflight = NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::validate_pallas_verifier_witness_batch(
+                params, std::slice::from_ref(witness)
+            )?;
+            if derived_preflight != *preflight {
+                return Err(
+                    "one-hop recursive verifier slice Pallas witness preflight mismatch".to_owned(),
+                );
+            }
+            Ok(())
+        }
+
+        /// Validate that a one-hop native Pallas witness re-derives the supplied hop-bound preflight.
+        ///
+        /// Reserved mode-2 evidence stores the hop-proof-hash-bound preflight
+        /// digest, not the detached native batch digest. This guard keeps the
+        /// one-hop verifier-slice host path aligned with that evidence shape until
+        /// the full witness-batch digest relation is proved in-circuit.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the fixed-window profile is not production, the
+        /// witness fails native preflight, the hop proof hash is not the one bound
+        /// into `preflight`, or the derived digest/fingerprint fields do not
+        /// exactly match `preflight`.
+        #[cfg(feature = "zk-halo2-ipa")]
+        pub fn validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            hop_proof_hash: &iroha_crypto::Hash,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<(), String> {
+            if WINDOWS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS
+                || WINDOW_BITS != super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+            {
+                return Err(format!(
+                    "one-hop recursive verifier slice requires production fixed-window profile {}x{} for hop-bound Pallas witness preflight binding (found {WINDOWS}x{WINDOW_BITS})",
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
+                    super::KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS
+                ));
+            }
+            let native_preflight = NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::validate_pallas_verifier_witness_batch(
+                params, std::slice::from_ref(witness)
+            )?;
+            let derived_preflight = super::kagemusha_bind_pallas_ipa_batch_preflight_to_hop_proofs(
+                native_preflight,
+                std::slice::from_ref(hop_proof_hash),
+            )?;
+            if derived_preflight != *preflight {
+                return Err(
+                    "one-hop recursive verifier slice hop-bound Pallas witness preflight mismatch"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        }
+
+        /// Build a one-hop recursive verifier-slice circuit from a native Pallas witness and hop-bound preflight.
+        ///
+        /// Reserved mode-2 evidence stores the hop-proof-hash-bound preflight
+        /// digest. This constructor keeps that path separate from
+        /// [`Self::try_from_pallas_witness_with_preflight`], which intentionally
+        /// accepts only the detached native-batch preflight.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if recursive metadata, hop-bound Pallas preflight
+        /// metadata, native witness binding, witness translation, or verifier
+        /// host-links are inconsistent.
+        #[cfg(feature = "zk-halo2-ipa")]
+        pub fn try_from_pallas_witness_with_hop_bound_preflight(
+            semantic: KagemushaRecursiveAggregationSemantic,
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            hop_proof_hash: &iroha_crypto::Hash,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<Self, String> {
+            Self::validate_one_hop_preflight_metadata_binding(&semantic, preflight)?;
+            Self::validate_one_hop_pallas_witness_hop_bound_preflight_binding(
+                params,
+                witness,
+                hop_proof_hash,
+                preflight,
+            )?;
+            let verifier = NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(params, witness)?;
+            Self::try_from_parts_with_preflight(semantic, verifier, preflight)
+        }
+
+        /// Build a one-hop recursive verifier-slice circuit from a native Pallas witness.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if recursive metadata, Pallas preflight metadata,
+        /// native witness binding, witness translation, or verifier host-links
+        /// are inconsistent.
+        pub fn try_from_pallas_witness_with_preflight(
+            semantic: KagemushaRecursiveAggregationSemantic,
+            params: &iroha_zkp_halo2::pallas::Params,
+            witness: &iroha_zkp_halo2::IpaVerifierWitness<iroha_zkp_halo2::pallas::PallasBackend>,
+            preflight: &PallasIpaBatchVerifierPreflight,
+        ) -> Result<Self, String> {
+            Self::validate_one_hop_preflight_metadata_binding(&semantic, preflight)?;
+            Self::validate_one_hop_pallas_witness_preflight_binding(params, witness, preflight)?;
+            let verifier = NonNativeVestaIpaVerifierSharedTableNativeScalar::<
+                LEN,
+                WINDOWS,
+                WINDOW_BITS,
+            >::try_from_pallas_verifier_witness(params, witness)?;
+            Self::try_from_parts_with_preflight(semantic, verifier, preflight)
+        }
+
         fn validate_one_hop_semantic_profile(
             semantic: &KagemushaRecursiveAggregationSemantic,
         ) -> Result<(), String> {
+            let Some(opening_choice_index) =
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICES
+                    .iter()
+                    .position(|choice| usize::try_from(*choice).ok() == Some(LEN))
+            else {
+                return Err(format!(
+                    "one-hop recursive verifier slice opening length {LEN} is not supported"
+                ));
+            };
             if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_INDEX]
-                != Scalar::from(2)
+                != Scalar::from(u64::try_from(LEN).expect("opening length fits u64"))
             {
-                return Err(
-                    "one-hop recursive verifier slice requires verifier opening length 2"
-                        .to_owned(),
-                );
+                return Err(format!(
+                    "one-hop recursive verifier slice requires verifier opening length {LEN}"
+                ));
             }
             if semantic.public_values[super::KAGEMUSHA_RECURSIVE_AGGREGATION_WITNESS_COUNT_INDEX]
                 != Scalar::from(1)
@@ -28745,7 +31655,7 @@ mod pasta_tiny {
             }
             let mut expected_opening_selectors =
                 [Scalar::from(0); super::KAGEMUSHA_RECURSIVE_AGGREGATION_OPENING_LEN_CHOICE_COUNT];
-            expected_opening_selectors[0] = Scalar::from(1);
+            expected_opening_selectors[opening_choice_index] = Scalar::from(1);
             if semantic.opening_len_selectors != expected_opening_selectors {
                 return Err(
                     "one-hop recursive verifier slice opening-length selector witness mismatch"
@@ -28762,15 +31672,80 @@ mod pasta_tiny {
             Self::validate_digest_limbs(
                 semantic,
                 super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_TABLE_SCHEDULE_START_INDEX,
-                &super::kagemusha_recursive_fixed_window_table_schedule_digest(2)?,
+                &super::kagemusha_recursive_fixed_window_table_schedule_digest(LEN)?,
                 "fixed-window schedule digest",
             )?;
             Self::validate_digest_limbs(
                 semantic,
                 super::KAGEMUSHA_RECURSIVE_AGGREGATION_FIXED_WINDOW_SHARED_TABLE_MANIFEST_START_INDEX,
-                &super::kagemusha_recursive_fixed_window_shared_table_manifest_digest(2)?,
+                &super::kagemusha_recursive_fixed_window_shared_table_manifest_digest(LEN)?,
                 "shared-table manifest digest",
-            )
+            )?;
+            Self::validate_one_hop_semantic_non_zero_witnesses(semantic)
+        }
+
+        fn validate_one_hop_scalar_projection_public_input_binding(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+            verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+        ) -> Result<(), String> {
+            let digest = Self::one_hop_verifier_scalar_projection_digest(verifier)?;
+            let mut digest_bytes = [0u8; 32];
+            digest_bytes.copy_from_slice(digest.to_repr().as_ref());
+            let expected = super::bytes_to_u64_limbs_le(&digest_bytes).map(Scalar::from);
+            for (offset, expected) in expected.into_iter().enumerate() {
+                if semantic.public_values
+                    [super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                        + offset]
+                    != expected
+                {
+                    return Err(
+                        "one-hop recursive verifier slice scalar-projection digest mismatch"
+                            .to_owned(),
+                    );
+                }
+            }
+            Ok(())
+        }
+
+        fn one_hop_verifier_scalar_projection_digest(
+            verifier: &NonNativeVestaIpaVerifierSharedTableNativeScalar<LEN, WINDOWS, WINDOW_BITS>,
+        ) -> Result<Scalar, String> {
+            let first_b_layer = verifier.b_reduction.vectors.first().ok_or_else(|| {
+                "one-hop recursive verifier slice missing initial b-reduction layer".to_owned()
+            })?;
+            let b0 = first_b_layer.first().ok_or_else(|| {
+                "one-hop recursive verifier slice missing first initial b scalar".to_owned()
+            })?;
+            let b1 = first_b_layer.get(1).ok_or_else(|| {
+                "one-hop recursive verifier slice missing second initial b scalar".to_owned()
+            })?;
+            let challenge = verifier.b_reduction.challenges.first().ok_or_else(|| {
+                "one-hop recursive verifier slice missing transcript challenge".to_owned()
+            })?;
+            let inverse = verifier
+                .b_reduction
+                .challenge_inverses
+                .first()
+                .ok_or_else(|| {
+                    "one-hop recursive verifier slice missing transcript challenge inverse"
+                        .to_owned()
+                })?;
+            let final_b = verifier
+                .b_reduction
+                .vectors
+                .last()
+                .and_then(|layer| layer.first())
+                .ok_or_else(|| {
+                    "one-hop recursive verifier slice missing final folded b scalar".to_owned()
+                })?;
+            Ok(kagemusha_one_hop_verifier_scalar_projection_digest([
+                verifier.transcript_binding_digest,
+                b0.value,
+                b1.value,
+                challenge.value,
+                inverse.value,
+                final_b.value,
+            ]))
         }
 
         fn validate_one_hop_preflight_binding(
@@ -28792,9 +31767,9 @@ mod pasta_tiny {
                     preflight.proof_count
                 ));
             }
-            if preflight.opening_len != 2 {
+            if usize::try_from(preflight.opening_len).ok() != Some(LEN) {
                 return Err(format!(
-                    "one-hop recursive verifier slice requires preflight opening length 2 (found {})",
+                    "one-hop recursive verifier slice requires preflight opening length {LEN} (found {})",
                     preflight.opening_len
                 ));
             }
@@ -28807,6 +31782,26 @@ mod pasta_tiny {
                     preflight.verifier_witness_profile
                 ));
             }
+            Self::validate_preflight_digest_non_zero(
+                &preflight.params_fingerprint,
+                "preflight verifier parameter fingerprint",
+            )?;
+            Self::validate_preflight_digest_non_zero(
+                &preflight.fixed_window_table_schedule_digest,
+                "preflight fixed-window schedule digest",
+            )?;
+            Self::validate_preflight_digest_non_zero(
+                &preflight.fixed_window_shared_table_manifest_digest,
+                "preflight shared-table manifest digest",
+            )?;
+            Self::validate_preflight_digest_non_zero(
+                &preflight.fixed_window_table_base_digest,
+                "preflight fixed-window table-base digest",
+            )?;
+            Self::validate_preflight_digest_non_zero(
+                &preflight.aggregate_digest,
+                "preflight verifier-witness batch digest",
+            )?;
             Self::validate_digest_limbs(
                 semantic,
                 super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_PARAMS_START_INDEX,
@@ -28839,6 +31834,44 @@ mod pasta_tiny {
             )
         }
 
+        fn validate_one_hop_semantic_non_zero_witnesses(
+            semantic: &KagemushaRecursiveAggregationSemantic,
+        ) -> Result<(), String> {
+            let one = Scalar::from(1);
+            for (group_index, group) in
+                super::KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS
+                    .iter()
+                    .enumerate()
+            {
+                let sum = group.iter().fold(Scalar::from(0), |acc, index| {
+                    acc + semantic.public_values[*index]
+                });
+                if sum == Scalar::from(0) {
+                    return Err(format!(
+                        "one-hop recursive verifier slice public field group {group_index} must be non-zero"
+                    ));
+                }
+                if sum * semantic.non_zero_public_field_inverses[group_index] != one {
+                    return Err(format!(
+                        "one-hop recursive verifier slice non-zero public field inverse mismatch at group {group_index}"
+                    ));
+                }
+            }
+            Ok(())
+        }
+
+        fn validate_preflight_digest_non_zero(
+            digest: &[u8; 32],
+            label: &str,
+        ) -> Result<(), String> {
+            if *digest == [0u8; 32] {
+                return Err(format!(
+                    "one-hop recursive verifier slice {label} must be non-zero"
+                ));
+            }
+            Ok(())
+        }
+
         fn validate_digest_limbs(
             semantic: &KagemushaRecursiveAggregationSemantic,
             start_index: usize,
@@ -28855,8 +31888,8 @@ mod pasta_tiny {
         }
     }
 
-    impl<const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
-        for KagemushaRecursiveAggregationOneHopVerifierSlice<WINDOWS, WINDOW_BITS>
+    impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
+        for KagemushaRecursiveAggregationOneHopVerifierSlice<LEN, WINDOWS, WINDOW_BITS>
     {
         type Config = KagemushaRecursiveAggregationOneHopVerifierSliceConfig;
         type FloorPlanner = SimpleFloorPlanner;
@@ -28868,15 +31901,23 @@ mod pasta_tiny {
         fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
             let semantic = KagemushaRecursiveAggregationSemantic::configure(meta);
             let verifier = configure_non_native_vesta_ipa_verifier_shared_table_native_scalar::<
-                2,
+                LEN,
                 WINDOWS,
                 WINDOW_BITS,
             >(meta);
             let scalar_projection =
-                configure_kagemusha_one_hop_verifier_scalar_projection(meta, &verifier);
+                configure_kagemusha_one_hop_verifier_scalar_projection::<LEN>(meta, &verifier);
             let verifier_binding_digest = meta.instance_column();
             let link = meta.selector();
             let semantic_inst = semantic.4;
+            let scalar_limb_coefficients = std::array::from_fn::<_, 4, _>(|offset| {
+                let radix = scalar_two_pow_64();
+                let mut coefficient = Scalar::from(1);
+                for _ in 0..offset {
+                    coefficient *= radix;
+                }
+                coefficient
+            });
 
             meta.create_gate(
                 "kagemusha_recursive_aggregation_one_hop_verifier_slice_link",
@@ -28900,11 +31941,31 @@ mod pasta_tiny {
                         verifier.transcript_binding.binding_digest_instance,
                         Rotation(3),
                     );
+                    let verifier_scalar_projection_digest =
+                        meta.query_instance(scalar_projection.digest_instance, Rotation::cur());
+                    let scalar_projection_public_input = (0..4).fold(
+                        Expression::Constant(Scalar::from(0)),
+                        |acc, offset| {
+                            acc + meta.query_instance(
+                                semantic_inst[
+                                    super::KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX
+                                        + offset
+                                ],
+                                Rotation::cur(),
+                            ) * Expression::Constant(scalar_limb_coefficients[offset])
+                        },
+                    );
                     vec![
-                        s.clone() * (opening_len - Expression::Constant(Scalar::from(2))),
+                        s.clone()
+                            * (opening_len
+                                - Expression::Constant(Scalar::from(
+                                    u64::try_from(LEN).expect("opening length fits u64"),
+                                ))),
                         s.clone() * (witness_count - Expression::Constant(Scalar::from(1))),
                         s.clone() * (hop_count - Expression::Constant(Scalar::from(1))),
-                        s * (verifier_binding_digest_public - verifier_binding_digest_actual),
+                        s.clone()
+                            * (verifier_binding_digest_public - verifier_binding_digest_actual),
+                        s * (verifier_scalar_projection_digest - scalar_projection_public_input),
                     ]
                 },
             );
@@ -28931,7 +31992,13 @@ mod pasta_tiny {
                 self.verifier.b_reduction.vectors[0][1].value,
                 self.verifier.b_reduction.challenges[0].value,
                 self.verifier.b_reduction.challenge_inverses[0].value,
-                self.verifier.b_reduction.vectors[1][0].value,
+                self.verifier
+                    .b_reduction
+                    .vectors
+                    .last()
+                    .and_then(|layer| layer.first())
+                    .ok_or(PlonkError::Synthesis)?
+                    .value,
             ];
             layouter.assign_region(
                 || "one_hop_verifier_scalar_projection",
@@ -31260,10 +34327,27 @@ mod pasta_tiny {
         label: &str,
         value: usize,
     ) -> Result<(), String> {
+        if label.is_empty() {
+            return Err("Pallas IPA batch digest length label must be non-empty".to_owned());
+        }
+        let label_len = u64::try_from(label.len())
+            .map_err(|_| "Pallas IPA batch digest length label does not fit in u64".to_owned())?;
         let value = u64::try_from(value)
             .map_err(|_| format!("Pallas IPA batch {label} length does not fit in u64"))?;
+        pallas_batch_digest_update_u64(hasher, label_len);
+        pallas_batch_digest_update_bytes(hasher, label.as_bytes());
         pallas_batch_digest_update_u64(hasher, value);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn pallas_batch_digest_test_length_field(
+        label: &str,
+        value: usize,
+    ) -> Result<[u8; 32], String> {
+        let mut hasher = PallasBatchDigest::new();
+        pallas_batch_digest_update_len(&mut hasher, label, value)?;
+        Ok(hasher.finalize())
     }
 
     fn pallas_batch_digest_update_fixed_window_table_profile<
@@ -42201,6 +45285,14 @@ mod pasta_tiny {
         }
     }
 
+    fn nested_vec_lengths_match<L, R>(left: &[Vec<L>], right: &[Vec<R>]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right.iter())
+                .all(|(left_layer, right_layer)| left_layer.len() == right_layer.len())
+    }
+
     impl<const LEN: usize, const WINDOWS: usize, const WINDOW_BITS: usize> Circuit<Scalar>
         for NonNativeVestaIpaVerifierNativeScalar<LEN, WINDOWS, WINDOW_BITS>
     {
@@ -42219,6 +45311,15 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            if !nested_vec_lengths_match(&self.b_reduction.vectors, &config.b_reduction.vectors)
+                || self.b_reduction.challenges.len() != config.b_reduction.challenges.len()
+                || self.b_reduction.challenge_inverses.len()
+                    != config.b_reduction.challenge_inverses.len()
+                || self.round_accumulators.len() != config.round_accumulators.len()
+                || !nested_vec_lengths_match(&self.generator_folds, &config.generator_folds)
+            {
+                return Err(PlonkError::Synthesis);
+            }
             layouter.assign_region(
                 || "non_native_vesta_ipa_verifier_native_scalar",
                 |mut region| {
@@ -42740,7 +45841,11 @@ mod pasta_tiny {
         #[must_use]
         pub fn host_links_hold(&self) -> bool {
             let rounds = self.round_accumulators.len();
+            let Some(expected_rounds) = ipa_power_of_two_rounds(LEN) else {
+                return false;
+            };
             if rounds == 0
+                || rounds != expected_rounds
                 || self.b_reduction.challenges.len() != rounds
                 || self.b_reduction.challenge_inverses.len() != rounds
                 || self.transcript_round_projections.len() != rounds
@@ -42748,7 +45853,28 @@ mod pasta_tiny {
                 || self.transcript_challenge_inverses.len() != rounds
                 || self.transcript_round_states.len() != rounds + 1
                 || self.generator_folds.len() != rounds
+                || self.b_reduction.vectors.len() != rounds + 1
             {
+                return false;
+            }
+            let mut expected_b_layer_len = LEN;
+            for b_layer in &self.b_reduction.vectors {
+                if b_layer.len() != expected_b_layer_len {
+                    return false;
+                }
+                expected_b_layer_len /= 2;
+            }
+            if expected_b_layer_len != 0 {
+                return false;
+            }
+            let mut expected_layer_len = LEN;
+            for generator_fold_layer in &self.generator_folds {
+                if expected_layer_len <= 1 || generator_fold_layer.len() != expected_layer_len / 2 {
+                    return false;
+                }
+                expected_layer_len /= 2;
+            }
+            if expected_layer_len != 1 {
                 return false;
             }
             if self.transcript_round_states[0] != self.transcript_header_projection {
@@ -42760,6 +45886,12 @@ mod pasta_tiny {
             if final_b_layer.len() != 1
                 || final_b_layer[0].value != self.final_msm.msm.term_muls[1].scalar.scalar.value
             {
+                return false;
+            }
+            let final_a = self.final_msm.msm.term_muls[0].scalar.scalar.value;
+            let final_b = self.final_msm.msm.term_muls[1].scalar.scalar.value;
+            let final_product = self.final_msm.msm.term_muls[2].scalar.scalar.value;
+            if final_a * final_b != final_product {
                 return false;
             }
 
@@ -43159,6 +46291,15 @@ mod pasta_tiny {
             config: Self::Config,
             mut layouter: impl Layouter<Scalar>,
         ) -> Result<(), PlonkError> {
+            if !nested_vec_lengths_match(&self.b_reduction.vectors, &config.b_reduction.vectors)
+                || self.b_reduction.challenges.len() != config.b_reduction.challenges.len()
+                || self.b_reduction.challenge_inverses.len()
+                    != config.b_reduction.challenge_inverses.len()
+                || self.round_accumulators.len() != config.round_accumulators.len()
+                || !nested_vec_lengths_match(&self.generator_folds, &config.generator_folds)
+            {
+                return Err(PlonkError::Synthesis);
+            }
             layouter.assign_region(
                 || "non_native_vesta_ipa_verifier_shared_table_native_scalar",
                 |mut region| {
@@ -47508,6 +50649,15 @@ mod preverified_key_tests {
             "halo2/ipa:kzg",
             "halo2/ipa:KZG",
             "halo2/ipa: KZG",
+            "stark/fri/prod;kzg",
+            "stark/fri/prod,kzg",
+            "stark/fri/prod+kzg",
+            "stark/fri/prod.kzg",
+            "stark/fri/prod(kzg)",
+            "stark/fri/prod;bn254",
+            "stark/fri/prod+bn256",
+            "stark/fri/prod-bls12-381",
+            "halo2/ipa;groth16",
             "groth16/bn254",
         ] {
             let mut dedup = DedupCache::new();
@@ -47535,14 +50685,18 @@ mod preverified_key_tests {
             "halo2/debug",
             "halo2/ipa:debug-proof",
             "halo2/ipa:DEBUG-Proof",
+            "halo2/ipa:d-e-b-u-g-proof",
             "stark/fri/debug",
             "stark/fri/Debug",
+            "stark/fri/d-e-b-u-g",
             "mock",
             "mock-proof",
             "Mock-Proof",
             "halo2/mock",
             "halo2/ipa:mock-proof",
             "halo2/ipa:Mock-Proof",
+            "halo2/ipa:m-o-c-k-proof",
+            "stark/fri/m-o-c-k",
             "zk-trace/mock-proof",
         ] {
             let mut dedup = DedupCache::new();

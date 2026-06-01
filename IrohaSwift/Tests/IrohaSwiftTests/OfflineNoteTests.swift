@@ -1321,6 +1321,67 @@ final class OfflineNoteTests: XCTestCase {
         )
     }
 
+    func testOfflineNoteWalletScopesSharedStoreByChainAndAccount() throws {
+        let fixture = try Self.loadFixture()
+        let derivation = fixture.chainVectors.derivation
+        let senderCertificate = try Self.certificate(fixture.paymentToken.senderKeyCertificate)
+        let sharedStore = InMemoryOfflineNoteStore()
+        let ownedNote = try Self.sourceWalletNote(fixture, certificate: senderCertificate)
+        let otherAccountNote = try Self.noteVariant(
+            ownedNote,
+            xorFirstByte: 0x01,
+            accountId: fixture.paymentToken.recipientAccountId
+        )
+        let otherChainNote = try Self.noteVariant(
+            ownedNote,
+            xorFirstByte: 0x02,
+            chainId: "00000043"
+        )
+        try sharedStore.upsert(ownedNote)
+        try sharedStore.upsert(otherAccountNote)
+        try sharedStore.upsert(otherChainNote)
+
+        let wallet = OfflineNoteWallet(
+            chainId: derivation.chainId,
+            accountId: ownedNote.accountId,
+            attestationProvider: StaticAttestationProvider(certificate: senderCertificate),
+            store: sharedStore,
+            transactionSubmitter: RecordingTransactionSubmitter(),
+            proofProvider: BindingProofProvider(),
+            proofVerifier: BindingProofVerifier(),
+            certificateVerifier: try Self.certificateVerifier(fixture),
+            randomSource: QueueRandomSource(values: [
+                try Self.hex(derivation.recipientNoteSecretHex)
+            ]),
+            idGenerator: FixedIdGenerator(id: derivation.paymentRequestId),
+            clock: { 1_700_000_001_200 }
+        )
+
+        XCTAssertEqual(
+            Set(try wallet.listNotes().map(\.noteCommitmentHex)),
+            [ownedNote.noteCommitmentHex]
+        )
+
+        let receiveRequest = try wallet.prepareReceive(
+            assetDefinitionId: Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId),
+            amount: fixture.chainVectors.redeem.amount
+        )
+
+        XCTAssertEqual(
+            Set(try wallet.listNotes().map(\.noteCommitmentHex)),
+            [ownedNote.noteCommitmentHex, receiveRequest.outputCommitmentHex]
+        )
+        XCTAssertEqual(
+            Set(try sharedStore.listNotes().map(\.noteCommitmentHex)),
+            [
+                ownedNote.noteCommitmentHex,
+                receiveRequest.outputCommitmentHex,
+                otherAccountNote.noteCommitmentHex,
+                otherChainNote.noteCommitmentHex
+            ]
+        )
+    }
+
     func testOfflineNoteWalletRejectsBearerCashCustodyPolicyOverflow() throws {
         let fixture = try Self.loadFixture()
         let derivation = fixture.chainVectors.derivation
@@ -2124,6 +2185,88 @@ final class OfflineNoteTests: XCTestCase {
         XCTAssertEqual(try Self.string(issueBody, "local_balance"), "0")
         XCTAssertEqual(try Self.string(issueBody, "nonce"), "auth-issue-1")
         _ = try Self.object(issueBody, "lineage_state")
+    }
+
+    func testToriiIssuerClientRejectsMalformedCertificateUsageLimits() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        let deviceBinding = try OfflineNoteIssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
+                "offline_public_key": offlinePublicKey,
+            ]
+        )
+
+        var malformedCertificates: [[String: Any]] = []
+        for invalidLimit in [
+            NSNumber(value: 0),
+            NSNumber(value: 2),
+            NSNumber(value: UInt64(4_294_967_297)),
+            "1",
+        ] as [Any] {
+            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["assertion_usage_count_limit"] = invalidLimit
+            malformedCertificates.append(certificateJSON)
+        }
+        for invalidVersion in [
+            NSNumber(value: 0),
+            NSNumber(value: 2),
+            NSNumber(value: UInt64(4_294_967_297)),
+            "1",
+        ] as [Any] {
+            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["version"] = invalidVersion
+            malformedCertificates.append(certificateJSON)
+        }
+
+        for certificateJSON in malformedCertificates {
+            OfflineIssuerURLProtocol.reset()
+            OfflineIssuerURLProtocol.handler = { request in
+                let body = try Self.requestBody(request)
+                let response: [String: Any] = [
+                    "operation_id": try Self.string(body, "operation_id"),
+                    "lineage_state": Self.lineageState(revision: 0, balance: "0"),
+                    "key_certificate": certificateJSON,
+                    "key_certificates": [certificateJSON],
+                ]
+                return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+            }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+            let session = URLSession(configuration: configuration)
+            let client = ToriiOfflineNoteIssuerClient(
+                baseURL: URL(string: "https://torii.example")!,
+                session: session,
+                canonicalAuth: ToriiCanonicalRequestAuth(
+                    accountId: accountId,
+                    privateKey: Data(0..<32)
+                ),
+                deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+                clock: { 1_700_000_000_000 },
+                nonceGenerator: SequenceIdGenerator(ids: [
+                    "operation-refill-malformed",
+                    "auth-refill-malformed",
+                ])
+            )
+
+            do {
+                _ = try await client.prepareLoad(
+                    chainId: "chain-1",
+                    accountId: accountId,
+                    assetDefinitionId: assetDefinitionId,
+                    amount: "5"
+                )
+                XCTFail("malformed certificate metadata must reject")
+            } catch {
+                continue
+            }
+        }
     }
 
     /// Regression: the canonical body sent to Torii must NOT escape `/` as
@@ -3716,12 +3859,43 @@ final class OfflineNoteTests: XCTestCase {
             assertionScheme: certificate.assertionScheme,
             assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
-            assertionUsageCountLimit: 7,
+            assertionUsageCountLimit: 1,
             oneUse: true
         )
         XCTAssertNil(noLimitPayload.assertionUsageCountLimit)
-        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 7)
+        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 1)
         XCTAssertNotEqual(try noLimitPayload.noritoEncoded(), try limitedPayload.noritoEncoded())
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayload(
+            version: 1,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: 2,
+            oneUse: true
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .certificateMustBeOneUse)
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificate(
+            version: certificate.version,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: 0,
+            oneUse: true,
+            issuerSignature: certificate.issuerSignature
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .certificateMustBeOneUse)
+        }
 
         XCTAssertThrowsError(try OfflineNoteKeyCertificatePayload(
             version: 1,
@@ -4422,6 +4596,31 @@ final class OfflineNoteTests: XCTestCase {
             state: .spendable,
             createdAtMs: 1_700_000_000_000,
             updatedAtMs: 1_700_000_000_000
+        )
+    }
+
+    private static func noteVariant(
+        _ note: OfflineNoteWalletNote,
+        xorFirstByte: UInt8,
+        chainId: String? = nil,
+        accountId: String? = nil
+    ) throws -> OfflineNoteWalletNote {
+        var commitment = [UInt8](note.noteCommitment)
+        commitment[0] ^= xorFirstByte
+        return try OfflineNoteWalletNote(
+            chainId: chainId ?? note.chainId,
+            accountId: accountId ?? note.accountId,
+            assetId: note.assetId,
+            amount: note.amount,
+            keyCertificate: note.keyCertificate,
+            noteCommitment: Data(commitment),
+            noteSecret: note.noteSecret,
+            origin: note.origin,
+            bearerAuditTrail: note.bearerAuditTrail,
+            spentPaymentRequestId: note.spentPaymentRequestId,
+            state: note.state,
+            createdAtMs: note.createdAtMs,
+            updatedAtMs: note.updatedAtMs
         )
     }
 

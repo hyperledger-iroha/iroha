@@ -1,28 +1,27 @@
 {
   "schema_version": 1,
-  "param_set": "fhe_bfv_med",
-  "version": 2,
-  "backend": "fhe/bfv-rns/v2",
+  "param_set": "bfv-default",
+  "version": 1,
+  "backend": "fhe/bfv-rns/v1",
   "scheme": {
     "scheme": "Bfv",
     "value": null
   },
   "ciphertext_modulus_bits": [
-    60,
-    50,
-    40
+    53,
+    52
   ],
-  "plaintext_modulus_bits": 20,
-  "polynomial_modulus_degree": 8192,
-  "slot_count": 4096,
+  "plaintext_modulus_bits": 9,
+  "polynomial_modulus_degree": 64,
+  "slot_count": 64,
   "security_level_bits": 128,
-  "max_multiplicative_depth": 2,
+  "max_multiplicative_depth": 1,
   "lifecycle": {
     "lifecycle": "Active",
     "value": null
   },
-  "activation_height": 10000,
-  "deprecation_height": 20000,
-  "withdraw_height": 40000,
-  "parameter_digest": "hash:4D4E4F505152535455565758595A5B5C5D5E5F606162636465666768696A6B6D#842E"
+  "activation_height": 1,
+  "deprecation_height": null,
+  "withdraw_height": null,
+  "parameter_digest": "hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E"
 }

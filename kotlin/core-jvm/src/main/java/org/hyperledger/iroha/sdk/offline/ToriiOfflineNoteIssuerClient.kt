@@ -343,7 +343,7 @@ class ToriiOfflineNoteIssuerClient @JvmOverloads constructor(
 
 private fun parseKeyCertificate(value: Map<String, Any?>): OfflineNote.KeyCertificate =
     OfflineNote.KeyCertificate(
-        version = requiredLong(value, "version").toInt(),
+        version = requiredKeyCertificateVersion(value),
         platform = requiredString(value, "platform"),
         keyId = requiredString(value, "key_id"),
         deviceId = requiredString(value, "device_id"),
@@ -352,7 +352,7 @@ private fun parseKeyCertificate(value: Map<String, Any?>): OfflineNote.KeyCertif
         assertionScheme = requiredString(value, "assertion_scheme"),
         assertionKeyAlgorithm = requiredString(value, "assertion_key_algorithm"),
         assertionPublicKey = decodeBase64(requiredString(value, "assertion_public_key"), "assertion_public_key"),
-        assertionUsageCountLimit = optionalLong(value["assertion_usage_count_limit"])?.toInt(),
+        assertionUsageCountLimit = optionalAssertionUsageCountLimit(value["assertion_usage_count_limit"]),
         oneUse = requiredBoolean(value, "one_use"),
         issuerSignature = decodeBase64(requiredString(value, "issuer_signature_base64"), "issuer_signature_base64"),
     )
@@ -389,6 +389,20 @@ private fun requiredBoolean(value: Map<String, Any?>, field: String): Boolean =
 private fun requiredLong(value: Map<String, Any?>, field: String): Long =
     optionalLong(requiredValue(value, field))
         ?: throw IllegalStateException("$field must be an integer")
+
+private fun requiredKeyCertificateVersion(value: Map<String, Any?>): Int {
+    val version = requiredLong(value, "version")
+    require(version == OfflineNote.KEY_CERTIFICATE_VERSION.toLong()) {
+        "version must be ${OfflineNote.KEY_CERTIFICATE_VERSION}"
+    }
+    return OfflineNote.KEY_CERTIFICATE_VERSION
+}
+
+private fun optionalAssertionUsageCountLimit(value: Any?): Int? {
+    val limit = optionalLong(value) ?: return null
+    require(limit == 1L) { "assertion_usage_count_limit must be exactly 1" }
+    return 1
+}
 
 private fun optionalLong(value: Any?): Long? = when (value) {
     null -> null

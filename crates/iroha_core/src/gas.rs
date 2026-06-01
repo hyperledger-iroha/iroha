@@ -233,6 +233,20 @@ fn anonymous_escrow_proof_gas(any: &dyn std::any::Any) -> Option<u64> {
     None
 }
 
+fn gas_for_recursive_kagemusha_redeem(redeem: &dm_isi::offline::RedeemKagemushaRecursive) -> u64 {
+    let mut gas = gas_for_proof_attachment(&redeem.redeem_proof, 1, 0);
+    let recursive_proof_bytes =
+        u64::try_from(redeem.bundle.recursive_proof.proof.bytes.len()).unwrap_or(u64::MAX);
+    gas = gas.saturating_add(zk_gas_base_verify());
+    gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
+    gas.saturating_add(
+        zk_gas_per_public_input().saturating_mul(
+            u64::try_from(crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_INSTANCE_COLUMNS)
+                .unwrap_or(u64::MAX),
+        ),
+    )
+}
+
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -420,6 +434,9 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
+        return gas_for_recursive_kagemusha_redeem(redeem);
+    }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);
     }
@@ -480,6 +497,9 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
             transfer.inputs.len(),
             transfer.outputs.len(),
         );
+    }
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursive>() {
+        return gas_for_recursive_kagemusha_redeem(redeem);
     }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);

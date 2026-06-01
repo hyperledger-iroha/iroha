@@ -57381,6 +57381,7 @@ pub struct AccountTransactionsGetParams {
     Debug,
     Clone,
 )]
+/// Query parameters accepted by the committed contract-activity feed.
 pub struct ContractActivityGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,

@@ -31,6 +31,7 @@ pub mod isi {
         asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
+        zk_ace::CanManageZkAceIdentityForAccount,
     };
     // Governance ISIs
     use iroha_data_model::isi::confidential;
@@ -10028,6 +10029,815 @@ pub mod isi {
         }
     }
 
+    fn ensure_zk_ace_nonzero(label: &str, value: &[u8; 32]) -> Result<(), Error> {
+        if *value == [0u8; 32] {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!("{label} must be nonzero")),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_zk_ace_nonempty(label: &str, value: &str) -> Result<(), Error> {
+        if value.trim().is_empty() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!("{label} must be non-empty")),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_zk_ace_action_and_domain(action_class: &str, domain_tag: &str) -> Result<(), Error> {
+        if action_class != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE action class is not transparent_asset_transfer".into(),
+            ));
+        }
+        if domain_tag != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE domain tag is not iroha:zk-ace:pq-authorization:v0".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn canonical_zk_ace_allowed_accounts(
+        state_transaction: &StateTransaction<'_, '_>,
+        allowed_accounts: &[AccountId],
+    ) -> Result<Vec<AccountId>, Error> {
+        if allowed_accounts.is_empty() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "ZK-ACE allowed_accounts must be non-empty".into(),
+                ),
+            ));
+        }
+        if allowed_accounts.len() > iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!(
+                    "ZK-ACE allowed_accounts exceeds maximum of {}",
+                    iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS
+                )),
+            ));
+        }
+        let mut canonical = allowed_accounts.to_vec();
+        canonical.sort();
+        for account in &canonical {
+            if state_transaction.world.accounts.get(account).is_none() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "ZK-ACE allowed account `{account}` does not exist"
+                    )),
+                ));
+            }
+        }
+        if canonical.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "ZK-ACE allowed_accounts must not contain duplicates".into(),
+                ),
+            ));
+        }
+        Ok(canonical)
+    }
+
+    fn has_zk_ace_identity_manage_permission(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        account: &AccountId,
+        asset: &AssetDefinitionId,
+    ) -> bool {
+        let required: Permission = CanManageZkAceIdentityForAccount {
+            account: account.clone(),
+            asset: asset.clone(),
+        }
+        .into();
+        if state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| permissions.iter().any(|permission| permission == &required))
+        {
+            return true;
+        }
+        state_transaction
+            .world
+            .account_roles
+            .iter()
+            .filter_map(|(role_key, ())| {
+                if &role_key.account == authority {
+                    state_transaction.world.roles.get(&role_key.id)
+                } else {
+                    None
+                }
+            })
+            .any(|role| role.permissions().any(|permission| permission == &required))
+    }
+
+    fn ensure_zk_ace_identity_manage_authority(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        asset: &AssetDefinitionId,
+        allowed_accounts: &[AccountId],
+    ) -> Result<(), Error> {
+        for account in allowed_accounts {
+            if authority == account {
+                continue;
+            }
+            if !has_zk_ace_identity_manage_permission(state_transaction, authority, account, asset)
+            {
+                return Err(FindError::Permission(Box::new(Permission::new(
+                    "CanManageZkAceIdentityForAccount".into(),
+                    Json::new(CanManageZkAceIdentityForAccount {
+                        account: account.clone(),
+                        asset: asset.clone(),
+                    }),
+                )))
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_active_zk_ace_binding(
+        state_transaction: &StateTransaction<'_, '_>,
+        id: &VerifyingKeyId,
+    ) -> Result<crate::state::ZkAssetVerifierBinding, Error> {
+        if id.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "ZK-ACE verifier key must use stark/fri/sha256-goldilocks".into(),
+                ),
+            ));
+        }
+        let record = state_transaction
+            .world
+            .verifying_keys
+            .get(id)
+            .cloned()
+            .ok_or_else(|| {
+                FindError::Permission(Box::new(Permission::new(
+                    "VerifyingKeyMissing".into(),
+                    iroha_primitives::json::Json::from(
+                        format!("{}::{}", id.backend, id.name).as_str(),
+                    ),
+                )))
+            })?;
+        if record.status != ConfidentialStatus::Active {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key is not active".into(),
+            ));
+        }
+        if record.backend != BackendTag::Stark
+            || !circuit_id_matches(
+                id.backend.as_str(),
+                &record.circuit_id,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            )
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key is not bound to zk_ace_pq_authorization_v0".into(),
+            ));
+        }
+        let key = record.key.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key bytes missing".into(),
+            )
+        })?;
+        if key.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key backend mismatch".into(),
+            ));
+        }
+        Ok(crate::state::ZkAssetVerifierBinding {
+            id: id.clone(),
+            commitment: record.commitment,
+        })
+    }
+
+    fn ensure_zk_ace_record_active(
+        record: &crate::state::ZkAceIdentityRecord,
+    ) -> Result<(), Error> {
+        match record.status {
+            crate::state::ZkAceIdentityStatus::Active => Ok(()),
+            crate::state::ZkAceIdentityStatus::Rotated => {
+                Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE identity commitment was rotated out".into(),
+                ))
+            }
+            crate::state::ZkAceIdentityStatus::Revoked => {
+                Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE identity commitment was revoked".into(),
+                ))
+            }
+        }
+    }
+
+    fn validate_zk_ace_proof_envelope(
+        label: &str,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        record: &VerifyingKeyRecord,
+        public_inputs: &iroha_data_model::zk::ZkAcePublicInputsV1,
+    ) -> Result<ZkOpenVerifyEnvelope, Error> {
+        if attachment.backend.as_str() != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+            || attachment.proof.backend.as_str()
+                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+            || attachment.vk_ref.backend.as_str()
+                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} proof must use stark/fri/sha256-goldilocks").into(),
+            ));
+        }
+        let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
+            .map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("{label} proof must use OpenVerifyEnvelope payload"),
+                ))
+            })?;
+        if env.backend != BackendTag::Stark {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
+            ));
+        }
+        if !env.aux.is_empty() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} envelope auxiliary bytes must be empty").into(),
+            ));
+        }
+        if !circuit_id_matches(
+            attachment.backend.as_str(),
+            &record.circuit_id,
+            &env.circuit_id,
+        ) || !circuit_id_matches(
+            attachment.backend.as_str(),
+            &record.circuit_id,
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} verifying key circuit mismatch").into(),
+            ));
+        }
+        if env.vk_hash != record.commitment {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} verifying key commitment mismatch").into(),
+            ));
+        }
+        let expected_public_inputs = norito::to_bytes(public_inputs).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("{label} public inputs are not canonical"),
+            ))
+        })?;
+        if env.public_inputs != expected_public_inputs {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} public inputs do not match submitted fields").into(),
+            ));
+        }
+        let expected_word = iroha_data_model::zk::derive_zk_ace_public_inputs_digest(public_inputs)
+            .map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("{label} public input digest failed"),
+                ))
+            })?;
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&env.proof_bytes).map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("{label} malformed STARK/FRI proof wrapper"),
+                ))
+            })?;
+        if open.version != 1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} unsupported STARK/FRI wrapper version").into(),
+            ));
+        }
+        if open.public_inputs != vec![vec![expected_word]] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} STARK public inputs mismatch").into(),
+            ));
+        }
+        if open.envelope_bytes.is_empty() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(format!("{label} empty STARK proof bytes")),
+            ));
+        }
+        Ok(env)
+    }
+
+    impl Execute for zk::RegisterZkAceIdentityCommitment {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
+            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
+            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
+            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
+            ensure_zk_ace_action_and_domain(self.action_class(), self.domain_tag())?;
+            state_transaction
+                .world
+                .asset_definition_mut(self.asset())
+                .map_err(Error::from)?;
+            let allowed_accounts =
+                canonical_zk_ace_allowed_accounts(state_transaction, self.allowed_accounts())?;
+            ensure_zk_ace_identity_manage_authority(
+                state_transaction,
+                authority,
+                self.asset(),
+                &allowed_accounts,
+            )?;
+
+            let binding = resolve_active_zk_ace_binding(state_transaction, self.verifier_key())?;
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(self.asset())
+                .cloned()
+                .unwrap_or_default();
+            if st
+                .zk_ace_identities
+                .contains_key(self.identity_commitment())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE identity commitment is already registered".into(),
+                ));
+            }
+            st.zk_ace_identities.insert(
+                *self.identity_commitment(),
+                crate::state::ZkAceIdentityRecord {
+                    policy_hash: *self.policy_hash(),
+                    allowed_accounts,
+                    action_class: self.action_class().trim().to_owned(),
+                    domain_tag: self.domain_tag().trim().to_owned(),
+                    verifier: binding,
+                    status: crate::state::ZkAceIdentityStatus::Active,
+                    successor: None,
+                },
+            );
+            let key: Name = "zk.ace.identity.last".parse().unwrap();
+            let mut summary_map = norito::json::native::Map::new();
+            summary_map.insert(
+                "event".into(),
+                norito::json::native::Value::from("registered"),
+            );
+            summary_map.insert(
+                "identity_commitment".into(),
+                norito::json::native::Value::from(hex::encode(self.identity_commitment())),
+            );
+            summary_map.insert(
+                "policy_hash".into(),
+                norito::json::native::Value::from(hex::encode(self.policy_hash())),
+            );
+            let summary = Json::from(norito::json::native::Value::Object(summary_map));
+            state_transaction
+                .world
+                .asset_definition_mut(self.asset())
+                .map_err(Error::from)
+                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                    iroha_data_model::prelude::MetadataChanged {
+                        target: self.asset().clone(),
+                        key,
+                        value: summary,
+                    },
+                ),
+            ));
+            state_transaction
+                .world
+                .zk_assets
+                .remove(self.asset().clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(self.asset().clone(), st);
+            Ok(())
+        }
+    }
+
+    impl Execute for zk::RotateZkAceIdentityCommitment {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_zk_ace_nonzero(
+                "old ZK-ACE identity commitment",
+                self.old_identity_commitment(),
+            )?;
+            ensure_zk_ace_nonzero(
+                "new ZK-ACE identity commitment",
+                self.new_identity_commitment(),
+            )?;
+            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
+            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
+            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
+            ensure_zk_ace_action_and_domain(self.action_class(), self.domain_tag())?;
+            if self.old_identity_commitment() == self.new_identity_commitment() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "ZK-ACE rotation requires a distinct replacement commitment".into(),
+                    ),
+                ));
+            }
+            state_transaction
+                .world
+                .asset_definition_mut(self.asset())
+                .map_err(Error::from)?;
+            let allowed_accounts =
+                canonical_zk_ace_allowed_accounts(state_transaction, self.allowed_accounts())?;
+            ensure_zk_ace_identity_manage_authority(
+                state_transaction,
+                authority,
+                self.asset(),
+                &allowed_accounts,
+            )?;
+            let binding = resolve_active_zk_ace_binding(state_transaction, self.verifier_key())?;
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(self.asset())
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE asset has no identity state".into(),
+                    )
+                })?;
+            if st
+                .zk_ace_identities
+                .contains_key(self.new_identity_commitment())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "replacement ZK-ACE identity commitment is already registered".into(),
+                ));
+            }
+            let old = st
+                .zk_ace_identities
+                .get_mut(self.old_identity_commitment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE identity commitment is unknown".into(),
+                    )
+                })?;
+            ensure_zk_ace_record_active(old)?;
+            old.status = crate::state::ZkAceIdentityStatus::Rotated;
+            old.successor = Some(*self.new_identity_commitment());
+            st.zk_ace_identities.insert(
+                *self.new_identity_commitment(),
+                crate::state::ZkAceIdentityRecord {
+                    policy_hash: *self.policy_hash(),
+                    allowed_accounts,
+                    action_class: self.action_class().trim().to_owned(),
+                    domain_tag: self.domain_tag().trim().to_owned(),
+                    verifier: binding,
+                    status: crate::state::ZkAceIdentityStatus::Active,
+                    successor: None,
+                },
+            );
+            state_transaction
+                .world
+                .zk_assets
+                .remove(self.asset().clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(self.asset().clone(), st);
+            Ok(())
+        }
+    }
+
+    impl Execute for zk::RevokeZkAceIdentityCommitment {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
+            if let Some(reason_hash) = self.reason_hash() {
+                ensure_zk_ace_nonzero("ZK-ACE revocation reason hash", reason_hash)?;
+            }
+            state_transaction
+                .world
+                .asset_definition_mut(self.asset())
+                .map_err(Error::from)?;
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(self.asset())
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE asset has no identity state".into(),
+                    )
+                })?;
+            let allowed_accounts = st
+                .zk_ace_identities
+                .get(self.identity_commitment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE identity commitment is unknown".into(),
+                    )
+                })?
+                .allowed_accounts
+                .clone();
+            ensure_zk_ace_identity_manage_authority(
+                state_transaction,
+                authority,
+                self.asset(),
+                &allowed_accounts,
+            )?;
+            let record = st
+                .zk_ace_identities
+                .get_mut(self.identity_commitment())
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE identity commitment is unknown".into(),
+                    )
+                })?;
+            record.status = crate::state::ZkAceIdentityStatus::Revoked;
+            record.successor = None;
+            state_transaction
+                .world
+                .zk_assets
+                .remove(self.asset().clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(self.asset().clone(), st);
+            Ok(())
+        }
+    }
+
+    impl Execute for zk::SubmitZkAceAuthorizedTransfer {
+        #[allow(clippy::too_many_lines)]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if *self.amount() == 0 {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "ZK-ACE authorized transfer amount must be greater than zero".into(),
+                    ),
+                ));
+            }
+            ensure_zk_ace_nonzero("ZK-ACE identity commitment", self.identity_commitment())?;
+            ensure_zk_ace_nonzero("ZK-ACE tx digest", self.tx_digest())?;
+            ensure_zk_ace_nonzero("ZK-ACE replay nullifier", self.replay_nullifier())?;
+            ensure_zk_ace_nonzero("ZK-ACE policy hash", self.policy_hash())?;
+            ensure_zk_ace_nonempty("ZK-ACE action_class", self.action_class())?;
+            ensure_zk_ace_nonempty("ZK-ACE domain_tag", self.domain_tag())?;
+            if self.chain_id() != &state_transaction.chain_id {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE proof is bound to a different chain id".into(),
+                ));
+            }
+            if self.action_class().trim()
+                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE action_class is not transparent_asset_transfer".into(),
+                ));
+            }
+            if self.domain_tag().trim()
+                != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE domain_tag mismatch".into(),
+                ));
+            }
+            let expected_tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+                self.from(),
+                self.to(),
+                self.asset(),
+                *self.amount(),
+                self.chain_id(),
+                self.action_class().trim(),
+                self.policy_hash(),
+            );
+            if *self.tx_digest() != expected_tx_digest {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE tx_digest does not match transfer fields".into(),
+                ));
+            }
+            if crate::zk::is_stark_fri_v1_backend(self.proof().backend.as_str())
+                && !state_transaction.zk.stark.enabled
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "stark verification is disabled in node configuration".into(),
+                ));
+            }
+            let policy_mode = apply_policy_if_due(state_transaction, self.asset())?.mode();
+            if matches!(policy_mode, ConfidentialPolicyMode::ShieldedOnly) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE transparent transfer not permitted by asset policy".into(),
+                ));
+            }
+
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(self.asset())
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE asset has no identity state".into(),
+                    )
+                })?;
+            if st
+                .zk_ace_replay_nullifiers
+                .contains(self.replay_nullifier())
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE replay nullifier already consumed".into(),
+                ));
+            }
+            let identity_record = st
+                .zk_ace_identities
+                .get(self.identity_commitment())
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE identity commitment is unknown".into(),
+                    )
+                })?;
+            ensure_zk_ace_record_active(&identity_record)?;
+            if identity_record.policy_hash != *self.policy_hash() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE policy hash mismatch".into(),
+                ));
+            }
+            if identity_record.action_class != self.action_class().trim()
+                || identity_record.domain_tag != self.domain_tag().trim()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE identity record action/domain mismatch".into(),
+                ));
+            }
+            if !identity_record.allowed_accounts.contains(self.from()) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE source account is not in the identity allowlist".into(),
+                ));
+            }
+            let attachment = self.proof();
+            if attachment.backend != attachment.proof.backend {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE proof backend mismatch".into(),
+                ));
+            }
+            enforce_vk_binding(&identity_record.verifier, attachment)?;
+            let (vk_box, vk_record) = resolve_asset_vk(
+                state_transaction,
+                Some(&identity_record.verifier),
+                attachment,
+            )?;
+            let vk_record = vk_record.ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE verifier record missing".into(),
+                )
+            })?;
+            let public_inputs: iroha_data_model::zk::ZkAcePublicInputsV1 =
+                norito::decode_from_bytes(&{
+                    let env: ZkOpenVerifyEnvelope =
+                        norito::decode_from_bytes(&attachment.proof.bytes).map_err(|_| {
+                            InstructionExecutionError::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "ZK-ACE proof must use OpenVerifyEnvelope payload".into(),
+                                ),
+                            )
+                        })?;
+                    env.public_inputs
+                })
+                .map_err(|_| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "ZK-ACE malformed public inputs".into(),
+                        ),
+                    )
+                })?;
+            let expected_public_inputs =
+                iroha_data_model::zk::ZkAcePublicInputsV1::transparent_transfer(
+                    *self.identity_commitment(),
+                    *self.tx_digest(),
+                    self.chain_id().clone(),
+                    *self.replay_nullifier(),
+                    *self.policy_hash(),
+                    self.from().clone(),
+                    self.to().clone(),
+                    self.asset().clone(),
+                    *self.amount(),
+                    attachment.vk_ref.clone(),
+                );
+            if public_inputs != expected_public_inputs {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "ZK-ACE public inputs do not match submitted transfer".into(),
+                ));
+            }
+            let _env = validate_zk_ace_proof_envelope(
+                "ZK-ACE authorization",
+                attachment,
+                &vk_record,
+                &public_inputs,
+            )?;
+            enforce_vk_max_proof_bytes(
+                "ZK-ACE authorization",
+                &vk_record,
+                attachment.proof.bytes.len(),
+            )?;
+            state_transaction.register_confidential_proof(attachment.proof.bytes.len())?;
+            let report = crate::zk::verify_backend_with_timing_checked(
+                attachment.backend.as_str(),
+                &attachment.proof,
+                Some(&vk_box),
+                &state_transaction.zk,
+            );
+            if !report.ok {
+                if state_transaction.trust_committed_execution_results {
+                    iroha_logger::warn!(
+                        backend = attachment.backend.as_str(),
+                        proof_len = attachment.proof.bytes.len(),
+                        "replay accepted committed ZK-ACE authorization after local proof verifier rejection"
+                    );
+                } else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "invalid ZK-ACE authorization proof".into(),
+                    ));
+                }
+            }
+            st.zk_ace_replay_nullifiers.insert(*self.replay_nullifier());
+
+            let source_asset_id =
+                shield_public_asset_id(state_transaction, self.asset(), self.from())?;
+            let transfer = Transfer::asset_numeric(
+                source_asset_id,
+                Numeric::new(*self.amount(), 0),
+                self.to().clone(),
+            );
+            transfer.execute(self.from(), state_transaction)?;
+
+            let proof_hash = crate::zk::hash_proof(&attachment.proof);
+            let key: Name = "zk.ace.transfer.last".parse().unwrap();
+            let mut summary_map = norito::json::native::Map::new();
+            summary_map.insert(
+                "identity_commitment".into(),
+                norito::json::native::Value::from(hex::encode(self.identity_commitment())),
+            );
+            summary_map.insert(
+                "replay_nullifier".into(),
+                norito::json::native::Value::from(hex::encode(self.replay_nullifier())),
+            );
+            summary_map.insert(
+                "tx_digest".into(),
+                norito::json::native::Value::from(hex::encode(self.tx_digest())),
+            );
+            summary_map.insert(
+                "policy_hash".into(),
+                norito::json::native::Value::from(hex::encode(self.policy_hash())),
+            );
+            summary_map.insert(
+                "proof_hash".into(),
+                norito::json::native::Value::from(hex::encode(proof_hash)),
+            );
+            summary_map.insert(
+                "from".into(),
+                norito::json::native::Value::from(self.from().to_string()),
+            );
+            summary_map.insert(
+                "to".into(),
+                norito::json::native::Value::from(self.to().to_string()),
+            );
+            summary_map.insert(
+                "amount".into(),
+                norito::json::native::Value::from(self.amount().to_string()),
+            );
+            let summary = Json::from(norito::json::native::Value::Object(summary_map));
+            state_transaction
+                .world
+                .asset_definition_mut(self.asset())
+                .map_err(Error::from)
+                .map(|def| def.metadata_mut().insert(key.clone(), summary.clone()))?;
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::prelude::AssetDefinitionEvent::MetadataInserted(
+                    iroha_data_model::prelude::MetadataChanged {
+                        target: self.asset().clone(),
+                        key,
+                        value: summary,
+                    },
+                ),
+            ));
+            state_transaction
+                .world
+                .zk_assets
+                .remove(self.asset().clone());
+            state_transaction
+                .world
+                .zk_assets
+                .insert(self.asset().clone(), st);
+            Ok(())
+        }
+    }
+
     impl Execute for zk::ScheduleConfidentialPolicyTransition {
         fn execute(
             self,
@@ -14439,7 +15249,7 @@ pub mod isi {
             isi::{SetParameter, bridge::RecordBridgeReceipt},
             parameter::system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
             prelude::Parameter,
-            zk::OpenVerifyEnvelope,
+            zk::{OpenVerifyEnvelope, StarkFriOpenProofV1, ZkAcePublicInputsV1},
         };
 
         #[test]
@@ -16944,6 +17754,210 @@ pub mod isi {
                 .clone()
         }
 
+        struct ZkAceTransferFixture {
+            state: State,
+            asset_def_id: AssetDefinitionId,
+            receiver: AccountId,
+            vk_id: VerifyingKeyId,
+            identity_commitment: [u8; 32],
+            policy_hash: [u8; 32],
+        }
+
+        fn zk_ace_transfer_fixture() -> ZkAceTransferFixture {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let receiver = gen_account_in(&domain_id).0;
+            let alice = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
+            let receiver_account = new_account_in_domain(&receiver).build(&ALICE_ID);
+            let asset_def_id =
+                AssetDefinitionId::new(domain_id, "zkace".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+                .with_name(asset_def_id.name().to_string())
+                .build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let alice_asset = Asset::new(alice_asset_id, Numeric::new(100, 0));
+            let world = World::with_assets(
+                [domain],
+                [alice, receiver_account],
+                [asset_definition],
+                [alice_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            state.zk.stark.enabled = true;
+            state.zk.halo2.enabled = false;
+
+            ZkAceTransferFixture {
+                state,
+                asset_def_id,
+                receiver,
+                vk_id: VerifyingKeyId::new(
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                ),
+                identity_commitment: [0x41; 32],
+                policy_hash: [0x42; 32],
+            }
+        }
+
+        fn install_zk_ace_verifier(
+            stx: &mut StateTransaction<'_, '_>,
+            vk_id: &VerifyingKeyId,
+            status: ConfidentialStatus,
+            max_proof_bytes: u32,
+        ) -> [u8; 32] {
+            let vk_box = VerifyingKeyBox::new(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                vec![0xa5; 32],
+            );
+            let commitment = hash_vk(&vk_box);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                None,
+                "zk-ace",
+                BackendTag::Stark,
+                "goldilocks",
+                [0x91; 32],
+                commitment,
+            );
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("test verifying key length fits");
+            record.max_proof_bytes = max_proof_bytes;
+            record.status = status;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("stark_default".into());
+            stx.world.verifying_keys.insert(vk_id.clone(), record);
+            commitment
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn zk_ace_proof_attachment(
+            chain_id: iroha_data_model::ChainId,
+            from: AccountId,
+            to: AccountId,
+            asset: AssetDefinitionId,
+            amount: u128,
+            identity_commitment: [u8; 32],
+            replay_nullifier: [u8; 32],
+            policy_hash: [u8; 32],
+            vk_id: VerifyingKeyId,
+            vk_commitment: [u8; 32],
+        ) -> (ProofAttachment, [u8; 32]) {
+            let tx_digest = iroha_data_model::zk::derive_zk_ace_transfer_digest(
+                &from,
+                &to,
+                &asset,
+                amount,
+                &chain_id,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+                &policy_hash,
+            );
+            let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
+                identity_commitment,
+                tx_digest,
+                chain_id,
+                replay_nullifier,
+                policy_hash,
+                from,
+                to,
+                asset,
+                amount,
+                vk_id.clone(),
+            );
+            let public_word =
+                iroha_data_model::zk::derive_zk_ace_public_inputs_digest(&public_inputs)
+                    .expect("digest ZK-ACE public inputs");
+            let open = StarkFriOpenProofV1 {
+                version: 1,
+                public_inputs: vec![vec![public_word]],
+                envelope_bytes: vec![0x51, 0x52, 0x53],
+            };
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_string(),
+                vk_hash: vk_commitment,
+                public_inputs: norito::to_bytes(&public_inputs)
+                    .expect("encode ZK-ACE public inputs"),
+                proof_bytes: norito::to_bytes(&open).expect("encode STARK wrapper"),
+                aux: Vec::new(),
+            };
+            let proof_box = ProofBox::new(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                norito::to_bytes(&envelope).expect("encode open verify envelope"),
+            );
+            let mut attachment = ProofAttachment::new_ref(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                proof_box,
+                vk_id,
+            );
+            attachment.vk_commitment = Some(vk_commitment);
+            (attachment, tx_digest)
+        }
+
+        fn mutate_zk_ace_envelope_public_inputs(mut proof: ProofAttachment) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            let mut public_inputs: ZkAcePublicInputsV1 =
+                norito::decode_from_bytes(&envelope.public_inputs).expect("decode public inputs");
+            public_inputs.amount = public_inputs
+                .amount
+                .checked_add(1)
+                .expect("test amount mutation stays in bounds");
+            envelope.public_inputs =
+                norito::to_bytes(&public_inputs).expect("encode mutated public inputs");
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        fn mutate_zk_ace_stark_public_input(mut proof: ProofAttachment) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            let mut open: StarkFriOpenProofV1 =
+                norito::decode_from_bytes(&envelope.proof_bytes).expect("decode STARK wrapper");
+            let first_word = open
+                .public_inputs
+                .first_mut()
+                .and_then(|column| column.first_mut())
+                .expect("fixture carries one STARK public input");
+            first_word[0] ^= 0x01;
+            envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn zk_ace_transfer_instruction(
+            from: AccountId,
+            to: AccountId,
+            asset: AssetDefinitionId,
+            amount: u128,
+            identity_commitment: [u8; 32],
+            tx_digest: [u8; 32],
+            chain_id: iroha_data_model::ChainId,
+            replay_nullifier: [u8; 32],
+            policy_hash: [u8; 32],
+            proof: ProofAttachment,
+        ) -> iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer {
+            iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
+                from,
+                to,
+                asset,
+                amount,
+                identity_commitment,
+                tx_digest,
+                chain_id,
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                replay_nullifier,
+                policy_hash,
+                proof,
+            )
+        }
+
         fn commitment_count(
             stx: &StateTransaction<'_, '_>,
             asset_def_id: &AssetDefinitionId,
@@ -16952,6 +17966,726 @@ pub mod isi {
                 .zk_assets
                 .get(asset_def_id)
                 .map_or(0, |state| state.commitments.len())
+        }
+
+        fn seed_zk_ace_call_hash(stx: &mut StateTransaction<'_, '_>, byte: u8) {
+            stx.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+        }
+
+        #[test]
+        fn zk_ace_authorized_transfer_records_state_and_rejects_replay() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            let register_identity = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            );
+            register_identity
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ZK-ACE identity commitment");
+
+            let amount = 7;
+            let replay_nullifier = [0x43; 32];
+            let (proof, tx_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                replay_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof.clone(),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x71);
+            transfer
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("ZK-ACE authorized transfer succeeds under committed dev proof");
+
+            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            let receiver_asset = AssetId::new(fixture.asset_def_id.clone(), fixture.receiver);
+            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(93, 0));
+            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(7, 0));
+            assert!(
+                stx.world
+                    .zk_assets
+                    .get(&fixture.asset_def_id)
+                    .expect("ZK-ACE state exists")
+                    .zk_ace_replay_nullifiers
+                    .contains(&replay_nullifier)
+            );
+
+            let replay_err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("replay nullifier reuse must fail");
+            let msg = smart_contract_instruction_error_message(replay_err);
+            assert!(
+                msg.contains("replay nullifier already consumed"),
+                "unexpected replay error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_identity_allowlist_is_canonical_and_enforced() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+
+            let canonical = super::canonical_zk_ace_allowed_accounts(
+                &stx,
+                &[fixture.receiver.clone(), ALICE_ID.clone()],
+            )
+            .expect("canonical allowlist");
+            let mut expected_canonical = vec![fixture.receiver.clone(), ALICE_ID.clone()];
+            expected_canonical.sort();
+            assert_eq!(canonical, expected_canonical);
+
+            for (allowed_accounts, expected) in [
+                (Vec::new(), "non-empty"),
+                (vec![ALICE_ID.clone(), ALICE_ID.clone()], "duplicates"),
+                (
+                    (0..=iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS)
+                        .map(|_| ALICE_ID.clone())
+                        .collect(),
+                    "exceeds maximum",
+                ),
+            ] {
+                let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                    fixture.asset_def_id.clone(),
+                    fixture.identity_commitment,
+                    fixture.policy_hash,
+                    allowed_accounts,
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                    fixture.vk_id.clone(),
+                )
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("invalid allowlist must fail");
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(msg.contains(expected), "unexpected allowlist error: {msg}");
+            }
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&fixture.receiver, &mut stx)
+            .expect_err("unauthorized registrar must not bind victim account");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("CanManageZkAceIdentityForAccount"),
+                "unexpected unauthorized registrar error: {msg}"
+            );
+
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register allowlisted ZK-ACE identity commitment");
+
+            let replay_nullifier = [0x5a; 32];
+            let (proof, tx_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                fixture.receiver.clone(),
+                ALICE_ID.clone(),
+                fixture.asset_def_id.clone(),
+                1,
+                fixture.identity_commitment,
+                replay_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let transfer = zk_ace_transfer_instruction(
+                fixture.receiver,
+                ALICE_ID.clone(),
+                fixture.asset_def_id,
+                1,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x7b);
+            let err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("non-allowlisted source must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("source account is not in the identity allowlist"),
+                "unexpected non-allowlisted source error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_rotation_and_revocation_enforce_identity_state() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register initial ZK-ACE identity commitment");
+
+            let replacement_commitment = [0x49; 32];
+            iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                replacement_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("rotate ZK-ACE identity commitment");
+
+            let stale_nullifier = [0x4a; 32];
+            let (stale_proof, stale_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                4,
+                fixture.identity_commitment,
+                stale_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let stale_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                4,
+                fixture.identity_commitment,
+                stale_digest,
+                stx.chain_id.clone(),
+                stale_nullifier,
+                fixture.policy_hash,
+                stale_proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x74);
+            let err = stale_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("rotated-out identity commitment must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("rotated out"),
+                "unexpected rotated identity error: {msg}"
+            );
+
+            let active_nullifier = [0x4b; 32];
+            let (active_proof, active_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                4,
+                replacement_commitment,
+                active_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let active_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                4,
+                replacement_commitment,
+                active_digest,
+                stx.chain_id.clone(),
+                active_nullifier,
+                fixture.policy_hash,
+                active_proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x75);
+            active_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect("replacement ZK-ACE identity commitment succeeds");
+
+            let alice_asset = AssetId::new(fixture.asset_def_id.clone(), ALICE_ID.clone());
+            let receiver_asset =
+                AssetId::new(fixture.asset_def_id.clone(), fixture.receiver.clone());
+            assert_eq!(numeric_balance(&stx, &alice_asset), Numeric::new(96, 0));
+            assert_eq!(numeric_balance(&stx, &receiver_asset), Numeric::new(4, 0));
+
+            iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                replacement_commitment,
+                Some([0x4c; 32]),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("revoke replacement ZK-ACE identity commitment");
+
+            let revoked_nullifier = [0x4d; 32];
+            let (revoked_proof, revoked_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                2,
+                replacement_commitment,
+                revoked_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let revoked_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver,
+                fixture.asset_def_id,
+                2,
+                replacement_commitment,
+                revoked_digest,
+                stx.chain_id.clone(),
+                revoked_nullifier,
+                fixture.policy_hash,
+                revoked_proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x76);
+            let err = revoked_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("revoked identity commitment must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("revoked"),
+                "unexpected revoked identity error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_authorized_transfer_rejects_digest_and_public_input_mutations() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                [0x55; 32],
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                "unsupported_action".to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("unsupported ZK-ACE action class must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("action class"),
+                "unexpected unsupported action error: {msg}"
+            );
+
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 6;
+            let replay_nullifier = [0x50; 32];
+            let (proof, tx_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                replay_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+
+            let mut wrong_digest = tx_digest;
+            wrong_digest[0] ^= 0x01;
+            let wrong_digest_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                wrong_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof.clone(),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x77);
+            let err = wrong_digest_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("tampered tx digest must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("tx_digest does not match transfer fields"),
+                "unexpected tx digest error: {msg}"
+            );
+
+            let wrong_recipient_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                ALICE_ID.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                proof.clone(),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x78);
+            let err = wrong_recipient_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("recipient substitution must fail digest binding");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("tx_digest does not match transfer fields"),
+                "unexpected recipient-substitution error: {msg}"
+            );
+
+            let public_input_nullifier = [0x51; 32];
+            let (public_input_proof, public_input_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                public_input_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let public_input_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                public_input_digest,
+                stx.chain_id.clone(),
+                public_input_nullifier,
+                fixture.policy_hash,
+                mutate_zk_ace_envelope_public_inputs(public_input_proof),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x79);
+            let err = public_input_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("envelope public-input mutation must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("public inputs do not match submitted transfer"),
+                "unexpected public-input mutation error: {msg}"
+            );
+
+            let stark_nullifier = [0x52; 32];
+            let (stark_proof, stark_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                stark_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            let stark_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver,
+                fixture.asset_def_id,
+                amount,
+                fixture.identity_commitment,
+                stark_digest,
+                stx.chain_id.clone(),
+                stark_nullifier,
+                fixture.policy_hash,
+                mutate_zk_ace_stark_public_input(stark_proof),
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x7a);
+            let err = stark_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("STARK public-input mutation must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("STARK public inputs mismatch"),
+                "unexpected STARK public-input error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_authorized_transfer_rejects_wrong_domain_chain_and_verifier() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+
+            let amount = 5;
+            let replay_nullifier = [0x44; 32];
+            let (proof, tx_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                replay_nullifier,
+                fixture.policy_hash,
+                fixture.vk_id.clone(),
+                vk_commitment,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x72);
+            let wrong_chain: iroha_data_model::ChainId =
+                "different-zk-ace-chain".parse().expect("chain id parses");
+            let wrong_chain_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                wrong_chain,
+                replay_nullifier,
+                fixture.policy_hash,
+                proof.clone(),
+            );
+            let err = wrong_chain_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("wrong chain id must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("different chain id"),
+                "unexpected chain error: {msg}"
+            );
+
+            let wrong_domain_transfer =
+                iroha_data_model::isi::zk::SubmitZkAceAuthorizedTransfer::new(
+                    ALICE_ID.clone(),
+                    fixture.receiver.clone(),
+                    fixture.asset_def_id.clone(),
+                    amount,
+                    fixture.identity_commitment,
+                    tx_digest,
+                    stx.chain_id.clone(),
+                    "iroha:wrong-domain".to_owned(),
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                    [0x45; 32],
+                    fixture.policy_hash,
+                    proof.clone(),
+                );
+            let err = wrong_domain_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("wrong domain tag must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("domain_tag mismatch"),
+                "unexpected domain error: {msg}"
+            );
+
+            let wrong_vk_id = VerifyingKeyId::new(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                "wrong_zk_ace_verifier",
+            );
+            let (wrong_vk_proof, wrong_vk_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                [0x46; 32],
+                fixture.policy_hash,
+                wrong_vk_id,
+                vk_commitment,
+            );
+            let wrong_vk_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver,
+                fixture.asset_def_id,
+                amount,
+                fixture.identity_commitment,
+                wrong_vk_digest,
+                stx.chain_id.clone(),
+                [0x46; 32],
+                fixture.policy_hash,
+                wrong_vk_proof,
+            );
+            let err = wrong_vk_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("wrong verifier key reference must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("verifying key reference mismatch"),
+                "unexpected verifier error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_rejects_retired_verifier_and_oversized_authorization_proof() {
+            let retired = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = retired.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(
+                &mut stx,
+                &retired.vk_id,
+                ConfidentialStatus::Withdrawn,
+                4096,
+            );
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                retired.asset_def_id.clone(),
+                retired.identity_commitment,
+                retired.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                retired.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("retired ZK-ACE verifier must not register identities");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("verifying key is not active")
+                    || msg.contains("ZK-ACE verifying key is not active"),
+                "unexpected retired verifier error: {msg}"
+            );
+
+            let oversized = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = oversized.state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+            let vk_commitment =
+                install_zk_ace_verifier(&mut stx, &oversized.vk_id, ConfidentialStatus::Active, 16);
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                oversized.asset_def_id.clone(),
+                oversized.identity_commitment,
+                oversized.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                oversized.vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register ZK-ACE identity commitment");
+            let replay_nullifier = [0x47; 32];
+            let (proof, tx_digest) = zk_ace_proof_attachment(
+                stx.chain_id.clone(),
+                ALICE_ID.clone(),
+                oversized.receiver.clone(),
+                oversized.asset_def_id.clone(),
+                3,
+                oversized.identity_commitment,
+                replay_nullifier,
+                oversized.policy_hash,
+                oversized.vk_id.clone(),
+                vk_commitment,
+            );
+            assert!(
+                proof.proof.bytes.len() > 16,
+                "fixture proof must exceed test verifier max"
+            );
+            let transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                oversized.receiver,
+                oversized.asset_def_id,
+                3,
+                oversized.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                oversized.policy_hash,
+                proof,
+            );
+            seed_zk_ace_call_hash(&mut stx, 0x73);
+            let err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("oversized ZK-ACE proof must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("max_proof_bytes"),
+                "unexpected oversized proof error: {msg}"
+            );
         }
 
         #[test]

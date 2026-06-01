@@ -12550,8 +12550,16 @@ test("wraps EVM-family Groth16 proof bytes with a request-bound envelope hash", 
   const prover = new EvmSccpProver({
     prove: async (request) => {
       callbackRequest = request;
+      assert.equal(Object.isFrozen(request), true);
+      assert.equal(Object.isFrozen(request.publicInputs), true);
+      assert.equal(Object.isFrozen(request.publicSignalWords), true);
+      assert.equal(Object.isFrozen(request.destinationBinding), true);
       assert.equal(request.backend, SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1);
       assert.equal(request.targetDomain, SCCP_DOMAIN_ETH);
+      request.bundleBytes[0] = 99;
+      request.sourceProofBytes[0] = 99;
+      assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       assert.deepEqual(
         request.publicSignalWords,
         sccpGroth16Bn254PublicSignalWords({
@@ -12869,9 +12877,15 @@ test("wraps TRON Groth16 proof bytes with a request-bound envelope hash", async 
   const prover = new TronSccpProver({
     prove: async (request) => {
       callbackRequest = request;
+      assert.equal(Object.isFrozen(request), true);
+      assert.equal(Object.isFrozen(request.publicInputs), true);
+      assert.equal(Object.isFrozen(request.publicSignalWords), true);
+      assert.equal(Object.isFrozen(request.destinationBinding), true);
       assert.equal(request.backend, SCCP_TRON_GROTH16_BN254_PROOF_BACKEND_V1);
       request.bundleBytes[0] = 99;
+      request.sourceProofBytes[0] = 99;
       assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       assert.deepEqual(
         request.publicSignalWords,
         sccpGroth16Bn254PublicSignalWords({

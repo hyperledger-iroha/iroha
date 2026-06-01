@@ -1,7 +1,10 @@
 use super::*;
 use crate::{
     asset::AssetDefinitionId,
-    offline::{OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem},
+    offline::{
+        KagemushaRecursiveSpendBundleV1, OfflineNoteAuditBundle, OfflineNoteIssue,
+        OfflineNoteRedeem,
+    },
     proof::ProofAttachment,
 };
 
@@ -60,10 +63,30 @@ isi! {
     }
 }
 
+isi! {
+    /// Redeem recursive Kagemusha offline cash into an online public balance.
+    ///
+    /// This instruction is submitted by the final offline holder. It verifies the
+    /// constant-size recursive spend bundle, then verifies the final redeem proof
+    /// against the bundle's current spendable note descriptor before minting the
+    /// public amount.
+    pub struct RedeemKagemushaRecursive {
+        /// Final holder's recursive Kagemusha spend bundle.
+        pub bundle: KagemushaRecursiveSpendBundleV1,
+        /// Recipient account credited online.
+        pub recipient: AccountId,
+        /// Public amount credited online.
+        pub public_amount: u128,
+        /// Final unshield/redeem proof bound to the current note descriptor.
+        pub redeem_proof: ProofAttachment,
+    }
+}
+
 impl crate::seal::Instruction for IssueOfflineNote {}
 impl crate::seal::Instruction for RedeemOfflineNote {}
 impl crate::seal::Instruction for AuditOfflineNote {}
 impl crate::seal::Instruction for KagemushaTransfer {}
+impl crate::seal::Instruction for RedeemKagemushaRecursive {}
 
 impl IssueOfflineNote {
     /// Construct an Offline note issuance instruction.
@@ -109,6 +132,24 @@ impl KagemushaTransfer {
     }
 }
 
+impl RedeemKagemushaRecursive {
+    /// Construct a recursive Kagemusha redemption instruction.
+    #[must_use]
+    pub fn new(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+    ) -> Self {
+        Self {
+            bundle,
+            recipient,
+            public_amount,
+            redeem_proof,
+        }
+    }
+}
+
 fn offline_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
@@ -146,6 +187,46 @@ impl_decode_one_offline_field!(RedeemOfflineNote {
 impl_decode_one_offline_field!(AuditOfflineNote {
     audit: OfflineNoteAuditBundle
 });
+
+impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let bundle = super::decode_aos_canonical_field::<KagemushaRecursiveSpendBundleV1>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let recipient = super::decode_aos_canonical_field::<AccountId>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let public_amount = super::decode_aos_canonical_field::<u128>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let redeem_proof = super::decode_aos_canonical_field::<ProofAttachment>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                bundle,
+                recipient,
+                public_amount,
+                redeem_proof,
+            },
+            offset,
+        ))
+    }
+}
 
 impl<'a> norito::core::DecodeFromSlice<'a> for KagemushaTransfer {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {

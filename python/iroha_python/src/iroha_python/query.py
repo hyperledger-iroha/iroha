@@ -8,6 +8,15 @@ from typing import Any, Dict, Iterable, Mapping, Optional
 from .query_filter import FilterExpr, ensure_filter
 
 
+def _normalize_count_mode(count_mode: Optional[str]) -> Optional[str]:
+    if count_mode is None:
+        return None
+    value = str(count_mode).strip().lower()
+    if value not in {"bounded", "exact"}:
+        raise ValueError("count_mode must be 'bounded' or 'exact'")
+    return value
+
+
 @dataclass
 class Pagination:
     """Pagination controls for streaming endpoints."""
@@ -30,6 +39,7 @@ class QueryEnvelope:
     sort: Iterable[Mapping[str, Any]] = field(default_factory=list)
     pagination: Pagination = field(default_factory=Pagination)
     fetch_size: Optional[int] = None
+    count_mode: Optional[str] = None
     query_name: Optional[str] = None
     select: Optional[Iterable[Mapping[str, Any]]] = None
 
@@ -42,6 +52,9 @@ class QueryEnvelope:
             payload["filter"] = dict(self.filter)
         if self.fetch_size is not None:
             payload["fetch_size"] = self.fetch_size
+        count_mode = _normalize_count_mode(self.count_mode)
+        if count_mode is not None:
+            payload["count_mode"] = count_mode
         if self.query_name is not None:
             payload["query"] = self.query_name
         if self.select is not None:
@@ -56,6 +69,7 @@ def account_query_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
     fetch_size: Optional[int] = None,
+    count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/accounts/query`."""
@@ -65,6 +79,7 @@ def account_query_envelope(
         sort=list(sort) if sort is not None else [],
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
+        count_mode=count_mode,
         query_name=query_name,
     )
     return envelope.to_dict()
@@ -77,6 +92,7 @@ def asset_definitions_query_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
     fetch_size: Optional[int] = None,
+    count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/assets/definitions/query`."""
@@ -86,6 +102,7 @@ def asset_definitions_query_envelope(
         sort=list(sort) if sort is not None else [],
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
+        count_mode=count_mode,
         query_name=query_name,
     )
     return envelope.to_dict()
@@ -98,6 +115,7 @@ def domain_query_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
     fetch_size: Optional[int] = None,
+    count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/domains/query`."""
@@ -107,6 +125,7 @@ def domain_query_envelope(
         sort=list(sort) if sort is not None else [],
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
+        count_mode=count_mode,
         query_name=query_name,
     )
     return envelope.to_dict()
@@ -119,6 +138,7 @@ def asset_holders_query_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
     fetch_size: Optional[int] = None,
+    count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/assets/{definition}/holders/query`."""
@@ -128,6 +148,7 @@ def asset_holders_query_envelope(
         sort=list(sort) if sort is not None else [],
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
+        count_mode=count_mode,
         query_name=query_name,
     )
     return envelope.to_dict()
@@ -140,6 +161,7 @@ def rwa_query_envelope(
     limit: Optional[int] = None,
     offset: int = 0,
     fetch_size: Optional[int] = None,
+    count_mode: Optional[str] = None,
     query_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build an envelope for POST `/v1/rwas/query`."""
@@ -149,6 +171,7 @@ def rwa_query_envelope(
         sort=list(sort) if sort is not None else [],
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
+        count_mode=count_mode,
         query_name=query_name,
     )
     return envelope.to_dict()

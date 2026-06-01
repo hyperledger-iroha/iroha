@@ -942,6 +942,33 @@ test("listRepoAgreements normalizes repo payload", async () => {
   assert.equal(agreement.governance.marginFrequencySecs, 86400);
 });
 
+test("listRepoAgreements preserves bounded count metadata", async () => {
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [],
+        has_more: true,
+        count_mode: "bounded",
+        indexed_height: 9,
+        indexed_block_hash: "ab".repeat(32),
+        query_source: "live",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const page = await client.listRepoAgreements({ limit: 1, countMode: "bounded" });
+  assert.match(capturedUrl, /count_mode=bounded/);
+  assert.equal(page.total, null);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.countMode, "bounded");
+  assert.equal(page.indexedHeight, 9);
+  assert.equal(page.querySource, "live");
+});
+
 test("queryRepoAgreements posts structured envelope", async () => {
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -959,6 +986,20 @@ test("queryRepoAgreements posts structured envelope", async () => {
   assert.equal(calls[0].init.method, "POST");
   const body = JSON.parse(Buffer.from(calls[0].init.body).toString("utf8"));
   assert.ok(body.sort, "expected sort array in repo query body");
+});
+
+test("queryRepoAgreements rejects malformed bounded metadata", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: { items: [], has_more: "true", count_mode: "bounded" },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.queryRepoAgreements({ countMode: "bounded" }),
+    /invalid has_more flag/,
+  );
 });
 
 test("getAttachment validates attachmentId", async () => {
@@ -14609,6 +14650,64 @@ test("listAccounts encodes iterable params", async () => {
   assert.deepEqual(payload, toriiFixtures.iterable.accountListPage);
 });
 
+test("queryAccounts preserves bounded count metadata", async () => {
+  let captured;
+  const fetchImpl = async (_url, init) => {
+    captured = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [{ id: FIXTURE_ALICE_ID }],
+        has_more: true,
+        count_mode: "bounded",
+        indexed_height: 12,
+        indexed_block_hash: "ab".repeat(32),
+        query_source: "live",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.queryAccounts({ limit: 1, countMode: "bounded" });
+
+  assert.equal(captured.count_mode, "bounded");
+  assert.equal(payload.total, null);
+  assert.equal(payload.hasMore, true);
+  assert.equal(payload.countMode, "bounded");
+  assert.equal(payload.indexedHeight, 12);
+  assert.equal(payload.indexedBlockHash, "ab".repeat(32));
+  assert.equal(payload.querySource, "live");
+});
+
+test("iterateAccountsQuery follows bounded hasMore without exact totals", async () => {
+  const offsets = [];
+  const fetchImpl = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    offsets.push(body.pagination.offset);
+    const offset = body.pagination.offset;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [{ id: `${FIXTURE_ALICE_ID}-${offset}` }],
+        has_more: offset === 0,
+        count_mode: "bounded",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const items = [];
+  for await (const item of client.iterateAccountsQuery({
+    pageSize: 1,
+    count_mode: "bounded",
+  })) {
+    items.push(item);
+  }
+
+  assert.deepEqual(offsets, [0, 1]);
+  assert.equal(items.length, 2);
+});
+
 test("listAccounts rejects unsupported format option", async () => {
   let called = false;
   const fetchImpl = async () => {
@@ -14787,6 +14886,33 @@ test("queryAccounts rejects unsupported sort order tokens", async () => {
     /sort token at index 0 order must be "asc" or "desc"/,
   );
   assert.equal(callCount, 0);
+});
+
+test("queryAccounts rejects invalid countMode before fetching", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not call fetch");
+    },
+  });
+  await assert.rejects(
+    () => client.queryAccounts({ countMode: "full" }),
+    /countMode must be "bounded" or "exact"/,
+  );
+});
+
+test("queryAccounts rejects malformed has_more response metadata", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: { items: [], has_more: "false", count_mode: "bounded" },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.queryAccounts({ countMode: "bounded" }),
+    /invalid has_more flag/,
+  );
 });
 
 test("queryDomains rejects non-object select entries", async () => {

@@ -23,11 +23,9 @@ public final class KagemushaRecursiveAggregationProofBundleProver {
     final byte[] proofBundleArchive =
         nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
             recordBundleArchive, pallasOpenEnvelopesArchive);
-    if (proofBundleArchive == null || proofBundleArchive.length == 0) {
-      throw new IllegalStateException(
-          "nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes returned empty output");
-    }
-    return proofBundleArchive;
+    return KagemushaCompactPaymentTokenProver.requireNativeOutput(
+        proofBundleArchive,
+        "nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes");
   }
 
   private static void requireNative() {

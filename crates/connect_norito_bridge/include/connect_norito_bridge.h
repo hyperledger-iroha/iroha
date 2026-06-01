@@ -83,6 +83,72 @@ int32_t connect_norito_offline_prove_note_audit(
     uint8_t** out_recursive_proof_ptr,
     unsigned long* out_recursive_proof_len);
 
+// Encode and sign a `RedeemOfflineNote` on-chain transaction.
+// `redeem_norito` is the Norito archive of `OfflineNoteRedeem` with the
+// recursive proof already embedded. Output is canonical versioned
+// SignedTransaction bytes matching the transfer/mint encoders below.
+int32_t connect_norito_encode_redeem_offline_note_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* redeem_norito_ptr, unsigned long redeem_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Encode and sign an `AuditOfflineNote` on-chain transaction.
+// `audit_norito` is the Norito archive of `OfflineNoteAuditBundle` with the
+// recursive proof already embedded.
+int32_t connect_norito_encode_audit_offline_note_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* audit_norito_ptr, unsigned long audit_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Encode and sign an `IssueOfflineNote` on-chain transaction.
+// `issue_norito` is the Norito archive of `OfflineNoteIssue`.
+int32_t connect_norito_encode_issue_offline_note_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* issue_norito_ptr, unsigned long issue_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Encode and sign a defund transaction: bearer audit trail followed by the
+// redemption, atomically in one signed transaction. `audit_trail` is a
+// count-prefixed concatenation. Each entry is an 8-byte little-endian length
+// followed by that many bytes of an `OfflineNoteAuditBundle` archive.
+int32_t connect_norito_encode_defund_offline_note_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const uint8_t* audit_trail_ptr, unsigned long audit_trail_len, uint32_t audit_trail_count,
+    const uint8_t* redeem_norito_ptr, unsigned long redeem_norito_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 // Legacy unanchored Kagemusha compact-token prover retained for ABI compatibility only.
 // Production callers must use `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`.
 // Valid `KagemushaVerifiedFoldBundle` input returns ERR_KAGEMUSHA_PROVE and no output bytes.
@@ -113,6 +179,42 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bund
     unsigned long pallas_open_envelopes_norito_len,
     uint8_t** out_proof_bundle_ptr,
     unsigned long* out_proof_bundle_len);
+
+// Initialize production recursive Kagemusha spendable offline cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+int32_t connect_norito_kagemusha_recursive_spend_init(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_bundle_ptr,
+    unsigned long* out_bundle_len);
+
+// Append one offline hop to production recursive Kagemusha spendable cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendAppendRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+int32_t connect_norito_kagemusha_recursive_spend_append(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_bundle_ptr,
+    unsigned long* out_bundle_len);
+
+// Verify production recursive Kagemusha spendable offline cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendVerifyRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.
+int32_t connect_norito_kagemusha_recursive_spend_verify(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
+// Prepare an online recursive Kagemusha redeem instruction.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendRedeemRequestV1`.
+// Output: Norito-archive bytes of `RedeemKagemushaRecursive`.
+int32_t connect_norito_kagemusha_recursive_spend_redeem(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_instruction_ptr,
+    unsigned long* out_instruction_len);
 
 void connect_norito_free(uint8_t* ptr);
 

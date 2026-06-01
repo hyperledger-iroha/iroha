@@ -24,10 +24,10 @@ class KagemushaRecursiveAggregationProofBundleProver private constructor() {
                     recordBundleArchive,
                     pallasOpenEnvelopesArchive,
                 )
-            check(proofBundleArchive != null && proofBundleArchive.isNotEmpty()) {
-                "nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes returned empty output"
-            }
-            return proofBundleArchive
+            return KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                proofBundleArchive,
+                "nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
+            )
         }
 
         private fun loadLibrary(): Boolean =

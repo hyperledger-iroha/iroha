@@ -1,0 +1,471 @@
+{
+  "schema_version": 1,
+  "vector_set": "soracloud-bfv-identifier-envelope-v1",
+  "policy": {
+    "policy_id": "string#retail",
+    "owner": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+    "active": true,
+    "normalization": "exact",
+    "resolver_public_key": "ed25519:ed01201111111111111111111111111111111111111111111111111111111111111111",
+    "backend": "bfv-affine-sha3-256-v1",
+    "input_encryption": "bfv-v1",
+    "input_encryption_public_parameters_decoded": {
+      "parameters": {
+        "polynomial_degree": 8,
+        "plaintext_modulus": 257,
+        "ciphertext_modulus": 16842752,
+        "decomposition_base_log": 12
+      },
+      "public_key": {
+        "a": [
+          3503246,
+          2379264,
+          12091019,
+          30169,
+          15804162,
+          8155629,
+          2418997,
+          3003107
+        ],
+        "b": [
+          11472226,
+          15791131,
+          10301391,
+          6321610,
+          502045,
+          1948157,
+          5332249,
+          12641494
+        ]
+      },
+      "max_input_bytes": 3
+    }
+  },
+  "vectors": [
+    {
+      "name": "identifier-string-ab",
+      "purpose": "baseline identifier encrypted request vector",
+      "input_utf8": "ab",
+      "input_hex": "6162",
+      "seed_hex": "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "EB82751711D3251C2285DF3BA751A3CC9166486E864A6823C73D7B154BCD68C9"
+    },
+    {
+      "name": "soracloud-add-left",
+      "purpose": "left input for a three-input Soracloud Add fixture",
+      "input_utf8": "ab",
+      "input_hex": "6162",
+      "seed_hex": "10112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "BA9620D9F249698F1E991F5F5930F2E93D3E67472CCB93F7B1FA9C130D2F8A41"
+    },
+    {
+      "name": "soracloud-add-middle",
+      "purpose": "middle input for a three-input Soracloud Add fixture",
+      "input_utf8": "cd",
+      "input_hex": "6364",
+      "seed_hex": "20112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "171C8DD5503F97A890CAF356033C5967495A68007FD732A34135B8387AAE4F4E"
+    },
+    {
+      "name": "soracloud-add-right",
+      "purpose": "right input for a three-input Soracloud Add fixture",
+      "input_utf8": "ef",
+      "input_hex": "6566",
+      "seed_hex": "30112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "D842AB98E5A5E7A3247B53DD600449FD25431C64DA788BBDFFD4930D62294D6F"
+    },
+    {
+      "name": "soracloud-multiply-left",
+      "purpose": "left input for a three-input Soracloud Multiply fixture",
+      "input_utf8": "gh",
+      "input_hex": "6768",
+      "seed_hex": "40112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "F9CD5C8BFAB652854197CBBB061A3E647DF2B1647CA2D49EE265DC28A67D873F"
+    },
+    {
+      "name": "soracloud-multiply-middle",
+      "purpose": "middle input for a three-input Soracloud Multiply fixture",
+      "input_utf8": "ij",
+      "input_hex": "696A",
+      "seed_hex": "50112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "29D6A32107BD439C2085C32E14ED74438227D77FD759C26468236FDF5B3A456F"
+    },
+    {
+      "name": "soracloud-multiply-right",
+      "purpose": "right input for a three-input Soracloud Multiply fixture",
+      "input_utf8": "kl",
+      "input_hex": "6B6C",
+      "seed_hex": "60112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF",
+      "expected_ciphertext_bytes": 1240,
+      "expected_ciphertext_sha256": "22F4564F23BC6D774DC4769A90B9A9EA3415DE785CB120A20190FB59ED92B57C"
+    }
+  ],
+  "operation_vectors": {
+    "vector_set": "soracloud-bfv-operation-v1",
+    "profile": "ram-lfe-bfv-v1",
+    "keygen_seed_utf8": "soracloud-fhe-test-keygen",
+    "max_input_bytes": 8,
+    "public_key": {
+      "expected_norito_bytes": 1212,
+      "expected_sha256": "AF7B077A45DC6FDA0AFCD995EA39F475F9DAA6901B37FE81BAB74C7FF059C386"
+    },
+    "public_parameters": {
+      "expected_norito_bytes": 1241,
+      "expected_sha256": "F41F1726D28D47B328E7AAC35F15E0595E1A81F00EDE499CEA4BDFAB91AC4B94",
+      "polynomial_degree": 64,
+      "plaintext_modulus": 257,
+      "ciphertext_modulus": "72339069014638592",
+      "decomposition_base_log": 12,
+      "max_input_bytes": 8
+    },
+    "evaluation_key_bundle": {
+      "expected_norito_bytes": 8312,
+      "expected_sha256": "BD34161E5E84EBC44B4F263F9FA08959E3D20D9B3F225973F1151A9273E6DD64",
+      "expected_digest_hex": "6018ed3cb8315df01d8e1f7910afab8bd02c978cbf96570ff9561f5812a8874b",
+      "decomposition_base_log": 12,
+      "decomposition_digit_count": 5,
+      "relinearization_entry_count": 5,
+      "relinearization_entries": [
+        {
+          "index": 0,
+          "coefficient_count": 64,
+          "b_sha256": "96741836539A99DD8CC392104F37E57AD6BBBB0275C0D031273BB9B84572F49D",
+          "a_sha256": "72DD1ABBD637D29E3B60AAA6284750AE90C1987C6D8540876CAD226D3345570A"
+        },
+        {
+          "index": 1,
+          "coefficient_count": 64,
+          "b_sha256": "C1FA5085623D83940A71C4CB0199EBF8964CB097B13136F0491B78820EE89043",
+          "a_sha256": "810F9388678971F556F54AE4175F24C98C1849D4974185745C2D9974B47AB563"
+        },
+        {
+          "index": 2,
+          "coefficient_count": 64,
+          "b_sha256": "A72063076623F3F1321B5C93FD9EDD6654175CEE51AEC16D2C7DB1C21C8F1F0E",
+          "a_sha256": "9A4335899F586B721D62444013259BFA49837B474AD1B0D2473572B769C16FD5"
+        },
+        {
+          "index": 3,
+          "coefficient_count": 64,
+          "b_sha256": "1CDB963B637F76F887F1851F29D758483EE772E8AF64EA709CAD34855269B9AA",
+          "a_sha256": "CEC49710AC3541E82811D271039ADA933F9A3838F5FC13E34DBF99FE5BDF188A"
+        },
+        {
+          "index": 4,
+          "coefficient_count": 64,
+          "b_sha256": "DFB636272EDFC8B08CB987B90E81A381962CB550EEC41F85170C357FA252B3B9",
+          "a_sha256": "DDA04289392BD840D7D2CB13C0ADC5111D81CE6A57DBCB49F603F77833AF0005"
+        }
+      ],
+      "rotation_key_count": 1,
+      "bootstrap_key_id": "bootstrap-test-key"
+    },
+    "rotation_keys": [
+      {
+        "rotation_steps": 1,
+        "seed_utf8": "soracloud-fhe-rotation-key",
+        "expected_zero_refresh_bytes": 1212,
+        "expected_zero_refresh_sha256": "2C968758FFC5CE42D247F91D4D265C78BDACCA088356E5AD835F0EBE8F0B9488",
+        "zero_refresh_components": {
+          "coefficient_count": 64,
+          "c0_sha256": "4BC9BD805149457B9AAF04F23B7511720A4A60DFFD536BB000BF65EBD7B52A03",
+          "c1_sha256": "2CB9A17318A1A31A941EFF3D8B620FF0765CC5E4C2EFC24089052C77F6F2CD14"
+        }
+      }
+    ],
+    "bootstrap_key": {
+      "key_id": "bootstrap-test-key",
+      "seed_utf8": "soracloud-fhe-bootstrap-key",
+      "expected_zero_refresh_bytes": 1212,
+      "expected_zero_refresh_sha256": "A56033A6AE99D031BA48F010B2DF4BC877BC5918B48C85A44BAB6FCCC3D1DA51",
+      "zero_refresh_components": {
+        "coefficient_count": 64,
+        "c0_sha256": "A0F0898E8080D91AF19D3A3FF9D7C32690E4298E61876DD31C0341AD3B4B539D",
+        "c1_sha256": "5FC76E1A70CC683F5EE23889B3CCFCD5674FE9430D547A55FB0FB13B5DBE1738"
+      }
+    },
+    "vectors": [
+      {
+        "name": "soracloud-add-output",
+        "purpose": "three-input Soracloud Add output over RAM-LFE BFV identifier envelopes",
+        "operation": "Add",
+        "inputs": [
+          {
+            "input_hex": "0102",
+            "seed_utf8": "soracloud-fhe-add-input-1",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "4FABDDA333FD34815C3F759EAD9D9CF9F5081FC2645321448C2E7A976EEC41EA"
+          },
+          {
+            "input_hex": "0304",
+            "seed_utf8": "soracloud-fhe-add-input-2",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "F9758578BE1AFC5FEEF53416502CA066B0136208709D19A19A3EEC45B4EED25E"
+          },
+          {
+            "input_hex": "0506",
+            "seed_utf8": "soracloud-fhe-add-input-3",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "DFEC77C965B162AF5CC1972B2A88DD0E3641EA400D3E88C193D79040E184D8DC"
+          }
+        ],
+        "expected_output_ciphertext_bytes": 10616,
+        "expected_output_ciphertext_sha256": "C72C6E771F7E8FB6394D506A3DB4BA69D422CB35CCE32F04203DDA1CF7455430",
+        "expected_plaintext_slots": [
+          6,
+          9,
+          12,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "soracloud-multiply-output",
+        "purpose": "three-input Soracloud Multiply output over RAM-LFE BFV identifier envelopes",
+        "operation": "Multiply",
+        "inputs": [
+          {
+            "input_hex": "0203",
+            "seed_utf8": "soracloud-fhe-mul-input-1",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "EEE740942D3CB2CEAFD9FF9AA3E1ECEB7F6CE41D06BCE6092209B4FE03212B1F"
+          },
+          {
+            "input_hex": "0405",
+            "seed_utf8": "soracloud-fhe-mul-input-2",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "D464C7366A87B9D37BED05D9DDDDF1B8C0BDF9D5EABAD933BC521BB7F900AC86"
+          },
+          {
+            "input_hex": "0607",
+            "seed_utf8": "soracloud-fhe-mul-input-3",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "25340D1C426472B729F2948E841630D57550FD8246673BADBF23441EB51B83DB"
+          }
+        ],
+        "expected_output_ciphertext_bytes": 10616,
+        "expected_output_ciphertext_sha256": "7E2BB3CA5EE53C8B00F8061D5DF4F5BF1FC2649A24A8521806CEDFD351BCE043",
+        "expected_plaintext_slots": [
+          8,
+          48,
+          105,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "name": "soracloud-rotate-left-output",
+        "purpose": "Soracloud RotateLeft output shape with public rotation refresh material",
+        "operation": "RotateLeft",
+        "inputs": [
+          {
+            "input_hex": "6162",
+            "seed_utf8": "soracloud-rotate-input",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "9E49DF51AF687CCF584FE79A22B9351728069B919876DEAF1B015297B05A0CCF"
+          }
+        ],
+        "rotation_steps": 1,
+        "expected_output_ciphertext_bytes": 10616,
+        "expected_output_ciphertext_sha256": "F2F2E028FE7CE7FD2189C0AD960D5F2CDDB1883008CCA665D6A4D9EA341215C6",
+        "expected_plaintext_slots": [
+          97,
+          98,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2
+        ]
+      },
+      {
+        "name": "soracloud-bootstrap-output",
+        "purpose": "Soracloud Bootstrap output shape with public encrypted-zero refresh material",
+        "operation": "Bootstrap",
+        "inputs": [
+          {
+            "input_hex": "616263",
+            "seed_utf8": "soracloud-bootstrap-input",
+            "expected_ciphertext_bytes": 10616,
+            "expected_ciphertext_sha256": "AEE43A9FB38F9E596A897565134B3CA20F15F92CDAA9850F8BA961E95AC9043D"
+          }
+        ],
+        "bootstrap_count": 1,
+        "expected_output_ciphertext_bytes": 10616,
+        "expected_output_ciphertext_sha256": "D873550CE7FB4C9B96397CF1B2E2927D3038475058399C10EDBACED73E9F3E86",
+        "expected_plaintext_slots": [
+          3,
+          97,
+          98,
+          99,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "expected_output_utf8": "abc"
+      }
+    ],
+    "public_parameters_decoded": {
+      "parameters": {
+        "polynomial_degree": 64,
+        "plaintext_modulus": 257,
+        "ciphertext_modulus": "72339069014638592",
+        "decomposition_base_log": 12
+      },
+      "public_key": {
+        "b": [
+          "2386007989367717",
+          "6318092823850044",
+          "32674293955861105",
+          "31242067094471831",
+          "44426112831362282",
+          "31420999594286269",
+          "5877659248627225",
+          "55731316239454479",
+          "40169923226594581",
+          "52584487086135468",
+          "17848715689611456",
+          "56926454785088410",
+          "57380207509045902",
+          "54526520683987453",
+          "16140815915328537",
+          "36498033715375116",
+          "29424120301713270",
+          "37229348469900733",
+          "9755782702219258",
+          "56325830880939895",
+          "22647389252999048",
+          "23974308496153517",
+          "62063888202424540",
+          "33787972498722721",
+          "34036927948012330",
+          "7280554284531371",
+          "42848545180510555",
+          "61046011220730974",
+          "64698666899015488",
+          "22135986411208491",
+          "19155945226420937",
+          "4179936611484582",
+          "470879580115841",
+          "34836614614614210",
+          "21733575125708172",
+          "68545144174768933",
+          "48627532496217423",
+          "70691516926562804",
+          "65582572247375242",
+          "12917503518525269",
+          "19364211777750967",
+          "44436061219880226",
+          "67010515738182800",
+          "70109518035890024",
+          "37325659940018136",
+          "66927575037312776",
+          "24501336240203991",
+          "67393874004878359",
+          "50205632770544623",
+          "66759074121198901",
+          "40125128045418971",
+          "18590801085494962",
+          "58960030900225617",
+          "18615779175839022",
+          "54122339124089101",
+          "10575081016428098",
+          "36503249659893610",
+          "62443527661256205",
+          "31268363898439422",
+          "69789340578293628",
+          "41137367216534495",
+          "71155215024711969",
+          "13931493880732993",
+          "11999306225874296"
+        ],
+        "a": [
+          "41751510850786309",
+          "34803134148681124",
+          "63064268906816736",
+          "21608120852585730",
+          "43538032113110274",
+          "15507388675565352",
+          "68078818623020148",
+          "6082513081901317",
+          "64615059552502053",
+          "56872327360938996",
+          "68697628158847175",
+          "34518270598415177",
+          "35207698624427163",
+          "57529413655136650",
+          "55934920922314330",
+          "17875547888290292",
+          "58031919841258888",
+          "6036343147997732",
+          "16725635117694070",
+          "6484767158094114",
+          "46201346835670230",
+          "40289794994331533",
+          "42553290965208729",
+          "18544424887486456",
+          "19876056571444669",
+          "67087760747193",
+          "58237973070183916",
+          "42867062506069037",
+          "38862244798471031",
+          "71789171901356373",
+          "49027123483364115",
+          "15876679101817939",
+          "49118966670635847",
+          "71395603665005953",
+          "53965135234739977",
+          "25639730758894798",
+          "16348329523088357",
+          "58895718498125438",
+          "5050001686962225",
+          "41585331156376965",
+          "9971862115469506",
+          "23075706485659597",
+          "61938723012912663",
+          "65577162651544644",
+          "4655865855505787",
+          "40506608587302500",
+          "61855517702682155",
+          "18004846984902326",
+          "66514156809250584",
+          "67808730933988860",
+          "62011664160107195",
+          "12920331665905617",
+          "11805948192779557",
+          "118505194503717",
+          "29129411682535869",
+          "35031505207708226",
+          "59845288519599715",
+          "17325789490205465",
+          "63245120887180856",
+          "59295608947375206",
+          "68717367106067552",
+          "52579076508440194",
+          "48380789473708873",
+          "20469582820124416"
+        ]
+      },
+      "max_input_bytes": 8,
+      "norito_length_encoding": "compact-v1"
+    }
+  }
+}

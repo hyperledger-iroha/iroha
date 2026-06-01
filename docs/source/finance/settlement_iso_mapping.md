@@ -110,8 +110,15 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
 - The IVM helper now ingests real ISO 20022 XML envelopes (head.001 + `DataPDU` + `Document`)
   and validates the Business Application Header via the `head.001` schema so `BizMsgIdr`,
   `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
-  blocks remain intentionally skipped. Regression tests consume the samples and the new
-  header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
+  blocks remain skipped during IVM field materialisation. Torii profile validation verifies the
+  supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles and
+  continues to reject embedded signatures for live `reject-unsupported` profiles. Regression tests
+  consume the samples and the new header envelope fixture to guard the mappings.【crates/ivm/src/iso20022.rs:265】【crates/ivm/src/iso20022.rs:3301】【crates/ivm/src/iso20022.rs:3703】
+- Torii accepts lifecycle submissions at `/v1/iso20022/pacs002`, `pacs004`, `camt056`,
+  `sese023`, `sese024`, and `sese025`. These endpoints validate the selected rail profile,
+  store the lifecycle message in the durable ISO bridge record model, reject replayed
+  payload/UETR evidence, and update referenced durable records only when the original message is
+  already known.
 
 #### Regulatory and market-structure considerations
 
@@ -370,7 +377,12 @@ iroha app settlement dvp \
 ### pacs.004 return mapping notes
 
 - return fixtures now normalise `ChrgBr` (`DEBT`/`CRED`/`SHAR`/`SLEV`) and proprietary return reasons exposed as `TxInf[*]/RtrdRsn/Prtry`, so bridge consumers can replay fee attribution and operator codes without re-parsing the XML envelope.
-- AppHdr signature blocks inside `DataPDU` envelopes remain ignored on ingest; audits should rely on channel provenance rather than embedded XMLDSIG fields.
+- Torii can emit return/cancellation/status XML from durable bridge records via `/v1/iso20022/messages/{msg_id}/pacs004`, `/camt029`, `/sese024`, and `/sese025`. The `pacs.004` and `sese.025` helpers fail when the original record lacks required amount/currency or securities-leg context, so evidence remains tied to submitted ISO messages instead of placeholders.
+- Embedded signature behavior is profile-gated: live `reject-unsupported`
+  profiles fail closed on any embedded signature block, `record-only` profiles
+  preserve only the ignored-signature marker, and `require-verified` profiles
+  accept only the supported P-256/SHA-256 enveloped XMLDSig/XAdES subset after
+  digest and signature verification.
 
 ### Operational checklist for the bridge
 - Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  

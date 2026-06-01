@@ -145,6 +145,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::asset::{CanBurnAsset},
     iroha_executor_data_model::permission::asset::{CanTransferAsset},
     iroha_executor_data_model::permission::asset::{CanModifyAssetMetadata},
+    iroha_executor_data_model::permission::zk_ace::{CanManageZkAceIdentityForAccount},
 
     iroha_executor_data_model::permission::nft::{CanRegisterNft},
     iroha_executor_data_model::permission::nft::{CanUnregisterNft},

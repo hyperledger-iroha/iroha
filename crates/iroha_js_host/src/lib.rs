@@ -137,6 +137,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     permission::Permission,
+    proof::{ProofAttachment, VerifyingKeyId},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::{ContractManifest, ManifestProvenance},
@@ -157,6 +158,7 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action, Repeats},
     },
+    zk::{ZkAcePublicInputsV1, ZkAceWitnessV1},
 };
 use iroha_primitives::{
     json::Json,
@@ -636,6 +638,226 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
+}
+
+fn parse_zk_ace_verifier_key_id(value: Option<String>) -> napi::Result<VerifyingKeyId> {
+    let Some(value) = value else {
+        return Ok(zk_ace_prover::zk_ace_verifier_key_id(
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        ));
+    };
+    let trimmed = value.trim();
+    let Some((backend, name)) = trimmed.split_once(':') else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "verifier_key_id must be in 'backend:name' format",
+        ));
+    };
+    let backend = backend.trim();
+    let name = name.trim();
+    if backend.is_empty() || name.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "verifier_key_id backend and name must be non-empty",
+        ));
+    }
+    let backend = iroha_schema::Ident::from_str(backend).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid verifier_key_id backend: {err}"),
+        )
+    })?;
+    Ok(VerifyingKeyId::new(backend, name))
+}
+
+fn parse_zk_ace_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
+    let bytes = value.as_ref();
+    if bytes.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be exactly 32 bytes"),
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(bytes);
+    Ok(out)
+}
+
+fn parse_optional_zk_ace_commitment(value: Option<Uint8Array>) -> napi::Result<[u8; 32]> {
+    match value {
+        Some(value) => parse_zk_ace_fixed32(&value, "vk_commitment"),
+        None => zk_ace_prover::zk_ace_verifying_key_commitment_v1()
+            .map_err(|err| norito_to_napi(format!("build ZK-ACE verifier commitment: {err}"))),
+    }
+}
+
+fn hex32_lower(value: &[u8; 32]) -> String {
+    hex::encode(value)
+}
+
+fn proof_attachment_to_js_value(attachment: &ProofAttachment) -> napi::Result<Value> {
+    let mut vk_ref = Map::new();
+    vk_ref.insert(
+        "backend".to_owned(),
+        Value::String(attachment.vk_ref.backend.as_str().to_owned()),
+    );
+    vk_ref.insert(
+        "name".to_owned(),
+        Value::String(attachment.vk_ref.name.clone()),
+    );
+
+    let mut proof = Map::new();
+    proof.insert(
+        "backend".to_owned(),
+        Value::String(attachment.backend.as_str().to_owned()),
+    );
+    proof.insert("verifying_key_ref".to_owned(), Value::Object(vk_ref));
+    proof.insert(
+        "proof_b64".to_owned(),
+        Value::String(STANDARD.encode(&attachment.proof.bytes)),
+    );
+    if let Some(commitment) = attachment.vk_commitment {
+        proof.insert(
+            "verifying_key_commitment".to_owned(),
+            Value::String(hex32_lower(&commitment)),
+        );
+    }
+    if let Some(envelope_hash) = attachment.envelope_hash {
+        proof.insert(
+            "envelope_hash".to_owned(),
+            Value::String(hex32_lower(&envelope_hash)),
+        );
+    }
+    Ok(Value::Object(proof))
+}
+
+fn zk_ace_authorization_to_json(
+    public_inputs: &ZkAcePublicInputsV1,
+    proof: &ProofAttachment,
+    public_inputs_bytes: &[u8],
+) -> napi::Result<String> {
+    let mut root = Map::new();
+    root.insert(
+        "public_inputs".to_owned(),
+        json::to_value(public_inputs).map_err(norito_to_napi)?,
+    );
+    root.insert("proof".to_owned(), proof_attachment_to_js_value(proof)?);
+    root.insert(
+        "identity_commitment".to_owned(),
+        Value::String(hex32_lower(&public_inputs.identity_commitment)),
+    );
+    root.insert(
+        "tx_digest".to_owned(),
+        Value::String(hex32_lower(&public_inputs.tx_digest)),
+    );
+    root.insert(
+        "replay_nullifier".to_owned(),
+        Value::String(hex32_lower(&public_inputs.replay_nullifier)),
+    );
+    root.insert(
+        "policy_hash".to_owned(),
+        Value::String(hex32_lower(&public_inputs.policy_hash)),
+    );
+    root.insert(
+        "verifier_key_id".to_owned(),
+        Value::String(format!(
+            "{}:{}",
+            public_inputs.verifier_key_id.backend.as_str(),
+            public_inputs.verifier_key_id.name
+        )),
+    );
+    root.insert(
+        "authorization_proof_bytes".to_owned(),
+        json::to_value(&proof.proof.bytes.len()).map_err(norito_to_napi)?,
+    );
+    root.insert(
+        "authorization_public_input_bytes".to_owned(),
+        json::to_value(&public_inputs_bytes.len()).map_err(norito_to_napi)?,
+    );
+    root.insert(
+        "replay_nullifier_bytes".to_owned(),
+        json::to_value(&32usize).map_err(norito_to_napi)?,
+    );
+    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
+}
+
+#[napi(js_name = "zkAceBuildAuthorizationProofV1")]
+#[allow(clippy::needless_pass_by_value)]
+/// Build a ZK-ACE authorization proof from canonical public inputs and private witness JSON.
+pub fn zk_ace_build_authorization_proof_v1(
+    public_inputs_json: String,
+    witness_json: String,
+    vk_commitment: Option<Uint8Array>,
+) -> napi::Result<String> {
+    let public_inputs: ZkAcePublicInputsV1 =
+        json::from_json(&public_inputs_json).map_err(norito_to_napi)?;
+    let witness: ZkAceWitnessV1 = json::from_json(&witness_json).map_err(norito_to_napi)?;
+    let vk_commitment = parse_optional_zk_ace_commitment(vk_commitment)?;
+    let proof =
+        zk_ace_prover::build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+            .map_err(|err| norito_to_napi(format!("build ZK-ACE proof: {err}")))?;
+    let public_inputs_bytes = norito::to_bytes(&public_inputs).map_err(norito_to_napi)?;
+    zk_ace_authorization_to_json(&public_inputs, &proof, &public_inputs_bytes)
+}
+
+#[napi(js_name = "zkAceBuildTransferAuthorizationV1")]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+/// Build a complete ZK-ACE transparent-transfer authorization proof and public input payload.
+pub fn zk_ace_build_transfer_authorization_v1(
+    from_account_id: String,
+    to_account_id: String,
+    asset_definition_id: String,
+    amount: String,
+    chain_id: String,
+    identity_root: Uint8Array,
+    identity_blinding: Uint8Array,
+    replay_secret: Uint8Array,
+    policy_hash: Uint8Array,
+    verifier_key_id: Option<String>,
+    vk_commitment: Option<Uint8Array>,
+) -> napi::Result<String> {
+    let from = parse_account_id(&from_account_id, "from_account_id")?;
+    let to = parse_account_id(&to_account_id, "to_account_id")?;
+    let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset_definition_id: {err}"),
+        )
+    })?;
+    let amount = amount.trim().parse::<u128>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("amount must be an unsigned integer string: {err}"),
+        )
+    })?;
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain_id: {err}"))
+    })?;
+    let witness = ZkAceWitnessV1 {
+        identity_root: parse_zk_ace_fixed32(&identity_root, "identity_root")?,
+        identity_blinding: parse_zk_ace_fixed32(&identity_blinding, "identity_blinding")?,
+        replay_secret: parse_zk_ace_fixed32(&replay_secret, "replay_secret")?,
+    };
+    let policy_hash = parse_zk_ace_fixed32(&policy_hash, "policy_hash")?;
+    let verifier_key_id = parse_zk_ace_verifier_key_id(verifier_key_id)?;
+    let vk_commitment = parse_optional_zk_ace_commitment(vk_commitment)?;
+    let authorization = zk_ace_prover::build_zk_ace_transfer_authorization_v1(
+        from,
+        to,
+        asset,
+        amount,
+        chain_id,
+        witness,
+        policy_hash,
+        verifier_key_id,
+        vk_commitment,
+    )
+    .map_err(|err| norito_to_napi(format!("build ZK-ACE transfer authorization: {err}")))?;
+    zk_ace_authorization_to_json(
+        &authorization.public_inputs,
+        &authorization.proof,
+        &authorization.public_inputs_bytes,
+    )
 }
 
 fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
@@ -2037,6 +2259,147 @@ pub fn build_confidential_unshield_proof_v3(
         root: Buffer::from(proof.root.to_vec()),
         proof: Buffer::from(proof.proof.bytes),
     })
+}
+
+fn decode_kagemusha_recursive_archive<T>(archive: &Uint8Array, context: &str) -> napi::Result<T>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de>,
+{
+    if archive.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} archive must not be empty"),
+        ));
+    }
+    decode_from_bytes(archive.as_ref()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} archive: {err}"),
+        )
+    })
+}
+
+fn encode_kagemusha_recursive_archive<T>(value: &T, context: &str) -> napi::Result<Buffer>
+where
+    T: norito::core::NoritoSerialize,
+{
+    norito::to_bytes(value)
+        .map(Buffer::from)
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, format!("{context}: {err}")))
+}
+
+/// Build the initial recursive Kagemusha spend bundle from a raw Norito request archive.
+#[napi(js_name = "kagemushaRecursiveSpendInit")]
+pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend init")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let bundle =
+        iroha_core::zk::prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+            &request.record_bundle,
+            &request.pallas_open_envelopes_archive,
+            request.current_note,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            &vk_box,
+            None,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    encode_kagemusha_recursive_archive(
+        &bundle,
+        "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+/// Append one offline hop to a recursive Kagemusha spend bundle from a raw Norito request archive.
+#[napi(js_name = "kagemushaRecursiveSpendAppend")]
+pub fn kagemusha_recursive_spend_append(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend append")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let bundle =
+        iroha_core::zk::prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+            &request.previous_bundle,
+            &request.record_bundle,
+            &request.pallas_open_envelopes_archive,
+            request.current_note,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            &vk_box,
+            None,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    encode_kagemusha_recursive_archive(
+        &bundle,
+        "failed to encode Kagemusha recursive spend append bundle",
+    )
+}
+
+/// Verify a recursive Kagemusha spend bundle from a raw Norito request archive.
+#[napi(js_name = "kagemushaRecursiveSpendVerify")]
+pub fn kagemusha_recursive_spend_verify(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend verify")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
+    let result = match iroha_core::zk::preverify_kagemusha_recursive_spend_bundle(
+        &request.bundle,
+        &vk_box,
+    ) {
+        Ok(()) => {
+            let valid =
+                iroha_core::zk::verify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box);
+            iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
+                valid,
+                hop_count: request.bundle.accumulator.hop_count,
+                encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
+                    .unwrap_or(u32::MAX),
+                reason: if valid {
+                    String::new()
+                } else {
+                    "proof verification failed".to_owned()
+                },
+            }
+        }
+        Err(reason) => iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
+            valid: false,
+            hop_count: request.bundle.accumulator.hop_count,
+            encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
+                .unwrap_or(u32::MAX),
+            reason,
+        },
+    };
+    encode_kagemusha_recursive_archive(
+        &result,
+        "failed to encode Kagemusha recursive spend verify result",
+    )
+}
+
+/// Build the online redeem instruction from a recursive Kagemusha spend redeem request archive.
+#[napi(js_name = "kagemushaRecursiveSpendRedeem")]
+pub fn kagemusha_recursive_spend_redeem(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend redeem")?;
+    let instruction = kagemusha_recursive_spend_redeem_instruction_from_request(request)?;
+    encode_kagemusha_recursive_archive(
+        &instruction,
+        "failed to encode Kagemusha recursive spend redeem instruction",
+    )
+}
+
+fn kagemusha_recursive_spend_redeem_instruction_from_request(
+    request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+) -> napi::Result<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
+    request
+        .validate_public_binding()
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let instruction = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+        request.bundle,
+        request.recipient,
+        request.public_amount,
+        request.redeem_proof,
+    );
+    Ok(instruction)
 }
 
 /// Produce the canonical SM2 fixture output for the given distinguishing ID, seed, and message.
@@ -9980,6 +10343,40 @@ mod tests {
         assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
     }
 
+    #[test]
+    fn kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor() {
+        let request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        let instruction =
+            kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
+                .expect("valid recursive spend redeem request");
+        assert_eq!(instruction.public_amount, 42);
+
+        let wrong_amount = sample_kagemusha_recursive_spend_redeem_request_for_js_host(41);
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(wrong_amount) {
+            Ok(_) => panic!("wrong recursive spend redeem amount must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("public_amount"),
+            "unexpected wrong-amount error: {err}"
+        );
+
+        let mut missing_anchor = request;
+        missing_anchor
+            .bundle
+            .accumulator
+            .topup_anchor_nullifiers
+            .clear();
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(missing_anchor) {
+            Ok(_) => panic!("missing recursive spend top-up anchor must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("topup_anchor_nullifiers"),
+            "unexpected missing-anchor error: {err}"
+        );
+    }
+
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
@@ -9989,6 +10386,83 @@ mod tests {
     fn sample_account(_domain: &str) -> AccountId {
         let keypair = KeyPair::random();
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_kagemusha_recursive_spend_bundle_for_js_host()
+    -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+        let chain_id: iroha_data_model::ChainId =
+            "kagemusha-js-host-recursive".parse().expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-js-host".parse().expect("asset definition name"),
+        );
+        let current_note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: sample_hash(0x61),
+            spend_nullifier: sample_hash(0x71),
+            amount: Numeric::new(42, 0),
+        };
+        let lineage_digest = sample_hash(0x91);
+        let accumulator = iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1 {
+            domain: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN
+                .to_owned(),
+            chain_id,
+            asset,
+            initial_root: sample_hash(0x11),
+            final_root: sample_hash(0x12),
+            topup_anchor_nullifiers: vec![sample_hash(0x21), sample_hash(0x31)],
+            hop_count: 1,
+            lineage_digest,
+            aggregation_transcript_digest: lineage_digest,
+            nullifier_digest: Hash::new(b"js-host-recursive-nullifier-digest"),
+            output_commitment_digest: Hash::new(b"js-host-recursive-output-digest"),
+            fold_digest: Hash::new(b"js-host-recursive-fold-digest"),
+            recursive_proof_chain_digest: sample_hash(0x96),
+            verifier_params_fingerprint: sample_hash(0xA1),
+            fixed_window_table_schedule_digest: sample_hash(0xA2),
+            fixed_window_shared_table_manifest_digest: sample_hash(0xA3),
+            fixed_window_table_base_digest: sample_hash(0xA4),
+            verifier_witness_batch_digest: sample_hash(0xA5),
+            verifier_opening_len: 4,
+            current_note,
+        };
+        let public_inputs =
+            iroha_data_model::offline::kagemusha_recursive_spend_public_inputs_from_accumulator(
+                &accumulator,
+            )
+            .expect("recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive spend public-input hash");
+        iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof: iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    "halo2/ipa",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: iroha_data_model::proof::ProofBox::new(
+                    "halo2/ipa".to_owned(),
+                    vec![0xA5; 64],
+                ),
+            },
+        }
+    }
+
+    fn sample_kagemusha_recursive_spend_redeem_request_for_js_host(
+        public_amount: u128,
+    ) -> iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 {
+        iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: sample_kagemusha_recursive_spend_bundle_for_js_host(),
+            recipient: sample_account("kagemusha-js-host"),
+            public_amount,
+            redeem_proof: ProofAttachment::new_ref(
+                "halo2/ipa".to_owned(),
+                iroha_data_model::proof::ProofBox::new("halo2/ipa".to_owned(), vec![0x5A; 64]),
+                VerifyingKeyId::new("halo2/ipa", "js-host-recursive-unshield"),
+            ),
+        }
     }
 
     fn account_json_literal(account: &AccountId) -> String {

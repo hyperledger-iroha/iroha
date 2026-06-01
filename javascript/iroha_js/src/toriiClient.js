@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { chacha20orig } from "@noble/ciphers/chacha";
 
 import {
   resolveToriiClientConfig,
@@ -20,6 +21,7 @@ import {
 import {
   AccountAddress,
   AccountAddressError,
+  curveIdToAlgorithm,
   ensureCurveIdEnabled,
   normalizeBytes,
   validatePublicKeyForCurve,
@@ -43,7 +45,6 @@ import { blake2b256 } from "./blake2b.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
 import {
   getCurveEntryByPublicKeyMulticodec,
-  publicKeyMulticodecForCurveId,
 } from "./curveRegistry.js";
 import { noritoEncodeMultisigProposeRequest } from "./norito.js";
 import {
@@ -70,7 +71,16 @@ const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
 const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
+const NORITO_COMPACT_LEN_FLAG = 0x02;
 const BFV_IDENTIFIER_SEED_BYTES = 32;
+const BFV_RUST_ENCRYPT_DOMAIN = Buffer.from(
+  "iroha.crypto.fhe.bfv.encrypt.v1",
+  "utf8",
+);
+const BFV_RUST_IDENTIFIER_SLOT_DOMAIN = Buffer.from(
+  "iroha.crypto.fhe.bfv.identifier.slot.v1",
+  "utf8",
+);
 const BFV_IDENTIFIER_SHA512_DOMAIN = Buffer.from(
   "iroha.sdk.identifier.bfv.prg.v1",
   "utf8",
@@ -318,6 +328,8 @@ const ITERABLE_LIST_OPTION_KEYS = new Set([
   "offset",
   "filter",
   "sort",
+  "countMode",
+  "count_mode",
   "signal",
   "canonicalAuth",
 ]);
@@ -357,6 +369,8 @@ const ITERABLE_OPTION_KEYS = new Set([
   "signal",
   "fetchSize",
   "fetch_size",
+  "countMode",
+  "count_mode",
   "queryName",
   "query_name",
   "select",
@@ -421,6 +435,7 @@ const ITERABLE_QUERY_OPTION_KEYS = new Set([
   "filter",
   "sort",
   "fetchSize",
+  "countMode",
   "queryName",
   "select",
   "signal",
@@ -9565,7 +9580,11 @@ export class ToriiClient {
             }
           }
         }
-        if ((knownTotal !== null && produced >= knownTotal) || items.length < pageLimit) {
+        if (
+          page?.hasMore === false ||
+          (knownTotal !== null && produced >= knownTotal) ||
+          items.length < pageLimit
+        ) {
           return;
         }
         offset += items.length;
@@ -9876,17 +9895,57 @@ export class ToriiClient {
     if (!payload || typeof payload !== "object" || !Array.isArray(payload.items)) {
       throw new Error("iterable endpoint returned unexpected payload");
     }
-    const totalValue =
-      payload.total === undefined || payload.total === null
+    const hasTotal = payload.total !== undefined && payload.total !== null;
+    if (
+      payload.has_more !== undefined &&
+      payload.has_more !== null &&
+      typeof payload.has_more !== "boolean"
+    ) {
+      throw new Error("iterable endpoint returned invalid has_more flag");
+    }
+    const hasMore =
+      payload.has_more === undefined || payload.has_more === null
+        ? undefined
+        : payload.has_more;
+    const countMode =
+      payload.count_mode === undefined || payload.count_mode === null
+        ? undefined
+        : ToriiClient._normalizeCountModeOption(payload.count_mode, "count_mode");
+    const totalValue = hasTotal
+      ? Number(payload.total)
+      : hasMore === undefined
         ? payload.items.length
-        : Number(payload.total);
-    if (!Number.isFinite(totalValue) || totalValue < 0) {
+        : null;
+    if (
+      totalValue !== null &&
+      (!Number.isFinite(totalValue) || totalValue < 0 || !Number.isInteger(totalValue))
+    ) {
       throw new Error("iterable endpoint returned invalid total count");
     }
-    return {
+    const result = {
       items: payload.items,
       total: totalValue,
     };
+    if (hasMore !== undefined) {
+      result.hasMore = hasMore;
+    }
+    if (countMode !== undefined) {
+      result.countMode = countMode;
+    }
+    if (payload.indexed_height !== undefined && payload.indexed_height !== null) {
+      result.indexedHeight = ToriiClient._normalizeUnsignedInteger(
+        payload.indexed_height,
+        "indexed_height",
+        { allowZero: true },
+      );
+    }
+    if (payload.indexed_block_hash !== undefined) {
+      result.indexedBlockHash = payload.indexed_block_hash ?? null;
+    }
+    if (payload.query_source !== undefined && payload.query_source !== null) {
+      result.querySource = requireNonEmptyString(payload.query_source, "query_source");
+    }
+    return result;
   }
 
   static _requireNonEmptyString(value, name) {
@@ -10331,6 +10390,13 @@ export class ToriiClient {
     if (normalizedOptions.offset !== undefined && normalizedOptions.offset !== null) {
       params.offset = ToriiClient._normalizeOffset(normalizedOptions.offset);
     }
+    const countMode = ToriiClient._normalizeCountModeOption(
+      normalizedOptions.countMode ?? normalizedOptions.count_mode,
+      "countMode",
+    );
+    if (countMode !== undefined) {
+      params.count_mode = countMode;
+    }
     const filterParam = ToriiClient._normalizeFilterParam(normalizedOptions.filter);
     if (filterParam !== undefined) {
       params.filter = filterParam;
@@ -10728,6 +10794,10 @@ export class ToriiClient {
         { allowZero: false },
       );
     }
+    const countMode = ToriiClient._normalizeCountModeOption(options.countMode, "countMode");
+    if (countMode !== undefined) {
+      envelope.count_mode = countMode;
+    }
     if (options.queryName !== undefined && options.queryName !== null) {
       const name = String(options.queryName).trim();
       if (!name) {
@@ -10753,6 +10823,21 @@ export class ToriiClient {
       });
     }
     return envelope;
+  }
+
+  static _normalizeCountModeOption(value, context = "countMode") {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    const normalized = String(value).trim().toLowerCase();
+    if (normalized === "bounded" || normalized === "exact") {
+      return normalized;
+    }
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be "bounded" or "exact"`,
+      context,
+    );
   }
 
   static _normalizeFilterObject(filter) {
@@ -21198,59 +21283,6 @@ function buildRamLfeReceiptVerifyRequest(options, context) {
   return payload;
 }
 
-function normalizeIdentifierBfvParameters(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    polynomial_degree: ToriiClient._normalizeUnsignedInteger(
-      record.polynomial_degree,
-      `${context}.polynomial_degree`,
-      { allowZero: false },
-    ),
-    plaintext_modulus: ToriiClient._normalizeUnsignedInteger(
-      record.plaintext_modulus,
-      `${context}.plaintext_modulus`,
-      { allowZero: false },
-    ),
-    ciphertext_modulus: ToriiClient._normalizeUnsignedInteger(
-      record.ciphertext_modulus,
-      `${context}.ciphertext_modulus`,
-      { allowZero: false },
-    ),
-    decomposition_base_log: ToriiClient._normalizeUnsignedInteger(
-      record.decomposition_base_log,
-      `${context}.decomposition_base_log`,
-      { allowZero: false },
-    ),
-  };
-}
-
-function normalizeIdentifierBfvPublicKey(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    b: requireUnsignedIntegerArray(record.b, `${context}.b`),
-    a: requireUnsignedIntegerArray(record.a, `${context}.a`),
-  };
-}
-
-function normalizeIdentifierBfvPublicParameters(payload, context) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    parameters: normalizeIdentifierBfvParameters(
-      record.parameters,
-      `${context}.parameters`,
-    ),
-    public_key: normalizeIdentifierBfvPublicKey(
-      record.public_key,
-      `${context}.public_key`,
-    ),
-    max_input_bytes: ToriiClient._normalizeUnsignedInteger(
-      record.max_input_bytes,
-      `${context}.max_input_bytes`,
-      { allowZero: false },
-    ),
-  };
-}
-
 function u64ToLittleEndianBuffer(value) {
   const normalized = BigInt.asUintN(64, BigInt(value));
   const buffer = Buffer.alloc(8);
@@ -21264,6 +21296,12 @@ function createSha512Digest(parts) {
     hash.update(part);
   }
   return hash.digest();
+}
+
+function irohaHashBytes(parts) {
+  const digest = Buffer.from(blake2b256(Buffer.concat(parts.map((part) => Buffer.from(part)))));
+  digest[digest.length - 1] |= 1;
+  return digest;
 }
 
 function deriveIdentifierBfvSeed(record, context) {
@@ -21321,6 +21359,43 @@ class IdentifierBfvDeterministicStream {
   }
 }
 
+class IdentifierBfvRustChaCha20Rng {
+  constructor(seed) {
+    this.key = Buffer.from(seed);
+    this.nonce = Buffer.alloc(8);
+    this.counter = 0;
+    this.buffer = Buffer.alloc(0);
+    this.offset = 0;
+  }
+
+  refill() {
+    this.buffer = Buffer.from(
+      chacha20orig(this.key, this.nonce, new Uint8Array(64), undefined, this.counter),
+    );
+    this.counter += 1;
+    this.offset = 0;
+  }
+
+  nextBytes(length) {
+    let remaining = length;
+    const chunks = [];
+    while (remaining > 0) {
+      if (this.offset >= this.buffer.length) {
+        this.refill();
+      }
+      const available = Math.min(remaining, this.buffer.length - this.offset);
+      chunks.push(this.buffer.subarray(this.offset, this.offset + available));
+      this.offset += available;
+      remaining -= available;
+    }
+    return Buffer.concat(chunks, length);
+  }
+
+  nextU32() {
+    return this.nextBytes(4).readUInt32LE(0);
+  }
+}
+
 function crc64Ecma(payload) {
   let crc = UINT64_MASK;
   for (const byte of payload) {
@@ -21351,49 +21426,220 @@ function frameNoritoPayload(typeName, payload, flags = 0) {
   return Buffer.concat([header, payload]);
 }
 
-function encodeNoritoField(payload) {
-  return Buffer.concat([u64ToLittleEndianBuffer(payload.length), payload]);
+function encodeUnsignedLeb128(value) {
+  const out = [];
+  let remaining = BigInt(value);
+  do {
+    let byte = Number(remaining & 0x7fn);
+    remaining >>= 7n;
+    if (remaining !== 0n) {
+      byte |= 0x80;
+    }
+    out.push(byte);
+  } while (remaining !== 0n);
+  return Buffer.from(out);
+}
+
+function encodeNoritoLength(value, compact) {
+  return compact ? encodeUnsignedLeb128(value) : u64ToLittleEndianBuffer(value);
+}
+
+function encodeNoritoField(payload, compact = false) {
+  return Buffer.concat([encodeNoritoLength(payload.length, compact), payload]);
 }
 
 function encodeNoritoU64(value) {
   return u64ToLittleEndianBuffer(value);
 }
 
-function encodeNoritoVec(values, encode) {
+function encodeNoritoVec(values, encode, compact = false) {
   const parts = [u64ToLittleEndianBuffer(values.length)];
   for (const value of values) {
     const payload = encode(value);
-    parts.push(u64ToLittleEndianBuffer(payload.length), payload);
+    parts.push(encodeNoritoLength(payload.length, compact), payload);
   }
   return Buffer.concat(parts);
 }
 
-function encodeNoritoBfvCiphertext(ciphertext) {
+function encodeNoritoBfvCiphertext(ciphertext, compact = false) {
   return Buffer.concat([
-    encodeNoritoField(encodeNoritoVec(ciphertext.c0, encodeNoritoU64)),
-    encodeNoritoField(encodeNoritoVec(ciphertext.c1, encodeNoritoU64)),
+    encodeNoritoField(encodeNoritoVec(ciphertext.c0, encodeNoritoU64, compact), compact),
+    encodeNoritoField(encodeNoritoVec(ciphertext.c1, encodeNoritoU64, compact), compact),
   ]);
 }
 
-function encodeNoritoBfvIdentifierCiphertext(ciphertext) {
+function encodeNoritoBfvIdentifierCiphertext(ciphertext, compact = false) {
   return frameNoritoPayload(
     BFV_IDENTIFIER_SCHEMA_NAME,
-    encodeNoritoField(encodeNoritoVec(ciphertext.slots, encodeNoritoBfvCiphertext)),
+    encodeNoritoField(
+      encodeNoritoVec(
+        ciphertext.slots,
+        (slot) => encodeNoritoBfvCiphertext(slot, compact),
+        compact,
+      ),
+      compact,
+    ),
+    compact ? NORITO_COMPACT_LEN_FLAG : 0,
   );
 }
 
-function requireSafeBfvUint(value, name) {
+function requireBfvUint(value, name, options = {}) {
+  const allowZero = options.allowZero !== false;
+  let integer;
   if (typeof value === "bigint") {
-    return value;
-  }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    integer = value;
+  } else if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+      throw createValidationError(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must be a safe integer number, bigint, or decimal string`,
+        name,
+      );
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!/^[0-9]+$/.test(trimmed)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a non-negative integer`,
+        name,
+      );
+    }
+    integer = BigInt(trimmed);
+  } else {
     throw createValidationError(
-      ValidationErrorCode.VALUE_OUT_OF_RANGE,
-      `${name} must be a non-negative safe integer`,
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a non-negative integer`,
       name,
     );
   }
-  return BigInt(value);
+  if (integer < 0n || (!allowZero && integer === 0n)) {
+    const qualifier = allowZero ? "non-negative integer" : "positive integer";
+    throw createValidationError(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be a ${qualifier}`,
+      name,
+    );
+  }
+  return integer;
+}
+
+function requireSafeBfvUint(value, name, options = {}) {
+  const integer = requireBfvUint(value, name, options);
+  if (integer > MAX_SAFE_INTEGER_BIGINT) {
+    throw createValidationError(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${MAX_SAFE_INTEGER}`,
+      name,
+    );
+  }
+  return integer;
+}
+
+function normalizeIdentifierBfvUint(value, name, options = {}) {
+  const integer = options.safe
+    ? requireSafeBfvUint(value, name, options)
+    : requireBfvUint(value, name, options);
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
+function normalizeIdentifierBfvUintArray(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) =>
+    normalizeIdentifierBfvUint(entry, `${context}[${index}]`, { allowZero: true }),
+  );
+}
+
+function normalizeIdentifierBfvParameters(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    polynomial_degree: normalizeIdentifierBfvUint(
+      record.polynomial_degree,
+      `${context}.polynomial_degree`,
+      { allowZero: false, safe: true },
+    ),
+    plaintext_modulus: normalizeIdentifierBfvUint(
+      record.plaintext_modulus,
+      `${context}.plaintext_modulus`,
+      { allowZero: false },
+    ),
+    ciphertext_modulus: normalizeIdentifierBfvUint(
+      record.ciphertext_modulus,
+      `${context}.ciphertext_modulus`,
+      { allowZero: false },
+    ),
+    decomposition_base_log: normalizeIdentifierBfvUint(
+      record.decomposition_base_log,
+      `${context}.decomposition_base_log`,
+      { allowZero: false, safe: true },
+    ),
+  };
+}
+
+function normalizeIdentifierBfvPublicKey(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    b: normalizeIdentifierBfvUintArray(record.b, `${context}.b`),
+    a: normalizeIdentifierBfvUintArray(record.a, `${context}.a`),
+  };
+}
+
+function normalizeIdentifierBfvPublicParameters(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const normalized = {
+    parameters: normalizeIdentifierBfvParameters(
+      record.parameters,
+      `${context}.parameters`,
+    ),
+    public_key: normalizeIdentifierBfvPublicKey(
+      record.public_key,
+      `${context}.public_key`,
+    ),
+    max_input_bytes: normalizeIdentifierBfvUint(
+      record.max_input_bytes,
+      `${context}.max_input_bytes`,
+      { allowZero: false, safe: true },
+    ),
+  };
+  if (
+    record.norito_length_encoding !== undefined &&
+    record.norito_length_encoding !== null
+  ) {
+    normalized.norito_length_encoding = requireNonEmptyString(
+      record.norito_length_encoding,
+      `${context}.norito_length_encoding`,
+    );
+  }
+  return normalized;
+}
+
+function identifierBfvInputBytes(input, normalization, name) {
+  if (input instanceof Uint8Array) {
+    const mode = requireNonEmptyString(normalization, `${name}Normalization`)
+      .trim()
+      .toLowerCase();
+    if (mode !== "exact") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} byte input requires exact normalization`,
+        name,
+      );
+    }
+    const bytes = Buffer.from(input);
+    if (bytes.length === 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be non-empty`,
+        name,
+      );
+    }
+    return bytes;
+  }
+  const normalizedInput = normalizeIdentifierInput(input, normalization, name);
+  return Buffer.from(normalizedInput, "utf8");
 }
 
 function normalizeIdentifierBfvEncryptionInputs(policySummary, input, options = {}) {
@@ -21412,7 +21658,7 @@ function normalizeIdentifierBfvEncryptionInputs(policySummary, input, options = 
       `encryptIdentifierInputForPolicy: policy ${normalizedPolicy.policy_id} is missing decoded BFV public parameters`,
     );
   }
-  const normalizedInput = normalizeIdentifierInput(
+  const inputBytes = identifierBfvInputBytes(
     input,
     normalizedPolicy.normalization,
     "encryptIdentifierInputForPolicy.input",
@@ -21426,7 +21672,7 @@ function normalizeIdentifierBfvEncryptionInputs(policySummary, input, options = 
   return {
     policy: normalizedPolicy,
     publicParameters,
-    inputBytes: Buffer.from(normalizedInput, "utf8"),
+    inputBytes,
     seed: deriveIdentifierBfvSeed(record, "encryptIdentifierInputForPolicy options"),
   };
 }
@@ -21436,11 +21682,11 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
   const polynomialDegree = Number(
     requireSafeBfvUint(params.polynomial_degree, `${context}.parameters.polynomial_degree`),
   );
-  const plaintextModulus = requireSafeBfvUint(
+  const plaintextModulus = requireBfvUint(
     params.plaintext_modulus,
     `${context}.parameters.plaintext_modulus`,
   );
-  const ciphertextModulus = requireSafeBfvUint(
+  const ciphertextModulus = requireBfvUint(
     params.ciphertext_modulus,
     `${context}.parameters.ciphertext_modulus`,
   );
@@ -21453,6 +21699,18 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
   const maxInputBytes = Number(
     requireSafeBfvUint(publicParameters.max_input_bytes, `${context}.max_input_bytes`),
   );
+  const noritoLengthEncoding =
+    publicParameters.norito_length_encoding === undefined ||
+    publicParameters.norito_length_encoding === null
+      ? "u64-v1"
+      : String(publicParameters.norito_length_encoding).trim();
+  if (!["u64-v1", "compact-v1"].includes(noritoLengthEncoding)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.norito_length_encoding must be u64-v1 or compact-v1`,
+      `${context}.norito_length_encoding`,
+    );
+  }
   if (polynomialDegree < 2 || (polynomialDegree & (polynomialDegree - 1)) !== 0) {
     throw createValidationError(
       ValidationErrorCode.VALUE_OUT_OF_RANGE,
@@ -21504,10 +21762,10 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
   }
   const publicKey = publicParameters.public_key;
   const b = publicKey.b.map((value, index) =>
-    requireSafeBfvUint(value, `${context}.public_key.b[${index}]`),
+    requireBfvUint(value, `${context}.public_key.b[${index}]`),
   );
   const a = publicKey.a.map((value, index) =>
-    requireSafeBfvUint(value, `${context}.public_key.a[${index}]`),
+    requireBfvUint(value, `${context}.public_key.a[${index}]`),
   );
   if (a.length !== polynomialDegree || b.length !== polynomialDegree) {
     throw createValidationError(
@@ -21535,6 +21793,7 @@ function validateIdentifierBfvPublicParameters(publicParameters, context) {
     plaintextModulus,
     ciphertextModulus,
     maxInputBytes,
+    noritoLengthEncoding,
     publicKey: { a, b },
   };
 }
@@ -21612,6 +21871,50 @@ function sampleSmallPoly(params, stream) {
   });
 }
 
+function rustHashDerivedRng(domain, seed) {
+  return new IdentifierBfvRustChaCha20Rng(irohaHashBytes([domain, seed]));
+}
+
+function rustIdentifierSlotSeed(seed, index) {
+  return irohaHashBytes([
+    BFV_RUST_IDENTIFIER_SLOT_DOMAIN,
+    seed,
+    u64ToLittleEndianBuffer(index),
+  ]);
+}
+
+function sampleSmallPolyRust(params, rng) {
+  return Array.from({ length: params.polynomialDegree }, () => {
+    const reduced = rustRandomRangeU8Inclusive0To2(rng);
+    if (reduced === 0) {
+      return 0n;
+    }
+    if (reduced === 1) {
+      return 1n;
+    }
+    return params.ciphertextModulus - 1n;
+  });
+}
+
+function rustRandomRangeU8Inclusive0To2(rng) {
+  const range = 3n;
+  const u32Modulus = 1n << 32n;
+  const u32Mask = u32Modulus - 1n;
+  const sample = BigInt(rng.nextU32());
+  const product = sample * range;
+  let result = Number(product >> 32n);
+  const loOrder = product & u32Mask;
+  const biasedThreshold = u32Modulus - range;
+  if (loOrder > biasedThreshold) {
+    const newProduct = BigInt(rng.nextU32()) * range;
+    const newHiOrder = newProduct >> 32n;
+    if (loOrder + newHiOrder > u32Mask) {
+      result += 1;
+    }
+  }
+  return result;
+}
+
 function sampleUniformPoly(params, stream) {
   const bound = 1n << 64n;
   const threshold = bound - (bound % params.ciphertextModulus);
@@ -21629,6 +21932,23 @@ function encryptIdentifierScalar(params, scalar, seed) {
     params,
     new IdentifierBfvDeterministicStream(seed, BFV_IDENTIFIER_U_DOMAIN),
   );
+  const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
+  const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
+  encoded[0] = scalar % params.plaintextModulus;
+  return {
+    c0: polyAddMod(
+      params,
+      polyAddMod(params, polyMulMod(params, params.publicKey.b, u), e1),
+      encoded,
+    ),
+    c1: polyAddMod(params, polyMulMod(params, params.publicKey.a, u), e2),
+  };
+}
+
+function encryptIdentifierScalarRust(params, scalar, seed) {
+  const rng = rustHashDerivedRng(BFV_RUST_ENCRYPT_DOMAIN, seed);
+  const u = sampleSmallPolyRust(params, rng);
   const e1 = Array.from({ length: params.polynomialDegree }, () => 0n);
   const e2 = Array.from({ length: params.polynomialDegree }, () => 0n);
   const encoded = Array.from({ length: params.polynomialDegree }, () => 0n);
@@ -25468,16 +25788,21 @@ function normalizeIterableQueryOptions(options, context, extraAllowedKeys = []) 
     ...ITERABLE_QUERY_OPTION_KEYS,
     ...extraAllowedKeys,
     "fetch_size",
+    "count_mode",
     "query_name",
   ]);
   const normalized = ToriiClient._normalizeIterableOptions(options, context, allowedKeys);
   if (normalized.fetch_size !== undefined && normalized.fetchSize === undefined) {
     normalized.fetchSize = normalized.fetch_size;
   }
+  if (normalized.count_mode !== undefined && normalized.countMode === undefined) {
+    normalized.countMode = normalized.count_mode;
+  }
   if (normalized.query_name !== undefined && normalized.queryName === undefined) {
     normalized.queryName = normalized.query_name;
   }
   delete normalized.fetch_size;
+  delete normalized.count_mode;
   delete normalized.query_name;
   const resolvedAllowedKeys = new Set([...ITERABLE_QUERY_OPTION_KEYS, ...extraAllowedKeys]);
   assertSupportedOptionKeys(normalized, resolvedAllowedKeys, context);
@@ -26483,8 +26808,8 @@ function normalizeIterableItems(payload, context, normalizeItem) {
     normalizeItem(entry, `${context}.items[${index}]`),
   );
   return {
+    ...payload,
     items: normalizedItems,
-    total: payload.total,
   };
 }
 
@@ -28385,6 +28710,14 @@ function identifierCanonicalByteVec(bytes) {
   return Buffer.concat(parts);
 }
 
+function identifierCanonicalRawByteVec(bytes) {
+  const payload = Buffer.from(bytes);
+  return Buffer.concat([
+    identifierCanonicalU64(payload.length, "rawByteVec.length"),
+    payload,
+  ]);
+}
+
 function identifierCanonicalOptionalU64(value, context) {
   if (value === null || value === undefined) {
     return Buffer.from([0]);
@@ -28455,35 +28788,60 @@ function identifierOpaqueHashPayload(raw, prefix, field) {
   return Buffer.concat([identifierCanonicalCompactLength(hash.length), hash]);
 }
 
-function publicKeyLiteralFromParts(curve, publicKey, context) {
-  ensureCurveIdEnabled(curve, context);
-  const bytes = Buffer.from(normalizeBytes(publicKey));
-  validatePublicKeyForCurve(curve, bytes, context);
-  const multicodec = publicKeyMulticodecForCurveId(curve);
-  if (multicodec === null) {
-    throw new Error(`${context} uses unsupported public-key curve ${curve}`);
+function identifierAlgorithmTagForCurveId(curve, context) {
+  switch (curveIdToAlgorithm(curve)) {
+    case "ed25519":
+      return 0;
+    case "secp256k1":
+      return 1;
+    case "bls_normal":
+      return 2;
+    case "bls_small":
+      return 3;
+    case "ml-dsa":
+      return 4;
+    case "gost3410-2012-256-paramset-a":
+      return 5;
+    case "gost3410-2012-256-paramset-b":
+      return 6;
+    case "gost3410-2012-256-paramset-c":
+      return 7;
+    case "gost3410-2012-512-paramset-a":
+      return 8;
+    case "gost3410-2012-512-paramset-b":
+      return 9;
+    case "sm2":
+      return 10;
+    default:
+      throw new Error(`${context} uses unsupported public-key curve ${curve}`);
   }
-  return Buffer.concat([
-    identifierCanonicalCompactLength(multicodec),
-    identifierCanonicalCompactLength(bytes.length),
-    bytes,
-  ]).toString("hex").toUpperCase();
+}
+
+function identifierCanonicalConstVecU8(bytes) {
+  const payload = Buffer.from(bytes);
+  const parts = [identifierCanonicalU64(payload.length, "ConstVec<u8>.length")];
+  for (const byte of payload) {
+    parts.push(identifierCanonicalSizedField(Buffer.from([byte])));
+  }
+  return Buffer.concat(parts);
 }
 
 function identifierPublicKeyPayload(controller, context) {
-  return identifierCanonicalString(
-    publicKeyLiteralFromParts(controller.curve, controller.publicKey, context),
-    context,
+  ensureCurveIdEnabled(controller.curve, context);
+  const publicKey = Buffer.from(normalizeBytes(controller.publicKey));
+  validatePublicKeyForCurve(controller.curve, publicKey, context);
+  return identifierCanonicalConstVecU8(
+    Buffer.concat([
+      Buffer.from([identifierAlgorithmTagForCurveId(controller.curve, context)]),
+      publicKey,
+    ]),
   );
 }
 
 function identifierMultisigMemberPayload(member, context) {
   return Buffer.concat([
     identifierCanonicalSizedField(
-      identifierCanonicalString(
-        publicKeyLiteralFromParts(member.curve, member.publicKey, `${context}.publicKey`),
-        `${context}.publicKey`,
-      ),
+      identifierPublicKeyPayload(member, `${context}.publicKey`),
     ),
     identifierCanonicalSizedField(identifierCanonicalU16(member.weight, `${context}.weight`)),
   ]);
@@ -28602,6 +28960,44 @@ function identifierOutputOpening(opening) {
   ]);
 }
 
+function identifierProofBoxPayload(attestation) {
+  return Buffer.concat([
+    identifierCanonicalSizedField(
+      identifierCanonicalString(attestation.proof_backend, "attestation.proof_backend"),
+    ),
+    identifierCanonicalSizedField(
+      identifierCanonicalRawByteVec(
+        Buffer.from(
+          normalizeRequiredBase64Payload(
+            attestation.proof_b64,
+            "attestation.proof_b64",
+          ),
+          "base64",
+        ),
+      ),
+    ),
+  ]);
+}
+
+function identifierReceiptAttestationPayload(attestation) {
+  const normalized = normalizeIdentifierReceiptAttestation(
+    attestation,
+    "identifier receipt attestation",
+  );
+  if (normalized.kind === "signed") {
+    return Buffer.concat([
+      identifierCanonicalU32(0),
+      identifierCanonicalSizedField(
+        identifierCanonicalByteVec(Buffer.from(normalized.signature, "hex")),
+      ),
+    ]);
+  }
+  return Buffer.concat([
+    identifierCanonicalU32(1),
+    identifierCanonicalSizedField(identifierProofBoxPayload(normalized)),
+  ]);
+}
+
 function identifierReceiptPayload(payload) {
   return Buffer.concat([
     identifierCanonicalSizedField(identifierPolicyIdPayload(payload.policy_id)),
@@ -28618,6 +29014,10 @@ export function encodeIdentifierResolutionReceiptPayload(payload) {
   return identifierReceiptPayload(
     normalizeIdentifierResolutionPayload(payload, "encodeIdentifierResolutionReceiptPayload.payload"),
   );
+}
+
+export function encodeIdentifierResolutionReceiptAttestation(attestation) {
+  return identifierReceiptAttestationPayload(attestation);
 }
 
 export function getIdentifierBfvPublicParameters(policySummary) {
@@ -28642,6 +29042,9 @@ export function encryptIdentifierInputForPolicy(policySummary, input, options = 
     "encryptIdentifierInputForPolicy.policy.input_encryption_public_parameters_decoded",
   );
   const slots = encodeIdentifierSlots(params, inputBytes).map((scalar, index) => {
+    if (params.noritoLengthEncoding === "compact-v1") {
+      return encryptIdentifierScalarRust(params, scalar, rustIdentifierSlotSeed(seed, index));
+    }
     const slotSeed = createSha512Digest([
       BFV_IDENTIFIER_SLOT_DOMAIN,
       seed,
@@ -28651,11 +29054,14 @@ export function encryptIdentifierInputForPolicy(policySummary, input, options = 
   });
   const ciphertext = {
     slots: slots.map((slot) => ({
-      c0: slot.c0.map((value) => Number(value)),
-      c1: slot.c1.map((value) => Number(value)),
+      c0: slot.c0,
+      c1: slot.c1,
     })),
   };
-  return encodeNoritoBfvIdentifierCiphertext(ciphertext).toString("hex");
+  return encodeNoritoBfvIdentifierCiphertext(
+    ciphertext,
+    params.noritoLengthEncoding === "compact-v1",
+  ).toString("hex");
 }
 
 export function buildIdentifierRequestForPolicy(policySummary, options = {}) {

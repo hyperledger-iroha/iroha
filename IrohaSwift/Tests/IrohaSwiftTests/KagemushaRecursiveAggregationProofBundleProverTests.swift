@@ -33,6 +33,42 @@ final class KagemushaRecursiveAggregationProofBundleProverTests: XCTestCase {
         }
     }
 
+    func testRejectsEmptyNativeOutput() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: Data([0x01]),
+                    pallasOpenEnvelopesArchive: Data([0x02]),
+                    bridgeAvailable: true
+                ) {
+                    Data()
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .proofRejected
+            )
+        }
+    }
+
+    func testNilNativeOutputIsBridgeUnavailable() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: Data([0x01]),
+                    pallasOpenEnvelopesArchive: Data([0x02]),
+                    bridgeAvailable: true
+                ) {
+                    nil
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveAggregationProofBundleProverError,
+                .bridgeUnavailable
+            )
+        }
+    }
+
     func testRejectsMalformedArchivesWhenBridgeIsAvailable() throws {
         guard KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable else {
             throw XCTSkip("Native Kagemusha recursive aggregation proof-bundle prover is unavailable.")

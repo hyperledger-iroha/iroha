@@ -71,6 +71,8 @@ mod operator_signatures;
 pub mod profile_stats;
 #[cfg(feature = "push")]
 mod push;
+#[doc(hidden)]
+pub mod query_load_profiles;
 mod vpn;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -419,6 +421,14 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
+#[cfg(feature = "app_api")]
+pub use routing::{
+    ContractActivityGetParams as ContractActivityGetParamsForBench,
+    handle_v1_account_assets_query as handle_v1_account_assets_query_for_bench,
+    handle_v1_accounts_query as handle_v1_accounts_query_for_bench,
+    handle_v1_asset_holders_query as handle_v1_asset_holders_query_for_bench,
+    handle_v1_contracts_activity_get as handle_v1_contracts_activity_get_for_bench,
+};
 pub use routing::{
     ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
     ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
@@ -29215,6 +29225,14 @@ async fn handler_iso_pacs008(
         "asset_id".into(),
         json_string_or_null(context.asset_id().map(ToString::to_string)),
     );
+    payload.insert(
+        "settlement_amount".into(),
+        json_string_or_null(context.settlement_amount().map(ToString::to_string)),
+    );
+    payload.insert(
+        "settlement_currency".into(),
+        json_string_or_null(context.settlement_currency().map(ToString::to_string)),
+    );
     insert_iso_metadata_fields(&mut payload, &status_snapshot);
     Ok((
         StatusCode::ACCEPTED,
@@ -29381,11 +29399,232 @@ async fn handler_iso_pacs009(
         "asset_id".into(),
         json_string_or_null(context.asset_id().map(ToString::to_string)),
     );
+    payload.insert(
+        "settlement_amount".into(),
+        json_string_or_null(context.settlement_amount().map(ToString::to_string)),
+    );
+    payload.insert(
+        "settlement_currency".into(),
+        json_string_or_null(context.settlement_currency().map(ToString::to_string)),
+    );
     insert_iso_metadata_fields(&mut payload, &status_snapshot);
     Ok((
         StatusCode::ACCEPTED,
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
+}
+
+async fn handler_iso_lifecycle_submit(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    query: HashMap<String, String>,
+    remote: std::net::SocketAddr,
+    body: axum::body::Bytes,
+    message_type: &'static str,
+    access_context: &'static str,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), access_context).await?;
+    let runtime = match &app.iso_bridge {
+        Some(rt) => rt.clone(),
+        None => {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
+            ));
+        }
+    };
+    if body.is_empty() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
+        ));
+    }
+
+    let parsed =
+        parse_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
+    let profile = iso_profile_from_request(&runtime, &headers, &query)?;
+    let metadata = runtime
+        .validate_profile_submission(profile, message_type, &parsed, &body)
+        .map_err(|err| Error::Query(map_iso_error(err)))?;
+    let msg_id = Iso20022BridgeRuntime::lifecycle_message_id(message_type, &parsed)
+        .map_err(|err| Error::Query(map_iso_error(err)))?;
+
+    if !runtime.check_and_record_inbound(&msg_id, metadata) {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
+        ));
+    }
+
+    let outcome = match runtime.apply_inbound_lifecycle_message(&msg_id, message_type, &parsed) {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+            return Err(Error::Query(map_iso_error(err)));
+        }
+    };
+    let status_snapshot = runtime
+        .message_status(&msg_id)
+        .expect("iso lifecycle status must exist immediately after recording");
+
+    let mut payload = norito::json::native::Map::new();
+    payload.insert(
+        "message_id".into(),
+        norito::json::native::Value::from(msg_id),
+    );
+    payload.insert(
+        "status".into(),
+        norito::json::native::Value::from(status_snapshot.status_label().to_string()),
+    );
+    payload.insert(
+        "pacs002_code".into(),
+        norito::json::native::Value::from(status_snapshot.pacs002_code().to_string()),
+    );
+    payload.insert(
+        "lifecycle_message_type".into(),
+        norito::json::native::Value::from(message_type),
+    );
+    payload.insert(
+        "referenced_message_id".into(),
+        json_string_or_null(outcome.referenced_message_id().map(str::to_string)),
+    );
+    payload.insert(
+        "referenced_message_known".into(),
+        norito::json::native::Value::from(outcome.referenced_message_known()),
+    );
+    payload.insert(
+        "lifecycle_status_code".into(),
+        json_string_or_null(outcome.lifecycle_status_code().map(str::to_string)),
+    );
+    payload.insert(
+        "lifecycle_reason_code".into(),
+        json_string_or_null(outcome.lifecycle_reason_code().map(str::to_string)),
+    );
+    payload.insert(
+        "lifecycle_action".into(),
+        norito::json::native::Value::from(outcome.action()),
+    );
+    payload.insert(
+        "detail".into(),
+        json_string_or_null(status_snapshot.detail().map(str::to_string)),
+    );
+    insert_iso_metadata_fields(&mut payload, &status_snapshot);
+    Ok((
+        StatusCode::ACCEPTED,
+        JsonBody(norito::json::native::Value::Object(payload)),
+    ))
+}
+
+async fn handler_iso_pacs002_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "pacs.002",
+        "v1/iso20022/pacs002",
+    )
+    .await
+}
+
+async fn handler_iso_pacs004_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "pacs.004",
+        "v1/iso20022/pacs004",
+    )
+    .await
+}
+
+async fn handler_iso_camt056_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "camt.056",
+        "v1/iso20022/camt056",
+    )
+    .await
+}
+
+async fn handler_iso_sese023_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "sese.023",
+        "v1/iso20022/sese023",
+    )
+    .await
+}
+
+async fn handler_iso_sese024_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "sese.024",
+        "v1/iso20022/sese024",
+    )
+    .await
+}
+
+async fn handler_iso_sese025_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "sese.025",
+        "v1/iso20022/sese025",
+    )
+    .await
 }
 
 async fn handler_iso_status(
@@ -29500,6 +29739,42 @@ async fn handler_iso_status(
         "asset_id".into(),
         json_string_or_null(status.asset_id().map(str::to_string)),
     );
+    payload.insert(
+        "settlement_amount".into(),
+        json_string_or_null(status.settlement_amount().map(str::to_string)),
+    );
+    payload.insert(
+        "settlement_currency".into(),
+        json_string_or_null(status.settlement_currency().map(str::to_string)),
+    );
+    payload.insert(
+        "settlement_date".into(),
+        json_string_or_null(status.settlement_date().map(str::to_string)),
+    );
+    payload.insert(
+        "settlement_quantity".into(),
+        json_string_or_null(status.settlement_quantity().map(str::to_string)),
+    );
+    payload.insert(
+        "settlement_movement_type".into(),
+        json_string_or_null(status.settlement_movement_type().map(str::to_string)),
+    );
+    payload.insert(
+        "settlement_payment_type".into(),
+        json_string_or_null(status.settlement_payment_type().map(str::to_string)),
+    );
+    payload.insert(
+        "security_instrument_id".into(),
+        json_string_or_null(status.security_instrument_id().map(str::to_string)),
+    );
+    payload.insert(
+        "plan_execution_order".into(),
+        json_string_or_null(status.plan_execution_order().map(str::to_string)),
+    );
+    payload.insert(
+        "plan_atomicity".into(),
+        json_string_or_null(status.plan_atomicity().map(str::to_string)),
+    );
     insert_iso_metadata_fields(&mut payload, &status);
     Ok((
         StatusCode::OK,
@@ -29513,14 +29788,95 @@ async fn handler_iso_pacs002(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(
+    let status = iso_status_for_outbox(
         &app,
         &headers,
-        Some(remote_ip),
+        remote.ip(),
+        &msg_id,
         "v1/iso20022/messages/pacs002",
     )
     .await?;
+
+    let xml = iso_pacs002_xml(&status);
+    Ok(iso_xml_response(xml))
+}
+
+async fn handler_iso_pacs004(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    let status = iso_status_for_outbox(
+        &app,
+        &headers,
+        remote.ip(),
+        &msg_id,
+        "v1/iso20022/messages/pacs004",
+    )
+    .await?;
+    Ok(iso_xml_response(iso_pacs004_xml(&status)?))
+}
+
+async fn handler_iso_camt029(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    let status = iso_status_for_outbox(
+        &app,
+        &headers,
+        remote.ip(),
+        &msg_id,
+        "v1/iso20022/messages/camt029",
+    )
+    .await?;
+    Ok(iso_xml_response(iso_camt029_xml(&status)))
+}
+
+async fn handler_iso_sese024(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    let status = iso_status_for_outbox(
+        &app,
+        &headers,
+        remote.ip(),
+        &msg_id,
+        "v1/iso20022/messages/sese024",
+    )
+    .await?;
+    Ok(iso_xml_response(iso_sese024_xml(&status)))
+}
+
+async fn handler_iso_sese025(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(msg_id): axum::extract::Path<String>,
+) -> Result<Response, Error> {
+    let status = iso_status_for_outbox(
+        &app,
+        &headers,
+        remote.ip(),
+        &msg_id,
+        "v1/iso20022/messages/sese025",
+    )
+    .await?;
+    Ok(iso_xml_response(iso_sese025_xml(&status)?))
+}
+
+async fn iso_status_for_outbox(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    remote_ip: std::net::IpAddr,
+    msg_id: &str,
+    access_context: &'static str,
+) -> Result<IsoMessageStatus, Error> {
+    check_access(app.as_ref(), headers, Some(remote_ip), access_context).await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
         None => {
@@ -29530,7 +29886,7 @@ async fn handler_iso_pacs002(
         }
     };
 
-    let mut status = runtime.message_status(&msg_id).ok_or_else(|| {
+    let mut status = runtime.message_status(msg_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             "unknown ISO 20022 message identifier".into(),
         ))
@@ -29539,22 +29895,24 @@ async fn handler_iso_pacs002(
         if let Some(hash_str) = status.transaction_hash() {
             if let Ok(hash) = hash_str.parse::<HashOf<SignedTransaction>>() {
                 if app.state.has_committed_transaction(hash) {
-                    runtime.mark_settled(&msg_id, SystemTime::now());
-                    if let Some(updated) = runtime.message_status(&msg_id) {
+                    runtime.mark_settled(msg_id, SystemTime::now());
+                    if let Some(updated) = runtime.message_status(msg_id) {
                         status = updated;
                     }
                 }
             }
         }
     }
+    Ok(status)
+}
 
-    let xml = iso_pacs002_xml(&status);
-    Ok((
+fn iso_xml_response(xml: String) -> Response {
+    (
         StatusCode::OK,
         [("content-type", "application/xml; charset=utf-8")],
         xml,
     )
-        .into_response())
+        .into_response()
 }
 
 fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
@@ -29614,6 +29972,224 @@ fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
     )
 }
 
+fn iso_pacs004_xml(status: &IsoMessageStatus) -> Result<String, Error> {
+    let amount =
+        require_iso_outbox_field(status.settlement_amount(), "settlement_amount", "pacs.004")?;
+    let currency = require_iso_outbox_field(
+        status.settlement_currency(),
+        "settlement_currency",
+        "pacs.004",
+    )?;
+    let msg_id = xml_escape(status.message_id());
+    let message_name = xml_escape(iso_original_message_name(status));
+    let tx_id = xml_escape(&iso_original_transaction_id(status));
+    let amount = xml_escape(amount);
+    let currency = xml_escape(currency);
+    let created_at = xml_timestamp(SystemTime::now());
+    let original_created_at = xml_timestamp(status.updated_at());
+    let return_reason = iso_return_reason_xml("      ", status);
+
+    Ok(format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.004.001.09">"#,
+            "\n  <PmtRtr>",
+            "\n    <GrpHdr>",
+            "\n      <MsgId>IROHA-PACS004-{msg_id}</MsgId>",
+            "\n      <CreDtTm>{created_at}</CreDtTm>",
+            "\n      <NbOfTxs>1</NbOfTxs>",
+            "\n    </GrpHdr>",
+            "\n    <OrgnlGrpInf>",
+            "\n      <OrgnlMsgId>{msg_id}</OrgnlMsgId>",
+            "\n      <OrgnlMsgNmId>{message_name}</OrgnlMsgNmId>",
+            "\n      <OrgnlCreDtTm>{original_created_at}</OrgnlCreDtTm>",
+            "\n    </OrgnlGrpInf>",
+            "\n    <TxInf>",
+            "\n      <OrgnlInstrId>{tx_id}</OrgnlInstrId>",
+            "\n      <RtrdIntrBkSttlmAmt Ccy=\"{currency}\">{amount}</RtrdIntrBkSttlmAmt>",
+            "\n      <ChrgBr>SLEV</ChrgBr>",
+            "{return_reason}",
+            "\n    </TxInf>",
+            "\n  </PmtRtr>",
+            "\n</Document>\n"
+        ),
+        msg_id = msg_id,
+        created_at = created_at,
+        message_name = message_name,
+        original_created_at = original_created_at,
+        tx_id = tx_id,
+        amount = amount,
+        currency = currency,
+        return_reason = return_reason,
+    ))
+}
+
+fn iso_camt029_xml(status: &IsoMessageStatus) -> String {
+    let msg_id = xml_escape(status.message_id());
+    let message_name = xml_escape(iso_original_message_name(status));
+    let tx_id = xml_escape(&iso_original_transaction_id(status));
+    let created_at = xml_timestamp(SystemTime::now());
+    let original_created_at = xml_timestamp(status.updated_at());
+    let cancellation_status = iso_camt029_status(status);
+    let cancellation_reason = iso_cancellation_reason_xml("        ", status);
+
+    format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">"#,
+            "\n  <RsltnOfInvstgtn>",
+            "\n    <Assgnmt>",
+            "\n      <Id>IROHA-CAMT029-{msg_id}</Id>",
+            "\n      <CreDtTm>{created_at}</CreDtTm>",
+            "\n    </Assgnmt>",
+            "\n    <Sts>",
+            "\n      <Conf>{cancellation_status}</Conf>",
+            "\n    </Sts>",
+            "\n    <CxlDtls>",
+            "\n      <OrgnlGrpInf>",
+            "\n        <OrgnlMsgId>{msg_id}</OrgnlMsgId>",
+            "\n        <OrgnlMsgNmId>{message_name}</OrgnlMsgNmId>",
+            "\n        <OrgnlCreDtTm>{original_created_at}</OrgnlCreDtTm>",
+            "\n      </OrgnlGrpInf>",
+            "\n      <TxInfAndSts>",
+            "\n        <OrgnlInstrId>{tx_id}</OrgnlInstrId>",
+            "\n        <TxCxlSts>{cancellation_status}</TxCxlSts>",
+            "{cancellation_reason}",
+            "\n      </TxInfAndSts>",
+            "\n    </CxlDtls>",
+            "\n  </RsltnOfInvstgtn>",
+            "\n</Document>\n"
+        ),
+        msg_id = msg_id,
+        created_at = created_at,
+        cancellation_status = cancellation_status,
+        message_name = message_name,
+        original_created_at = original_created_at,
+        tx_id = tx_id,
+        cancellation_reason = cancellation_reason,
+    )
+}
+
+fn iso_sese024_xml(status: &IsoMessageStatus) -> String {
+    let tx_id = xml_escape(&iso_securities_transaction_id(status));
+    let status_code = iso_sese024_status(status);
+    let settlement_date = xml_escape(&iso_settlement_date(status));
+    let status_reason = iso_settlement_status_reason_xml("      ", status);
+
+    format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10">"#,
+            "\n  <SctiesSttlmTxStsAdvc>",
+            "\n    <TxId>{tx_id}</TxId>",
+            "\n    <SttlmDt>{settlement_date}</SttlmDt>",
+            "\n    <SttlmTxSts>",
+            "\n      <Sts><Cd>{status_code}</Cd></Sts>",
+            "{status_reason}",
+            "\n    </SttlmTxSts>",
+            "\n  </SctiesSttlmTxStsAdvc>",
+            "\n</Document>\n"
+        ),
+        tx_id = tx_id,
+        settlement_date = settlement_date,
+        status_code = status_code,
+        status_reason = status_reason,
+    )
+}
+
+fn iso_sese025_xml(status: &IsoMessageStatus) -> Result<String, Error> {
+    if status.derived_status() != Pacs002Status::Acsc {
+        return Err(iso_outbox_validation_error(
+            "sese.025 confirmation requires a settled ISO 20022 message record",
+        ));
+    }
+
+    let amount =
+        require_iso_outbox_field(status.settlement_amount(), "settlement_amount", "sese.025")?;
+    let currency = require_iso_outbox_field(
+        status.settlement_currency(),
+        "settlement_currency",
+        "sese.025",
+    )?;
+    let quantity = require_iso_outbox_field(
+        status.settlement_quantity(),
+        "settlement_quantity",
+        "sese.025",
+    )?;
+    let movement_type = require_iso_outbox_field(
+        status.settlement_movement_type(),
+        "settlement_movement_type",
+        "sese.025",
+    )?;
+    let payment_type = require_iso_outbox_field(
+        status.settlement_payment_type(),
+        "settlement_payment_type",
+        "sese.025",
+    )?;
+    let execution_order = require_iso_outbox_field(
+        status.plan_execution_order(),
+        "plan_execution_order",
+        "sese.025",
+    )?;
+    let atomicity =
+        require_iso_outbox_field(status.plan_atomicity(), "plan_atomicity", "sese.025")?;
+    let tx_id = xml_escape(&iso_securities_transaction_id(status));
+    let settlement_date = xml_escape(&iso_settlement_date(status));
+    let amount = xml_escape(amount);
+    let currency = xml_escape(currency);
+    let quantity = xml_escape(quantity);
+    let movement_type = xml_escape(movement_type);
+    let payment_type = xml_escape(payment_type);
+    let execution_order = xml_escape(execution_order);
+    let atomicity = xml_escape(atomicity);
+    let security_leg = iso_security_leg_xml(status);
+    let status_reason = iso_settlement_confirmation_reason_xml("    ", status);
+
+    Ok(format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            "\n",
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.025.001.08">"#,
+            "\n  <SctiesSttlmTxConf>",
+            "\n    <TxId>{tx_id}</TxId>",
+            "\n    <SttlmDt>{settlement_date}</SttlmDt>",
+            "\n    <SttlmTpAndAddtlParams>",
+            "\n      <SctiesMvmntTp>{movement_type}</SctiesMvmntTp>",
+            "\n      <Pmt>{payment_type}</Pmt>",
+            "\n    </SttlmTpAndAddtlParams>",
+            "\n    <TxSts>",
+            "\n      <ConfSts>ACCP</ConfSts>",
+            "\n    </TxSts>",
+            "\n    <SttlmQty><Qty><Unit>{quantity}</Unit></Qty></SttlmQty>",
+            "\n    <SttlmAmt Ccy=\"{currency}\">{amount}</SttlmAmt>",
+            "{security_leg}",
+            "\n    <SplmtryData>",
+            "\n      <Plan>",
+            "\n        <ExecutionOrder>{execution_order}</ExecutionOrder>",
+            "\n        <Atomicity>{atomicity}</Atomicity>",
+            "\n      </Plan>",
+            "\n    </SplmtryData>",
+            "{status_reason}",
+            "\n  </SctiesSttlmTxConf>",
+            "\n</Document>\n"
+        ),
+        tx_id = tx_id,
+        settlement_date = settlement_date,
+        movement_type = movement_type,
+        payment_type = payment_type,
+        quantity = quantity,
+        currency = currency,
+        amount = amount,
+        security_leg = security_leg,
+        execution_order = execution_order,
+        atomicity = atomicity,
+        status_reason = status_reason,
+    ))
+}
+
 fn iso_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     let reason = status
         .rejection_reason_code()
@@ -29647,6 +30223,91 @@ fn iso_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     xml
 }
 
+fn iso_return_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
+    iso_wrapped_reason_xml("RtrRsnInf", indent, status)
+}
+
+fn iso_cancellation_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
+    iso_wrapped_reason_xml("CxlStsRsnInf", indent, status)
+}
+
+fn iso_settlement_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
+    let reason = status
+        .rejection_reason_code()
+        .or_else(|| status.hold_reason_code())
+        .or_else(|| status.change_reason_codes().first().map(String::as_str));
+    let detail = status.detail();
+    if reason.is_none() && detail.is_none() {
+        return String::new();
+    }
+    let mut xml = String::new();
+    if let Some(reason) = reason {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("<Rsn>");
+        xml.push_str(&iso_reason_xml(reason));
+        xml.push_str("</Rsn>");
+    }
+    if let Some(detail) = detail {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("<AddtlInf>");
+        xml.push_str(&xml_escape(detail));
+        xml.push_str("</AddtlInf>");
+    }
+    xml
+}
+
+fn iso_settlement_confirmation_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
+    let Some(detail) = status.detail() else {
+        return String::new();
+    };
+    let mut xml = String::new();
+    xml.push('\n');
+    xml.push_str(indent);
+    xml.push_str("<AddtlInf>");
+    xml.push_str(&xml_escape(detail));
+    xml.push_str("</AddtlInf>");
+    xml
+}
+
+fn iso_wrapped_reason_xml(wrapper: &str, indent: &str, status: &IsoMessageStatus) -> String {
+    let reason = status
+        .rejection_reason_code()
+        .or_else(|| status.hold_reason_code())
+        .or_else(|| status.change_reason_codes().first().map(String::as_str));
+    let detail = status.detail();
+    if reason.is_none() && detail.is_none() {
+        return String::new();
+    }
+    let mut xml = String::new();
+    xml.push('\n');
+    xml.push_str(indent);
+    xml.push('<');
+    xml.push_str(wrapper);
+    xml.push('>');
+    if let Some(reason) = reason {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("  <Rsn>");
+        xml.push_str(&iso_reason_xml(reason));
+        xml.push_str("</Rsn>");
+    }
+    if let Some(detail) = detail {
+        xml.push('\n');
+        xml.push_str(indent);
+        xml.push_str("  <AddtlInf>");
+        xml.push_str(&xml_escape(detail));
+        xml.push_str("</AddtlInf>");
+    }
+    xml.push('\n');
+    xml.push_str(indent);
+    xml.push_str("</");
+    xml.push_str(wrapper);
+    xml.push('>');
+    xml
+}
+
 fn iso_reason_xml(reason: &str) -> String {
     let trimmed = reason.trim();
     if let Some(proprietary) = trimmed.strip_prefix("PRTRY:") {
@@ -29655,10 +30316,111 @@ fn iso_reason_xml(reason: &str) -> String {
     format!("<Cd>{}</Cd>", xml_escape(trimmed))
 }
 
+fn iso_original_message_name(status: &IsoMessageStatus) -> &str {
+    status
+        .metadata()
+        .message_type()
+        .unwrap_or("unknown.iso20022.message")
+}
+
+fn iso_original_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<'_, str> {
+    if let Some(hash) = status.transaction_hash() {
+        std::borrow::Cow::Borrowed(hash)
+    } else if let Some(business_message_id) = status.metadata().business_message_id() {
+        std::borrow::Cow::Borrowed(business_message_id)
+    } else {
+        std::borrow::Cow::Borrowed(status.message_id())
+    }
+}
+
+fn iso_securities_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<'_, str> {
+    for prefix in ["sese.023:", "sese.024:", "sese.025:"] {
+        if let Some(stripped) = status.message_id().strip_prefix(prefix) {
+            return std::borrow::Cow::Borrowed(stripped);
+        }
+    }
+    iso_original_transaction_id(status)
+}
+
+fn iso_camt029_status(status: &IsoMessageStatus) -> &'static str {
+    match status.derived_status() {
+        Pacs002Status::Rjct => "CNCL",
+        Pacs002Status::Acsc => "RJCR",
+        Pacs002Status::Actc | Pacs002Status::Acsp | Pacs002Status::Acwc | Pacs002Status::Pdng => {
+            "PDCR"
+        }
+    }
+}
+
+fn iso_sese024_status(status: &IsoMessageStatus) -> &'static str {
+    match status.derived_status() {
+        Pacs002Status::Acsc => "SETT",
+        Pacs002Status::Rjct => "RJCT",
+        Pacs002Status::Pdng => "PEND",
+        Pacs002Status::Acwc => {
+            if status
+                .change_reason_codes()
+                .iter()
+                .any(|code| code == "PARTIAL_SETTLEMENT")
+            {
+                "PART"
+            } else {
+                "PEND"
+            }
+        }
+        Pacs002Status::Actc | Pacs002Status::Acsp => "ACCP",
+    }
+}
+
+fn iso_settlement_date(status: &IsoMessageStatus) -> String {
+    status
+        .settlement_date()
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| xml_date(status.settled_at().unwrap_or_else(|| status.updated_at())))
+}
+
+fn iso_security_leg_xml(status: &IsoMessageStatus) -> String {
+    let Some(instrument_id) = status.security_instrument_id() else {
+        return String::new();
+    };
+    let instrument_id = xml_escape(instrument_id);
+    format!(
+        "\n    <SctiesMvmntDtls>\n      <SctiesId><OthrId><Id>{instrument_id}</Id></OthrId></SctiesId>\n    </SctiesMvmntDtls>"
+    )
+}
+
+fn require_iso_outbox_field<'a>(
+    value: Option<&'a str>,
+    field: &str,
+    message_type: &str,
+) -> Result<&'a str, Error> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            iso_outbox_validation_error(format!(
+                "{message_type} outbox XML requires durable ISO context field `{field}`"
+            ))
+        })
+}
+
+fn iso_outbox_validation_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
 fn xml_timestamp(time: SystemTime) -> String {
     OffsetDateTime::from(time)
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
+fn xml_date(time: SystemTime) -> String {
+    xml_timestamp(time)
+        .split_once('T')
+        .map(|(date, _)| date.to_owned())
+        .unwrap_or_else(|| "1970-01-01".to_owned())
 }
 
 fn xml_escape(value: &str) -> String {
@@ -34945,11 +35707,33 @@ impl Torii {
             router
                 .route("/v1/iso20022/pacs008", post(handler_iso_pacs008))
                 .route("/v1/iso20022/pacs009", post(handler_iso_pacs009))
+                .route("/v1/iso20022/pacs002", post(handler_iso_pacs002_submit))
+                .route("/v1/iso20022/pacs004", post(handler_iso_pacs004_submit))
+                .route("/v1/iso20022/camt056", post(handler_iso_camt056_submit))
+                .route("/v1/iso20022/sese023", post(handler_iso_sese023_submit))
+                .route("/v1/iso20022/sese024", post(handler_iso_sese024_submit))
+                .route("/v1/iso20022/sese025", post(handler_iso_sese025_submit))
                 .route("/v1/iso20022/status/{msg_id}", get(handler_iso_status))
                 .route("/v1/iso20022/messages/{msg_id}", get(handler_iso_status))
                 .route(
                     "/v1/iso20022/messages/{msg_id}/pacs002",
                     get(handler_iso_pacs002),
+                )
+                .route(
+                    "/v1/iso20022/messages/{msg_id}/pacs004",
+                    get(handler_iso_pacs004),
+                )
+                .route(
+                    "/v1/iso20022/messages/{msg_id}/camt029",
+                    get(handler_iso_camt029),
+                )
+                .route(
+                    "/v1/iso20022/messages/{msg_id}/sese024",
+                    get(handler_iso_sese024),
+                )
+                .route(
+                    "/v1/iso20022/messages/{msg_id}/sese025",
+                    get(handler_iso_sese025),
                 )
         });
     }

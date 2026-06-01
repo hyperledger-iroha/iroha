@@ -50,7 +50,7 @@ public final class IdentifierReceiptVerifier {
       verifier.update(message, 0, message.length);
       return verifier.verifySignature(signature);
     } catch (final Exception ex) {
-      throw new IllegalArgumentException("failed to verify Ed25519 identifier receipt", ex);
+      return false;
     }
   }
 

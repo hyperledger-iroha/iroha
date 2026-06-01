@@ -7,14 +7,17 @@ use std::collections::BTreeSet;
 use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{
     account::AccountId,
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionId, AssetId, definition::ConfidentialPolicyMode},
     confidential::ConfidentialStatus,
     events::data::prelude::{
         OfflineNoteAuditRecorded, OfflineNoteEvent, OfflineNoteIssued, OfflineNoteRedeemed,
     },
     isi::{
         error::{InstructionExecutionError, MathError},
-        offline::{AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemOfflineNote},
+        offline::{
+            AuditOfflineNote, IssueOfflineNote, KagemushaTransfer, RedeemKagemushaRecursive,
+            RedeemOfflineNote,
+        },
     },
     offline::{
         OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA, OFFLINE_REJECTION_REASON_PREFIX,
@@ -228,10 +231,13 @@ pub mod isi {
     ) -> Result<(), InstructionExecutionError> {
         if certificate.version != iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
             || !certificate.one_use
+            || certificate
+                .assertion_usage_count_limit
+                .is_some_and(|limit| limit != 1)
         {
             return Err(labeled_invariant(
                 "invalid_issuer_cert",
-                "offline note operation requires a compact one-use key certificate",
+                "offline note operation requires a compact one-use key certificate with a matching hardware usage limit",
             ));
         }
         if certificate.public_key.is_empty() {
@@ -529,6 +535,264 @@ pub mod isi {
                 "Kagemusha confidential transfers require a root hint",
             )
             .into());
+        }
+        Ok(())
+    }
+
+    fn resolve_kagemusha_unshield_verifier(
+        asset: &AssetDefinitionId,
+        proof: &ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(VerifyingKeyBox, VerifyingKeyRecord), Error> {
+        ensure_kagemusha_transparent_attachment(proof)?;
+        let zk_state = state_transaction
+            .world
+            .zk_assets
+            .get(asset)
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "recursive Kagemusha redemption requires configured shielded asset state",
+                )
+            })?;
+        let binding = zk_state.vk_unshield.as_ref().ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redemption requires a bound unshield verifier key",
+            )
+        })?;
+        if proof.vk_ref != binding.id || proof.backend != binding.id.backend {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem proof must reference the asset-bound unshield verifier key",
+            )
+            .into());
+        }
+        let Some(commitment) = proof.vk_commitment else {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem proof must publish the asset-bound verifier-key commitment",
+            )
+            .into());
+        };
+        if commitment != binding.commitment {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem verifier-key commitment does not match the asset binding",
+            )
+            .into());
+        }
+        let record = state_transaction
+            .world
+            .verifying_keys
+            .get(&binding.id)
+            .cloned()
+            .ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "recursive Kagemusha redeem verifier key is not registered",
+                )
+            })?;
+        if record.status != ConfidentialStatus::Active {
+            return Err(labeled_invariant(
+                "verifier_key_inactive",
+                "recursive Kagemusha redeem verifier key is not active",
+            )
+            .into());
+        }
+        if record.commitment != binding.commitment {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem verifier-key registry commitment does not match the asset binding",
+            )
+            .into());
+        }
+        if record.backend != BackendTag::Halo2IpaPasta
+            || proof.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redemption requires a transparent Halo2/IPA unshield verifier",
+            )
+            .into());
+        }
+        if !crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(&record.circuit_id)
+            && !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+                &record.circuit_id,
+            )
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redemption requires a confidential unshield verifier",
+            )
+            .into());
+        }
+        if record.max_proof_bytes == 0 {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem verifier key must publish a non-zero max_proof_bytes cap",
+            )
+            .into());
+        }
+        if proof.proof.bytes.len() > record.max_proof_bytes as usize {
+            return Err(labeled_invariant(
+                "invalid_proof",
+                "recursive Kagemusha redeem proof exceeds verifier record max_proof_bytes",
+            )
+            .into());
+        }
+        let vk_box = record.key.clone().ok_or_else(|| {
+            labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem verifier key is not available inline",
+            )
+        })?;
+        if vk_box.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA
+            || vk_box.bytes.is_empty()
+            || u32::try_from(vk_box.bytes.len()).ok() != Some(record.vk_len)
+            || crate::zk::hash_vk(&vk_box) != record.commitment
+        {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem inline verifier key does not match the registry record",
+            )
+            .into());
+        }
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.proof.bytes).map_err(|_| {
+                labeled_invariant(
+                    "invalid_proof",
+                    "recursive Kagemusha redeem proof must be an OpenVerifyEnvelope",
+                )
+            })?;
+        if envelope.backend != BackendTag::Halo2IpaPasta
+            || envelope.circuit_id != record.circuit_id
+            || envelope.vk_hash != record.commitment
+            || !envelope.aux.is_empty()
+        {
+            return Err(labeled_invariant(
+                "invalid_proof",
+                "recursive Kagemusha redeem proof envelope metadata mismatch",
+            )
+            .into());
+        }
+        let expected_schema = if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+            &record.circuit_id,
+        ) {
+            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1
+        } else {
+            crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1
+        };
+        let expected_schema_hash: [u8; 32] = Hash::new(expected_schema).into();
+        if envelope.public_inputs != expected_schema
+            || record.public_inputs_schema_hash != expected_schema_hash
+        {
+            return Err(labeled_invariant(
+                "verifier_schema_mismatch",
+                "recursive Kagemusha redeem proof public-input schema mismatch",
+            )
+            .into());
+        }
+        if let Some(envelope_hash) = proof.envelope_hash {
+            let expected_hash: [u8; 32] = Hash::new(&proof.proof.bytes).into();
+            if envelope_hash != expected_hash {
+                return Err(labeled_invariant(
+                    "invalid_proof",
+                    "recursive Kagemusha redeem proof envelope hash does not match the submitted envelope",
+                )
+                .into());
+            }
+        }
+        Ok((vk_box, record))
+    }
+
+    fn ensure_kagemusha_recursive_redeem_public_inputs(
+        instruction: &RedeemKagemushaRecursive,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: &VerifyingKeyRecord,
+    ) -> Result<(), Error> {
+        let current_note = &instruction.bundle.accumulator.current_note;
+        if current_note.amount.scale() != 0
+            || current_note.amount.try_mantissa_u128() != Some(instruction.public_amount)
+        {
+            return Err(labeled_invariant(
+                "amount_mismatch",
+                "recursive Kagemusha redeem amount does not match the spendable note descriptor",
+            )
+            .into());
+        }
+        let expected_public_amount =
+            crate::zk::confidential_v2::encode_confidential_amount_v2(instruction.public_amount);
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &instruction.bundle.accumulator.asset.to_string(),
+        );
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id().as_str(),
+        );
+        let zero = [0u8; 32];
+        if crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(&vk_record.circuit_id)
+        {
+            let (
+                input_commitments,
+                proof_nullifiers,
+                proof_output,
+                proof_root,
+                public_amount,
+                asset_tag,
+                chain_tag,
+            ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(
+                &instruction.redeem_proof.proof.bytes,
+            )
+            .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
+            if proof_output != zero {
+                return Err(labeled_invariant(
+                    "final_commitment_mismatch",
+                    "recursive Kagemusha final redeem proof must not create private change",
+                )
+                .into());
+            }
+            if input_commitments[0] != current_note.note_commitment
+                || input_commitments[1] != zero
+                || proof_nullifiers[0] != current_note.spend_nullifier
+                || proof_nullifiers[1] != zero
+                || proof_root != instruction.bundle.accumulator.final_root
+                || public_amount != expected_public_amount
+                || asset_tag != expected_asset_tag
+                || chain_tag != expected_chain_tag
+            {
+                return Err(labeled_invariant(
+                    "final_commitment_mismatch",
+                    "recursive Kagemusha final redeem proof is not bound to the final spendable note",
+                )
+                .into());
+            }
+        } else {
+            let (
+                input_commitments,
+                proof_nullifiers,
+                proof_root,
+                public_amount,
+                asset_tag,
+                chain_tag,
+            ) = crate::zk::confidential_v2::parse_unshield_public_inputs(
+                &instruction.redeem_proof.proof.bytes,
+            )
+            .map_err(|err| labeled_invariant("invalid_proof", err.to_string()))?;
+            if input_commitments[0] != current_note.note_commitment
+                || input_commitments[1] != zero
+                || proof_nullifiers[0] != current_note.spend_nullifier
+                || proof_nullifiers[1] != zero
+                || proof_root != instruction.bundle.accumulator.final_root
+                || public_amount != expected_public_amount
+                || asset_tag != expected_asset_tag
+                || chain_tag != expected_chain_tag
+            {
+                return Err(labeled_invariant(
+                    "final_commitment_mismatch",
+                    "recursive Kagemusha final redeem proof is not bound to the final spendable note",
+                )
+                .into());
+            }
         }
         Ok(())
     }
@@ -874,6 +1138,21 @@ pub mod isi {
         Ok(())
     }
 
+    fn ensure_disjoint_hashes(
+        left: &[Hash],
+        right: &[Hash],
+        label: &'static str,
+        message: &'static str,
+    ) -> Result<(), InstructionExecutionError> {
+        let left = left.iter().copied().collect::<BTreeSet<_>>();
+        for hash in right {
+            if left.contains(hash) {
+                return Err(labeled_invariant(label, message));
+            }
+        }
+        Ok(())
+    }
+
     fn ensure_unique_bytes32(
         values: &[[u8; 32]],
         label: &'static str,
@@ -882,6 +1161,21 @@ pub mod isi {
         let mut seen = BTreeSet::new();
         for value in values {
             if !seen.insert(*value) {
+                return Err(labeled_invariant(label, message));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_disjoint_bytes32(
+        left: &[[u8; 32]],
+        right: &[[u8; 32]],
+        label: &'static str,
+        message: &'static str,
+    ) -> Result<(), InstructionExecutionError> {
+        let left = left.iter().copied().collect::<BTreeSet<_>>();
+        for value in right {
+            if left.contains(value) {
                 return Err(labeled_invariant(label, message));
             }
         }
@@ -1265,6 +1559,7 @@ pub mod isi {
                 })?,
             )?;
             let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let issued_commitment_key = offline_note_issue_key(&redemption.source_note_commitment);
             let spent_claim_key = offline_note_spent_claim_key(&issued_claim_hash);
             if state_transaction
                 .world
@@ -1275,6 +1570,18 @@ pub mod isi {
                 return Err(labeled_invariant(
                     "note_not_issued",
                     "offline note was not issued for this source commitment, recipient, asset, and amount",
+                )
+                    .into());
+            }
+            if state_transaction
+                .world
+                .offline_note_replay_keys
+                .get(&issued_commitment_key)
+                .is_none()
+            {
+                return Err(labeled_invariant(
+                    "note_not_issued",
+                    "offline redemption source note commitment was not issued by top-up or prior audit",
                 )
                 .into());
             }
@@ -1389,6 +1696,12 @@ pub mod isi {
                 &audit.output_commitments,
                 "audit_duplicate_output",
                 "offline audit output commitments must be unique",
+            )?;
+            ensure_disjoint_hashes(
+                &audit.input_nullifiers,
+                &audit.output_commitments,
+                "proof_binding",
+                "offline audit output commitments must be disjoint from input nullifiers",
             )?;
             let output_commitment_set = audit
                 .output_commitments
@@ -1539,6 +1852,11 @@ pub mod isi {
                 .iter()
                 .map(offline_note_issued_claim_key)
                 .collect::<Vec<_>>();
+            let issued_input_commitment_keys = audit
+                .input_claims
+                .iter()
+                .map(|claim| offline_note_issue_key(&claim.note_commitment))
+                .collect::<Vec<_>>();
             let spent_input_claim_keys = input_claim_hashes
                 .iter()
                 .map(offline_note_spent_claim_key)
@@ -1593,6 +1911,20 @@ pub mod isi {
                     return Err(labeled_invariant(
                         "note_not_issued",
                         "offline audit input claim was not issued",
+                    )
+                    .into());
+                }
+            }
+            for issued_commitment_key in &issued_input_commitment_keys {
+                if state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(issued_commitment_key)
+                    .is_none()
+                {
+                    return Err(labeled_invariant(
+                        "note_not_issued",
+                        "offline audit input note commitment was not issued by top-up or prior audit",
                     )
                     .into());
                 }
@@ -1733,6 +2065,12 @@ pub mod isi {
                     .offline_note_replay_keys
                     .insert(observed_key, ());
             }
+            for issued_output_commitment_key in issued_output_commitment_keys {
+                state_transaction
+                    .world
+                    .offline_note_replay_keys
+                    .insert(issued_output_commitment_key, ());
+            }
             for issued_claim_key in issued_output_claim_keys {
                 state_transaction
                     .world
@@ -1811,6 +2149,12 @@ pub mod isi {
                 "duplicate_output",
                 "Kagemusha transfer output commitments must be unique",
             )?;
+            ensure_disjoint_bytes32(
+                &self.inputs,
+                &self.outputs,
+                "proof_binding",
+                "Kagemusha transfer output commitments must be disjoint from input nullifiers",
+            )?;
             ensure_kagemusha_transparent_attachment(&self.proof)?;
             ensure_kagemusha_transfer_verifier_binding(
                 &self.asset,
@@ -1826,6 +2170,188 @@ pub mod isi {
                 self.root_hint,
             );
             transfer.execute(authority, state_transaction)
+        }
+    }
+
+    impl Execute for RedeemKagemushaRecursive {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.settlement.offline.kagemusha_enabled {
+                return Err(labeled_invariant(
+                    "kagemusha_disabled",
+                    "Kagemusha recursive redemption is disabled by configuration",
+                )
+                .into());
+            }
+            if state_transaction.settlement.offline.kagemusha_force_legacy {
+                return Err(labeled_invariant(
+                    "kagemusha_legacy_forced",
+                    "Kagemusha recursive redemption is bypassed by explicit legacy fallback",
+                )
+                .into());
+            }
+            if self.public_amount == 0 {
+                return Err(labeled_invariant(
+                    "amount_mismatch",
+                    "recursive Kagemusha redemption amount must be non-zero",
+                )
+                .into());
+            }
+            self.bundle
+                .validate_public_input_binding()
+                .map_err(|err| labeled_invariant("invalid_recursive_bundle", err.to_string()))?;
+            let redeem_nullifiers =
+                self.bundle.accumulator.redeem_nullifiers().map_err(|err| {
+                    labeled_invariant("invalid_recursive_bundle", err.to_string())
+                })?;
+            let current_note_nullifier = self.bundle.accumulator.current_note.spend_nullifier;
+            if self.bundle.accumulator.chain_id != *state_transaction.chain_id() {
+                return Err(labeled_invariant(
+                    "wrong_chain",
+                    "recursive Kagemusha bundle chain id does not match this chain",
+                )
+                .into());
+            }
+
+            let def_id = self.bundle.accumulator.asset.clone();
+            let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
+                state_transaction,
+                &def_id,
+            )?
+            .mode();
+            match policy_mode {
+                ConfidentialPolicyMode::TransparentOnly | ConfidentialPolicyMode::ShieldedOnly => {
+                    return Err(labeled_invariant(
+                        "unshield_not_permitted",
+                        "recursive Kagemusha redemption is not permitted by policy",
+                    )
+                    .into());
+                }
+                ConfidentialPolicyMode::Convertible => {}
+            }
+
+            let mut st = state_transaction
+                .world
+                .zk_assets
+                .get(&def_id)
+                .cloned()
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "verifier_key_invalid",
+                        "recursive Kagemusha redemption requires configured shielded asset state",
+                    )
+                })?;
+            if !st.allow_unshield {
+                return Err(labeled_invariant(
+                    "unshield_not_permitted",
+                    "recursive Kagemusha redemption is not permitted by asset policy",
+                )
+                .into());
+            }
+            if !st
+                .root_history
+                .iter()
+                .any(|root| root == &self.bundle.accumulator.initial_root)
+            {
+                return Err(labeled_invariant(
+                    "stale_root",
+                    "recursive Kagemusha initial root is stale or unknown",
+                )
+                .into());
+            }
+            for nullifier in &redeem_nullifiers {
+                if st.nullifiers.contains(nullifier) {
+                    let kind = if *nullifier == current_note_nullifier {
+                        "current note"
+                    } else {
+                        "top-up anchor"
+                    };
+                    return Err(labeled_invariant(
+                        "duplicate_nullifier",
+                        format!("recursive Kagemusha {kind} nullifier is already spent"),
+                    )
+                    .into());
+                }
+            }
+
+            let recursive_record = state_transaction
+                .world
+                .verifying_keys
+                .get(&self.bundle.recursive_proof.verifier_key_id)
+                .cloned()
+                .ok_or_else(|| {
+                    labeled_invariant(
+                        "verifier_key_invalid",
+                        "recursive Kagemusha spend verifier key is not registered",
+                    )
+                })?;
+            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
+                &self.bundle,
+                &recursive_record,
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+            state_transaction
+                .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
+            if !crate::zk::verify_kagemusha_recursive_spend_bundle_with_record(
+                &self.bundle,
+                &recursive_record,
+            ) {
+                return Err(labeled_invariant(
+                    "invalid_recursive_bundle",
+                    "recursive Kagemusha spend proof verification failed",
+                )
+                .into());
+            }
+
+            let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
+                &def_id,
+                &self.redeem_proof,
+                state_transaction,
+            )?;
+            ensure_kagemusha_recursive_redeem_public_inputs(
+                &self,
+                state_transaction,
+                &redeem_record,
+            )?;
+            state_transaction.register_nullifiers(redeem_nullifiers.len())?;
+            state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())?;
+            let report = crate::zk::verify_backend_with_timing_checked(
+                self.redeem_proof.backend.as_str(),
+                &self.redeem_proof.proof,
+                Some(&redeem_vk),
+                &state_transaction.zk,
+            );
+            if !report.ok {
+                return Err(labeled_invariant(
+                    "invalid_proof",
+                    "recursive Kagemusha final redeem proof verification failed",
+                )
+                .into());
+            }
+            for nullifier in redeem_nullifiers {
+                if !st.nullifiers.insert(nullifier) {
+                    let kind = if nullifier == current_note_nullifier {
+                        "current note"
+                    } else {
+                        "top-up anchor"
+                    };
+                    return Err(labeled_invariant(
+                        "duplicate_nullifier",
+                        format!("recursive Kagemusha {kind} nullifier is already spent"),
+                    )
+                    .into());
+                }
+            }
+            state_transaction.world.zk_assets.remove(def_id.clone());
+            state_transaction.world.zk_assets.insert(def_id.clone(), st);
+            let mint = Mint::asset_numeric(
+                Numeric::new(self.public_amount, 0),
+                AssetId::of(def_id, self.recipient),
+            );
+            mint.execute(authority, state_transaction)
         }
     }
 
@@ -1846,7 +2372,7 @@ pub mod isi {
             asset::{Asset, AssetDefinition, definition::AssetConfidentialPolicy},
             block::BlockHeader,
             domain::{Domain, DomainId},
-            offline::OfflineNoteAuditBundle,
+            offline::{KagemushaFoldStep, OfflineNoteAuditBundle},
             permission::Permission,
             proof::ProofAttachment,
         };
@@ -1866,6 +2392,10 @@ pub mod isi {
                 *byte = seed.wrapping_add(offset);
             }
             Signature::from_bytes(&payload)
+        }
+
+        fn fixed_bytes(label: &[u8]) -> [u8; 32] {
+            Hash::new(label).into()
         }
 
         fn sample_certificate() -> OfflineNoteKeyCertificate {
@@ -1967,6 +2497,28 @@ pub mod isi {
             let public_inputs_hash = audit.public_inputs_hash().expect("audit hash");
             audit.recursive_proof = placeholder_recursive_proof(public_inputs_hash);
             audit
+        }
+
+        fn sample_redemption_for_issue(
+            issue: &iroha_data_model::offline::OfflineNoteIssue,
+            recipient: AccountId,
+        ) -> iroha_data_model::offline::OfflineNoteRedeem {
+            let mut redemption = iroha_data_model::offline::OfflineNoteRedeem {
+                source_note_commitment: issue.note_commitment,
+                input_nullifiers: vec![Hash::new(b"offline-redeem-input-nullifier")],
+                sender_key_certificate: issue.key_certificate.clone(),
+                recipient,
+                asset: issue.asset.clone(),
+                amount: issue.amount.clone(),
+                recursive_proof: placeholder_recursive_proof(Hash::new(
+                    b"offline-redeem-placeholder-public-inputs",
+                )),
+            };
+            let public_inputs_hash = redemption
+                .public_inputs_hash()
+                .expect("redemption public-input hash");
+            redemption.recursive_proof = placeholder_recursive_proof(public_inputs_hash);
+            redemption
         }
 
         fn self_escrow_test_state(
@@ -2341,6 +2893,288 @@ pub mod isi {
             )
         }
 
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn recursive_spend_bundle_for_note(
+            chain_id: &iroha_data_model::ChainId,
+            asset: &AssetDefinitionId,
+            initial_root: [u8; 32],
+            final_root: [u8; 32],
+            note_commitment: [u8; 32],
+            spend_nullifier: [u8; 32],
+            amount: u128,
+        ) -> iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 {
+            let mut previous =
+                None::<iroha_data_model::offline::KagemushaRecursiveSpendAccumulatorV1>;
+            let mut previous_proof =
+                None::<iroha_data_model::offline::KagemushaRecursiveAggregationProof>;
+            let roots = [
+                initial_root,
+                fixed_bytes(b"recursive-redeem-root-1"),
+                fixed_bytes(b"recursive-redeem-root-2"),
+                final_root,
+            ];
+            for hop_index in 0..3usize {
+                let proof_label = format!("recursive-redeem-hop-{hop_index}");
+                let mut step = KagemushaFoldStep {
+                    root_before: roots[hop_index],
+                    input_nullifiers: vec![
+                        [0x21_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                        [0x31_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                    ],
+                    output_commitments: vec![
+                        [0x41_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                        [0x51_u8.wrapping_add(u8::try_from(hop_index).expect("hop fits")); 32],
+                    ],
+                    root_after: roots[hop_index + 1],
+                    proof_hash: Hash::new(proof_label.as_bytes()),
+                    proof_public_inputs_digest: fixed_bytes(
+                        format!("{proof_label}:public").as_bytes(),
+                    ),
+                    verifier_key_id: VerifyingKeyId::new(
+                        crate::zk::ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-hop-fixture",
+                    ),
+                    verifier_key_commitment: fixed_bytes(format!("{proof_label}:vk").as_bytes()),
+                    verifier_key_poseidon_digest:
+                        iroha_data_model::offline::kagemusha_verifier_key_poseidon_digest(
+                            crate::zk::ZK_BACKEND_HALO2_IPA,
+                            proof_label.as_bytes(),
+                        )
+                        .expect("recursive redeem hop verifier-key digest"),
+                };
+                if let Some(previous) = previous.as_ref() {
+                    step.input_nullifiers = vec![previous.current_note.spend_nullifier];
+                }
+                let current_note = iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                    note_commitment: if hop_index == 2 {
+                        note_commitment
+                    } else {
+                        step.output_commitments[0]
+                    },
+                    spend_nullifier: if hop_index == 2 {
+                        spend_nullifier
+                    } else {
+                        fixed_bytes(format!("recursive-redeem-nullifier-{hop_index}").as_bytes())
+                    },
+                    amount: Numeric::new(amount, 0),
+                };
+                step.output_commitments[0] = current_note.note_commitment;
+                let evidence =
+                    iroha_data_model::offline::kagemusha_recursive_aggregation_evidence_from_steps(
+                        chain_id,
+                        asset,
+                        &[step],
+                        4,
+                        fixed_bytes(b"recursive-redeem-pallas-params"),
+                        crate::zk::kagemusha_recursive_fixed_window_table_schedule_digest(4)
+                            .expect("canonical recursive schedule digest"),
+                        crate::zk::kagemusha_recursive_fixed_window_shared_table_manifest_digest(4)
+                            .expect("canonical recursive shared-table manifest digest"),
+                        fixed_bytes(b"recursive-redeem-table-bases"),
+                        fixed_bytes(format!("recursive-redeem-batch-{hop_index}").as_bytes()),
+                    )
+                    .expect("recursive redeem evidence");
+                let accumulator = match previous.as_ref() {
+                    Some(previous) => {
+                        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_append_evidence(
+                            previous,
+                            previous_proof
+                                .as_ref()
+                                .expect("previous recursive redeem proof"),
+                            &evidence,
+                            &current_note,
+                        )
+                        .expect("append recursive redeem accumulator")
+                    }
+                    None => {
+                        iroha_data_model::offline::kagemusha_recursive_spend_accumulator_from_initial_evidence(
+                            &evidence,
+                            &current_note,
+                        )
+                        .expect("initial recursive redeem accumulator")
+                    }
+                };
+                let public_inputs = accumulator
+                    .recursive_public_inputs()
+                    .expect("recursive redeem public inputs");
+                let public_inputs_hash = public_inputs
+                    .public_inputs_hash()
+                    .expect("recursive redeem public-input hash");
+                previous_proof = Some(iroha_data_model::offline::KagemushaRecursiveAggregationProof {
+                    verifier_key_id: VerifyingKeyId::new(
+                        crate::zk::ZK_BACKEND_HALO2_IPA,
+                        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                    ),
+                    public_inputs,
+                    public_inputs_hash,
+                    proof: ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![0xC7; 96]),
+                });
+                previous = Some(accumulator);
+            }
+            let vk_box = crate::zk::kagemusha_recursive_aggregation_proof_vk_box()
+                .expect("recursive aggregation vk");
+            crate::zk::prove_kagemusha_recursive_spend_accumulator(
+                crate::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+                &vk_box,
+                previous.expect("three-hop recursive redeem accumulator"),
+                None,
+            )
+            .expect("recursive spend proof")
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn real_recursive_kagemusha_redeem_test_state() -> (
+            State,
+            AccountId,
+            AccountId,
+            AssetDefinitionId,
+            RedeemKagemushaRecursive,
+        ) {
+            let authority = sample_account(0x56);
+            let recipient = sample_account(0x57);
+            let chain_id: iroha_data_model::ChainId = "kagemusha-recursive-redeem-chain"
+                .parse()
+                .expect("chain id");
+            let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+            let definition_id = AssetDefinitionId::new(
+                domain_id.clone(),
+                "kgmr".parse().expect("asset definition name"),
+            );
+            let recipient_asset_id = AssetId::new(definition_id.clone(), recipient.clone());
+            let domain = Domain::new(domain_id).build(&authority);
+            let authority_account = Account::new(authority.clone()).build(&authority);
+            let recipient_account = Account::new(recipient.clone()).build(&authority);
+            let asset_definition =
+                AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
+                    .with_name("kgmr".to_owned())
+                    .confidential_policy(AssetConfidentialPolicy::convertible())
+                    .build(&authority);
+            let recipient_asset = Asset::new(recipient_asset_id, Numeric::zero());
+
+            let spend_key = [0x77_u8; 32];
+            let input_rho = [0x78_u8; 32];
+            let input_diversifier = crate::zk::confidential_v2::derive_confidential_diversifier_v2(
+                b"recursive-redeem-input",
+            );
+            let owner_tag =
+                crate::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                    &spend_key,
+                    input_diversifier,
+                )
+                .expect("recursive redeem owner tag");
+            let note_commitment = crate::zk::confidential_v2::derive_confidential_note_v2(
+                &definition_id.to_string(),
+                42,
+                input_rho,
+                owner_tag,
+            )
+            .expect("recursive redeem note commitment");
+            let tree_commitments = vec![note_commitment];
+            let final_root =
+                crate::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+                    .expect("recursive redeem final root");
+            let spend_nullifier = crate::zk::confidential_v2::derive_confidential_nullifier_v2(
+                chain_id.as_str(),
+                &definition_id.to_string(),
+                &spend_key,
+                input_rho,
+            );
+            let initial_root = fixed_bytes(b"recursive-redeem-initial-root");
+            let bundle = recursive_spend_bundle_for_note(
+                &chain_id,
+                &definition_id,
+                initial_root,
+                final_root,
+                note_commitment,
+                spend_nullifier,
+                42,
+            );
+
+            let recursive_vk_record = crate::zk::kagemusha_recursive_aggregation_proof_vk_record(
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                1,
+            )
+            .expect("recursive spend verifier record");
+            let recursive_vk_id = bundle.recursive_proof.verifier_key_id.clone();
+            let mut unshield_record =
+                crate::zk::confidential_v2::confidential_unshield_v2_vk_record(
+                    crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    1,
+                )
+                .expect("confidential unshield v2 verifier record");
+            let unshield_vk_box = unshield_record.key.clone().expect("unshield verifier key");
+            let unshield_vk_commitment = unshield_record.commitment;
+            let unshield_vk_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "recursive-kagemusha-unshield-v2",
+            );
+            unshield_record.status = ConfidentialStatus::Active;
+            let unshield_proof = crate::zk::confidential_v2::build_confidential_unshield_proof_v2(
+                &chain_id,
+                &definition_id.to_string(),
+                &spend_key,
+                &tree_commitments,
+                &[crate::zk::confidential_v2::ConfidentialUnshieldInputV2 {
+                    amount: 42,
+                    rho: input_rho,
+                    diversifier: input_diversifier,
+                    leaf_index: 0,
+                }],
+                42,
+                final_root,
+                &unshield_record.circuit_id,
+                &unshield_vk_box,
+            )
+            .expect("recursive Kagemusha final unshield proof");
+            assert_eq!(unshield_proof.nullifiers, vec![spend_nullifier]);
+            let mut redeem_attachment = ProofAttachment::new_ref(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                unshield_proof.proof,
+                unshield_vk_id.clone(),
+            );
+            redeem_attachment.vk_commitment = Some(unshield_vk_commitment);
+            redeem_attachment.envelope_hash =
+                Some(Hash::new(&redeem_attachment.proof.bytes).into());
+            let instruction =
+                RedeemKagemushaRecursive::new(bundle, recipient.clone(), 42, redeem_attachment);
+
+            let mut world = World::with_assets(
+                [domain],
+                [authority_account, recipient_account],
+                [asset_definition],
+                [recipient_asset],
+                [],
+            );
+            world
+                .verifying_keys
+                .insert(recursive_vk_id, recursive_vk_record);
+            world
+                .verifying_keys
+                .insert(unshield_vk_id.clone(), unshield_record);
+            world.zk_assets.insert(definition_id.clone(), {
+                let mut zk_state = ZkAssetState::default();
+                zk_state.allow_unshield = true;
+                zk_state.commitments = tree_commitments;
+                zk_state.root_history = vec![initial_root];
+                zk_state.vk_unshield = Some(ZkAssetVerifierBinding {
+                    id: unshield_vk_id,
+                    commitment: unshield_vk_commitment,
+                });
+                zk_state
+            });
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let mut state = State::new_with_chain(world, Arc::clone(&kura), query, chain_id);
+            let mut zk = state.zk.clone();
+            zk.halo2.enabled = true;
+            zk.halo2.max_envelope_bytes = usize::MAX;
+            zk.halo2.max_proof_bytes = usize::MAX;
+            state.set_zk(zk);
+
+            (state, authority, recipient, definition_id, instruction)
+        }
+
         fn mutate_kagemusha_transfer_envelope(
             transfer: &mut KagemushaTransfer,
             mutate: impl FnOnce(&mut OpenVerifyEnvelope),
@@ -2351,6 +3185,18 @@ pub mod isi {
             mutate(&mut envelope);
             transfer.proof.proof.bytes =
                 norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
+        }
+
+        fn mutate_proof_attachment_envelope(
+            proof: &mut ProofAttachment,
+            mutate: impl FnOnce(&mut OpenVerifyEnvelope),
+        ) {
+            let mut envelope: OpenVerifyEnvelope = norito::decode_from_bytes(&proof.proof.bytes)
+                .expect("proof attachment should be an OpenVerifyEnvelope");
+            mutate(&mut envelope);
+            let encoded = norito::to_bytes(&envelope).expect("encode mutated OpenVerifyEnvelope");
+            proof.envelope_hash = Some(Hash::new(&encoded).into());
+            proof.proof.bytes = encoded;
         }
 
         fn assert_kagemusha_transfer_record_mutation_rejects(
@@ -2595,6 +3441,15 @@ pub mod isi {
             assert!(validate_offline_note_key_certificate(&certificate).is_err());
 
             certificate.one_use = true;
+            certificate.assertion_usage_count_limit = Some(2);
+            assert!(validate_offline_note_key_certificate(&certificate).is_err());
+
+            certificate.assertion_usage_count_limit = Some(0);
+            assert!(validate_offline_note_key_certificate(&certificate).is_err());
+
+            certificate.assertion_usage_count_limit = Some(1);
+            assert!(validate_offline_note_key_certificate(&certificate).is_ok());
+
             certificate.public_key.clear();
             assert!(validate_offline_note_key_certificate(&certificate).is_err());
         }
@@ -2737,6 +3592,128 @@ pub mod isi {
         }
 
         #[test]
+        fn audit_rejects_claim_anchor_without_topup_commitment_lineage() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let input_certificate = sample_certificate();
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let output_certificate =
+                signed_sample_certificate(&account_keypair, account_id, 0x7F, "audit-output-key");
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-topup-note"),
+                key_certificate: input_certificate.clone(),
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let audit = sample_audit_bundle_for_issue(&issue, output_certificate);
+            let certificate_payload_hash = input_certificate
+                .payload_hash()
+                .expect("certificate payload hash");
+            let certificate_key = offline_note_key_certificate_key(&certificate_payload_hash);
+            let issued_claim = OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim");
+            let issued_claim_hash =
+                offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let relayer = sample_account(0x7E);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(certificate_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_claim_key, ());
+
+            let err = AuditOfflineNote::new(audit)
+                .execute(&relayer, &mut transaction)
+                .expect_err("claim-only lineage must not anchor an input note commitment");
+            assert_offline_rejection(
+                err,
+                "note_not_issued",
+                "input note commitment was not issued",
+            );
+        }
+
+        #[test]
+        fn redeem_rejects_claim_anchor_without_topup_commitment_lineage() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let input_certificate = sample_certificate();
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-redeem-topup-note"),
+                key_certificate: input_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let redemption = sample_redemption_for_issue(&issue, account_id.clone());
+            let issued_claim = OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim");
+            let issued_claim_hash =
+                offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_claim_key, ());
+
+            let err = RedeemOfflineNote::new(redemption)
+                .execute(&account_id, &mut transaction)
+                .expect_err("claim-only lineage must not anchor a redeem source commitment");
+            assert_offline_rejection(
+                err,
+                "note_not_issued",
+                "source note commitment was not issued",
+            );
+        }
+
+        #[test]
+        fn redeem_accepts_topup_commitment_anchor_until_proof_verification() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let input_certificate = sample_certificate();
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-redeem-topup-note"),
+                key_certificate: input_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let redemption = sample_redemption_for_issue(&issue, account_id.clone());
+            let issued_claim = OfflineNoteIssuedClaim::from_issue(&issue).expect("issued claim");
+            let issued_claim_hash =
+                offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
+            let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let issued_commitment_key = offline_note_issue_key(&issue.note_commitment);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_claim_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_commitment_key, ());
+
+            let err = RedeemOfflineNote::new(redemption)
+                .execute(&account_id, &mut transaction)
+                .expect_err("placeholder proof should reject after lineage admission");
+            let message = err.to_string();
+            assert!(
+                !message.contains("note_not_issued")
+                    && (message.contains("verifier_key")
+                        || message.contains("invalid_proof")
+                        || message.contains("OpenVerifyEnvelope")),
+                "unexpected redeem error after topup commitment anchor: {message}"
+            );
+        }
+
+        #[test]
         fn audit_rejects_mutated_input_claim_even_when_certificate_topup_is_anchored() {
             let (state, asset_id, account_id, _definition_id) =
                 distinct_escrow_test_state(Numeric::new(100, 0), 0x7D);
@@ -2848,6 +3825,7 @@ pub mod isi {
             let issued_claim_hash =
                 offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
             let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let issued_input_commitment_key = offline_note_issue_key(&issue.note_commitment);
             let issued_output_commitment_key =
                 offline_note_issue_key(audit.output_commitments.first().expect("output"));
             let relayer = sample_account(0x89);
@@ -2862,6 +3840,10 @@ pub mod isi {
                 .world
                 .offline_note_replay_keys
                 .insert(issued_claim_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_input_commitment_key, ());
             transaction
                 .world
                 .offline_note_replay_keys
@@ -2899,6 +3881,7 @@ pub mod isi {
             let issued_claim_hash =
                 offline_note_issued_claim_hash(issued_claim).expect("issued claim hash");
             let issued_claim_key = offline_note_issued_claim_key(&issued_claim_hash);
+            let issued_input_commitment_key = offline_note_issue_key(&issue.note_commitment);
             let relayer = sample_account(0x85);
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
@@ -2911,6 +3894,10 @@ pub mod isi {
                 .world
                 .offline_note_replay_keys
                 .insert(issued_claim_key, ());
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(issued_input_commitment_key, ());
 
             let err = AuditOfflineNote::new(audit)
                 .execute(&relayer, &mut transaction)
@@ -2955,6 +3942,44 @@ pub mod isi {
                 err,
                 "invalid_issuer_cert",
                 "signature does not match issuer account",
+            );
+        }
+
+        #[test]
+        fn audit_rejects_nullifier_output_overlap_before_proof() {
+            let (state, asset_id, account_id, _definition_id) =
+                self_escrow_test_state(Numeric::new(100, 0));
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let input_certificate = signed_sample_certificate(
+                &account_keypair,
+                account_id.clone(),
+                0x84,
+                "topup-input-key",
+            );
+            let output_certificate =
+                signed_sample_certificate(&account_keypair, account_id, 0x85, "audit-output-key");
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-topup-note"),
+                key_certificate: input_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let mut audit = sample_audit_bundle_for_issue(&issue, output_certificate);
+            audit.output_commitments[0] = audit.input_nullifiers[0];
+            audit.output_claims[0].note_commitment = audit.input_nullifiers[0];
+            audit.recursive_proof.proof.bytes = b"not-an-open-verify-envelope".to_vec();
+            let relayer = sample_account(0x86);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = AuditOfflineNote::new(audit)
+                .execute(&relayer, &mut transaction)
+                .expect_err("offline audit input/output overlap must reject before proof decode");
+            assert_offline_rejection(
+                err,
+                "proof_binding",
+                "output commitments must be disjoint from input nullifiers",
             );
         }
 
@@ -3079,6 +4104,16 @@ pub mod isi {
                     .is_some(),
                 "audit should anchor output claim lineage for later redemption"
             );
+            let output_commitment_key =
+                offline_note_issue_key(audit.output_commitments.first().expect("output"));
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&output_commitment_key)
+                    .is_some(),
+                "audit should anchor output commitment lineage for later offline-offline hops"
+            );
             let first_audit_output_claim = audit.output_claims.first().expect("output claim");
             let second_output_certificate =
                 signed_sample_certificate(&issuer, authority.clone(), 0x79, "audit-output-key-2");
@@ -3143,6 +4178,20 @@ pub mod isi {
                     .get(&second_output_claim_key)
                     .is_some(),
                 "second audit should anchor the next output claim lineage"
+            );
+            let second_output_commitment_key = offline_note_issue_key(
+                second_audit
+                    .output_commitments
+                    .first()
+                    .expect("second output commitment"),
+            );
+            assert!(
+                transaction
+                    .world
+                    .offline_note_replay_keys
+                    .get(&second_output_commitment_key)
+                    .is_some(),
+                "second audit should anchor the next output commitment lineage"
             );
             let balance = transaction
                 .world
@@ -3210,13 +4259,18 @@ pub mod isi {
                 "halo2/bn254",
                 "debug-proof",
                 "Debug-Proof",
+                "D-e-b-u-g-Proof",
                 "mock-proof",
                 "Mock-Proof",
+                "M-o-c-k-Proof",
                 "stark/fri/debug-proof",
                 "stark/fri/Debug-Proof",
+                "stark/fri/d-e-b-u-g-proof",
                 "stark/fri/mock-proof",
+                "stark/fri/m-o-c-k-proof",
                 "halo2/ipa:mock-proof",
                 "halo2/ipa:Mock-Proof",
+                "halo2/ipa:m-o-c-k-proof",
             ] {
                 let (state, mut proof, _public_inputs_hash) =
                     offline_note_verifier_test_state(ConfidentialStatus::Active);
@@ -3562,6 +4616,8 @@ pub mod isi {
                 "halo2/ipa:KZG",
                 "halo2/ipa: KZG",
                 "halo2/ipa:Mock-Proof",
+                "halo2/ipa:M-o-c-k-Proof",
+                "stark/fri/d-e-b-u-g",
             ] {
                 let err = sample_kagemusha_transfer(backend)
                     .execute(&authority, &mut transaction)
@@ -3648,6 +4704,543 @@ pub mod isi {
                     || message.contains("invalid confidential transfer v2 public inputs"),
                 "unexpected error: {message}"
             );
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_executes_after_three_offline_hops() {
+            let (state, authority, recipient, definition_id, instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            let spend_nullifier = instruction.bundle.accumulator.current_note.spend_nullifier;
+            let topup_anchor_nullifiers = instruction
+                .bundle
+                .accumulator
+                .topup_anchor_nullifiers
+                .clone();
+            let recipient_asset_id = AssetId::new(definition_id.clone(), recipient);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            instruction
+                .execute(&authority, &mut transaction)
+                .expect("recursive Kagemusha redeem should execute");
+
+            let shielded_state = transaction
+                .world
+                .zk_assets
+                .get(&definition_id)
+                .expect("recursive redeem keeps shielded asset state");
+            assert!(
+                shielded_state.nullifiers.contains(&spend_nullifier),
+                "recursive redeem must consume the final spendable note nullifier"
+            );
+            for nullifier in topup_anchor_nullifiers {
+                assert!(
+                    shielded_state.nullifiers.contains(&nullifier),
+                    "recursive redeem must consume the top-up anchor nullifier"
+                );
+            }
+            let balance = transaction
+                .world
+                .assets
+                .get(&recipient_asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero);
+            assert_eq!(balance, Numeric::new(42, 0));
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots() {
+            let (state, authority, _recipient, definition_id, instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            instruction
+                .clone()
+                .execute(&authority, &mut transaction)
+                .expect("first recursive Kagemusha redeem should execute");
+            let err = instruction
+                .execute(&authority, &mut transaction)
+                .expect_err("recursive Kagemusha redeem must reject double spend");
+            assert_offline_rejection(err, "duplicate_nullifier", "already spent");
+
+            let (mut disabled_state, disabled_authority, _, _, disabled_instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            disabled_state.settlement.offline.kagemusha_enabled = false;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = disabled_state.block(header);
+            let mut transaction = block.transaction();
+            let err = disabled_instruction
+                .execute(&disabled_authority, &mut transaction)
+                .expect_err("disabled recursive Kagemusha must reject");
+            assert_offline_rejection(err, "kagemusha_disabled", "disabled");
+
+            let (mut legacy_state, legacy_authority, _, _, legacy_instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            legacy_state.settlement.offline.kagemusha_force_legacy = true;
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = legacy_state.block(header);
+            let mut transaction = block.transaction();
+            let err = legacy_instruction
+                .execute(&legacy_authority, &mut transaction)
+                .expect_err("legacy-forced recursive Kagemusha must reject");
+            assert_offline_rejection(err, "kagemusha_legacy_forced", "legacy fallback");
+
+            let (stale_state, stale_authority, _, _, stale_instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = stale_state.block(header);
+            {
+                let mut mutation = block.transaction();
+                mutation
+                    .world_mut_for_testing()
+                    .zk_assets_mut_for_testing()
+                    .get_mut(&definition_id)
+                    .expect("recursive Kagemusha shielded state")
+                    .root_history
+                    .clear();
+                mutation.apply();
+            }
+            let mut transaction = block.transaction();
+            let err = stale_instruction
+                .execute(&stale_authority, &mut transaction)
+                .expect_err("stale recursive Kagemusha root must reject");
+            assert_offline_rejection(err, "stale_root", "stale or unknown");
+
+            let (anchor_state, anchor_authority, _, anchor_definition_id, anchor_instruction) =
+                real_recursive_kagemusha_redeem_test_state();
+            let topup_anchor = anchor_instruction
+                .bundle
+                .accumulator
+                .topup_anchor_nullifiers[0];
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = anchor_state.block(header);
+            {
+                let mut mutation = block.transaction();
+                mutation
+                    .world_mut_for_testing()
+                    .zk_assets_mut_for_testing()
+                    .get_mut(&anchor_definition_id)
+                    .expect("recursive Kagemusha shielded state")
+                    .nullifiers
+                    .insert(topup_anchor);
+                mutation.apply();
+            }
+            let mut transaction = block.transaction();
+            let err = anchor_instruction
+                .execute(&anchor_authority, &mut transaction)
+                .expect_err("recursive Kagemusha redeem must reject reused top-up anchor");
+            assert_offline_rejection(err, "duplicate_nullifier", "top-up anchor");
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn run_recursive_kagemusha_redeem_large_stack(test: impl FnOnce() + Send + 'static) {
+            std::thread::Builder::new()
+                .name("recursive-kagemusha-redeem-test".to_owned())
+                .stack_size(512 * 1024 * 1024)
+                .spawn(test)
+                .expect("spawn recursive Kagemusha redeem test")
+                .join()
+                .expect("recursive Kagemusha redeem test panicked");
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_rejects_verifier_and_policy_misconfigurations() {
+            run_recursive_kagemusha_redeem_large_stack(|| {
+                let (
+                    no_unshield_state,
+                    no_unshield_authority,
+                    _,
+                    no_unshield_definition_id,
+                    no_unshield_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = no_unshield_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    mutation
+                        .world_mut_for_testing()
+                        .zk_assets_mut_for_testing()
+                        .get_mut(&no_unshield_definition_id)
+                        .expect("recursive Kagemusha shielded state")
+                        .allow_unshield = false;
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = no_unshield_instruction
+                    .execute(&no_unshield_authority, &mut transaction)
+                    .expect_err("recursive Kagemusha redeem must reject disabled unshielding");
+                assert_offline_rejection(err, "unshield_not_permitted", "asset policy");
+
+                let (
+                    missing_recursive_vk_state,
+                    missing_recursive_vk_authority,
+                    _,
+                    _,
+                    missing_recursive_vk_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = missing_recursive_vk_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .remove(
+                            missing_recursive_vk_instruction
+                                .bundle
+                                .recursive_proof
+                                .verifier_key_id
+                                .clone(),
+                        );
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = missing_recursive_vk_instruction
+                    .execute(&missing_recursive_vk_authority, &mut transaction)
+                    .expect_err(
+                        "recursive Kagemusha redeem must reject missing recursive verifier",
+                    );
+                assert_offline_rejection(err, "verifier_key_invalid", "spend verifier key");
+
+                let (
+                    missing_unshield_binding_state,
+                    missing_unshield_binding_authority,
+                    _,
+                    missing_unshield_binding_definition_id,
+                    missing_unshield_binding_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = missing_unshield_binding_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    mutation
+                        .world_mut_for_testing()
+                        .zk_assets_mut_for_testing()
+                        .get_mut(&missing_unshield_binding_definition_id)
+                        .expect("recursive Kagemusha shielded state")
+                        .vk_unshield = None;
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = missing_unshield_binding_instruction
+                    .execute(&missing_unshield_binding_authority, &mut transaction)
+                    .expect_err("recursive Kagemusha redeem must reject missing unshield binding");
+                assert_offline_rejection(
+                    err,
+                    "verifier_key_invalid",
+                    "bound unshield verifier key",
+                );
+
+                let (
+                    missing_unshield_vk_state,
+                    missing_unshield_vk_authority,
+                    _,
+                    _,
+                    missing_unshield_vk_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = missing_unshield_vk_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .remove(missing_unshield_vk_instruction.redeem_proof.vk_ref.clone());
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = missing_unshield_vk_instruction
+                    .execute(&missing_unshield_vk_authority, &mut transaction)
+                    .expect_err("recursive Kagemusha redeem must reject missing unshield verifier");
+                assert_offline_rejection(err, "verifier_key_invalid", "not registered");
+
+                let (
+                    inactive_recursive_vk_state,
+                    inactive_recursive_vk_authority,
+                    _,
+                    _,
+                    inactive_recursive_vk_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = inactive_recursive_vk_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    let vk_id = inactive_recursive_vk_instruction
+                        .bundle
+                        .recursive_proof
+                        .verifier_key_id
+                        .clone();
+                    let mut record = mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .remove(vk_id.clone())
+                        .expect("recursive verifier record");
+                    record.status = ConfidentialStatus::Withdrawn;
+                    mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .insert(vk_id, record);
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = inactive_recursive_vk_instruction
+                    .execute(&inactive_recursive_vk_authority, &mut transaction)
+                    .expect_err(
+                        "recursive Kagemusha redeem must reject inactive recursive verifier",
+                    );
+                assert_offline_rejection(err, "invalid_recursive_bundle", "not active");
+
+                let (
+                    tiny_recursive_vk_cap_state,
+                    tiny_recursive_vk_cap_authority,
+                    _,
+                    _,
+                    tiny_recursive_vk_cap_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = tiny_recursive_vk_cap_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    let vk_id = tiny_recursive_vk_cap_instruction
+                        .bundle
+                        .recursive_proof
+                        .verifier_key_id
+                        .clone();
+                    let mut record = mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .remove(vk_id.clone())
+                        .expect("recursive verifier record");
+                    record.max_proof_bytes = 1;
+                    mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .insert(vk_id, record);
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = tiny_recursive_vk_cap_instruction
+                    .execute(&tiny_recursive_vk_cap_authority, &mut transaction)
+                    .expect_err(
+                        "recursive Kagemusha redeem must reject verifier proof-size cap mismatch",
+                    );
+                assert_offline_rejection(
+                    err,
+                    "invalid_recursive_bundle",
+                    "exceeds verifier record",
+                );
+
+                let (
+                    inactive_unshield_vk_state,
+                    inactive_unshield_vk_authority,
+                    _,
+                    _,
+                    inactive_unshield_vk_instruction,
+                ) = real_recursive_kagemusha_redeem_test_state();
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = inactive_unshield_vk_state.block(header);
+                {
+                    let mut mutation = block.transaction();
+                    let vk_id = inactive_unshield_vk_instruction.redeem_proof.vk_ref.clone();
+                    let mut record = mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .remove(vk_id.clone())
+                        .expect("unshield verifier record");
+                    record.status = ConfidentialStatus::Withdrawn;
+                    mutation
+                        .world_mut_for_testing()
+                        .verifying_keys_mut_for_testing()
+                        .insert(vk_id, record);
+                    mutation.apply();
+                }
+                let mut transaction = block.transaction();
+                let err = inactive_unshield_vk_instruction
+                    .execute(&inactive_unshield_vk_authority, &mut transaction)
+                    .expect_err(
+                        "recursive Kagemusha redeem must reject inactive unshield verifier",
+                    );
+                assert_offline_rejection(err, "verifier_key_inactive", "not active");
+            });
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches() {
+            run_recursive_kagemusha_redeem_large_stack(|| {
+                let (state, authority, _, _, mut wrong_amount) =
+                    real_recursive_kagemusha_redeem_test_state();
+                wrong_amount.public_amount = 41;
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_amount
+                    .execute(&authority, &mut transaction)
+                    .expect_err("wrong recursive Kagemusha public amount must reject");
+                assert_offline_rejection(err, "amount_mismatch", "amount");
+
+                let (mut wrong_chain_state, wrong_chain_authority, _, _, wrong_chain_instruction) =
+                    real_recursive_kagemusha_redeem_test_state();
+                wrong_chain_state.chain_id = "kagemusha-recursive-redeem-other-chain"
+                    .parse()
+                    .expect("wrong chain id");
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = wrong_chain_state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_chain_instruction
+                    .execute(&wrong_chain_authority, &mut transaction)
+                    .expect_err("wrong-chain recursive Kagemusha bundle must reject");
+                assert_offline_rejection(err, "wrong_chain", "chain id");
+
+                let (state, authority, _, _, mut wrong_final_note) =
+                    real_recursive_kagemusha_redeem_test_state();
+                wrong_final_note
+                    .bundle
+                    .accumulator
+                    .current_note
+                    .note_commitment[0] ^= 0x01;
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_final_note
+                    .execute(&authority, &mut transaction)
+                    .expect_err("tampered recursive Kagemusha final note must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "public input");
+
+                let (state, authority, _, _, mut wrong_proof_chain_public_input) =
+                    real_recursive_kagemusha_redeem_test_state();
+                wrong_proof_chain_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs
+                    .recursive_proof_chain_digest[0] ^= 0x01;
+                wrong_proof_chain_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs_hash = wrong_proof_chain_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs
+                    .public_inputs_hash()
+                    .expect("mutated recursive proof public-input hash");
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_proof_chain_public_input
+                    .execute(&authority, &mut transaction)
+                    .expect_err("mutated recursive proof-chain public input must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "public input");
+
+                let (state, authority, _, _, mut wrong_scalar_projection_public_input) =
+                    real_recursive_kagemusha_redeem_test_state();
+                wrong_scalar_projection_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs
+                    .recursive_verifier_scalar_projection_digest[0] ^= 0x01;
+                wrong_scalar_projection_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs_hash = wrong_scalar_projection_public_input
+                    .bundle
+                    .recursive_proof
+                    .public_inputs
+                    .public_inputs_hash()
+                    .expect("mutated recursive scalar projection public-input hash");
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_scalar_projection_public_input
+                    .execute(&authority, &mut transaction)
+                    .expect_err("mutated recursive scalar-projection public input must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "public input");
+
+                let (state, authority, _, _, mut trusted_setup_recursive_backend) =
+                    real_recursive_kagemusha_redeem_test_state();
+                trusted_setup_recursive_backend.bundle.recursive_proof.proof =
+                    ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = trusted_setup_recursive_backend
+                    .execute(&authority, &mut transaction)
+                    .expect_err("trusted-setup recursive spend proof backend must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "not supported");
+
+                let (state, authority, _, _, mut transparent_wrong_family_recursive_backend) =
+                    real_recursive_kagemusha_redeem_test_state();
+                transparent_wrong_family_recursive_backend
+                    .bundle
+                    .recursive_proof
+                    .proof = ProofBox::new("stark/fri/transparent-v1".into(), vec![0xA5; 64]);
+                transparent_wrong_family_recursive_backend
+                    .bundle
+                    .recursive_proof
+                    .verifier_key_id = VerifyingKeyId::new(
+                    "stark/fri/transparent-v1",
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                );
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = transparent_wrong_family_recursive_backend
+                    .execute(&authority, &mut transaction)
+                    .expect_err("STARK/FRI recursive spend proof bundle must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "proof.backend");
+
+                let (state, authority, _, _, mut empty_recursive_proof) =
+                    real_recursive_kagemusha_redeem_test_state();
+                empty_recursive_proof.bundle.recursive_proof.proof =
+                    ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), Vec::new());
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = empty_recursive_proof
+                    .execute(&authority, &mut transaction)
+                    .expect_err("empty recursive spend proof payload must reject");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "proof.bytes");
+
+                let (state, authority, _, _, mut wrong_redeem_public_inputs) =
+                    real_recursive_kagemusha_redeem_test_state();
+                mutate_proof_attachment_envelope(
+                    &mut wrong_redeem_public_inputs.redeem_proof,
+                    |envelope| {
+                        *envelope
+                            .proof_bytes
+                            .last_mut()
+                            .expect("recursive redeem proof public instances") ^= 0x01;
+                    },
+                );
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = wrong_redeem_public_inputs
+                    .execute(&authority, &mut transaction)
+                    .expect_err("mutated recursive Kagemusha redeem public inputs must reject");
+                assert_offline_rejection(err, "final_commitment_mismatch", "final spendable note");
+
+                let (state, authority, _, _, mut tampered_redeem_proof) =
+                    real_recursive_kagemusha_redeem_test_state();
+                *tampered_redeem_proof
+                    .redeem_proof
+                    .proof
+                    .bytes
+                    .last_mut()
+                    .expect("recursive redeem proof bytes") ^= 0x01;
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = tampered_redeem_proof
+                    .execute(&authority, &mut transaction)
+                    .expect_err("tampered recursive Kagemusha redeem proof must reject");
+                assert_offline_rejection(err, "invalid_proof", "OpenVerifyEnvelope");
+            });
         }
 
         #[test]
@@ -3998,6 +5591,26 @@ pub mod isi {
         }
 
         #[test]
+        fn kagemusha_transfer_rejects_nullifier_output_overlap_before_proof_decode() {
+            let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
+                real_kagemusha_test_state();
+            transfer.outputs[0] = transfer.inputs[0];
+            transfer.proof.proof.bytes = b"not-an-open-verify-envelope".to_vec();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = transfer
+                .execute(&authority, &mut transaction)
+                .expect_err("Kagemusha input/output overlap must reject before proof decode");
+            assert_offline_rejection(
+                err,
+                "proof_binding",
+                "output commitments must be disjoint from input nullifiers",
+            );
+        }
+
+        #[test]
         fn kagemusha_transfer_rejects_zero_sets_before_proof_decode() {
             let cases: [(&str, fn(&mut KagemushaTransfer)); 2] = [
                 ("input nullifiers must be non-zero", |transfer| {
@@ -4062,6 +5675,7 @@ pub mod isi {
             let nullifier_key = offline_note_nullifier_key(&nullifier);
             let audit_nullifier_key = offline_note_audit_nullifier_key(&nullifier);
             let audit_output_key = offline_note_audit_output_key(&output_commitment);
+            let output_issue_key = offline_note_issue_key(&output_commitment);
 
             assert_eq!(
                 issued_claim_key,
@@ -4083,15 +5697,20 @@ pub mod isi {
                 )
             );
             assert_eq!(
+                output_issue_key,
+                offline_note_replay_key(OFFLINE_NOTE_REPLAY_ISSUE_DOMAIN, &output_commitment)
+            );
+            assert_eq!(
                 BTreeSet::from([
                     issued_claim_key,
                     spent_claim_key,
                     nullifier_key,
                     audit_nullifier_key,
                     audit_output_key,
+                    output_issue_key,
                 ])
                 .len(),
-                5
+                6
             );
         }
     }
