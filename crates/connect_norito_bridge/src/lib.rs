@@ -3822,6 +3822,301 @@ pub unsafe extern "C" fn connect_norito_offline_prove_note_audit(
     bridge_result_to_code(result)
 }
 
+/// Encode and sign a `RedeemOfflineNote` on-chain transaction.
+///
+/// `redeem_norito` is the Norito archive of `OfflineNoteRedeem` with the
+/// recursive proof already embedded. The output is canonical versioned
+/// `SignedTransaction` bytes matching the transfer/mint encoders.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_redeem_offline_note_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if redeem_norito_ptr.is_null()
+            || private_key_ptr.is_null()
+            || out_signed_ptr.is_null()
+            || out_signed_len.is_null()
+            || out_hash_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
+            .parse()
+            .map_err(|_| BridgeError::ChainId)?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+        let redeem_bytes =
+            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+        let redemption: iroha_data_model::offline::OfflineNoteRedeem =
+            norito::decode_from_bytes(redeem_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
+        let instruction = InstructionBox::from(
+            iroha_data_model::isi::offline::RedeemOfflineNote::new(redemption),
+        );
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            private_key,
+            move || Executable::from([instruction]),
+        );
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Encode and sign an `AuditOfflineNote` on-chain transaction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_audit_offline_note_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    audit_norito_ptr: *const c_uchar,
+    audit_norito_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if audit_norito_ptr.is_null()
+            || private_key_ptr.is_null()
+            || out_signed_ptr.is_null()
+            || out_signed_len.is_null()
+            || out_hash_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
+            .parse()
+            .map_err(|_| BridgeError::ChainId)?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+        let audit_bytes =
+            unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
+        let audit: iroha_data_model::offline::OfflineNoteAuditBundle =
+            norito::decode_from_bytes(audit_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::offline::AuditOfflineNote::new(audit));
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            private_key,
+            move || Executable::from([instruction]),
+        );
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Encode and sign an `IssueOfflineNote` on-chain transaction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_issue_offline_note_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    issue_norito_ptr: *const c_uchar,
+    issue_norito_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if issue_norito_ptr.is_null()
+            || private_key_ptr.is_null()
+            || out_signed_ptr.is_null()
+            || out_signed_len.is_null()
+            || out_hash_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
+            .parse()
+            .map_err(|_| BridgeError::ChainId)?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+        let issue_bytes =
+            unsafe { slice::from_raw_parts(issue_norito_ptr, issue_norito_len as usize) };
+        let issue: iroha_data_model::offline::OfflineNoteIssue =
+            norito::decode_from_bytes(issue_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::offline::IssueOfflineNote::new(issue));
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            private_key,
+            move || Executable::from([instruction]),
+        );
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Encode and sign a defund transaction: bearer audits followed by redemption.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    audit_trail_ptr: *const c_uchar,
+    audit_trail_len: c_ulong,
+    audit_trail_count: u32,
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if redeem_norito_ptr.is_null()
+            || private_key_ptr.is_null()
+            || out_signed_ptr.is_null()
+            || out_signed_len.is_null()
+            || out_hash_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let chain_id: ChainId = unsafe { read_string_bridge(chain_ptr, chain_len) }?
+            .parse()
+            .map_err(|_| BridgeError::ChainId)?;
+        let authority =
+            parse_account_id(unsafe { read_string_bridge(authority_ptr, authority_len) }?)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let trail: &[u8] = if audit_trail_count > 0 {
+            if audit_trail_ptr.is_null() {
+                return Err(BridgeError::NullPtr);
+            }
+            unsafe { slice::from_raw_parts(audit_trail_ptr, audit_trail_len as usize) }
+        } else {
+            &[]
+        };
+        let mut instructions: Vec<InstructionBox> =
+            Vec::with_capacity(audit_trail_count as usize + 1);
+        let mut cursor: usize = 0;
+        for _ in 0..audit_trail_count {
+            if cursor + 8 > trail.len() {
+                return Err(BridgeError::OfflineNoteProve);
+            }
+            let len = usize::try_from(u64::from_le_bytes(
+                <[u8; 8]>::try_from(&trail[cursor..cursor + 8])
+                    .map_err(|_| BridgeError::OfflineNoteProve)?,
+            ))
+            .map_err(|_| BridgeError::OfflineNoteProve)?;
+            cursor += 8;
+            if cursor + len > trail.len() {
+                return Err(BridgeError::OfflineNoteProve);
+            }
+            let audit: iroha_data_model::offline::OfflineNoteAuditBundle =
+                norito::decode_from_bytes(&trail[cursor..cursor + len])
+                    .map_err(|_| BridgeError::OfflineNoteProve)?;
+            cursor += len;
+            instructions.push(InstructionBox::from(
+                iroha_data_model::isi::offline::AuditOfflineNote::new(audit),
+            ));
+        }
+        if cursor != trail.len() {
+            return Err(BridgeError::OfflineNoteProve);
+        }
+
+        let redeem_bytes =
+            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+        let redemption: iroha_data_model::offline::OfflineNoteRedeem =
+            norito::decode_from_bytes(redeem_bytes).map_err(|_| BridgeError::OfflineNoteProve)?;
+        instructions.push(InstructionBox::from(
+            iroha_data_model::isi::offline::RedeemOfflineNote::new(redemption),
+        ));
+
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            private_key,
+            move || Executable::from(instructions),
+        );
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
 fn prove_offline_note_redeem_recursive(
     redeem_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
@@ -4290,7 +4585,7 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
 
 #[cfg(test)]
 mod offline_note_prover_tests {
-    use std::sync::OnceLock;
+    use std::{ffi::CString, sync::OnceLock};
 
     use iroha_core::zk::{
         KAGEMUSHA_HOP_MAX_PROOF_BYTES, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
@@ -4334,6 +4629,17 @@ mod offline_note_prover_tests {
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_authority_and_private_key(seed: u8) -> (CString, Vec<u8>) {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (public_key, private_key) = keypair.into_parts();
+        let account = AccountId::new(public_key);
+        let (_algorithm, private_bytes) = private_key.to_bytes();
+        (
+            CString::new(account.to_string()).expect("valid cstring"),
+            private_bytes,
+        )
     }
 
     fn sample_asset(account: AccountId) -> AssetId {
@@ -4446,6 +4752,16 @@ mod offline_note_prover_tests {
             assertion_usage_count_limit: None,
             one_use: true,
             issuer_signature: sample_signature(seed.wrapping_add(1)),
+        }
+    }
+
+    fn sample_issue() -> OfflineNoteIssue {
+        let account = sample_account(0x91);
+        OfflineNoteIssue {
+            note_commitment: Hash::new(b"offline-note-issued-note"),
+            key_certificate: sample_certificate(&account, 0x92),
+            asset: sample_asset(account),
+            amount: Numeric::new(10, 0),
         }
     }
 
@@ -5738,6 +6054,174 @@ mod offline_note_prover_tests {
         assert_eq!(status, ERR_OFFLINE_NOTE_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    fn decode_signed_from_ffi_output(
+        out_hash: [u8; Hash::LENGTH],
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> SignedTransaction {
+        assert!(!out_ptr.is_null());
+        let bytes = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
+        let signed = decode_signed_transaction(bytes).expect("decode signed transaction");
+        assert_eq!(out_hash, *signed.hash().as_ref());
+        connect_norito_free(out_ptr);
+        signed
+    }
+
+    fn assert_single_instruction<T: 'static>(signed: &SignedTransaction) {
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 1);
+                assert!(instructions[0].as_any().downcast_ref::<T>().is_some());
+            }
+            other => panic!("unexpected executable: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offline_note_signed_transaction_ffis_encode_canonical_transactions() {
+        let chain = CString::new("00000042").expect("valid chain id");
+        let (authority, private_key) = sample_authority_and_private_key(0x55);
+        let issue_archive = norito::to_bytes(&sample_issue()).expect("encode issue");
+        let redeem_archive = norito::to_bytes(&sample_redemption()).expect("encode redemption");
+        let audit_archive = norito::to_bytes(&sample_audit()).expect("encode audit");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let mut out_hash = [0u8; Hash::LENGTH];
+
+        let issue_status = unsafe {
+            connect_norito_encode_issue_offline_note_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                3_500,
+                1,
+                17,
+                1,
+                issue_archive.as_ptr(),
+                issue_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(issue_status, 0);
+        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
+        assert_single_instruction::<iroha_data_model::isi::offline::IssueOfflineNote>(&signed);
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let redeem_status = unsafe {
+            connect_norito_encode_redeem_offline_note_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(redeem_status, 0);
+        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
+        assert_single_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>(&signed);
+
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let audit_status = unsafe {
+            connect_norito_encode_audit_offline_note_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                audit_archive.as_ptr(),
+                audit_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(audit_status, 0);
+        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
+        assert_single_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>(&signed);
+
+        let mut trail = Vec::new();
+        let audit_len = u64::try_from(audit_archive.len()).expect("audit archive length fits u64");
+        trail.extend_from_slice(&audit_len.to_le_bytes());
+        trail.extend_from_slice(&audit_archive);
+        out_ptr = ptr::null_mut();
+        out_len = 0;
+        out_hash = [0u8; Hash::LENGTH];
+        let defund_status = unsafe {
+            connect_norito_encode_defund_offline_note_signed_transaction(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1_736_000_000_000,
+                0,
+                0,
+                0,
+                0,
+                trail.as_ptr(),
+                trail.len() as c_ulong,
+                1,
+                redeem_archive.as_ptr(),
+                redeem_archive.len() as c_ulong,
+                private_key.as_ptr(),
+                private_key.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(defund_status, 0);
+        let signed = decode_signed_from_ffi_output(out_hash, out_ptr, out_len);
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                assert_eq!(instructions.len(), 2);
+                assert!(
+                    instructions[0]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::AuditOfflineNote>()
+                        .is_some()
+                );
+                assert!(
+                    instructions[1]
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::RedeemOfflineNote>()
+                        .is_some()
+                );
+            }
+            other => panic!("unexpected executable: {other:?}"),
+        }
     }
 }
 

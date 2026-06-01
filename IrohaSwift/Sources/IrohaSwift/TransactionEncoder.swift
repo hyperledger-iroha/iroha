@@ -540,7 +540,7 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
 }
 
 struct SwiftTransactionEncoder {
-    private static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
+    static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
         guard NoritoNativeBridge.shared.isAvailable else {
             throw SwiftTransactionEncoderError.nativeBridgeUnavailable
         }
@@ -554,7 +554,7 @@ struct SwiftTransactionEncoder {
         }
     }
 
-    private static func wrap(native: NativeSignedTransaction) throws -> SignedTransactionEnvelope {
+    static func wrap(native: NativeSignedTransaction) throws -> SignedTransactionEnvelope {
         guard native.signedBytes.first == signedTransactionWireVersion else {
             throw SwiftTransactionEncoderError.invalidNativeSignedTransaction(
                 "missing version byte \(signedTransactionWireVersion)"
@@ -1343,7 +1343,7 @@ struct SwiftTransactionEncoder {
         return try wrap(native: native)
     }
 
-    private static func privateKeyBytes(from signingKey: SigningKey) throws -> Data {
+    static func privateKeyBytes(from signingKey: SigningKey) throws -> Data {
         if signingKey.algorithm != .ed25519 {
             guard NoritoNativeBridge.shared.supportsTransactions(using: signingKey.algorithm) else {
                 throw SwiftTransactionEncoderError.unsupportedSigningAlgorithm(signingKey.algorithm)
