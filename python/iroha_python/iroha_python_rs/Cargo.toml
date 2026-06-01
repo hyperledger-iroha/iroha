@@ -41,6 +41,7 @@ tempfile = { workspace = true }
 httpmock = "0.8.2"
 ed25519-dalek = "2.2.0"
 http = { workspace = true }
+iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 
 [package.metadata.maturin]
 name = "iroha_python._crypto"

@@ -11,6 +11,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineReadiness;
+import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
 
 public final class OfflineToriiClientTests {
 
@@ -18,6 +19,7 @@ public final class OfflineToriiClientTests {
 
   public static void main(final String[] args) {
     readinessUsesCanonicalGetPathAndParsesResponse();
+    v2ReadinessUsesCanonicalGetPathAndParsesResponse();
     propagatesNon2xxResponses();
     propagatesRejectCodeFromNon2xxResponses();
     rejectsInsecureAuthorizationHeader();
@@ -57,6 +59,42 @@ public final class OfflineToriiClientTests {
     assert readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
     assert !readiness.offlineRecursiveNoteProof() : "offline_recursive_note_proof mismatch";
     assert readiness.offlineFountainQr() : "offline_fountain_qr mismatch";
+    assert readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
+    assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
+  }
+
+  private static void v2ReadinessUsesCanonicalGetPathAndParsesResponse() {
+    final StubExecutor executor =
+        new StubExecutor(
+            200,
+            """
+            {
+              "offline_note_v2": true,
+              "offline_one_use_keys": true,
+              "offline_recursive_note_proof": false,
+              "offline_fountain_qr_v1": true,
+              "offline_sync_optional": true,
+              "offline_telemetry": true
+            }
+            """);
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("https://example.com"))
+            .timeout(Duration.ofSeconds(5))
+            .build();
+
+    final OfflineV2Readiness readiness = client.getOfflineV2Readiness().join();
+
+    assert "GET".equals(executor.lastRequest.method()) : "v2 readiness must use GET";
+    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/v2/readiness")
+        : "v2 readiness path mismatch";
+    assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
+        : "v2 accept header mismatch";
+    assert readiness.offlineNoteV2() : "offline_note_v2 mismatch";
+    assert readiness.offlineOneUseKeys() : "offline_one_use_keys mismatch";
+    assert !readiness.offlineRecursiveNoteProof() : "offline_recursive_note_proof mismatch";
+    assert readiness.offlineFountainQrV1() : "offline_fountain_qr_v1 mismatch";
     assert readiness.offlineSyncOptional() : "offline_sync_optional mismatch";
     assert readiness.offlineTelemetry() : "offline_telemetry mismatch";
   }

@@ -21,6 +21,20 @@ object OfflineJsonParser {
         )
     }
 
+    @JvmStatic
+    fun parseOfflineV2Readiness(payload: ByteArray): OfflineV2Readiness {
+        val root = parse(payload)
+        val obj = expectObject(root, "root")
+        return OfflineV2Readiness(
+            asBoolean(obj["offline_note_v2"], "offline_note_v2"),
+            asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
+            asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
+            asBoolean(obj["offline_fountain_qr_v1"], "offline_fountain_qr_v1"),
+            asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
+            asBoolean(obj["offline_telemetry"], "offline_telemetry"),
+        )
+    }
+
     /** Returns a canonical JSON string for the provided payload (keys sorted). */
     @JvmStatic
     fun canonicalJson(payload: ByteArray): String {

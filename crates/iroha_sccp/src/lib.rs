@@ -64,6 +64,8 @@ pub const SCCP_DOMAIN_TRON: u32 = 5;
 pub const SCCP_DOMAIN_SORA_KUSAMA: u32 = 6;
 pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
 pub const SCCP_DOMAIN_SORA2: u32 = 8;
+/// BNB Smart Chain mainnet EVM chain id.
+pub const SCCP_BSC_MAINNET_EVM_CHAIN_ID: u64 = 56;
 pub const SCCP_STARK_FRI_PROOF_FAMILY_V1: &str = "stark-fri-v1";
 /// Production-planned Solana source recursive verifier backend for SCCP proofs.
 pub const SCCP_SOLANA_RECURSIVE_PROOF_BACKEND_V1: &str = "sccp-solana-recursive-mainnet-v1";
@@ -115,6 +117,9 @@ const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1: &[u8] =
     b"iroha:sccp:solana-route-canary-live-program:v1";
 const SCCP_SUBSTRATE_ROUTE_CANARY_FINALIZED_RUNTIME_LABEL_V1: &[u8] =
     b"iroha:sccp:substrate-route-canary-finalized-runtime:v1";
+const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: &str = "norito:sccp-local-admission:v1";
+const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: &str = "local_admission";
+const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: &str = "SubmitBridgeProof";
 /// Solana mainnet-beta destination anchor id required for SCCP verifier rollout.
 pub const SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1: &str =
     "sccp:sol:destination-anchor:solana-mainnet-beta:v1";
@@ -649,6 +654,13 @@ const SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES: usize = 96;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES: usize = 96;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES: usize = 256;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_TRANSITIONS: usize = 64;
+/// Ethereum mainnet slots per epoch from the consensus mainnet preset.
+pub const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH: u64 = 32;
+/// Ethereum mainnet epochs per sync committee period from the Altair preset.
+pub const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD: u64 = 256;
+/// Ethereum mainnet slots per sync committee period.
+pub const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: u64 =
+    SCCP_ETH_MAINNET_SLOTS_PER_EPOCH * SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = 1
     + 4
     + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
@@ -3409,8 +3421,10 @@ pub enum SccpAnchorGovernanceV1 {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpLaunchModeV1 {
-    #[default]
     AllLanesAtOnce,
+    EthereumMainnetLane,
+    #[default]
+    BscMainnetLane,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -3485,6 +3499,8 @@ macro_rules! impl_str_json_enum {
 
 impl_str_json_enum!(SccpLaunchModeV1, "unsupported SCCP launch mode", {
     SccpLaunchModeV1::AllLanesAtOnce => "AllLanesAtOnce",
+    SccpLaunchModeV1::EthereumMainnetLane => "EthereumMainnetLane",
+    SccpLaunchModeV1::BscMainnetLane => "BscMainnetLane",
 });
 
 impl_str_json_enum!(
@@ -3543,7 +3559,7 @@ impl Default for SccpProductionPolicyV1 {
     fn default() -> Self {
         Self {
             version: 1,
-            launch_mode: SccpLaunchModeV1::AllLanesAtOnce,
+            launch_mode: SccpLaunchModeV1::BscMainnetLane,
             proof_submitter_policy: SccpProofSubmitterPolicyV1::Permissionless,
             route_activation_policy: SccpRouteActivationPolicyV1::GovernanceAllowlist,
             per_message_human_approval_required: false,
@@ -3640,6 +3656,15 @@ pub struct SccpRouteAllowlistReadinessV1 {
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_log_index: Option<u32>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_receipt_block_number: Option<u64>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_receipt_block_hash: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[norito(default)]
+    pub evm_route_canary_block_receipts_root: Option<String>,
     #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_call_data_sha256: Option<String>,
@@ -3763,6 +3788,9 @@ impl Default for SccpRouteAllowlistReadinessV1 {
             route_canary_destination_binding_hash: None,
             evm_route_canary_transaction_hash: None,
             evm_route_canary_log_index: None,
+            evm_route_canary_receipt_block_number: None,
+            evm_route_canary_receipt_block_hash: None,
+            evm_route_canary_block_receipts_root: None,
             evm_route_canary_call_data_sha256: None,
             evm_route_canary_message_id: None,
             evm_route_canary_payload_hash: None,
@@ -4421,6 +4449,28 @@ pub struct SccpSubstrateRuntimeSubmissionPayloadV1 {
 )]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[allow(clippy::struct_field_names)]
+pub struct SccpLocalAdmissionSubmissionPayloadV1 {
+    pub version: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub proof_bytes: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub public_inputs_bytes: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub bundle_bytes: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    pub statement_hash: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    pub source_verifier_material_hash: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    pub source_adapter_engine_deployment_hash: H256,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(tag = "platform", content = "payload", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum SccpPlatformSubmissionPayloadV1 {
@@ -4430,6 +4480,7 @@ pub enum SccpPlatformSubmissionPayloadV1 {
     TonInternalMessage(SccpTonInternalMessageSubmissionPayloadV1),
     TronContractCall(SccpTronContractSubmissionPayloadV1),
     SubstrateRuntimeCall(SccpSubstrateRuntimeSubmissionPayloadV1),
+    LocalAdmission(SccpLocalAdmissionSubmissionPayloadV1),
 }
 
 #[derive(
@@ -5906,6 +5957,9 @@ pub fn sccp_route_allowlist_for_domain(domain: u32) -> Option<SccpRouteAllowlist
         route_canary_destination_binding_hash: None,
         evm_route_canary_transaction_hash: None,
         evm_route_canary_log_index: None,
+        evm_route_canary_receipt_block_number: None,
+        evm_route_canary_receipt_block_hash: None,
+        evm_route_canary_block_receipts_root: None,
         evm_route_canary_call_data_sha256: None,
         evm_route_canary_message_id: None,
         evm_route_canary_payload_hash: None,
@@ -6022,6 +6076,9 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_hash: H256,
     log_index: u32,
+    receipt_block_number: u64,
+    receipt_block_hash: H256,
+    block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
     payload_hash: H256,
@@ -6037,9 +6094,12 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     if !matches!(domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
         || destination_rollout.domain != domain
         || target_domain != domain
+        || receipt_block_number == 0
         || !h256_is_nonzero(&route_allowlist_hash)
         || !h256_is_nonzero(&destination_binding_hash)
         || !h256_is_nonzero(&transaction_hash)
+        || !h256_is_nonzero(&receipt_block_hash)
+        || !h256_is_nonzero(&block_receipts_root)
         || !h256_is_nonzero(&call_data_sha256)
         || !h256_is_nonzero(&message_id)
         || !h256_is_nonzero(&payload_hash)
@@ -6056,6 +6116,8 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     }
     if !sccp_nonzero_h256_values_are_pairwise_distinct(&[
         transaction_hash,
+        receipt_block_hash,
+        block_receipts_root,
         call_data_sha256,
         message_id,
         payload_hash,
@@ -6089,11 +6151,14 @@ pub fn canonical_sccp_evm_route_canary_evidence_bytes_v1(
     let proof_family_hash = keccak256_bytes(SCCP_STARK_FRI_PROOF_FAMILY_V1.as_bytes());
 
     let mut out = Vec::new();
-    push_u8(&mut out, 2);
+    push_u8(&mut out, 3);
     out.extend_from_slice(&route_allowlist_hash);
     out.extend_from_slice(&bridge_address);
     out.extend_from_slice(&transaction_hash);
     push_u32(&mut out, log_index);
+    push_u64(&mut out, receipt_block_number);
+    out.extend_from_slice(&receipt_block_hash);
+    out.extend_from_slice(&block_receipts_root);
     out.extend_from_slice(&call_data_sha256);
     out.extend_from_slice(&message_id);
     push_u32(&mut out, SCCP_DOMAIN_SORA);
@@ -6121,6 +6186,9 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
     destination_rollout: &SccpDestinationRolloutV1,
     transaction_hash: H256,
     log_index: u32,
+    receipt_block_number: u64,
+    receipt_block_hash: H256,
+    block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
     payload_hash: H256,
@@ -6134,7 +6202,7 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
     used_message_proof: bool,
 ) -> Option<H256> {
     Some(prefixed_blake2b(
-        b"iroha:sccp:evm-route-canary-evidence:v2",
+        b"iroha:sccp:evm-route-canary-evidence:v3",
         &canonical_sccp_evm_route_canary_evidence_bytes_v1(
             domain,
             route_allowlist_hash,
@@ -6142,6 +6210,9 @@ pub fn sccp_evm_route_canary_evidence_hash_v1(
             destination_rollout,
             transaction_hash,
             log_index,
+            receipt_block_number,
+            receipt_block_hash,
+            block_receipts_root,
             call_data_sha256,
             message_id,
             payload_hash,
@@ -6708,6 +6779,9 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     source_adapter_engine_deployment_hash: H256,
     transaction_hash: H256,
     log_index: u32,
+    receipt_block_number: u64,
+    receipt_block_hash: H256,
+    block_receipts_root: H256,
     call_data_sha256: H256,
     message_id: H256,
     payload_hash: H256,
@@ -6736,6 +6810,9 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
         destination_rollout,
         transaction_hash,
         log_index,
+        receipt_block_number,
+        receipt_block_hash,
+        block_receipts_root,
         call_data_sha256,
         message_id,
         payload_hash,
@@ -6757,6 +6834,10 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     )?;
     allowlist.evm_route_canary_transaction_hash = Some(encode_0x_lower_hex(&transaction_hash));
     allowlist.evm_route_canary_log_index = Some(log_index);
+    allowlist.evm_route_canary_receipt_block_number = Some(receipt_block_number);
+    allowlist.evm_route_canary_receipt_block_hash = Some(encode_0x_lower_hex(&receipt_block_hash));
+    allowlist.evm_route_canary_block_receipts_root =
+        Some(encode_0x_lower_hex(&block_receipts_root));
     allowlist.evm_route_canary_call_data_sha256 = Some(encode_0x_lower_hex(&call_data_sha256));
     allowlist.evm_route_canary_message_id = Some(encode_0x_lower_hex(&message_id));
     allowlist.evm_route_canary_payload_hash = Some(encode_0x_lower_hex(&payload_hash));
@@ -7022,6 +7103,9 @@ fn sccp_route_allowlist_evm_canary_fields_absent(
 ) -> bool {
     allowlist.evm_route_canary_transaction_hash.is_none()
         && allowlist.evm_route_canary_log_index.is_none()
+        && allowlist.evm_route_canary_receipt_block_number.is_none()
+        && allowlist.evm_route_canary_receipt_block_hash.is_none()
+        && allowlist.evm_route_canary_block_receipts_root.is_none()
         && allowlist.evm_route_canary_call_data_sha256.is_none()
         && allowlist.evm_route_canary_message_id.is_none()
         && allowlist.evm_route_canary_payload_hash.is_none()
@@ -7092,6 +7176,22 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     let Some(log_index) = allowlist.evm_route_canary_log_index else {
         return false;
     };
+    let Some(receipt_block_number) = allowlist.evm_route_canary_receipt_block_number else {
+        return false;
+    };
+    if receipt_block_number == 0 {
+        return false;
+    }
+    let Some(receipt_block_hash) = required_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_receipt_block_hash.as_deref(),
+    ) else {
+        return false;
+    };
+    let Some(block_receipts_root) = required_hex_string_is_nonzero::<32>(
+        allowlist.evm_route_canary_block_receipts_root.as_deref(),
+    ) else {
+        return false;
+    };
     let Some(call_data_sha256) = required_hex_string_is_nonzero::<32>(
         allowlist.evm_route_canary_call_data_sha256.as_deref(),
     ) else {
@@ -7146,6 +7246,9 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
         destination_rollout,
         transaction_hash,
         log_index,
+        receipt_block_number,
+        receipt_block_hash,
+        block_receipts_root,
         call_data_sha256,
         message_id,
         payload_hash,
@@ -7969,12 +8072,6 @@ fn sccp_lane_production_readiness_from_components(
         );
     }
     blockers.extend(rollout.blockers.clone());
-    if !production_ready {
-        blockers.push(
-            "all-lanes-at-once launch policy blocks activation until every advertised SCCP counterparty is proof-complete".to_owned(),
-        );
-    }
-
     Some(SccpLaneProductionReadinessV1 {
         version: 1,
         domain,
@@ -8133,9 +8230,13 @@ pub fn sccp_destination_binding_for_domain(domain: u32) -> Option<SccpDestinatio
 pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under cryptographic trust anchors";
 
 pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
-    sccp_all_lanes_launch_ready_v1()
-        && sccp_lane_production_readiness_for_domain(domain)
-            .is_some_and(|readiness| readiness.production_ready)
+    let lane_ready = sccp_lane_production_readiness_for_domain(domain)
+        .is_some_and(|readiness| readiness.production_ready);
+    match sccp_production_policy_v1().launch_mode {
+        SccpLaunchModeV1::AllLanesAtOnce => sccp_all_lanes_launch_ready_v1() && lane_ready,
+        SccpLaunchModeV1::EthereumMainnetLane => domain == SCCP_DOMAIN_ETH && lane_ready,
+        SccpLaunchModeV1::BscMainnetLane => domain == SCCP_DOMAIN_BSC && lane_ready,
+    }
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
@@ -8699,6 +8800,40 @@ pub fn build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_
         allow_unready,
         None,
         None,
+    )
+}
+
+/// Build a BSC mainnet counterparty proof job from external Groth16 proof bytes.
+pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding(
+    bundle: &NexusSccpMessageProofV1,
+    groth16_proof_bytes: &[u8],
+    destination_binding: &SccpDestinationBindingV1,
+) -> Option<SccpCounterpartyProofJobV1> {
+    build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
+        bundle,
+        groth16_proof_bytes,
+        destination_binding,
+        false,
+    )
+}
+
+/// Build a BSC mainnet counterparty proof job, optionally bypassing readiness checks in tests.
+pub fn build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    groth16_proof_bytes: &[u8],
+    destination_binding: &SccpDestinationBindingV1,
+    allow_unready: bool,
+) -> Option<SccpCounterpartyProofJobV1> {
+    if sccp_counterparty_domain_for_message_payload(&bundle.payload) != Some(SCCP_DOMAIN_BSC)
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(destination_binding)
+    {
+        return None;
+    }
+    build_sccp_counterparty_proof_job_from_bundle_with_evm_groth16_proof_and_destination_binding_allow_unready(
+        bundle,
+        groth16_proof_bytes,
+        destination_binding,
+        allow_unready,
     )
 }
 
@@ -12205,6 +12340,25 @@ pub fn sccp_source_adapter_engine_deployment_from_material_v1(
         SCCP_DOMAIN_SORA,
         deployment_receipt_hash,
     )
+}
+
+/// Build the BSC mainnet source-adapter deployment descriptor from governed material.
+pub fn build_sccp_bsc_mainnet_source_adapter_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    if material.source_domain != SCCP_DOMAIN_BSC {
+        return None;
+    }
+    sccp_source_adapter_engine_deployment_from_material_v1(material, deployment_receipt_hash)
+}
+
+/// Alias for the current BSC mainnet source-adapter deployment descriptor format.
+pub fn build_sccp_bsc_mainnet_source_adapter_deployment(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_bsc_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
 }
 
 fn sccp_source_adapter_target_domain_is_allowed_for_material(
@@ -16062,6 +16216,46 @@ pub fn wrap_sccp_evm_groth16_bn254_proof_result(
     )
 }
 
+/// Build a BSC mainnet Groth16 request for browser or app-side proving.
+pub fn build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+    manifest: &SccpProofManifestV1,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    bundle_bytes: &[u8],
+    source_proof_bytes: Option<&[u8]>,
+    statement_hash: H256,
+    destination_binding: &SccpDestinationBindingV1,
+) -> Option<SccpEvmGroth16Bn254ProofRequestV1> {
+    if manifest.local_domain != SCCP_DOMAIN_SORA
+        || manifest.counterparty_domain != SCCP_DOMAIN_BSC
+        || public_inputs.target_domain != SCCP_DOMAIN_BSC
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(destination_binding)
+    {
+        return None;
+    }
+    build_sccp_evm_groth16_bn254_proof_request(
+        manifest,
+        public_inputs,
+        bundle_bytes,
+        source_proof_bytes,
+        statement_hash,
+        destination_binding,
+    )
+}
+
+/// Wrap BSC mainnet Groth16 proof bytes returned by an external browser or app prover.
+pub fn wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(
+    proof_bytes: &[u8],
+    request: &SccpEvmGroth16Bn254ProofRequestV1,
+) -> Option<SccpEvmGroth16Bn254ProofResultV1> {
+    if request.target_domain != SCCP_DOMAIN_BSC
+        || request.public_inputs.target_domain != SCCP_DOMAIN_BSC
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(&request.destination_binding)
+    {
+        return None;
+    }
+    wrap_sccp_evm_groth16_bn254_proof_result(proof_bytes, request)
+}
+
 pub fn wrap_sccp_tron_groth16_bn254_proof_result(
     proof_bytes: &[u8],
     request: &SccpTronGroth16Bn254ProofRequestV1,
@@ -16233,6 +16427,107 @@ pub fn build_sccp_evm_destination_binding(
             verifier_key_hash,
         ),
     })
+}
+
+/// Return the ABI word used as the BSC mainnet network id in EVM destination bindings.
+pub fn sccp_bsc_mainnet_network_id_word_v1() -> H256 {
+    abi_word_u64(SCCP_BSC_MAINNET_EVM_CHAIN_ID)
+}
+
+fn sccp_bsc_mainnet_destination_binding_is_deployment_bound(
+    binding: &SccpDestinationBindingV1,
+) -> bool {
+    if !sccp_destination_binding_metadata_is_valid(binding) {
+        return false;
+    }
+
+    let mut parts = binding.key.split(':');
+    let (
+        Some(prefix),
+        Some(source_domain),
+        Some(target_domain),
+        Some(network_id),
+        Some(verifier_address),
+        Some(bridge_address),
+        Some(verifier_code_hash),
+        Some(verifier_key_hash),
+    ) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    )
+    else {
+        return false;
+    };
+    if parts.next().is_some()
+        || prefix != "evm"
+        || source_domain.parse::<u32>().ok() != Some(SCCP_DOMAIN_SORA)
+        || target_domain.parse::<u32>().ok() != Some(SCCP_DOMAIN_BSC)
+    {
+        return false;
+    }
+
+    let Some(network_id) = decode_fixed_hex_bytes::<32>(network_id) else {
+        return false;
+    };
+    if network_id != sccp_bsc_mainnet_network_id_word_v1() {
+        return false;
+    }
+    let Some(verifier_address) = decode_fixed_hex_bytes::<20>(verifier_address) else {
+        return false;
+    };
+    let Some(bridge_address) = decode_fixed_hex_bytes::<20>(bridge_address) else {
+        return false;
+    };
+    let Some(verifier_code_hash) = decode_fixed_hex_bytes::<32>(verifier_code_hash) else {
+        return false;
+    };
+    let Some(verifier_key_hash) = decode_fixed_hex_bytes::<32>(verifier_key_hash) else {
+        return false;
+    };
+
+    sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).is_some_and(|manifest| {
+        build_sccp_evm_destination_binding(
+            &manifest,
+            network_id,
+            verifier_address,
+            bridge_address,
+            verifier_code_hash,
+            verifier_key_hash,
+        )
+        .is_some_and(|expected| &expected == binding)
+    })
+}
+
+/// Build the governed BSC mainnet EVM destination binding.
+pub fn build_sccp_bsc_mainnet_destination_binding(
+    manifest: &SccpProofManifestV1,
+    network_id: H256,
+    verifier_address: [u8; 20],
+    bridge_address: [u8; 20],
+    verifier_code_hash: H256,
+    verifier_key_hash: H256,
+) -> Option<SccpDestinationBindingV1> {
+    if manifest.local_domain != SCCP_DOMAIN_SORA
+        || manifest.counterparty_domain != SCCP_DOMAIN_BSC
+        || network_id != sccp_bsc_mainnet_network_id_word_v1()
+    {
+        return None;
+    }
+    let binding = build_sccp_evm_destination_binding(
+        manifest,
+        network_id,
+        verifier_address,
+        bridge_address,
+        verifier_code_hash,
+        verifier_key_hash,
+    )?;
+    sccp_bsc_mainnet_destination_binding_is_deployment_bound(&binding).then_some(binding)
 }
 
 fn sccp_evm_destination_binding_matches_deployment_material(
@@ -16775,6 +17070,112 @@ fn sccp_native_recursive_payload_bytes_are_packagable(bytes: &[u8]) -> bool {
     sccp_transparent_proof_bytes_are_packagable(bytes)
 }
 
+fn sccp_local_admission_is_allowed(
+    manifest: &SccpProofManifestV1,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    bundle: &NexusSccpMessageProofV1,
+    source_material: Option<&SccpSourceVerifierMaterialV1>,
+    source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
+) -> bool {
+    let source_domain = sccp_message_source_domain(&bundle.payload);
+    let target_domain = sccp_message_target_domain(&bundle.payload);
+    let Some(counterparty_domain) = sccp_counterparty_domain_for_message_payload(&bundle.payload)
+    else {
+        return false;
+    };
+    let (Some(material), Some(deployment)) = (source_material, source_deployment) else {
+        return false;
+    };
+
+    manifest.local_domain == SCCP_DOMAIN_SORA
+        && public_inputs.target_domain == manifest.local_domain
+        && target_domain == manifest.local_domain
+        && source_domain != manifest.local_domain
+        && source_domain == material.source_domain
+        && source_domain == deployment.source_domain
+        && deployment.target_domain == manifest.local_domain
+        && counterparty_domain == manifest.counterparty_domain
+        && sccp_transparent_public_inputs_match_manifest(manifest, public_inputs)
+        && sccp_source_adapter_engine_deployment_matches_material(material, deployment)
+        && sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            source_domain,
+            material,
+            deployment,
+        )
+}
+
+fn build_sccp_local_admission_submission_payload(
+    manifest: &SccpProofManifestV1,
+    proof_bytes: &[u8],
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    bundle: &NexusSccpMessageProofV1,
+    source_material: &SccpSourceVerifierMaterialV1,
+    source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpLocalAdmissionSubmissionPayloadV1> {
+    if !sccp_local_admission_is_allowed(
+        manifest,
+        public_inputs,
+        bundle,
+        Some(source_material),
+        Some(source_deployment),
+    ) || !sccp_transparent_proof_bytes_are_packagable(proof_bytes)
+    {
+        return None;
+    }
+    let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    if !sccp_native_recursive_payload_bytes_are_packagable(&bundle_bytes) {
+        return None;
+    }
+    let inner = build_sccp_message_transparent_inner_proof_internal(
+        bundle,
+        manifest,
+        Some(source_material),
+        Some(source_deployment),
+    )?;
+    Some(SccpLocalAdmissionSubmissionPayloadV1 {
+        version: 1,
+        proof_bytes: proof_bytes.to_vec(),
+        public_inputs_bytes,
+        bundle_bytes,
+        statement_hash: inner.statement_hash,
+        source_verifier_material_hash: sccp_source_verifier_material_hash(source_material),
+        source_adapter_engine_deployment_hash: sccp_source_adapter_engine_deployment_hash(
+            source_deployment,
+        ),
+    })
+}
+
+fn build_sccp_local_admission_submission_package(
+    manifest: &SccpProofManifestV1,
+    proof_bytes: &[u8],
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+    bundle: &NexusSccpMessageProofV1,
+    source_material: &SccpSourceVerifierMaterialV1,
+    source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    let payload = build_sccp_local_admission_submission_payload(
+        manifest,
+        proof_bytes,
+        public_inputs,
+        bundle,
+        source_material,
+        source_deployment,
+    )?;
+    let platform_payload = SccpPlatformSubmissionPayloadV1::LocalAdmission(payload);
+    Some(SccpCounterpartySubmissionPackageV1 {
+        version: 1,
+        proof_family: manifest.proof_family.clone(),
+        verifier_backend: manifest.verifier_backend.clone(),
+        envelope_encoding: SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.to_owned(),
+        submission_kind: SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1.to_owned(),
+        verifier_entrypoint: SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1.to_owned(),
+        envelope_bytes: to_bytes(&platform_payload).ok()?,
+        platform_payload,
+        arguments: Vec::new(),
+    })
+}
+
 fn build_sccp_platform_submission_payload(
     manifest: &SccpProofManifestV1,
     native_proof_bytes: &[u8],
@@ -17114,6 +17515,42 @@ pub fn build_sccp_counterparty_submission_package_with_destination_binding_allow
         allow_unready,
         None,
         None,
+    )
+}
+
+/// Build a signer-free BSC mainnet counterparty submission package.
+pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding(
+    bundle: &NexusSccpMessageProofV1,
+    proof_bytes: &[u8],
+    destination_binding: &SccpDestinationBindingV1,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
+        bundle,
+        proof_bytes,
+        destination_binding,
+        false,
+    )
+}
+
+/// Build a signer-free BSC mainnet submission package, optionally bypassing readiness checks.
+pub fn build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
+    bundle: &NexusSccpMessageProofV1,
+    proof_bytes: &[u8],
+    destination_binding: &SccpDestinationBindingV1,
+    allow_unready: bool,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    if sccp_counterparty_domain_for_message_payload(&bundle.payload) != Some(SCCP_DOMAIN_BSC)
+        || !sccp_bsc_mainnet_destination_binding_is_deployment_bound(destination_binding)
+    {
+        return None;
+    }
+    let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC)?;
+    build_sccp_counterparty_submission_package_with_destination_binding_allow_unready(
+        bundle,
+        &manifest,
+        proof_bytes,
+        destination_binding,
+        allow_unready,
     )
 }
 
@@ -18147,16 +18584,38 @@ fn build_nexus_sccp_message_transparent_proof_internal(
         source_material,
         source_deployment,
     )?;
-    let submission_package = build_sccp_counterparty_submission_package_internal(
-        bundle,
-        &manifest,
-        &proof_bytes,
-        platform_destination_binding,
-        signer,
-        allow_unready,
-        source_material,
-        source_deployment,
-    )?;
+    let submission_package = match (source_material, source_deployment) {
+        (Some(material), Some(deployment))
+            if platform_destination_binding.is_none()
+                && signer.is_none()
+                && sccp_local_admission_is_allowed(
+                    &manifest,
+                    &public_inputs,
+                    bundle,
+                    Some(material),
+                    Some(deployment),
+                ) =>
+        {
+            build_sccp_local_admission_submission_package(
+                &manifest,
+                &proof_bytes,
+                &public_inputs,
+                bundle,
+                material,
+                deployment,
+            )
+        }
+        _ => build_sccp_counterparty_submission_package_internal(
+            bundle,
+            &manifest,
+            &proof_bytes,
+            platform_destination_binding,
+            signer,
+            allow_unready,
+            source_material,
+            source_deployment,
+        ),
+    }?;
     Some(NexusSccpMessageTransparentProofV1 {
         version: 1,
         local_domain: manifest.local_domain,
@@ -18276,6 +18735,58 @@ fn verify_sccp_evm_attestation_signatures(
 
 fn sccp_destination_binding_metadata_is_valid(binding: &SccpDestinationBindingV1) -> bool {
     binding.version == 1 && !binding.key.trim().is_empty() && h256_is_nonzero(&binding.binding_hash)
+}
+
+fn verify_sccp_local_admission_submission_package_internal(
+    manifest: &SccpProofManifestV1,
+    proof: &NexusSccpMessageTransparentProofV1,
+    source_material: Option<&SccpSourceVerifierMaterialV1>,
+    source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
+) -> bool {
+    let (Some(material), Some(deployment)) = (source_material, source_deployment) else {
+        return false;
+    };
+    if proof.submission_package.version != 1
+        || proof.submission_package.proof_family != manifest.proof_family
+        || proof.submission_package.verifier_backend != manifest.verifier_backend
+        || proof.submission_package.envelope_encoding != SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1
+        || proof.submission_package.submission_kind != SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1
+        || proof.submission_package.verifier_entrypoint != SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1
+        || !proof.submission_package.arguments.is_empty()
+        || !sccp_local_admission_is_allowed(
+            manifest,
+            &proof.public_inputs,
+            &proof.bundle,
+            Some(material),
+            Some(deployment),
+        )
+        || !verify_sccp_message_transparent_inner_proof_bytes_internal(
+            &proof.proof_bytes,
+            &proof.bundle,
+            manifest,
+            &proof.public_inputs,
+            Some(material),
+            Some(deployment),
+        )
+    {
+        return false;
+    }
+    let Some(expected_payload) = build_sccp_local_admission_submission_payload(
+        manifest,
+        &proof.proof_bytes,
+        &proof.public_inputs,
+        &proof.bundle,
+        material,
+        deployment,
+    ) else {
+        return false;
+    };
+    let expected_platform_payload =
+        SccpPlatformSubmissionPayloadV1::LocalAdmission(expected_payload);
+    proof.submission_package.platform_payload == expected_platform_payload
+        && to_bytes(&expected_platform_payload)
+            .ok()
+            .is_some_and(|expected| expected == proof.submission_package.envelope_bytes)
 }
 
 fn verify_sccp_evm_submission_package_internal(
@@ -18671,7 +19182,22 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
         source_deployment,
     )
     .is_some_and(|expected| {
-            let proof_body_is_valid = if manifest.verifier_target
+            let proof_body_is_valid = if sccp_local_admission_is_allowed(
+                &manifest,
+                &proof.public_inputs,
+                &proof.bundle,
+                source_material,
+                source_deployment,
+            ) {
+                verify_sccp_message_transparent_inner_proof_bytes_internal(
+                    &proof.proof_bytes,
+                    &proof.bundle,
+                    &manifest,
+                    &proof.public_inputs,
+                    source_material,
+                    source_deployment,
+                )
+            } else if manifest.verifier_target
                 == SccpProofVerifierTargetV1::EvmContract
                 && manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::EvmGroth16Bn254
             {
@@ -18702,12 +19228,27 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
             expected == proof.public_inputs
                 && match manifest.verifier_target {
                     SccpProofVerifierTargetV1::EvmContract => {
-                        verify_sccp_evm_submission_package_internal(
+                        if sccp_local_admission_is_allowed(
                             &manifest,
-                            proof,
+                            &proof.public_inputs,
+                            &proof.bundle,
                             source_material,
                             source_deployment,
-                        )
+                        ) {
+                            verify_sccp_local_admission_submission_package_internal(
+                                &manifest,
+                                proof,
+                                source_material,
+                                source_deployment,
+                            )
+                        } else {
+                            verify_sccp_evm_submission_package_internal(
+                                &manifest,
+                                proof,
+                                source_material,
+                                source_deployment,
+                            )
+                        }
                     }
                     SccpProofVerifierTargetV1::TronContract => {
                         verify_sccp_tron_submission_package_internal(
@@ -21290,6 +21831,7 @@ fn sccp_evm_receipt_value_contains_source_event(
     let Some(log_items) = rlp_items_from_list_payload(receipt_logs_payload) else {
         return false;
     };
+    let mut matched = false;
     for log in log_items {
         let SccpRlpItem::List {
             payload: single_log_payload,
@@ -21342,11 +21884,14 @@ fn sccp_evm_receipt_value_contains_source_event(
             && data.is_empty()
             && expected_emitter_address.is_none_or(|expected| expected == address)
         {
-            return true;
+            if matched {
+                return false;
+            }
+            matched = true;
         }
     }
 
-    false
+    matched
 }
 
 fn verify_sccp_evm_receipt_mpt_value(
@@ -22889,6 +23434,9 @@ pub fn canonical_sccp_evm_receipt_proof_bytes(
     receipt_trie_proof_nodes: &[Vec<u8>],
     inclusion_branch: &[Vec<u8>],
 ) -> Option<Vec<u8>> {
+    if !h256_is_nonzero(&source_event_digest) {
+        return None;
+    }
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, source_domain);
@@ -22949,6 +23497,9 @@ pub fn canonical_sccp_bsc_receipt_proof_bytes(
     receipt_trie_proof_nodes: &[Vec<u8>],
     inclusion_branch: &[Vec<u8>],
 ) -> Option<Vec<u8>> {
+    if !h256_is_nonzero(&source_event_digest) {
+        return None;
+    }
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, source_domain);
@@ -28859,7 +29410,10 @@ pub fn canonical_sccp_ton_shard_proof_bytes_with_dictionary(
         || shard_state_dictionary_key_bit_len != 0
         || !shard_state_dictionary_key.is_empty()
         || !shard_state_dictionary_proof_boc.is_empty();
-    if transaction_lt == 0 || has_dictionary_opening != !shard_state_proof_boc.is_empty() {
+    if !h256_is_nonzero(&source_event_digest)
+        || transaction_lt == 0
+        || has_dictionary_opening != !shard_state_proof_boc.is_empty()
+    {
         return None;
     }
     let mut out = Vec::new();
@@ -29658,6 +30212,9 @@ pub fn canonical_sccp_substrate_storage_proof_bytes(
     events_root: H256,
     inclusion_branch: &[Vec<u8>],
 ) -> Option<Vec<u8>> {
+    if !h256_is_nonzero(&source_event_digest) {
+        return None;
+    }
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, source_domain);
@@ -31069,7 +31626,7 @@ fn verify_sccp_eth_sync_committee_transition_step(
     if transition.version != 1
         || transition.source_domain != SCCP_DOMAIN_ETH
         || transition.source_domain != adapter.source_domain
-        || transition.from_sync_period >= transition.to_sync_period
+        || transition.from_sync_period.checked_add(1) != Some(transition.to_sync_period)
         || expected_from_period.is_some_and(|period| transition.from_sync_period != period)
         || transition.transition_slot == 0
         || transition.transition_slot > adapter.beacon_slot
@@ -33887,6 +34444,41 @@ pub fn verified_sccp_message_source_chain_proof_envelope_for_production_with_mat
         deployment,
     )
     .then_some(source_proof)
+}
+
+/// Decode and verify a BSC mainnet -> SORA source proof against governed deployment material.
+pub fn verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_BSC
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_BSC
+        || deployment.source_domain != SCCP_DOMAIN_BSC
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded BSC mainnet -> SORA source proof against governed deployment material.
+pub fn verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_BSC
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && material.source_domain == SCCP_DOMAIN_BSC
+        && deployment.source_domain == SCCP_DOMAIN_BSC
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
 }
 
 fn sccp_message_finality_public_inputs_internal(
@@ -43794,6 +44386,22 @@ mod tests {
             )
             .is_none()
         );
+        assert!(
+            sccp_evm_receipt_proof_hash(
+                valid.source_domain,
+                [0; 32],
+                eth_beacon_slot,
+                eth_execution_block_number,
+                eth_execution_block_hash,
+                eth_execution_receipts_root,
+                eth_beacon_finalized_root,
+                eth_sync_committee_root,
+                eth_receipt_root_index,
+                &eth_receipt_trie_proof_nodes,
+                &valid.inclusion_branch,
+            )
+            .is_none()
+        );
 
         let mut wrong_receipt_trie_node = consensus.adapter_proof.clone();
         let SccpSourceAdapterProofV1::EthereumBeaconReceipt(adapter) = &mut wrong_receipt_trie_node
@@ -44159,6 +44767,14 @@ mod tests {
             &material,
         ));
 
+        let mut skipped_period = adapter.clone();
+        skipped_period.sync_committee_transition_proofs[0].to_sync_period += 1;
+        assert!(!verify_sccp_eth_beacon_sync_committee_proof(
+            &skipped_period,
+            &valid,
+            &material,
+        ));
+
         let mut wrong_parent = adapter.clone();
         wrong_parent.sync_committee_transition_proofs[0].parent_sync_committee_hash[0] ^= 0x01;
         wrong_parent.sync_committee_transition_proofs[0].transition_signature_hash =
@@ -44420,6 +45036,22 @@ mod tests {
                 bsc_receipt_root_index,
                 &bsc_receipt_trie_proof_nodes,
                 &[vec![0xAA; 31]],
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_bsc_receipt_proof_hash(
+                valid.source_domain,
+                [0; 32],
+                bsc_validator_epoch,
+                bsc_block_number,
+                bsc_block_hash,
+                bsc_receipts_root,
+                bsc_validator_set_hash,
+                bsc_commit_seal_hash,
+                bsc_receipt_root_index,
+                &bsc_receipt_trie_proof_nodes,
+                &valid.inclusion_branch,
             )
             .is_none()
         );
@@ -45293,6 +45925,20 @@ mod tests {
                 substrate_adapter.authority_set_hash,
                 substrate_adapter.events_root,
                 &[vec![0xAA; 31]],
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_substrate_storage_proof_hash(
+                substrate_valid.source_domain,
+                [0; 32],
+                substrate_inclusion.leaf_index,
+                substrate_adapter.finalized_block_number,
+                substrate_adapter.grandpa_set_id,
+                substrate_adapter.block_hash,
+                substrate_adapter.authority_set_hash,
+                substrate_adapter.events_root,
+                &substrate_valid.inclusion_branch,
             )
             .is_none()
         );
@@ -46190,6 +46836,25 @@ mod tests {
             test_h256_from_hex(
                 "0x09c63ca1185b537f0a37b7b248600a0992e5b7ed64ace9d1d437db7caae00686"
             )
+        );
+        assert!(
+            canonical_sccp_ton_shard_proof_bytes(
+                [0; 32],
+                19,
+                [0xaa; 32],
+                SCCP_TON_BASECHAIN_WORKCHAIN_ID,
+                SCCP_TON_BASECHAIN_FULL_SHARD,
+                7,
+                [0xbb; 32],
+                [0xbc; 32],
+                [0xcc; 32],
+                [0xdd; 32],
+                7,
+                0,
+                &shard_state_branch,
+                &inclusion_branch,
+            )
+            .is_none()
         );
         assert!(
             canonical_sccp_ton_shard_proof_bytes(
@@ -48811,6 +49476,48 @@ mod tests {
         assert!(sccp_evm_receipt_value_contains_source_event_digest(
             &receipt_with_unrelated_log0,
             source_event_digest,
+        ));
+        let duplicate_source_event_receipt_value = sample_eth_rlp_list(&[
+            sample_eth_rlp_string(&[1]),
+            sample_eth_rlp_u64(21_000),
+            sample_eth_rlp_string(&[0u8; 256]),
+            sample_eth_rlp_list(&[
+                sample_eth_rlp_list(&[
+                    sample_eth_rlp_string(&message_emitter_address),
+                    sample_eth_rlp_list(&[
+                        sample_eth_rlp_string(&sccp_evm_source_event_topic_v1()),
+                        sample_eth_rlp_string(&source_event_digest),
+                    ]),
+                    sample_eth_rlp_string(&[]),
+                ]),
+                sample_eth_rlp_list(&[
+                    sample_eth_rlp_string(&message_emitter_address),
+                    sample_eth_rlp_list(&[
+                        sample_eth_rlp_string(&sccp_evm_source_event_topic_v1()),
+                        sample_eth_rlp_string(&source_event_digest),
+                    ]),
+                    sample_eth_rlp_string(&[]),
+                ]),
+            ]),
+        ]);
+        assert!(
+            !sccp_evm_receipt_value_contains_source_event_digest(
+                &duplicate_source_event_receipt_value,
+                source_event_digest,
+            ),
+            "EVM source receipts must not contain duplicate matching SCCP logs"
+        );
+        let (duplicate_receipts_root, duplicate_receipt_trie_proof_nodes) =
+            sample_tron_receipt_mpt_proof_with_value(
+                receipt_root_index,
+                &duplicate_source_event_receipt_value,
+            );
+        assert!(!verify_sccp_evm_receipt_mpt_event_value_with_emitter(
+            duplicate_receipts_root,
+            receipt_root_index,
+            &duplicate_receipt_trie_proof_nodes,
+            source_event_digest,
+            Some(message_emitter_address),
         ));
         let (actual_receipts_root, actual_receipt_trie_proof_nodes) =
             sample_tron_receipt_mpt_proof_with_value(receipt_root_index, &receipt_value);
@@ -53769,9 +54476,9 @@ mod tests {
     }
 
     #[test]
-    fn production_policy_requires_permissionless_proofs_allowlisted_routes_and_all_lanes() {
+    fn production_policy_uses_bsc_mainnet_lane_launch() {
         let policy = sccp_production_policy_v1();
-        assert_eq!(policy.launch_mode, SccpLaunchModeV1::AllLanesAtOnce);
+        assert_eq!(policy.launch_mode, SccpLaunchModeV1::BscMainnetLane);
         assert_eq!(
             policy.proof_submitter_policy,
             SccpProofSubmitterPolicyV1::Permissionless
@@ -53782,6 +54489,7 @@ mod tests {
         );
         assert!(!policy.per_message_human_approval_required);
         assert!(!sccp_all_lanes_launch_ready_v1());
+        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_BSC));
     }
 
     #[test]
@@ -53884,7 +54592,7 @@ mod tests {
             readiness
                 .blockers
                 .iter()
-                .any(|blocker| blocker.contains("all-lanes-at-once"))
+                .all(|blocker| !blocker.contains("all-lanes-at-once"))
         );
     }
 
@@ -54226,6 +54934,9 @@ mod tests {
             &destination_rollout,
             [0xea; 32],
             3,
+            18_765_432,
+            [0xe8; 32],
+            [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
             [0xdc; 32],
@@ -54252,6 +54963,9 @@ mod tests {
             &destination_rollout,
             [0xea; 32],
             3,
+            18_765_432,
+            [0xe8; 32],
+            [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
             [0xdc; 32],
@@ -54266,36 +54980,51 @@ mod tests {
         )
         .expect("EVM route canary bytes");
         assert_eq!(
-            route_canary_bytes[0], 2,
-            "EVM canary transcript must use the v2 public-input layout"
+            route_canary_bytes[0], 3,
+            "EVM canary transcript must use the v3 receipt-block-bound layout"
         );
         assert_eq!(
-            &route_canary_bytes[153..157],
+            &route_canary_bytes[89..97],
+            &18_765_432u64.to_le_bytes(),
+            "EVM canary transcript must bind the receipt block number"
+        );
+        assert_eq!(
+            &route_canary_bytes[97..129],
+            &[0xe8; 32],
+            "EVM canary transcript must bind the receipt block hash"
+        );
+        assert_eq!(
+            &route_canary_bytes[129..161],
+            &[0xe9; 32],
+            "EVM canary transcript must bind the block receiptsRoot"
+        );
+        assert_eq!(
+            &route_canary_bytes[225..229],
             &SCCP_DOMAIN_SORA.to_le_bytes(),
             "EVM canary transcript must bind the SORA proof source-domain word"
         );
         assert_eq!(
-            &route_canary_bytes[157..161],
+            &route_canary_bytes[229..233],
             &SCCP_DOMAIN_ETH.to_le_bytes(),
             "EVM canary transcript must bind the target EVM-family lane"
         );
         assert_eq!(
-            &route_canary_bytes[225..257],
+            &route_canary_bytes[297..329],
             &[0xed; 32],
             "EVM canary transcript must bind the finality height public input"
         );
         assert_eq!(
-            &route_canary_bytes[257..289],
+            &route_canary_bytes[329..361],
             &[0xec; 32],
             "EVM canary transcript must bind the finality block hash public input"
         );
         assert_eq!(
-            &route_canary_bytes[321..325],
+            &route_canary_bytes[393..397],
             &1u32.to_le_bytes(),
             "EVM canary transcript must bind Groth16 proof ABI version"
         );
         assert_eq!(
-            &route_canary_bytes[325..329],
+            &route_canary_bytes[397..401],
             &SCCP_DOMAIN_SORA.to_le_bytes(),
             "EVM canary transcript must bind the SORA proof source-domain word"
         );
@@ -54321,6 +55050,9 @@ mod tests {
                 &destination_rollout,
                 [0xea; 32],
                 3,
+                18_765_432,
+                [0xe8; 32],
+                [0xe9; 32],
                 [0xeb; 32],
                 [0xdd; 32],
                 [0xdc; 32],
@@ -54344,6 +55076,9 @@ mod tests {
             source_deployment_hash,
             [0xea; 32],
             3,
+            18_765_432,
+            [0xe8; 32],
+            [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
             [0xdc; 32],
@@ -54366,6 +55101,18 @@ mod tests {
             Some(encode_0x_lower_hex(&[0xea; 32]).as_str())
         );
         assert_eq!(allowlist.evm_route_canary_log_index, Some(3));
+        assert_eq!(
+            allowlist.evm_route_canary_receipt_block_number,
+            Some(18_765_432)
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_receipt_block_hash.as_deref(),
+            Some(encode_0x_lower_hex(&[0xe8; 32]).as_str())
+        );
+        assert_eq!(
+            allowlist.evm_route_canary_block_receipts_root.as_deref(),
+            Some(encode_0x_lower_hex(&[0xe9; 32]).as_str())
+        );
         assert_eq!(
             allowlist.evm_route_canary_call_data_sha256.as_deref(),
             Some(encode_0x_lower_hex(&[0xeb; 32]).as_str())
@@ -54803,6 +55550,9 @@ mod tests {
             source_deployment_hash,
             [0xea; 32],
             0,
+            18_765_432,
+            [0xe8; 32],
+            [0xe9; 32],
             [0xeb; 32],
             [0xdd; 32],
             [0xdc; 32],
@@ -63575,6 +64325,338 @@ mod tests {
             )
             .is_none(),
             "EVM proof requests must use deployment-specific destination bindings"
+        );
+    }
+
+    #[test]
+    fn bsc_mainnet_destination_sdk_facade_enforces_mainnet_binding_and_wraps_ui_proof() {
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_BSC, 587);
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("BSC manifest");
+        let eth_manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("BSC public inputs");
+        let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&bundle);
+        let source_proof_bytes = [0x99; 32];
+        let inner =
+            build_sccp_message_transparent_inner_proof(&bundle, &manifest).expect("inner proof");
+        let proof_bytes = sample_evm_groth16_proof_bytes(&public_inputs, manifest.local_domain);
+        let bsc_network_id = sccp_bsc_mainnet_network_id_word_v1();
+        let deployment_binding = build_sccp_bsc_mainnet_destination_binding(
+            &manifest,
+            bsc_network_id,
+            [0x33; 20],
+            [0x22; 20],
+            [0x44; 32],
+            [0x55; 32],
+        )
+        .expect("BSC mainnet destination binding");
+
+        assert_eq!(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
+        assert_eq!(bsc_network_id, abi_word_u64(56));
+        assert!(
+            build_sccp_bsc_mainnet_destination_binding(
+                &manifest,
+                abi_word_u64(97),
+                [0x33; 20],
+                [0x22; 20],
+                [0x44; 32],
+                [0x55; 32],
+            )
+            .is_none(),
+            "BSC mainnet binding must reject testnet chain ids"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_destination_binding(
+                &eth_manifest,
+                bsc_network_id,
+                [0x33; 20],
+                [0x22; 20],
+                [0x44; 32],
+                [0x55; 32],
+            )
+            .is_none(),
+            "BSC mainnet binding must reject ETH manifests"
+        );
+
+        let request = build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+            &manifest,
+            &public_inputs,
+            &bundle_bytes,
+            Some(&source_proof_bytes),
+            inner.statement_hash,
+            &deployment_binding,
+        )
+        .expect("BSC mainnet proof request");
+        assert_eq!(request.target_domain, SCCP_DOMAIN_BSC);
+        assert_eq!(request.public_inputs.target_domain, SCCP_DOMAIN_BSC);
+        assert_eq!(request.destination_binding, deployment_binding);
+
+        let result = wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(&proof_bytes, &request)
+            .expect("BSC mainnet proof result");
+        assert_eq!(result.proof_bytes, proof_bytes);
+        assert_eq!(
+            result.destination_binding_hash,
+            deployment_binding.binding_hash
+        );
+
+        let wrong_network_binding =
+            sample_evm_destination_binding(&manifest, [0x31; 32], [0x33; 20], [0x22; 20]);
+        let mut wrong_target_request = request.clone();
+        wrong_target_request.target_domain = SCCP_DOMAIN_ETH;
+        assert!(
+            wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(&proof_bytes, &wrong_target_request,)
+                .is_none(),
+            "BSC mainnet proof-result wrapper must reject mutated target domains"
+        );
+        let mut wrong_binding_request = request.clone();
+        wrong_binding_request.destination_binding = wrong_network_binding.clone();
+        wrong_binding_request.destination_binding_hash = wrong_network_binding.binding_hash;
+        assert!(
+            wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(&proof_bytes, &wrong_binding_request,)
+                .is_none(),
+            "BSC mainnet proof-result wrapper must reject mutated destination bindings"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&source_proof_bytes),
+                inner.statement_hash,
+                &wrong_network_binding,
+            )
+            .is_none(),
+            "BSC mainnet requests must reject deployment bindings for other EVM networks"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+                &eth_manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&source_proof_bytes),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "BSC mainnet requests must reject non-BSC manifests"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_groth16_bn254_proof_request(
+                &manifest,
+                &public_inputs,
+                &bundle_bytes,
+                Some(&[0u8; 32]),
+                inner.statement_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "BSC mainnet requests must reject all-zero source proofs"
+        );
+
+        let package =
+            build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
+                &bundle,
+                &proof_bytes,
+                &deployment_binding,
+                true,
+            )
+            .expect("BSC mainnet submission package");
+        let SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(payload) =
+            &package.platform_payload
+        else {
+            panic!("expected BSC EVM Groth16 package");
+        };
+        assert_eq!(payload.destination_binding, deployment_binding);
+        assert_eq!(
+            payload.public_inputs.target_domain_word,
+            abi_word_u32(SCCP_DOMAIN_BSC)
+        );
+
+        assert!(
+            build_sccp_bsc_mainnet_counterparty_submission_package_with_destination_binding_allow_unready(
+                &sample_evm_transfer_bundle(588),
+                &proof_bytes,
+                &deployment_binding,
+                true,
+            )
+            .is_none(),
+            "BSC mainnet package wrapper must reject ETH-bound bundles"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
+                &bundle,
+                &proof_bytes,
+                &deployment_binding,
+                true,
+            )
+            .is_some(),
+            "BSC mainnet proof-job wrapper should package the same deployment-bound proof"
+        );
+        assert!(
+            build_sccp_bsc_mainnet_counterparty_proof_job_from_bundle_with_groth16_proof_and_destination_binding_allow_unready(
+                &bundle,
+                &proof_bytes,
+                &wrong_network_binding,
+                true,
+            )
+            .is_none(),
+            "BSC mainnet proof-job wrapper must reject non-mainnet destination bindings"
+        );
+    }
+
+    #[test]
+    fn bsc_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter() {
+        let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+            SCCP_DOMAIN_BSC,
+            sample_bsc_validator_set_hash(),
+            [0xB2; 32],
+            [0xC3; 32],
+            [0xD4; 32],
+            sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+        )
+        .expect("BSC mainnet source verifier material");
+        let deployment = build_sccp_bsc_mainnet_source_adapter_deployment(&material, [0xE6; 32])
+            .expect("BSC source adapter deployment");
+        let bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_SORA,
+            707,
+            Some(&material),
+            Some(&deployment),
+        );
+        let proof = source_chain_proof_from_bundle(&bundle);
+
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(&proof, &material),
+            "BSC source material alone must not satisfy the production source-adapter gate"
+        );
+        assert!(
+            verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &deployment,
+            )
+        );
+        assert!(
+            verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_some()
+        );
+        let artifact =
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                &material,
+                &deployment,
+                true,
+            )
+            .expect("BSC -> SORA local admission artifact");
+        assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        let SccpPlatformSubmissionPayloadV1::LocalAdmission(local_admission) =
+            &artifact.submission_package.platform_payload
+        else {
+            panic!("BSC -> SORA artifacts must use the local admission package");
+        };
+        assert_eq!(local_admission.version, 1);
+        assert_eq!(local_admission.proof_bytes, artifact.proof_bytes);
+        assert_eq!(
+            local_admission.source_verifier_material_hash,
+            sccp_source_verifier_material_hash(&material)
+        );
+        assert_eq!(
+            local_admission.source_adapter_engine_deployment_hash,
+            sccp_source_adapter_engine_deployment_hash(&deployment)
+        );
+        assert!(
+            verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &deployment,
+            ),
+            "BSC local admission package must verify without outbound EVM Groth16 calldata"
+        );
+
+        let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_SORA,
+            708,
+            Some(&material),
+            None,
+        );
+        assert!(
+            verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC facade must reject source proofs that omit deployment evidence"
+        );
+        let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_ETH, 709);
+        assert!(
+            verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC facade must reject non-SORA destination bundles"
+        );
+        let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 710);
+        assert!(
+            verified_sccp_bsc_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "BSC facade must reject non-BSC source bundles"
+        );
+
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = [0xAB; 32];
+        assert!(
+            !verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &replayed_receipt,
+            ),
+            "BSC facade must reject replayed deployment receipts"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &replayed_receipt,
+            ),
+            "BSC local admission artifacts must reject replayed deployment receipts"
+        );
+
+        let eth_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_ETH,
+                sample_eth_sync_committee_hash(),
+                [0xB2; 32],
+                [0xC2; 32],
+                [0xD2; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH),
+            )
+            .expect("ETH material");
+        assert!(
+            build_sccp_bsc_mainnet_source_adapter_deployment(&eth_material, [0xE6; 32]).is_none(),
+            "BSC deployment helper must reject non-BSC source material"
+        );
+        assert!(
+            !verify_sccp_bsc_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &eth_material,
+                &deployment,
+            ),
+            "BSC facade must reject cross-domain material"
         );
     }
 

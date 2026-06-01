@@ -34,7 +34,7 @@ SCCP_EVM_GROTH16_BACKEND = "evm-groth16-bn254-v1"
 SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 EVM_DESTINATION_BINDING_LABEL = b"iroha:sccp:evm-destination-binding:v1"
 SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
-EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v2"
+EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v3"
 
 DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
@@ -52,8 +52,13 @@ DOMAIN_PROFILES = {
 }
 
 
-def _strip_0x(value: str) -> str:
-    return value[2:] if value.lower().startswith("0x") else value
+def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if value.startswith("0X"):
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
+    text = value[2:] if value.startswith("0x") else value
+    if text != text.lower():
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
+    return text
 
 
 def parse_hex_bytes(
@@ -67,7 +72,7 @@ def parse_hex_bytes(
 
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = _strip_0x(value)
+    text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
@@ -90,8 +95,7 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = value
-    text = _strip_0x(text)
+    text = _strip_lower_0x_hex(value, label=label)
     if not text:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if len(text) % 2 != 0:
@@ -151,6 +155,21 @@ def parse_u32_decimal(value: str, *, label: str) -> int:
     return parsed
 
 
+def parse_u64_decimal(value: str, *, label: str) -> int:
+    """Parse a canonical non-negative decimal u64."""
+
+    if value != value.strip():
+        raise argparse.ArgumentTypeError(f"{label} must be a canonical u64 decimal")
+    if not value or not value.isascii() or not value.isdecimal():
+        raise argparse.ArgumentTypeError(f"{label} must be a canonical u64 decimal")
+    if len(value) > 1 and value.startswith("0"):
+        raise argparse.ArgumentTypeError(f"{label} must be a canonical u64 decimal")
+    parsed = int(value, 10)
+    if parsed > 0xFFFFFFFFFFFFFFFF:
+        raise argparse.ArgumentTypeError(f"{label} must fit u64")
+    return parsed
+
+
 def parse_bool_literal(value: str, *, label: str) -> bool:
     """Parse an exact true/false literal."""
 
@@ -171,6 +190,10 @@ def _push_u8(out: bytearray, value: int) -> None:
 
 def _push_u32(out: bytearray, value: int) -> None:
     out.extend(value.to_bytes(4, "little"))
+
+
+def _push_u64(out: bytearray, value: int) -> None:
+    out.extend(value.to_bytes(8, "little"))
 
 
 def _push_vec(out: bytearray, value: bytes) -> None:
@@ -555,6 +578,9 @@ def evm_route_canary_transaction_evidence_hash(
     bridge_address: bytes,
     transaction_hash: bytes,
     log_index: int,
+    receipt_block_number: int,
+    receipt_block_hash: bytes,
+    block_receipts_root: bytes,
     call_data_sha256: bytes,
     message_id: bytes,
     payload_hash: bytes,
@@ -596,6 +622,12 @@ def evm_route_canary_transaction_evidence_hash(
     if used_message_proof is not True:
         raise ValueError("used_message_proof must be true for EVM route canaries")
     log_index = _require_exact_u32(log_index, "log_index")
+    receipt_block_number = parse_u64_decimal(
+        str(receipt_block_number),
+        label="receipt_block_number",
+    )
+    if receipt_block_number == 0:
+        raise ValueError("receipt_block_number must be positive for EVM route canaries")
     route_allowlist_hash = _require_fixed_bytes(
         route_allowlist_hash,
         label="route_allowlist_hash",
@@ -609,6 +641,16 @@ def evm_route_canary_transaction_evidence_hash(
     transaction_hash = _require_fixed_bytes(
         transaction_hash,
         label="transaction_hash",
+        byte_length=32,
+    )
+    receipt_block_hash = _require_fixed_bytes(
+        receipt_block_hash,
+        label="receipt_block_hash",
+        byte_length=32,
+    )
+    block_receipts_root = _require_fixed_bytes(
+        block_receipts_root,
+        label="block_receipts_root",
         byte_length=32,
     )
     call_data_sha256 = _require_fixed_bytes(
@@ -669,10 +711,13 @@ def evm_route_canary_transaction_evidence_hash(
     _require_distinct_hash_roles(
         (
             ("transaction_hash", transaction_hash),
+            ("receipt_block_hash", receipt_block_hash),
+            ("block_receipts_root", block_receipts_root),
             ("call_data_sha256", call_data_sha256),
             ("message_id", message_id),
             ("payload_hash", payload_hash),
             ("commitment_root", commitment_root),
+            ("finality_height", finality_height),
             ("finality_block_hash", finality_block_hash),
             ("statement_hash", statement_hash),
         ),
@@ -680,11 +725,14 @@ def evm_route_canary_transaction_evidence_hash(
     )
 
     payload = bytearray()
-    _push_u8(payload, 2)
+    _push_u8(payload, 3)
     payload.extend(route_allowlist_hash)
     payload.extend(bridge_address)
     payload.extend(transaction_hash)
     _push_u32(payload, log_index)
+    _push_u64(payload, receipt_block_number)
+    payload.extend(receipt_block_hash)
+    payload.extend(block_receipts_root)
     payload.extend(call_data_sha256)
     payload.extend(message_id)
     _push_u32(payload, source_domain)
@@ -792,6 +840,9 @@ def _route_canary_toml_lines(
 _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_transaction_hash",
     "route_canary_log_index",
+    "route_canary_receipt_block_number",
+    "route_canary_receipt_block_hash",
+    "route_canary_block_receipts_root",
     "route_canary_call_data_sha256",
     "route_canary_message_id",
     "route_canary_payload_hash",
@@ -808,6 +859,8 @@ _ROUTE_CANARY_TRANSACTION_FIELDS = (
 
 _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS = (
     "transaction_hash",
+    "receipt_block_hash",
+    "block_receipts_root",
     "call_data_sha256",
     "message_id",
     "payload_hash",
@@ -827,6 +880,18 @@ def _route_canary_transaction_toml_lines(args: argparse.Namespace) -> list[str]:
             _hex(values["transaction_hash"]),
         ),
         _toml_line("evm_route_canary_log_index", values["log_index"]),
+        _toml_line(
+            "evm_route_canary_receipt_block_number",
+            values["receipt_block_number"],
+        ),
+        _toml_line(
+            "evm_route_canary_receipt_block_hash",
+            _hex(values["receipt_block_hash"]),
+        ),
+        _toml_line(
+            "evm_route_canary_block_receipts_root",
+            _hex(values["block_receipts_root"]),
+        ),
         _toml_line(
             "evm_route_canary_call_data_sha256",
             _hex(values["call_data_sha256"]),
@@ -910,6 +975,12 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
             "EVM route canary transaction metadata requires "
             "--route-canary-used-message-proof=true from live bridge state"
         )
+    receipt_block_number = parse_u64_decimal(
+        str(getattr(args, "route_canary_receipt_block_number")),
+        label="route_canary_receipt_block_number",
+    )
+    if receipt_block_number == 0:
+        raise ValueError("EVM route canary receipt block number must be positive")
     values = {
         "transaction_hash": _require_fixed_bytes(
             getattr(args, "route_canary_transaction_hash"),
@@ -917,6 +988,17 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
             byte_length=32,
         ),
         "log_index": log_index,
+        "receipt_block_number": receipt_block_number,
+        "receipt_block_hash": _require_fixed_bytes(
+            getattr(args, "route_canary_receipt_block_hash"),
+            label="route_canary_receipt_block_hash",
+            byte_length=32,
+        ),
+        "block_receipts_root": _require_fixed_bytes(
+            getattr(args, "route_canary_block_receipts_root"),
+            label="route_canary_block_receipts_root",
+            byte_length=32,
+        ),
         "call_data_sha256": _require_fixed_bytes(
             getattr(args, "route_canary_call_data_sha256"),
             label="route_canary_call_data_sha256",
@@ -982,6 +1064,9 @@ def _route_canary_transaction_evidence_hash(
         bridge_address=args.bridge_address,
         transaction_hash=values["transaction_hash"],
         log_index=values["log_index"],
+        receipt_block_number=values["receipt_block_number"],
+        receipt_block_hash=values["receipt_block_hash"],
+        block_receipts_root=values["block_receipts_root"],
         call_data_sha256=values["call_data_sha256"],
         message_id=values["message_id"],
         payload_hash=values["payload_hash"],
@@ -1010,6 +1095,12 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
         + json.dumps(_hex(values["transaction_hash"])),
         "# sccp_evm_route_canary_log_index = "
         + json.dumps(str(values["log_index"])),
+        "# sccp_evm_route_canary_receipt_block_number = "
+        + json.dumps(str(values["receipt_block_number"])),
+        "# sccp_evm_route_canary_receipt_block_hash = "
+        + json.dumps(_hex(values["receipt_block_hash"])),
+        "# sccp_evm_route_canary_block_receipts_root = "
+        + json.dumps(_hex(values["block_receipts_root"])),
         "# sccp_evm_route_canary_call_data_sha256 = "
         + json.dumps(_hex(values["call_data_sha256"])),
         "# sccp_evm_route_canary_message_id = "
@@ -1086,6 +1177,9 @@ def _route_canary_summary(
                 "evidence_source": "evm_message_proof_accepted_transaction",
                 "transaction_hash": _hex(values["transaction_hash"]),
                 "log_index": values["log_index"],
+                "receipt_block_number": values["receipt_block_number"],
+                "receipt_block_hash": _hex(values["receipt_block_hash"]),
+                "block_receipts_root": _hex(values["block_receipts_root"]),
                 "call_data_sha256": _hex(values["call_data_sha256"]),
                 "message_id": _hex(values["message_id"]),
                 "payload_hash": _hex(values["payload_hash"]),
@@ -1273,6 +1367,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
         raise ValueError(
             "--toml requires EVM route canary transaction metadata "
             "(--route-canary-transaction-hash, --route-canary-log-index, "
+            "--route-canary-receipt-block-number, "
+            "--route-canary-receipt-block-hash, "
+            "--route-canary-block-receipts-root, "
             "--route-canary-call-data-sha256, --route-canary-message-id, "
             "--route-canary-payload-hash, --route-canary-target-domain, "
             "--route-canary-statement-hash, --route-canary-commitment-root, "
@@ -1606,6 +1703,32 @@ def build_parser() -> argparse.ArgumentParser:
             label="route canary log index",
         ),
         help="Canonical decimal log index of the MessageProofAccepted canary event.",
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-number",
+        type=lambda value: parse_u64_decimal(
+            value,
+            label="route canary receipt block number",
+        ),
+        help="Canonical decimal EVM block number containing the canary receipt.",
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-hash",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="route canary receipt block hash",
+            byte_length=32,
+        ),
+        help="EVM block hash returned by the canary transaction receipt.",
+    )
+    parser.add_argument(
+        "--route-canary-block-receipts-root",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="route canary block receiptsRoot",
+            byte_length=32,
+        ),
+        help="EVM receiptsRoot from the block containing the canary receipt.",
     )
     parser.add_argument(
         "--route-canary-message-id",

@@ -13,6 +13,7 @@ PRIVACY_CRITERIA = (
     "hide_asset_type",
     "post_quantum",
 )
+_ALGORITHM_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
 
 _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "[{\"id\":\"transparent-transfer\",\"name\":\"Transparent asset transfer\",\"shortName\":\"Transparent\",\"sum"
@@ -77,7 +78,8 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "curityNotes\":[\"Authorization is only one PQ layer; proof backend and note encryption must also b"
     "e PQ before a payment flow is end-to-end post-quantum.\",\"Replay nullifiers must be chain-domain "
     "separated and irreversible after acceptance.\",\"A dev verifier must never be accepted under a pro"
-    "duction verifier key id.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
+    "duction verifier key id.\",\"Native AIR openings are blinded so sampled rows do not recover"
+    " identity or replay witness limbs.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
     "ier set\",\"authorization verifier registry\",\"wallet identity witness and replay-secret store\"],\"f"
     "ailureModes\":[\"transaction digest substitution\",\"chain-id or domain-separator mismatch\",\"replaye"
     "d nullifier\",\"revoked identity commitment\",\"policy hash mismatch\"],\"setupSteps\":[\"Register a ZK-"
@@ -97,15 +99,18 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k"
     "-out-of-n receiver-set proofs.\",\"category\":\"payment\",\"maturity\":\"accepted_conference\",\"coveredCr"
     "iteria\":[\"hide_amount\",\"hide_sender\",\"hide_receiver\"],\"proofFamily\":\"anonymous-pgc-k-out-of-n\",\""
-    "publicInputsSchema\":\"anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,li"
-    "nk_tag,range_commitments,chain_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1"
-    "\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":"
-    "\"catalog-as-of-2026-05\",\"recommendedFor\":[\"account-based private payments\",\"multi-receiver confi"
+    "publicInputsSchema\":\"anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,re"
+    "ceiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chai"
+    "n_id,domain_separator\",\"verifierKeyId\":\"anonymous_pgc_k_out_of_n_v1\",\"pqLayers\":{\"proof\":fal"
+    "se,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recomme"
+    "ndedFor\":[\"account-based private payments\",\"multi-receiver confi"
     "dential transfers\",\"payment privacy without a note-based shielded pool UX\"],\"sourceReferences\":["
     "{\"label\":\"Anonymous PGC with k-out-of-n Proofs\",\"url\":\"https://eprint.iacr.org/2025/884\"}],\"secu"
     "rityNotes\":[\"Requires fresh anonymity-set roots and replay/link-tag state.\",\"Amount privacy depe"
     "nds on the range-proof component and commitment binding.\",\"Receiver ciphertext commitments must "
-    "bind to the same transaction digest as the proof.\"],\"requiredState\":[\"anonymous account commitme"
+    "bind to the same transaction digest as the proof.\",\"The SDK dev fixture verifies deterministic "
+    "binding only; chain execution and production Anonymous PGC proofs remain unavailable.\"],\"requir"
+    "edState\":[\"anonymous account commitme"
     "nt set\",\"recent anonymity-set roots\",\"spent link-tag set\",\"range-proof verifier parameters\",\"wal"
     "let account blinding and receiver recovery metadata\"],\"failureModes\":[\"stale or unknown anonymit"
     "y-set root\",\"duplicate link tag\",\"receiver-set substitution\",\"range commitment mismatch\",\"author"
@@ -114,71 +119,83 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     ".\",\"Persist wallet blinding, balance-opening, and receiver recovery witnesses.\"],\"executionSteps"
     "\":[\"Select an anonymity-set root and receiver set.\",\"Create balance commitments, receiver cipher"
     "text commitments, and link tag.\",\"Generate the Anonymous PGC proof and submit the transfer instr"
-    "uction.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildAnonymousPgcAccountCommitmentInstru"
-    "ction\",\"buildAnonymousPgcReceiverSet\",\"buildAnonymousPgcKOutOfNProofV1\",\"buildAnonymousPgcTransf"
-    "erInstruction\"],\"chainRequirements\":[\"anonymous account commitment accumulator\",\"spent link-tag "
+    "uction.\"],\"sdkEntrypoints\":[\"buildAnonymousPgcReceiverSet\",\"buildAnonymousPgcDevProofFixture\","
+    "\"verifyAnonymousPgcDevProofLocally\"],\"plannedSdkEntrypoints\":[\"buildAnonymousPgcAccountCommitm"
+    "entInstruction\",\"buildAnonymousPgcKOutOfNProofV1\",\"buildAnonymousPgcTransferInstruction\"],\"chai"
+    "nRequirements\":[\"anonymous account commitment accumulator\",\"spent link-tag "
     "set\",\"Anonymous PGC verifier\",\"range-proof component verifier\"]},{\"id\":\"verange-transparent-rang"
     "e-v1\",\"name\":\"VeRange transparent range proofs v1\",\"shortName\":\"VeRange\",\"summary\":\"Verification"
     "-efficient transparent range-proof component for confidential amounts, solvency proofs, and nume"
     "ric credential predicates.\",\"category\":\"proof_backend\",\"maturity\":\"accepted_conference\",\"covered"
     "Criteria\":[\"hide_amount\"],\"proofFamily\":\"verange-transparent-range\",\"publicInputsSchema\":\"commit"
-    "ment,range_parameters,aggregation_count,domain_separator,payload_digest\",\"verifierKeyId\":\"verang"
-    "e_transparent_range_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},"
-    "\"implementationStage\":\"catalog-as-of-2026-05\",\"recommendedFor\":[\"confidential amount range proof"
-    "s\",\"reserve or solvency proofs\",\"numeric credential predicates\"],\"sourceReferences\":[{\"label\":\"V"
+    "ments,range_parameters,aggregation_count,domain_separator,payload_digest\",\"verifierKeyId\":\"veran"
+    "ge_transparent_range_v1\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},"
+    "\"implementationStage\":\"component\",\"recommendedFor\":[\"confidential amount range proofs\",\"reserve "
+    "or solvency proofs\",\"numeric credential predicates\"],\"sourceReferences\":[{\"label\":\"V"
     "eRange: Verification-efficient Zero-knowledge Range Arguments\",\"url\":\"https://eprint.iacr.org/20"
     "25/528\"}],\"securityNotes\":[\"This is a component, not a complete payment protocol.\",\"Range parame"
     "ters must be bound to the transaction payload and verifier key.\",\"Aggregated proof limits must b"
-    "e enforced by validators.\"],\"requiredState\":[\"range-proof verifier parameters\",\"range commitment"
+    "e enforced by validators.\",\"Local verification is limited to deterministic dev fixtures; the prod"
+    "uction VeRange prover remains unavailable.\"],\"requiredState\":[\"range-proof verifier parameters\","
+    "\"range commitment"
     " domain separators\",\"maximum aggregation policy\"],\"failureModes\":[\"wrong bit length\",\"commitment"
     " substitution\",\"verifier-parameter mismatch\",\"oversized aggregation\"],\"setupSteps\":[\"Register Ve"
     "Range verifier parameters and allowed bit lengths.\",\"Define the commitment scheme and domain sep"
     "arators used by dependent algorithms.\"],\"executionSteps\":[\"Build amount commitments.\",\"Generate "
     "a range proof bound to the transaction payload.\",\"Attach the range-proof envelope to the depende"
-    "nt confidential algorithm.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildRangeCommitment\""
-    ",\"buildVeRangeProofEnvelope\",\"buildVeRangeProofV1\",\"verifyVeRangeProofLocally\"],\"chainRequiremen"
-    "ts\":[\"VeRange verifier registry entry\",\"range commitment binding rules\",\"dependent payment or cr"
+    "nt confidential algorithm.\"],\"sdkEntrypoints\":[\"buildRangeCommitment\",\"buildVeRangeDevProofFixt"
+    "ure\",\"buildVeRangeProofEnvelope\",\"verifyVeRangeProofLocally\"],\"plannedSdkEntrypoints\":[\"build"
+    "VeRangeProofV1\"],\"chainRequire"
+    "ments\":[\"VeRange verifier registry entry\",\"range commitment binding rules\",\"dependent payment or cr"
     "edential verifier\"]},{\"id\":\"zkat-policy-private-auth-v1\",\"name\":\"zkAt policy-private authorizati"
     "on v1\",\"shortName\":\"zkAt policy auth\",\"summary\":\"Policy-private blockchain authenticator that hi"
     "des threshold rules, signer sets, and account authorization logic.\",\"category\":\"authorization\",\""
     "maturity\":\"accepted_conference\",\"coveredCriteria\":[],\"proofFamily\":\"zkat-policy-private-authenti"
     "cator\",\"publicInputsSchema\":\"policy_commitment,tx_digest,account_id,action_class,domain_separato"
     "r,policy_epoch\",\"verifierKeyId\":\"zkat_policy_private_auth_v1\",\"pqLayers\":{\"proof\":false,\"authori"
-    "zation\":false,\"noteEncryption\":false},\"implementationStage\":\"catalog-as-of-2026-05\",\"recommended"
+    "zation\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recommended"
     "For\":[\"institutional wallet policy privacy\",\"hidden threshold authorization\",\"authorization-poli"
     "cy migration without revealing signer topology\"],\"sourceReferences\":[{\"label\":\"zkAt: Zero-Knowle"
     "dge Authenticator for Blockchain\",\"url\":\"https://drops.dagstuhl.de/entities/document/10.4230/LIP"
     "Ics.AFT.2025.2\"}],\"securityNotes\":[\"Hides authorization policy, not payment fields.\",\"Policy com"
     "mitments require explicit epoch and rotation semantics.\",\"Combining with ZK-ACE requires both pr"
-    "oofs to bind the same transaction digest.\"],\"requiredState\":[\"policy commitment registry\",\"polic"
+    "oofs to bind the same transaction digest.\",\"The SDK dev fixture verifies deterministic binding o"
+    "nly; chain policy state and production zkAt proofs remain unavailable.\"],\"requiredState\":[\"poli"
+    "cy commitment registry\",\"polic"
     "y epoch state\",\"authorization verifier registry\"],\"failureModes\":[\"policy-root substitution\",\"st"
     "ale policy epoch\",\"unauthorized signer witness\",\"transaction digest mismatch\"],\"setupSteps\":[\"Re"
     "gister a hidden policy commitment and verifier key.\",\"Bind the policy to account action classes "
     "and epoch rules.\"],\"executionSteps\":[\"Generate a policy-private authenticator proof.\",\"Attach th"
-    "e authenticator envelope to the transaction authorization path.\"],\"sdkEntrypoints\":[],\"plannedSd"
-    "kEntrypoints\":[\"buildZkAtPolicyCommitmentInstruction\",\"buildZkAtPolicyProofV1\",\"buildZkAtAuthent"
-    "icatorEnvelope\",\"buildZkAtAuthorizedTransaction\"],\"chainRequirements\":[\"zkAt policy commitment r"
+    "e authenticator envelope to the transaction authorization path.\"],\"sdkEntrypoints\":[\"buildZkAtP"
+    "olicyCommitment\",\"buildZkAtAuthenticatorEnvelope\",\"buildZkAtDevProofFixture\",\"verifyZkAtAuthent"
+    "icatorLocally\"],\"plannedSdkEntrypoints\":[\"buildZkAtPolicyCommitmentInstruction\",\"buildZkAtPoli"
+    "cyProofV1\",\"buildZkAtAuthorizedTransaction\"],\"chainRequirements\":[\"zkAt policy commitment r"
     "egistry\",\"zkAt verifier\",\"account policy epoch state\"]},{\"id\":\"zk-ams-recursive-admission-v0\",\"n"
     "ame\":\"ZK-AMS recursive anonymous admission v0\",\"shortName\":\"ZK-AMS admission\",\"summary\":\"Researc"
     "h target for recursively aggregated anonymous admission from real-world personhood or eligibilit"
     "y credentials into anonymous on-chain accounts.\",\"category\":\"admission\",\"maturity\":\"arxiv_prepri"
     "nt\",\"coveredCriteria\":[],\"proofFamily\":\"recursive-anonymous-admission\",\"publicInputsSchema\":\"iss"
     "uer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof"
-    "_digest\",\"verifierKeyId\":\"zk_ams_recursive_admission_v0\",\"pqLayers\":{\"proof\":false,\"authorizatio"
-    "n\":false,\"noteEncryption\":false},\"implementationStage\":\"catalog-as-of-2026-05\",\"recommendedFor\":"
+    "_digest,domain_separator\",\"verifierKeyId\":\"zk_ams_recursive_admission_v0\",\"pqLayers\":{\"proof\":f"
+    "alse,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\"sdk-builder\",\"recomm"
+    "endedFor\":"
     "[\"anonymous onboarding\",\"Sybil-resistant wallet issuance\",\"credential-gated CBDC pilots\"],\"sourc"
     "eReferences\":[{\"label\":\"ZK-AMS recursive anonymous admission\",\"url\":\"https://arxiv.org/abs/2602."
     "16130\"}],\"securityNotes\":[\"Admission privacy is separate from later payment privacy.\",\"Duplicate"
     " admission prevention depends on issuer-scoped nullifiers.\",\"Recursive batching must bind every "
-    "admitted account commitment.\"],\"requiredState\":[\"issuer root registry\",\"admission nullifier set\""
+    "admitted account commitment.\",\"The SDK dev fixture verifies deterministic binding only; chain a"
+    "dmission state and production recursive proofs remain unavailable.\"],\"requiredState\":[\"issuer root"
+    " registry\",\"admission nullifier set\""
     ",\"anonymous account commitment registry\",\"recursive verifier parameters\"],\"failureModes\":[\"dupli"
     "cate credential admission\",\"wrong issuer root\",\"batch omission or account commitment substitutio"
     "n\",\"recursive proof parameter mismatch\"],\"setupSteps\":[\"Register credential issuer roots and rec"
     "ursive verifier parameters.\",\"Define anonymous account commitment format and admission-nullifier"
     " derivation.\"],\"executionSteps\":[\"Collect admitted account commitments into a batch.\",\"Generate "
     "or import a recursive admission proof.\",\"Submit the batch proof and admission nullifiers.\"],\"sdk"
-    "Entrypoints\":[],\"plannedSdkEntrypoints\":[\"buildZkAmsAdmissionBatchProofV0\",\"buildSubmitZkAmsAdmi"
-    "ssionBatchInstruction\"],\"chainRequirements\":[\"issuer root registry\",\"admission nullifier set\",\"r"
+    "Entrypoints\":[\"buildZkAmsAdmissionBatch\",\"buildZkAmsAdmissionProofEnvelope\",\"buildZkAmsAdmiss"
+    "ionDevProofFixture\",\"verifyZkAmsAdmissionProofLocally\"],\"plannedSdkEntrypoints\":[\"buildZkAmsAd"
+    "missionBatchProofV0\",\"buildSubmitZkAmsAdmissionBatchInstruction\"],\"chainRequirements\":[\"issuer "
+    "root registry\",\"admission nullifier set\",\"r"
     "ecursive admission verifier\"]},{\"id\":\"vega-existing-credential-zk-v0\",\"name\":\"Vega existing-cred"
     "ential ZK proofs v0\",\"shortName\":\"Vega credentials\",\"summary\":\"Low-latency zero-knowledge proof "
     "target for proving predicates over existing credentials without revealing the full credential.\","
@@ -186,42 +203,49 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "ng-credential-zk\",\"publicInputsSchema\":\"issuer_commitment,credential_schema,predicate_commitment"
     ",subject_binding,expiration_epoch,domain_separator\",\"verifierKeyId\":\"vega_existing_credential_zk"
     "_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStag"
-    "e\":\"catalog-as-of-2026-05\",\"recommendedFor\":[\"legacy credential bridges\",\"private eligibility ch"
+    "e\":\"sdk-builder\",\"recommendedFor\":[\"legacy credential bridges\",\"private eligibility ch"
     "ecks\",\"attribute predicates for wallet enrollment\"],\"sourceReferences\":[{\"label\":\"Vega: Low-Late"
     "ncy Zero-Knowledge Proofs over Existing Credentials\",\"url\":\"https://www.microsoft.com/en-us/rese"
     "arch/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/\"}],\"securityN"
     "otes\":[\"Credential schema parsing must be deterministic and versioned.\",\"Proofs must bind to wal"
     "let or identity commitments to prevent credential replay.\",\"Issuer trust and revocation semantic"
-    "s remain external policy inputs.\"],\"requiredState\":[\"credential issuer registry\",\"supported cred"
+    "s remain external policy inputs.\",\"The SDK dev fixture verifies deterministic binding only; chai"
+    "n credential policy state and production Vega proofs remain unavailable.\"],\"requiredState\":[\"cre"
+    "dential issuer registry\",\"supported cred"
     "ential schema registry\",\"predicate registry\",\"revocation or expiration policy\"],\"failureModes\":["
     "\"expired credential\",\"wrong issuer\",\"predicate mismatch\",\"wallet-binding replay\"],\"setupSteps\":["
     "\"Register supported credential schemas, issuers, and predicates.\",\"Bind credential proof subject"
     "s to wallet or ZK-ACE identity commitments.\"],\"executionSteps\":[\"Parse the credential under a re"
     "gistered schema.\",\"Generate a predicate proof and bind it to the wallet context.\",\"Submit the pr"
-    "oof envelope to the admission or authorization flow.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoint"
-    "s\":[\"buildVegaCredentialPredicateProofV0\",\"buildVegaCredentialProofEnvelope\"],\"chainRequirements"
+    "oof envelope to the admission or authorization flow.\"],\"sdkEntrypoints\":[\"buildVegaCredentialP"
+    "redicateCommitment\",\"buildVegaCredentialProofEnvelope\",\"buildVegaCredentialDevProofFixture\",\"v"
+    "erifyVegaCredentialProofLocally\"],\"plannedSdkEntrypoints\":[\"buildVegaCredentialPredicateProofV"
+    "0\",\"buildSubmitVegaCredentialProofInstruction\"],\"chainRequirements"
     "\":[\"credential schema registry\",\"issuer registry\",\"credential predicate verifier\"]},{\"id\":\"silen"
     "t-threshold-anoncred-v0\",\"name\":\"Silent threshold anonymous credentials v0\",\"shortName\":\"Silent "
     "threshold cred\",\"summary\":\"Research target for threshold-issued anonymous credentials with silen"
     "t setup, issuer hiding, constant-size showings, and dynamic verifier policies.\",\"category\":\"cred"
     "ential\",\"maturity\":\"technical_report\",\"coveredCriteria\":[],\"proofFamily\":\"threshold-anonymous-cr"
     "edentials\",\"publicInputsSchema\":\"issuer_set_commitment,threshold_policy_hash,credential_showing_"
-    "commitment,verifier_policy_hash,domain_separator\",\"verifierKeyId\":\"silent_threshold_anoncred_v0\""
-    ",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\":\""
-    "catalog-as-of-2026-05\",\"recommendedFor\":[\"multi-authority regulated credentials\",\"issuer-hiding "
+    "commitment,showing_nullifier,verifier_policy_hash,domain_separator\",\"verifierKeyId\":\"silent_th"
+    "reshold_anoncred_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\""
+    "implementationStage\":\"sdk-builder\",\"recommendedFor\":[\"multi-authority regulated credentials\",\"issuer-hiding "
     "eligibility proofs\",\"central-bank or supervisor issued wallet credentials\"],\"sourceReferences\":["
     "{\"label\":\"Anonymous Credentials with Issuer-Hiding, Threshold Issuance, and Silent Setup\",\"url\":"
     "\"https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html\"}],\"securityNotes\":[\"Crede"
     "ntial issuance and revocation governance are as important as proof verification.\",\"Issuer-set co"
     "mmitments need rotation and downgrade protections.\",\"This is a credential layer, not a private p"
-    "ayment protocol.\"],\"requiredState\":[\"threshold issuer registry\",\"credential parameter registry\","
+    "ayment protocol.\",\"The SDK dev fixture verifies deterministic binding only; chain credential sta"
+    "te and production silent-threshold proofs remain unavailable.\"],\"requiredState\":[\"threshold issuer registry\",\"credential parameter registry\","
     "\"verifier policy registry\",\"credential showing nullifier policy\"],\"failureModes\":[\"insufficient "
     "issuer threshold\",\"issuer-set substitution\",\"credential showing replay\",\"verifier-policy mismatc"
     "h\"],\"setupSteps\":[\"Register issuer sets, threshold policies, and credential parameters.\",\"Define"
     " showing-nullifier and verifier-policy binding rules.\"],\"executionSteps\":[\"Generate a credential"
     " showing proof under the verifier policy.\",\"Submit the proof as an admission or authorization co"
-    "mponent.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"buildSilentThresholdCredentialShowingPr"
-    "oofV0\",\"buildSilentThresholdCredentialEnvelope\"],\"chainRequirements\":[\"threshold issuer registry"
+    "mponent.\"],\"sdkEntrypoints\":[\"buildSilentThresholdCredentialCommitments\",\"buildSilentThreshold"
+    "CredentialEnvelope\",\"buildSilentThresholdCredentialDevProofFixture\",\"verifySilentThresholdCred"
+    "entialProofLocally\"],\"plannedSdkEntrypoints\":[\"buildSilentThresholdCredentialShowingProofV0\",\""
+    "buildSubmitSilentThresholdCredentialProofInstruction\"],\"chainRequirements\":[\"threshold issuer registry"
     "\",\"anonymous credential verifier\",\"credential showing replay policy\"]},{\"id\":\"zk-x509-onchain-id"
     "entity-v0\",\"name\":\"ZK-X.509 on-chain identity v0\",\"shortName\":\"ZK-X.509 identity\",\"summary\":\"ZK "
     "proof target for X.509 certificate validity, ownership, revocation status, and wallet-address bi"
@@ -229,37 +253,45 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "vm-x509-identity\",\"publicInputsSchema\":\"ca_root_commitment,certificate_policy_hash,revocation_ro"
     "ot,subject_commitment,address_binding,domain_separator\",\"verifierKeyId\":\"zk_x509_onchain_identit"
     "y_v0\",\"pqLayers\":{\"proof\":false,\"authorization\":false,\"noteEncryption\":false},\"implementationSta"
-    "ge\":\"catalog-as-of-2026-05\",\"recommendedFor\":[\"institutional wallet identity\",\"legal-entity acco"
+    "ge\":\"sdk-builder\",\"recommendedFor\":[\"institutional wallet identity\",\"legal-entity acco"
     "unt binding\",\"private PKI-based eligibility checks\"],\"sourceReferences\":[{\"label\":\"ZK-X.509 on-c"
     "hain identity\",\"url\":\"https://arxiv.org/abs/2603.25190\"}],\"securityNotes\":[\"Legacy X.509 trust r"
     "oots are usually not post-quantum.\",\"Revocation root freshness must be explicit in the public in"
-    "puts.\",\"Address binding must prevent proof replay across wallets and chains.\"],\"requiredState\":["
+    "puts.\",\"Address binding must prevent proof replay across wallets and chains.\",\"The SDK dev fixture"
+    " verifies deterministic public-input binding only; chain trust-root, revocation, policy state, "
+    "and production ZK-X.509 proofs remain unavailable.\"],\"requiredState\":["
     "\"trusted CA root registry\",\"certificate policy registry\",\"revocation root registry\",\"identity pr"
     "oof verifier\"],\"failureModes\":[\"expired certificate\",\"revoked certificate\",\"unknown CA root\",\"wr"
     "ong wallet address binding\",\"stale revocation root\"],\"setupSteps\":[\"Register trusted CA roots, c"
     "ertificate policies, and revocation-root feeds.\",\"Define wallet address binding and domain-separ"
     "ation rules.\"],\"executionSteps\":[\"Generate a proof of certificate validity, ownership, and revoc"
     "ation status.\",\"Bind the proof to an institution wallet or ZK-ACE identity commitment.\"],\"sdkEnt"
-    "rypoints\":[],\"plannedSdkEntrypoints\":[\"buildZkX509IdentityProofV0\",\"buildZkX509IdentityEnvelope\""
-    "],\"chainRequirements\":[\"trusted CA root registry\",\"revocation root registry\",\"ZK-X.509 verifier\""
+    "rypoints\":[\"buildZkX509IdentityCommitments\",\"buildZkX509IdentityEnvelope\",\"buildZkX509Identit"
+    "yDevProofFixture\",\"verifyZkX509IdentityProofLocally\"],\"plannedSdkEntrypoints\":[\"buildZkX509Id"
+    "entityProofV0\",\"buildSubmitZkX509IdentityProofInstruction\"],\"chainRequirements\":[\"trusted CA roo"
+    "t registry\",\"revocation root registry\",\"ZK-X.509 verifier\""
     "]},{\"id\":\"jindo-lattice-pcs-zk-v0\",\"name\":\"Jindo lattice polynomial commitment ZK v0\",\"shortName"
     "\":\"Jindo lattice PCS\",\"summary\":\"2026 lattice-based polynomial commitment candidate for post-qua"
     "ntum zero-knowledge proof systems.\",\"category\":\"proof_backend\",\"maturity\":\"technical_report\",\"co"
     "veredCriteria\":[],\"proofFamily\":\"lattice-polynomial-commitment\",\"publicInputsSchema\":\"commitment"
     ",opening_claim,query_set,parameter_hash,domain_separator\",\"verifierKeyId\":\"jindo_lattice_pcs_zk_"
     "v0\",\"pqLayers\":{\"proof\":true,\"authorization\":false,\"noteEncryption\":false},\"implementationStage\""
-    ":\"catalog-as-of-2026-05\",\"recommendedFor\":[\"post-quantum proof-system research\",\"future PQ verif"
+    ":\"sdk-builder\",\"recommendedFor\":[\"post-quantum proof-system research\",\"future PQ verif"
     "ier backend evaluation\",\"lattice PCS benchmarking\"],\"sourceReferences\":[{\"label\":\"Jindo lattice-"
     "based polynomial commitment\",\"url\":\"https://eprint.iacr.org.cn/2026/044\"}],\"securityNotes\":[\"Thi"
     "s is a proof backend candidate, not a transaction algorithm.\",\"PQ proof coverage alone does not "
     "imply PQ authorization or note encryption.\",\"Parameter selection and implementation security req"
-    "uire independent review.\"],\"requiredState\":[\"lattice PCS parameter registry\",\"backend verifier i"
+    "uire independent review.\",\"The SDK dev fixture verifies deterministic public-input binding only;"
+    " production Jindo lattice proving and verifier backends remain unavailable.\"],\"requiredState\":[\""
+    "lattice PCS parameter registry\",\"backend verifier i"
     "mplementation\",\"benchmark fixtures\"],\"failureModes\":[\"parameter mismatch\",\"opening claim substit"
     "ution\",\"unsupported query set\",\"backend misclassified as production-ready\"],\"setupSteps\":[\"Track"
     " lattice PCS parameter sets and verifier API shape.\",\"Benchmark prover, verifier, and proof-size"
     " behavior before integration.\"],\"executionSteps\":[\"Use as a candidate backend for future PQ circ"
-    "uits only after concrete circuit integration.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"bu"
-    "ildJindoLatticeProofV0\",\"verifyJindoPolynomialCommitmentV0\"],\"chainRequirements\":[\"Jindo verifie"
+    "uits only after concrete circuit integration.\"],\"sdkEntrypoints\":[\"buildJindoLatticePublicInput"
+    "s\",\"buildJindoLatticeProofEnvelope\",\"buildJindoLatticeDevProofFixture\",\"verifyJindoLatticeProo"
+    "fLocally\"],\"plannedSdkEntrypoints\":[\"buildJindoLatticeProofV0\",\"verifyJindoPolynomialCommitme"
+    "ntV0\"],\"chainRequirements\":[\"Jindo verifie"
     "r backend\",\"lattice PCS parameter registry\",\"dependent circuit integration\"]},{\"id\":\"sis-hints-a"
     "noncred-pq-v0\",\"name\":\"SIS-with-hints PQ anonymous credentials v0\",\"shortName\":\"SIS hints anoncr"
     "ed\",\"summary\":\"PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials and"
@@ -267,21 +299,25 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "redCriteria\":[],\"proofFamily\":\"lattice-anonymous-credentials\",\"publicInputsSchema\":\"issuer_commi"
     "tment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator\",\"verifierKeyId\""
     ":\"sis_hints_anoncred_pq_v0\",\"pqLayers\":{\"proof\":true,\"authorization\":false,\"noteEncryption\":fals"
-    "e},\"implementationStage\":\"catalog-as-of-2026-05\",\"recommendedFor\":[\"post-quantum anonymous crede"
+    "e},\"implementationStage\":\"sdk-builder\",\"recommendedFor\":[\"post-quantum anonymous crede"
     "ntial research\",\"future PQ KYC or eligibility proofs\",\"assumption tracking for lattice credentia"
     "l designs\"],\"sourceReferences\":[{\"label\":\"Tight Reductions for SIS-with-Hints Assumptions with A"
     "pplications\",\"url\":\"https://kclpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-wi"
     "th-hints-assumptions-with-applications/\"}],\"securityNotes\":[\"This is a credential foundation, no"
     "t an immediately deployable wallet protocol.\",\"PQ credential proof coverage does not make a paym"
     "ent flow end-to-end post-quantum.\",\"Parameter choices and reduction assumptions need explicit go"
-    "vernance.\"],\"requiredState\":[\"lattice credential parameter registry\",\"issuer parameter registry\""
+    "vernance.\",\"The SDK dev fixture verifies deterministic public-input binding only; production SI"
+    "S-with-hints credential proving and verifier backends remain unavailable.\"],\"requiredState\":[\"la"
+    "ttice credential parameter registry\",\"issuer parameter registry\""
     ",\"credential showing verifier\"],\"failureModes\":[\"wrong parameter set\",\"issuer parameter substitu"
     "tion\",\"credential showing replay\",\"overclaiming production readiness from assumption research\"],"
     "\"setupSteps\":[\"Track supported SIS-with-hints parameter sets and issuer parameters.\",\"Define how"
     " future PQ credential showings bind to wallet or authorization contexts.\"],\"executionSteps\":[\"Us"
     "e as a future PQ credential backend after a concrete credential protocol is selected.\"],\"sdkEntr"
-    "ypoints\":[],\"plannedSdkEntrypoints\":[\"buildSisHintsAnonymousCredentialProofV0\",\"buildSisHintsCre"
-    "dentialEnvelope\"],\"chainRequirements\":[\"lattice anonymous credential verifier\",\"credential param"
+    "ypoints\":[\"buildSisHintsCredentialCommitments\",\"buildSisHintsCredentialEnvelope\",\"buildSisHint"
+    "sCredentialDevProofFixture\",\"verifySisHintsCredentialProofLocally\"],\"plannedSdkEntrypoints\":[\"b"
+    "uildSisHintsAnonymousCredentialProofV0\",\"buildSubmitSisHintsCredentialProofInstruction\"],\"chain"
+    "Requirements\":[\"lattice anonymous credential verifier\",\"credential param"
     "eter registry\",\"issuer parameter registry\"]},{\"id\":\"orchard-halo2-actions-v1\",\"name\":\"Orchard-st"
     "yle Halo2 action bundle v1\",\"shortName\":\"Orchard Halo2\",\"summary\":\"Zcash Orchard-style action bu"
     "ndle with note commitments, nullifiers, and one aggregated Halo2 proof over spend/output actions"
@@ -422,6 +458,33 @@ _KEY_MAP = {
     "chainRequirements": "chain_requirements",
 }
 
+_STRING_LIST_FIELDS = (
+    "covered_criteria",
+    "chain_requirements",
+    "security_notes",
+    "required_state",
+    "failure_modes",
+    "setup_steps",
+    "execution_steps",
+    "sdk_entrypoints",
+    "planned_sdk_entrypoints",
+    "recommended_for",
+)
+_REQUIRED_STRING_FIELDS = ("name", "category", "maturity")
+_REQUIRED_PRESENT_FIELDS = (
+    "proof_family",
+    "public_inputs_schema",
+    "verifier_key_id",
+)
+_REQUIRED_STRING_LIST_FIELDS = (
+    "covered_criteria",
+    "chain_requirements",
+    "security_notes",
+    "failure_modes",
+    "sdk_entrypoints",
+    "planned_sdk_entrypoints",
+)
+
 
 def _canonicalize_value(value: Any) -> Any:
     if isinstance(value, Mapping):
@@ -429,6 +492,83 @@ def _canonicalize_value(value: Any) -> Any:
     if isinstance(value, list):
         return [_canonicalize_value(item) for item in value]
     return value
+
+
+def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> None:
+    for field in _REQUIRED_STRING_FIELDS:
+        value = descriptor.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} field {field!r} must be a non-empty string"
+            )
+
+    for field in _REQUIRED_PRESENT_FIELDS:
+        if field not in descriptor:
+            raise RuntimeError(
+                f"privacy algorithm catalog entry {index} field {field!r} is required"
+            )
+
+    for field in _REQUIRED_STRING_LIST_FIELDS:
+        if field not in descriptor:
+            raise RuntimeError(
+                f"privacy algorithm catalog entry {index} field {field!r} is required"
+            )
+
+    for field in _STRING_LIST_FIELDS:
+        if field not in descriptor:
+            continue
+        value = descriptor[field]
+        if not isinstance(value, list):
+            raise RuntimeError(
+                f"privacy algorithm catalog entry {index} field {field!r} must be a list"
+            )
+        for item_index, item in enumerate(value):
+            if not isinstance(item, str):
+                raise RuntimeError(
+                    "privacy algorithm catalog entry "
+                    f"{index} field {field!r} item {item_index} must be a string"
+                )
+
+    if "source_references" in descriptor:
+        references = descriptor["source_references"]
+        if not isinstance(references, list):
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} field 'source_references' must be a list"
+            )
+        for item_index, item in enumerate(references):
+            if not isinstance(item, Mapping):
+                raise RuntimeError(
+                    "privacy algorithm catalog entry "
+                    f"{index} field 'source_references' item {item_index} "
+                    "must be an object"
+                )
+            if not isinstance(item.get("label"), str) or not isinstance(
+                item.get("url"), str
+            ):
+                raise RuntimeError(
+                    "privacy algorithm catalog entry "
+                    f"{index} field 'source_references' item {item_index} "
+                    "must include string label and url"
+                )
+
+    pq_layers = descriptor.get("pq_layers")
+    if not isinstance(pq_layers, Mapping):
+        raise RuntimeError(
+            f"privacy algorithm catalog entry {index} field 'pq_layers' must be an object"
+        )
+    for key in ("proof", "authorization", "note_encryption"):
+        if key not in pq_layers:
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} field 'pq_layers.{key}' is required"
+            )
+        if not isinstance(pq_layers[key], bool):
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} field 'pq_layers.{key}' must be a boolean"
+            )
 
 
 def _with_boi_compatibility_fields(descriptor: Mapping[str, Any]) -> dict[str, Any]:
@@ -455,11 +595,36 @@ def _load_descriptors() -> tuple[dict[str, Any], ...]:
     loaded = json.loads(_RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON)
     if not isinstance(loaded, list):
         raise RuntimeError("privacy algorithm catalog must decode to a list")
-    return tuple(
-        _with_boi_compatibility_fields(_canonicalize_value(item))
-        for item in loaded
-        if isinstance(item, Mapping)
-    )
+    descriptors: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, item in enumerate(loaded):
+        if not isinstance(item, Mapping):
+            raise RuntimeError(
+                f"privacy algorithm catalog entry {index} must decode to an object"
+            )
+        canonical = _canonicalize_value(item)
+        algorithm_id = canonical.get("id")
+        if not isinstance(algorithm_id, str) or not algorithm_id.strip():
+            raise RuntimeError(
+                f"privacy algorithm catalog entry {index} must include a non-empty id"
+            )
+        if (
+            algorithm_id != algorithm_id.lower()
+            or any(char not in _ALGORITHM_ID_CHARS for char in algorithm_id)
+        ):
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} id {algorithm_id!r} must be lowercase and URL-safe"
+            )
+        if algorithm_id in seen_ids:
+            raise RuntimeError(
+                f"privacy algorithm catalog contains duplicate id {algorithm_id!r}"
+            )
+        seen_ids.add(algorithm_id)
+        _validate_descriptor_shape(canonical, index)
+        descriptor = _with_boi_compatibility_fields(canonical)
+        descriptors.append(descriptor)
+    return tuple(descriptors)
 
 
 _PRIVACY_ALGORITHM_DESCRIPTORS = _load_descriptors()
@@ -478,7 +643,9 @@ def get_privacy_algorithm_descriptors() -> list[dict[str, Any]]:
 def get_privacy_algorithm_descriptor(algorithm_id: str) -> dict[str, Any] | None:
     """Return one defensive-copy descriptor by id, or ``None`` if unknown."""
 
-    descriptor = _PRIVACY_ALGORITHM_DESCRIPTOR_BY_ID.get(str(algorithm_id))
+    if not isinstance(algorithm_id, str):
+        return None
+    descriptor = _PRIVACY_ALGORITHM_DESCRIPTOR_BY_ID.get(algorithm_id)
     return copy.deepcopy(descriptor) if descriptor is not None else None
 
 
@@ -536,6 +703,24 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     zk_ace_sdk_exports = (
         zk_ace_register and zk_ace_rotate and zk_ace_revoke and zk_ace_transfer and zk_ace_prover
     )
+    zk_ace_register_available = zk_ace_register and _callable_on_client(
+        client, "register_zk_ace_identity_commitment_and_wait", default=True
+    )
+    zk_ace_rotate_available = zk_ace_rotate and _callable_on_client(
+        client, "rotate_zk_ace_identity_commitment_and_wait", default=True
+    )
+    zk_ace_revoke_available = zk_ace_revoke and _callable_on_client(
+        client, "revoke_zk_ace_identity_commitment_and_wait", default=True
+    )
+    zk_ace_transfer_available = zk_ace_transfer and _callable_on_client(
+        client, "zk_ace_authorized_transfer_and_wait", default=True
+    )
+    zk_ace_validator_support = (
+        zk_ace_register_available
+        and zk_ace_rotate_available
+        and zk_ace_revoke_available
+        and zk_ace_transfer_available
+    )
 
     return {
         "python_sdk_available": True,
@@ -554,28 +739,17 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
         "unshield_instruction": _callable_on_client(
             client, "unshield_prepared_and_wait", default=True
         ),
-        "zk_ace_register_identity_instruction": zk_ace_register
-        and _callable_on_client(
-            client, "register_zk_ace_identity_commitment_and_wait", default=True
-        ),
-        "zk_ace_rotate_identity_instruction": zk_ace_rotate
-        and _callable_on_client(
-            client, "rotate_zk_ace_identity_commitment_and_wait", default=True
-        ),
-        "zk_ace_revoke_identity_instruction": zk_ace_revoke
-        and _callable_on_client(
-            client, "revoke_zk_ace_identity_commitment_and_wait", default=True
-        ),
+        "zk_ace_register_identity_instruction": zk_ace_register_available,
+        "zk_ace_rotate_identity_instruction": zk_ace_rotate_available,
+        "zk_ace_revoke_identity_instruction": zk_ace_revoke_available,
         "zk_ace_identity_lifecycle_instruction": zk_ace_register
         and zk_ace_rotate
         and zk_ace_revoke,
-        "zk_ace_authorized_transfer_instruction": zk_ace_transfer
-        and _callable_on_client(
-            client, "zk_ace_authorized_transfer_and_wait", default=True
-        ),
+        "zk_ace_authorized_transfer_instruction": zk_ace_transfer_available,
         "zk_ace_authorization_proof_v1": zk_ace_prover,
         "zk_ace_native_air_prover_v1": zk_ace_prover,
-        "zk_ace_validator_support_v1": zk_ace_transfer,
+        "zk_ace_validator_support_v1": zk_ace_validator_support,
+        "zk_ace_air_opening_privacy_v1": zk_ace_prover,
         "zk_ace_sdk_exports_v1": zk_ace_sdk_exports,
         "confidential_transfer_proof_v2": False,
         "confidential_unshield_proof_v3": False,

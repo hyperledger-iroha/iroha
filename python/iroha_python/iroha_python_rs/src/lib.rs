@@ -4110,6 +4110,12 @@ fn kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_
 }
 
 #[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_bridge_abi_version")]
+fn kagemusha_recursive_spend_bridge_abi_version_py() -> u32 {
+    6
+}
+
+#[pyfunction]
 #[pyo3(name = "kagemusha_recursive_spend_init")]
 fn kagemusha_recursive_spend_init_py(
     py: Python<'_>,
@@ -4165,6 +4171,72 @@ fn kagemusha_recursive_spend_append_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_lineage_witness_from_init_result")]
+fn kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+    bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(
+            request_archive,
+            "Kagemusha recursive spend lineage witness init request",
+        )?;
+    let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            bundle_archive,
+            "Kagemusha recursive spend lineage witness init bundle",
+        )?;
+    let witness =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_from_init_result(
+            &request, &bundle,
+        )
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &witness,
+        "failed to encode Kagemusha recursive spend lineage witness",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_lineage_witness_append_result")]
+fn kagemusha_recursive_spend_lineage_witness_append_result_py(
+    py: Python<'_>,
+    previous_witness_archive: &[u8],
+    request_archive: &[u8],
+    bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let previous_witness: iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 =
+        decode_kagemusha_recursive_archive(
+            previous_witness_archive,
+            "Kagemusha recursive spend previous lineage witness",
+        )?;
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 =
+        decode_kagemusha_recursive_archive(
+            request_archive,
+            "Kagemusha recursive spend lineage witness append request",
+        )?;
+    let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            bundle_archive,
+            "Kagemusha recursive spend lineage witness append bundle",
+        )?;
+    let witness =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_append_result(
+            &previous_witness,
+            &request,
+            &bundle,
+        )
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &witness,
+        "failed to encode Kagemusha recursive spend lineage witness",
+    )
+}
+
+#[pyfunction]
 #[pyo3(name = "kagemusha_recursive_spend_verify")]
 fn kagemusha_recursive_spend_verify_py(
     py: Python<'_>,
@@ -4172,35 +4244,8 @@ fn kagemusha_recursive_spend_verify_py(
 ) -> PyResult<Py<PyBytes>> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
         decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend verify")?;
-    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+    let result = iroha_core::zk::kagemusha_recursive_spend_verify_result(&request.bundle)
         .map_err(PyRuntimeError::new_err)?;
-    let result = match iroha_core::zk::preverify_kagemusha_recursive_spend_bundle(
-        &request.bundle,
-        &vk_box,
-    ) {
-        Ok(()) => {
-            let valid =
-                iroha_core::zk::verify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box);
-            iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
-                valid,
-                hop_count: request.bundle.accumulator.hop_count,
-                encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
-                    .unwrap_or(u32::MAX),
-                reason: if valid {
-                    String::new()
-                } else {
-                    "proof verification failed".to_owned()
-                },
-            }
-        }
-        Err(reason) => iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
-            valid: false,
-            hop_count: request.bundle.accumulator.hop_count,
-            encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
-                .unwrap_or(u32::MAX),
-            reason,
-        },
-    };
     encode_kagemusha_recursive_archive(
         py,
         &result,
@@ -4210,17 +4255,29 @@ fn kagemusha_recursive_spend_verify_py(
 
 fn kagemusha_recursive_spend_redeem_instruction_from_request(
     request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
-) -> Result<
-    iroha_data_model::isi::offline::RedeemKagemushaRecursive,
-    iroha_data_model::offline::KagemushaFoldError,
-> {
-    request.validate_public_binding()?;
+) -> Result<iroha_data_model::isi::offline::RedeemKagemushaRecursive, String> {
+    request
+        .validate_public_binding()
+        .map_err(|err| err.to_string())?;
+    if let Some(lineage_witness) = &request.lineage_witness {
+        let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()?;
+        iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box(
+            &request.bundle,
+            lineage_witness,
+            &vk_box,
+        )?;
+    } else {
+        iroha_core::zk::ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+            &request.bundle,
+        )?;
+    }
     Ok(
-        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
             request.bundle,
             request.recipient,
             request.public_amount,
             request.redeem_proof,
+            request.lineage_witness,
         ),
     )
 }
@@ -4353,7 +4410,7 @@ fn open_connect_payload_py(py: Python<'_>, key: &[u8], frame_bytes: &[u8]) -> Py
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, sync::OnceLock};
 
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use ed25519_dalek::SigningKey;
@@ -4362,12 +4419,17 @@ mod tests {
     use iroha_core::zk::ZK_BACKEND_HALO2_IPA;
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN, KagemushaRecursiveAggregationProof,
+        KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaRecursiveAggregationProof,
         KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
-        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendVerifyRequestV1,
-        KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
+        KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendRedeemRequestV1,
+        KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
+        KagemushaSpendableNoteDescriptorV1, KagemushaVerifiedFoldBundle,
+        KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+        KagemushaVerifiedFoldVerifierRecord,
         kagemusha_recursive_spend_public_inputs_from_accumulator,
     };
+    use iroha_data_model::{confidential::ConfidentialStatus, proof::VerifyingKeyId};
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
     use once_cell::sync::OnceCell;
@@ -4471,16 +4533,213 @@ mod tests {
     fn sample_recursive_spend_redeem_request(
         public_amount: u128,
     ) -> KagemushaRecursiveSpendRedeemRequestV1 {
+        let mut redeem_proof = ProofAttachment::new_ref(
+            ZK_BACKEND_HALO2_IPA.to_owned(),
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x5A; 64]),
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "python-recursive-unshield"),
+        );
+        redeem_proof.vk_commitment = Some(fixed_bytes(b"python-recursive-unshield-vk"));
         KagemushaRecursiveSpendRedeemRequestV1 {
             bundle: sample_kagemusha_recursive_spend_bundle(),
             recipient: sample_account(0xB8),
             public_amount,
-            redeem_proof: ProofAttachment::new_ref(
-                ZK_BACKEND_HALO2_IPA.to_owned(),
-                ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x5A; 64]),
-                VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "python-recursive-unshield"),
-            ),
+            redeem_proof,
+            lineage_witness: None,
         }
+    }
+
+    fn sample_pallas_coeffs(n: usize) -> Vec<iroha_zkp_halo2::pallas::Scalar> {
+        (0..n)
+            .map(|index| iroha_zkp_halo2::pallas::Scalar::from((index + 1) as u64))
+            .collect()
+    }
+
+    fn sample_pallas_open_envelope_with_metadata(
+        n: usize,
+        label: &str,
+        metadata: iroha_zkp_halo2::PolyOpenTranscriptMetadata,
+    ) -> iroha_zkp_halo2::OpenVerifyEnvelope {
+        let params = iroha_zkp_halo2::pallas::Params::new(n).expect("Pallas params");
+        let poly = iroha_zkp_halo2::pallas::Polynomial::from_coeffs(sample_pallas_coeffs(n));
+        let commitment = poly.commit(&params).expect("Pallas commitment");
+        let z = iroha_zkp_halo2::pallas::Scalar::from(5_u64);
+        let mut transcript = iroha_zkp_halo2::Transcript::new(label);
+        let (proof, t) = poly
+            .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+            .expect("Pallas opening proof");
+        iroha_zkp_halo2::OpenVerifyEnvelope {
+            params: iroha_zkp_halo2::norito_helpers::params_to_wire(&params),
+            public: iroha_zkp_halo2::norito_helpers::poly_open_public::<
+                iroha_zkp_halo2::pallas::PallasBackend,
+            >(params.n(), z, t, commitment),
+            proof: iroha_zkp_halo2::norito_helpers::proof_to_wire(&proof),
+            transcript_label: label.to_owned(),
+            vk_commitment: metadata.vk_commitment,
+            public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+            domain_tag: metadata.domain_tag,
+        }
+    }
+
+    fn sample_verifying_semantic_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
+        sample_verifying_semantic_recursive_spend_lineage_fixture().0
+    }
+
+    fn sample_verifying_semantic_recursive_spend_lineage_fixture() -> (
+        KagemushaRecursiveSpendBundleV1,
+        KagemushaRecursiveSpendLineageWitnessV1,
+    ) {
+        static FIXTURE: OnceLock<(
+            KagemushaRecursiveSpendBundleV1,
+            KagemushaRecursiveSpendLineageWitnessV1,
+        )> = OnceLock::new();
+        FIXTURE
+            .get_or_init(|| {
+                let chain_id: ChainId = "kagemusha-recursive-spend-python-real"
+                    .parse()
+                    .expect("chain id");
+                let asset = AssetDefinitionId::new(
+                    DomainId::try_new("offline", "universal").expect("domain id"),
+                    "kgmpyreal".parse().expect("asset definition name"),
+                );
+                let record = iroha_core::zk::confidential_v2::confidential_transfer_v2_vk_record(
+                    iroha_core::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                    3,
+                )
+                .expect("confidential transfer v2 verifier record");
+                let verifier_key = record.key.clone().expect("inline transfer verifier key");
+                let spend_key = [0x11_u8; Hash::LENGTH];
+                let input_rho = [0x21_u8; Hash::LENGTH];
+                let input_diversifier =
+                    iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                        b"kagemusha-python-real-input",
+                    );
+                let input_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &spend_key,
+                        input_diversifier,
+                    )
+                    .expect("input owner tag");
+                let input_commitment =
+                    iroha_core::zk::confidential_v2::derive_confidential_note_v2(
+                        &asset.to_string(),
+                        7,
+                        input_rho,
+                        input_owner_tag,
+                    )
+                    .expect("input commitment");
+                let tree_commitments = vec![input_commitment];
+                let root_before =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(
+                        &tree_commitments,
+                    )
+                    .expect("root before");
+                let output_owner_tag =
+                    iroha_core::zk::confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(
+                        &[0x41_u8; Hash::LENGTH],
+                        iroha_core::zk::confidential_v2::derive_confidential_diversifier_v2(
+                            b"kagemusha-python-real-output",
+                        ),
+                    )
+                    .expect("output owner tag");
+                let proof =
+                    iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
+                        &chain_id,
+                        &asset.to_string(),
+                        &spend_key,
+                        &tree_commitments,
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
+                            amount: 7,
+                            rho: input_rho,
+                            diversifier: input_diversifier,
+                            leaf_index: 0,
+                        }],
+                        &[iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
+                            amount: 7,
+                            rho: [0x31_u8; Hash::LENGTH],
+                            owner_tag: output_owner_tag,
+                        }],
+                        root_before,
+                        &record.circuit_id,
+                        &verifier_key,
+                    )
+                    .expect("confidential transfer v2 proof");
+                let mut next_tree = tree_commitments;
+                next_tree.extend(proof.output_commitments.iter().copied());
+                let root_after =
+                    iroha_core::zk::confidential_v2::compute_confidential_root_v2(&next_tree)
+                        .expect("root after");
+                let mut attachment = ProofAttachment::new_ref(
+                    ZK_BACKEND_HALO2_IPA.into(),
+                    proof.proof,
+                    VerifyingKeyId::new(
+                        ZK_BACKEND_HALO2_IPA,
+                        "kagemusha-python-confidential-transfer-v2",
+                    ),
+                );
+                attachment.vk_commitment = Some(iroha_core::zk::hash_vk(&verifier_key));
+                let step = KagemushaVerifiedFoldStep {
+                    root_before,
+                    input_nullifiers: proof.nullifiers,
+                    output_commitments: proof.output_commitments,
+                    root_after,
+                    attachment,
+                    verifier_key,
+                };
+                let id = step.attachment.vk_ref.clone();
+                let record_bundle = KagemushaVerifiedFoldRecordBundle {
+                    bundle: KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset,
+                        steps: vec![step],
+                    },
+                    verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id, record }],
+                };
+                let metadata =
+                    iroha_core::zk::kagemusha_pallas_open_envelope_metadata_for_verified_hop(
+                        &record_bundle.bundle.chain_id,
+                        &record_bundle.bundle.asset,
+                        0,
+                        &record_bundle.bundle.steps[0],
+                    )
+                    .expect("Pallas open-envelope hop metadata");
+                let envelope = sample_pallas_open_envelope_with_metadata(
+                    4,
+                    "python-recursive-spend-verify-open-envelope",
+                    metadata,
+                );
+                let envelope_archive =
+                    norito::to_bytes(&vec![envelope]).expect("encode Pallas envelope archive");
+                let current_note = KagemushaSpendableNoteDescriptorV1 {
+                    note_commitment: record_bundle.bundle.steps[0].output_commitments[0],
+                    spend_nullifier: fixed_bytes(
+                        b"python-recursive-spend-verify-current-nullifier",
+                    ),
+                    amount: Numeric::new(7, 0),
+                };
+                let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+                    .expect("recursive spend verifier key");
+                iroha_core::zk::prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+                    &record_bundle,
+                    &envelope_archive,
+                    current_note.clone(),
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                    &vk_box,
+                    None,
+                )
+                .map(|bundle| {
+                    (
+                        bundle,
+                        KagemushaRecursiveSpendLineageWitnessV1 {
+                            record_bundle,
+                            pallas_open_envelopes_archive: envelope_archive,
+                            current_notes: vec![current_note],
+                            previous_recursive_proofs: Vec::new(),
+                        },
+                    )
+                })
+                .expect("semantic recursive spend init bundle with lineage witness")
+            })
+            .clone()
     }
 
     fn empty_kagemusha_record_bundle_archive() -> Vec<u8> {
@@ -4646,6 +4905,144 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_lineage_witness_python_functions_validate_archives() {
+        ensure_python();
+        Python::attach(|py| {
+            let err =
+                kagemusha_recursive_spend_lineage_witness_from_init_result_py(py, &[], &[0x01])
+                    .expect_err("init lineage helper must reject empty request archive")
+                    .to_string();
+            assert!(
+                err.contains("archive must not be empty"),
+                "unexpected empty request error: {err}"
+            );
+
+            let err =
+                kagemusha_recursive_spend_lineage_witness_from_init_result_py(py, &[0x01], &[])
+                    .expect_err("init lineage helper must reject empty bundle archive")
+                    .to_string();
+            assert!(
+                err.contains("archive must not be empty"),
+                "unexpected empty bundle error: {err}"
+            );
+
+            let err = kagemusha_recursive_spend_lineage_witness_append_result_py(
+                py,
+                &[],
+                &[0x01],
+                &[0x02],
+            )
+            .expect_err("append lineage helper must reject empty witness archive")
+            .to_string();
+            assert!(
+                err.contains("archive must not be empty"),
+                "unexpected empty witness error: {err}"
+            );
+
+            let err = kagemusha_recursive_spend_lineage_witness_append_result_py(
+                py,
+                &[0x01],
+                &[],
+                &[0x02],
+            )
+            .expect_err("append lineage helper must reject empty request archive")
+            .to_string();
+            assert!(
+                err.contains("archive must not be empty"),
+                "unexpected empty append request error: {err}"
+            );
+
+            let err = kagemusha_recursive_spend_lineage_witness_append_result_py(
+                py,
+                &[0x01],
+                &[0x02],
+                &[],
+            )
+            .expect_err("append lineage helper must reject empty bundle archive")
+            .to_string();
+            assert!(
+                err.contains("archive must not be empty"),
+                "unexpected empty append bundle error: {err}"
+            );
+
+            let err = kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                py,
+                &[0x01, 0x02],
+                &[0x03, 0x04],
+            )
+            .expect_err("init lineage helper must reject malformed archives")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive spend"),
+                "unexpected malformed init helper error: {err}"
+            );
+
+            let err = kagemusha_recursive_spend_lineage_witness_append_result_py(
+                py,
+                &[0x01, 0x02],
+                &[0x03, 0x04],
+                &[0x05, 0x06],
+            )
+            .expect_err("append lineage helper must reject malformed archives")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive spend"),
+                "unexpected malformed append helper error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_six() {
+        assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 6);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_python_function_rebuilds_init_witness() {
+        ensure_python();
+        Python::attach(|py| {
+            let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+            let current_note = witness
+                .current_notes
+                .first()
+                .expect("one-hop lineage witness current note")
+                .clone();
+            let request = KagemushaRecursiveSpendInitRequestV1 {
+                record_bundle: witness.record_bundle.clone(),
+                pallas_open_envelopes_archive: witness.pallas_open_envelopes_archive.clone(),
+                current_note,
+            };
+            let request_archive = norito::to_bytes(&request).expect("encode init request");
+            let bundle_archive = norito::to_bytes(&bundle).expect("encode init bundle");
+
+            let output = kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                py,
+                &request_archive,
+                &bundle_archive,
+            )
+            .expect("init lineage helper rebuilds witness archive");
+            let decoded: KagemushaRecursiveSpendLineageWitnessV1 =
+                decode_from_bytes(output.bind(py).as_bytes())
+                    .expect("decode rebuilt lineage witness");
+            assert_eq!(decoded, witness);
+
+            let wrong_bundle_archive = norito::to_bytes(&sample_kagemusha_recursive_spend_bundle())
+                .expect("encode mismatched bundle");
+            let err = kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                py,
+                &request_archive,
+                &wrong_bundle_archive,
+            )
+            .expect_err("lineage helper must reject mismatched init bundle")
+            .to_string();
+            assert!(
+                err.contains("lineage"),
+                "mismatched init bundle error lost lineage context: {err}"
+            );
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_verify_python_function_reports_malformed_proof_material() {
         fn verify_result(
             py: Python<'_>,
@@ -4669,6 +5066,7 @@ mod tests {
                 ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
             let trusted_setup_result = verify_result(py, &trusted_setup_backend);
             assert!(!trusted_setup_result.valid);
+            assert!(!trusted_setup_result.chain_admissible);
             assert!(
                 trusted_setup_result.reason.contains("not supported"),
                 "trusted-setup recursive proof backend was not rejected clearly: {}",
@@ -4687,6 +5085,7 @@ mod tests {
             );
             let stark_result = verify_result(py, &stark_recursive_bundle);
             assert!(!stark_result.valid);
+            assert!(!stark_result.chain_admissible);
             assert!(
                 stark_result.reason.contains("proof.backend"),
                 "transparent STARK substitution was not rejected at proof.backend: {}",
@@ -4698,6 +5097,7 @@ mod tests {
                 ProofBox::new(ZK_BACKEND_HALO2_IPA.into(), Vec::new());
             let empty_result = verify_result(py, &empty_recursive_proof);
             assert!(!empty_result.valid);
+            assert!(!empty_result.chain_admissible);
             assert!(
                 empty_result.reason.contains("proof.bytes"),
                 "empty recursive IPA proof was not rejected at proof.bytes: {}",
@@ -4707,16 +5107,55 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor() {
-        let request = sample_recursive_spend_redeem_request(42);
-        let instruction =
-            kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
-                .expect("valid recursive spend redeem request");
-        assert_eq!(instruction.public_amount, 42);
-        assert_eq!(
-            instruction.bundle.accumulator.topup_anchor_nullifiers,
-            request.bundle.accumulator.topup_anchor_nullifiers
+    fn kagemusha_recursive_spend_verify_python_function_reports_backend_valid_semantic_profile() {
+        ensure_python();
+        let bundle = sample_verifying_semantic_recursive_spend_bundle();
+        let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+            .expect("recursive spend verifier key");
+        assert!(
+            iroha_core::zk::verify_kagemusha_recursive_spend_bundle(&bundle, &vk_box),
+            "fixture must be backend-valid before chain-admission gating"
         );
+        let request = KagemushaRecursiveSpendVerifyRequestV1 { bundle };
+        let archive = norito::to_bytes(&request).expect("encode recursive spend verify request");
+
+        Python::attach(|py| {
+            let output = kagemusha_recursive_spend_verify_py(py, &archive)
+                .expect("verify function returns a diagnostic result archive");
+            let result: KagemushaRecursiveSpendVerifyResultV1 =
+                decode_from_bytes(output.bind(py).as_bytes())
+                    .expect("decode recursive spend verify result");
+            assert!(
+                result.valid,
+                "backend-valid semantic recursive spend proofs must be spendable offline"
+            );
+            assert!(
+                !result.chain_admissible,
+                "semantic recursive spend proofs without lineage witness are not directly redeemable"
+            );
+            assert_eq!(result.hop_count, request.bundle.accumulator.hop_count);
+            assert!(result.encoded_bytes > 0);
+            assert!(result.reason.is_empty());
+            assert!(
+                result.chain_admission_reason.contains("chain admission")
+                    && result
+                        .chain_admission_reason
+                        .contains("private-hop lineage"),
+                "unexpected semantic recursive spend verify reason: {}",
+                result.chain_admission_reason
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_native_rejects_semantic_profile() {
+        let request = sample_recursive_spend_redeem_request(42);
+        request
+            .validate_public_binding()
+            .expect("semantic recursive spend redeem request has valid public bindings");
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+            .expect_err("Python native redeem builder must reject semantic profile");
+        assert!(err.contains("private-hop lineage"));
 
         let wrong_amount = sample_recursive_spend_redeem_request(41);
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(wrong_amount)
@@ -4732,6 +5171,239 @@ mod tests {
         let err = kagemusha_recursive_spend_redeem_instruction_from_request(missing_anchor)
             .expect_err("Python native redeem builder must reject missing top-up anchors");
         assert!(err.to_string().contains("top-up anchor"));
+
+        let mut missing_vk_commitment = sample_recursive_spend_redeem_request(42);
+        missing_vk_commitment.redeem_proof.vk_commitment = None;
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(missing_vk_commitment)
+            .expect_err("Python native redeem builder must reject missing redeem VK commitment");
+        assert!(err.to_string().contains("vk_commitment"));
+
+        let mut zero_vk_commitment = sample_recursive_spend_redeem_request(42);
+        zero_vk_commitment.redeem_proof.vk_commitment = Some([0u8; Hash::LENGTH]);
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(zero_vk_commitment)
+            .expect_err("Python native redeem builder must reject zero redeem VK commitment");
+        assert!(err.to_string().contains("vk_commitment"));
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_accepts_record_backed_lineage_witness() {
+        ensure_python();
+        let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let mut request = sample_recursive_spend_redeem_request(7);
+        request.bundle = bundle.clone();
+        request.lineage_witness = Some(witness.clone());
+        request
+            .validate_public_binding()
+            .expect("record-backed recursive spend redeem request has valid public bindings");
+
+        let instruction =
+            kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
+                .expect("Python native redeem builder accepts record-backed lineage witness");
+        assert_eq!(instruction.bundle, bundle);
+        assert_eq!(instruction.public_amount, 7);
+        assert_eq!(instruction.lineage_witness.as_ref(), Some(&witness));
+
+        let mut tampered_final_proof = request.clone();
+        tampered_final_proof.bundle.recursive_proof.proof.bytes[0] ^= 0x01;
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(tampered_final_proof)
+            .expect_err("Python native redeem builder must reject tampered final recursive proof");
+        assert!(
+            err.contains("final proof did not verify"),
+            "unexpected tampered final recursive proof error: {err}"
+        );
+
+        let archive = norito::to_bytes(&request).expect("encode recursive spend redeem request");
+        Python::attach(|py| {
+            let output = kagemusha_recursive_spend_redeem_py(py, &archive)
+                .expect("Python function accepts record-backed lineage witness");
+            let decoded: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(output.bind(py).as_bytes())
+                    .expect("decode recursive redeem instruction");
+            assert_eq!(decoded.bundle, bundle);
+            assert_eq!(decoded.public_amount, 7);
+            assert_eq!(decoded.lineage_witness.as_ref(), Some(&witness));
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_rejects_adversarial_lineage_witnesses() {
+        let (bundle, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+        let base_request = {
+            let mut request = sample_recursive_spend_redeem_request(7);
+            request.bundle = bundle;
+            request.lineage_witness = Some(witness);
+            request
+        };
+
+        fn assert_rejects(request: KagemushaRecursiveSpendRedeemRequestV1, label: &str) {
+            let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
+                Ok(_) => panic!("Python native redeem builder must reject {label}"),
+                Err(err) => err,
+            };
+            assert!(
+                !err.is_empty(),
+                "Python native redeem builder must report a reason for {label}"
+            );
+        }
+
+        let mut missing_record = base_request.clone();
+        missing_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .clear();
+        assert_rejects(missing_record, "missing verifier record");
+
+        let mut duplicate_record = base_request.clone();
+        let duplicate = duplicate_record
+            .lineage_witness
+            .as_ref()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .clone();
+        duplicate_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .push(duplicate);
+        assert_rejects(duplicate_record, "duplicate verifier record");
+
+        let mut unreferenced_record = base_request.clone();
+        let mut extra = unreferenced_record
+            .lineage_witness
+            .as_ref()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .clone();
+        extra.id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "unused-python-lineage-hop");
+        unreferenced_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .push(extra);
+        assert_rejects(unreferenced_record, "unreferenced verifier record");
+
+        let mut inactive_record = base_request.clone();
+        inactive_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .status = ConfidentialStatus::Withdrawn;
+        assert_rejects(inactive_record, "inactive verifier record");
+
+        let mut inline_key_mismatch = base_request.clone();
+        inline_key_mismatch
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .record
+            .key = None;
+        assert_rejects(inline_key_mismatch, "missing inline verifier key");
+
+        let mut malformed_pallas_archive = base_request.clone();
+        malformed_pallas_archive
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .pallas_open_envelopes_archive = vec![0xFF, 0x00, 0x01];
+        assert_rejects(malformed_pallas_archive, "malformed Pallas archive");
+
+        let mut note_commitment_mismatch = base_request.clone();
+        note_commitment_mismatch
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .current_notes[0]
+            .note_commitment = fixed_bytes(b"python-lineage-wrong-current-note");
+        assert_rejects(note_commitment_mismatch, "current note commitment mismatch");
+
+        let mut unexpected_previous_proof = base_request.clone();
+        let previous = unexpected_previous_proof.bundle.recursive_proof.clone();
+        unexpected_previous_proof
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .previous_recursive_proofs
+            .push(previous);
+        assert_rejects(
+            unexpected_previous_proof,
+            "unexpected previous recursive proof for one-hop witness",
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_native_rejects_reserved_lineage_profile() {
+        let mut request = sample_recursive_spend_redeem_request(42);
+        request.bundle.recursive_proof.verifier_key_id.name =
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+        request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest =
+            fixed_bytes(b"python-recursive-lineage-scalar-projection");
+        request.bundle.recursive_proof.public_inputs_hash = request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage recursive spend public-input hash");
+        request
+            .validate_public_binding()
+            .expect("reserved lineage recursive spend redeem request has valid public bindings");
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
+            .expect_err("Python native redeem builder must reject reserved lineage profile");
+        assert!(
+            err.contains("lineage proof")
+                && (err.contains("not wired into chain admission")
+                    || err.contains("failed to decode recursive spend lineage proof envelope")),
+            "unexpected reserved-lineage error: {err}"
+        );
+
+        request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest = [0u8; Hash::LENGTH];
+        request.bundle.recursive_proof.public_inputs_hash = request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("zero lineage scalar public-input hash");
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+            .expect_err("Python native redeem builder must reject zero lineage scalar projection");
+        assert!(err.contains("recursive_verifier_scalar_projection_digest"));
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_function_rejects_semantic_profile() {
+        ensure_python();
+        let request = sample_recursive_spend_redeem_request(42);
+        request
+            .validate_public_binding()
+            .expect("semantic recursive spend redeem request has valid public bindings");
+        let archive = norito::to_bytes(&request).expect("encode recursive spend request");
+        Python::attach(|py| {
+            let err = kagemusha_recursive_spend_redeem_py(py, &archive)
+                .expect_err("Python function must reject semantic profile");
+            let message = err.to_string();
+            assert!(message.contains("invalid Kagemusha recursive spend redeem request"));
+            assert!(message.contains("private-hop lineage"));
+        });
     }
 
     #[test]
@@ -9792,9 +10464,21 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_bridge_abi_version_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         kagemusha_recursive_spend_append_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_lineage_witness_from_init_result_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_lineage_witness_append_result_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

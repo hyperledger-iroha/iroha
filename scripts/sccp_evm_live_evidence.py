@@ -211,6 +211,10 @@ def _json_rpc(
         raise RuntimeError(str(exc)) from exc
     if not isinstance(decoded, dict):
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
+    if decoded.get("jsonrpc") != "2.0":
+        raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
+    if decoded.get("id") != 1:
+        raise RuntimeError(f"JSON-RPC {method} returned a mismatched response id")
     error = decoded.get("error")
     if error is not None:
         raise RuntimeError(f"JSON-RPC {method} error: {error}")
@@ -900,6 +904,12 @@ def _collect_route_canary_transaction_evidence(
         raise RuntimeError("route-canary receipt transactionHash does not match request")
     if receipt.get("status") != "0x1":
         raise RuntimeError("route-canary transaction receipt status must be 0x1")
+    receipt_block = _route_canary_receipt_block_summary(
+        rpc_url,
+        receipt,
+        opener=opener,
+        timeout=timeout,
+    )
     bridge_address = _parse_hex_bytes(
         str(destination["bridge_address"]),
         label="destination bridge address",
@@ -946,8 +956,12 @@ def _collect_route_canary_transaction_evidence(
             expected_network_id=expected_network_id,
         )
         if candidate is not None:
+            if event_summary is not None:
+                raise RuntimeError(
+                    "route-canary transaction receipt contained more than one "
+                    "matching MessageProofAccepted event at the supplied log index"
+                )
             event_summary = candidate
-            break
     if event_summary is None:
         raise RuntimeError(
             "route-canary transaction receipt did not contain the expected "
@@ -988,6 +1002,15 @@ def _collect_route_canary_transaction_evidence(
         bridge_address=bridge_address,
         transaction_hash=transaction_hash,
         log_index=int(event_summary["log_index"]),
+        receipt_block_number=int(receipt_block["block_number"]),
+        receipt_block_hash=_parse_hex32(
+            str(receipt_block["block_hash"]),
+            label="route-canary receipt block hash",
+        ),
+        block_receipts_root=_parse_hex32(
+            str(receipt_block["block_receipts_root"]),
+            label="route-canary block receiptsRoot",
+        ),
         call_data_sha256=_parse_hex32(
             str(call_summary["call_data_sha256"]),
             label="route-canary call data SHA-256",
@@ -1026,21 +1049,63 @@ def _collect_route_canary_transaction_evidence(
     summary = {
         **event_summary,
         "receipt_status": "0x1",
+        **receipt_block,
         **call_summary,
         **used_summary,
         "route_canary_evidence_hash": _hex(canary_hash),
     }
-    block_number = receipt.get("blockNumber")
-    if isinstance(block_number, str):
-        summary["block_number"] = _rpc_quantity(
-            block_number,
-            method="route-canary receipt blockNumber",
-        )
-    block_hash = receipt.get("blockHash")
-    if isinstance(block_hash, str):
-        _parse_exact_hex32_blob(block_hash, label="route-canary receipt blockHash")
-        summary["block_hash"] = block_hash.lower()
     return summary
+
+
+def _route_canary_receipt_block_summary(
+    rpc_url: str,
+    receipt: dict[str, Any],
+    *,
+    opener: Urlopen,
+    timeout: float,
+) -> dict[str, Any]:
+    receipt_block_number_text = receipt.get("blockNumber")
+    if not isinstance(receipt_block_number_text, str):
+        raise RuntimeError("route-canary receipt blockNumber must be present")
+    receipt_block_number = _rpc_quantity(
+        receipt_block_number_text,
+        method="route-canary receipt blockNumber",
+    )
+    receipt_block_hash = _parse_exact_hex32_blob(
+        receipt.get("blockHash"),
+        label="route-canary receipt blockHash",
+    )
+    block = _json_rpc(
+        rpc_url,
+        "eth_getBlockByNumber",
+        [receipt_block_number_text, False],
+        opener=opener,
+        timeout=timeout,
+    )
+    if not isinstance(block, dict):
+        raise RuntimeError("route-canary receipt block was not found")
+    block_number = _rpc_quantity(
+        block.get("number"),
+        method="route-canary block number",
+    )
+    if block_number != receipt_block_number:
+        raise RuntimeError("route-canary block number does not match receipt blockNumber")
+    block_hash = _parse_exact_hex32_blob(
+        block.get("hash"),
+        label="route-canary block hash",
+    )
+    if block_hash != receipt_block_hash:
+        raise RuntimeError("route-canary block hash does not match receipt blockHash")
+    block_receipts_root = _parse_exact_hex32_blob(
+        block.get("receiptsRoot"),
+        label="route-canary block receiptsRoot",
+    )
+    return {
+        "block_number": receipt_block_number,
+        "block_hash": _hex(receipt_block_hash),
+        "block_receipts_root": _hex(block_receipts_root),
+        "receipt_block_matches": True,
+    }
 
 
 def _offline_args(summary: dict[str, Any]) -> list[str]:
@@ -1105,6 +1170,12 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                     str(route_canary_transaction["transaction_hash"]),
                     "--route-canary-log-index",
                     str(route_canary_transaction["log_index"]),
+                    "--route-canary-receipt-block-number",
+                    str(route_canary_transaction["block_number"]),
+                    "--route-canary-receipt-block-hash",
+                    str(route_canary_transaction["block_hash"]),
+                    "--route-canary-block-receipts-root",
+                    str(route_canary_transaction["block_receipts_root"]),
                     "--route-canary-call-data-sha256",
                     str(route_canary_transaction["call_data_sha256"]),
                     "--route-canary-message-id",
@@ -1307,6 +1378,10 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction.get("event_matches") is True
         and transaction.get("call_matches") is True
         and transaction.get("message_proof_used") is True
+        and transaction.get("receipt_block_matches") is True
+        and type(transaction.get("block_number")) is int
+        and isinstance(transaction.get("block_hash"), str)
+        and isinstance(transaction.get("block_receipts_root"), str)
     )
 
 
@@ -1556,6 +1631,43 @@ def collect_live_evidence(
                 f"expected {_hex(derived_canary_hash)}, "
                 f"got {_hex(route_canary_evidence_hash)}"
             )
+        expected_receipt_block_number = getattr(
+            args,
+            "route_canary_receipt_block_number",
+            None,
+        )
+        if (
+            expected_receipt_block_number is not None
+            and expected_receipt_block_number != route_canary_transaction["block_number"]
+        ):
+            raise ValueError(
+                "--route-canary-receipt-block-number does not match "
+                "MessageProofAccepted transaction receipt block"
+            )
+        expected_receipt_block_hash = getattr(
+            args,
+            "route_canary_receipt_block_hash",
+            None,
+        )
+        if expected_receipt_block_hash is not None and _hex(
+            expected_receipt_block_hash
+        ) != route_canary_transaction["block_hash"]:
+            raise ValueError(
+                "--route-canary-receipt-block-hash does not match "
+                "MessageProofAccepted transaction receipt block"
+            )
+        expected_block_receipts_root = getattr(
+            args,
+            "route_canary_block_receipts_root",
+            None,
+        )
+        if expected_block_receipts_root is not None and _hex(
+            expected_block_receipts_root
+        ) != route_canary_transaction["block_receipts_root"]:
+            raise ValueError(
+                "--route-canary-block-receipts-root does not match "
+                "MessageProofAccepted transaction receipt block"
+            )
         args.route_canary_evidence_hash = derived_canary_hash
         args.network_id = _parse_hex32(
             str(destination["network_id"]),
@@ -1573,6 +1685,17 @@ def collect_live_evidence(
         args.route_canary_call_data_sha256 = _parse_hex32(
             str(route_canary_transaction["call_data_sha256"]),
             label="route canary call data SHA-256",
+        )
+        args.route_canary_receipt_block_number = int(
+            route_canary_transaction["block_number"]
+        )
+        args.route_canary_receipt_block_hash = _parse_hex32(
+            str(route_canary_transaction["block_hash"]),
+            label="route canary receipt block hash",
+        )
+        args.route_canary_block_receipts_root = _parse_hex32(
+            str(route_canary_transaction["block_receipts_root"]),
+            label="route canary block receiptsRoot",
         )
         args.route_canary_payload_hash = _parse_hex32(
             str(route_canary_transaction["public_inputs_payload_hash"]),
@@ -1715,6 +1838,39 @@ def build_parser() -> argparse.ArgumentParser:
         "--route-canary-log-index",
         type=_parse_route_canary_log_index,
         help="Canonical decimal log index of the MessageProofAccepted canary event.",
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-number",
+        type=lambda value: evidence.parse_u64_decimal(
+            value,
+            label="route canary receipt block number",
+        ),
+        help=(
+            "Optional expected receipt block number for the canary transaction. "
+            "When supplied, it must match the fetched receipt block."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-hash",
+        type=lambda value: _parse_hex32(
+            value,
+            label="route canary receipt block hash",
+        ),
+        help=(
+            "Optional expected receipt block hash for the canary transaction. "
+            "When supplied, it must match the fetched receipt block."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-block-receipts-root",
+        type=lambda value: _parse_hex32(
+            value,
+            label="route canary block receiptsRoot",
+        ),
+        help=(
+            "Optional expected receiptsRoot for the canary transaction block. "
+            "When supplied, it must match eth_getBlockByNumber."
+        ),
     )
     parser.add_argument(
         "--block-tag",

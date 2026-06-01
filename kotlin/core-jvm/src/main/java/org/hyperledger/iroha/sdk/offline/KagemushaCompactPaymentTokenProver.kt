@@ -23,20 +23,40 @@ class KagemushaCompactPaymentTokenProver private constructor() {
         private fun loadLibrary(): Boolean =
             detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                probeSymbol = { nativeProveVerifiedCompactPaymentTokenWithRecords(ByteArray(0)) },
+                probeSymbol = {
+                    expectIllegalArgumentProbe {
+                        nativeProveVerifiedCompactPaymentTokenWithRecords(ByteArray(0))
+                    }
+                },
             )
 
-        internal fun detectNativeAvailability(loadLibrary: () -> Unit, probeSymbol: () -> Unit): Boolean =
+        internal fun detectNativeAvailability(loadLibrary: () -> Unit, probeSymbol: () -> Boolean): Boolean {
             try {
                 loadLibrary()
-                probeSymbol()
-                true
             } catch (_: IllegalArgumentException) {
-                true
+                return false
+            } catch (_: UnsatisfiedLinkError) {
+                return false
+            } catch (_: SecurityException) {
+                return false
+            }
+            return try {
+                probeSymbol()
+            } catch (_: IllegalArgumentException) {
+                false
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
                 false
+            }
+        }
+
+        internal fun expectIllegalArgumentProbe(probe: () -> Unit): Boolean =
+            try {
+                probe()
+                false
+            } catch (_: IllegalArgumentException) {
+                true
             }
 
         internal fun requireNativeOutput(output: ByteArray?, label: String): ByteArray {

@@ -2,8 +2,8 @@ use super::*;
 use crate::{
     asset::AssetDefinitionId,
     offline::{
-        KagemushaRecursiveSpendBundleV1, OfflineNoteAuditBundle, OfflineNoteIssue,
-        OfflineNoteRedeem,
+        KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendLineageWitnessV1,
+        OfflineNoteAuditBundle, OfflineNoteIssue, OfflineNoteRedeem,
     },
     proof::ProofAttachment,
 };
@@ -79,6 +79,8 @@ isi! {
         pub public_amount: u128,
         /// Final unshield/redeem proof bound to the current note descriptor.
         pub redeem_proof: ProofAttachment,
+        /// Optional record-backed lineage witness used for production chain admission.
+        pub lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
     }
 }
 
@@ -141,11 +143,24 @@ impl RedeemKagemushaRecursive {
         public_amount: u128,
         redeem_proof: ProofAttachment,
     ) -> Self {
+        Self::new_with_lineage_witness(bundle, recipient, public_amount, redeem_proof, None)
+    }
+
+    /// Construct a recursive Kagemusha redemption instruction with lineage witness material.
+    #[must_use]
+    pub fn new_with_lineage_witness(
+        bundle: KagemushaRecursiveSpendBundleV1,
+        recipient: AccountId,
+        public_amount: u128,
+        redeem_proof: ProofAttachment,
+        lineage_witness: Option<KagemushaRecursiveSpendLineageWitnessV1>,
+    ) -> Self {
         Self {
             bundle,
             recipient,
             public_amount,
             redeem_proof,
+            lineage_witness,
         }
     }
 }
@@ -212,6 +227,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
             super::read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let lineage_witness = if offset == bytes.len() {
+            None
+        } else {
+            super::decode_aos_canonical_field::<Option<KagemushaRecursiveSpendLineageWitnessV1>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?
+        };
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
@@ -222,6 +245,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RedeemKagemushaRecursive {
                 recipient,
                 public_amount,
                 redeem_proof,
+                lineage_witness,
             },
             offset,
         ))

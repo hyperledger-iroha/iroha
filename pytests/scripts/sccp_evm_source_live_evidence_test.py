@@ -79,14 +79,23 @@ def fake_opener_for(
     domain=1,
     rpc_chain_id=1,
     runtime=None,
+    receipt_block_runtime=None,
     receipt_transaction_hash=None,
     receipt_contract_address=None,
     omit_receipt_contract_address=False,
     receipt_block_hash=None,
     receipt_block_number="0x1234",
+    block_response_hash=None,
+    block_response_number=None,
+    block_response_receipts_root=None,
 ):
     bridge = "0x" + "11" * 20
     runtime = runtime or bytes.fromhex("60806040526003")
+    receipt_block_runtime = receipt_block_runtime or runtime
+    receipt_block_hash = receipt_block_hash or ("0x" + "99" * 32)
+    block_response_hash = block_response_hash or receipt_block_hash
+    block_response_number = block_response_number or receipt_block_number
+    block_response_receipts_root = block_response_receipts_root or ("0x" + "bc" * 32)
     evidence = module._load_evidence_module(domain)
     bridge_code_hash = evidence.runtime_bytecode_hash(runtime)
 
@@ -101,11 +110,14 @@ def fake_opener_for(
             )
         if method == "eth_getCode":
             assert params[0].lower() == bridge
+            selected_runtime = (
+                receipt_block_runtime if params[1] == receipt_block_number else runtime
+            )
             return FakeResponse(
                 {
                     "jsonrpc": "2.0",
                     "id": payload["id"],
-                    "result": "0x" + runtime.hex(),
+                    "result": "0x" + selected_runtime.hex(),
                 }
             )
         if method == "eth_getTransactionReceipt":
@@ -117,7 +129,7 @@ def fake_opener_for(
             receipt = {
                 "transactionHash": transaction_hash,
                 "status": "0x1",
-                "blockHash": receipt_block_hash or ("0x" + "99" * 32),
+                "blockHash": receipt_block_hash,
                 "blockNumber": receipt_block_number,
             }
             if not omit_receipt_contract_address:
@@ -131,6 +143,20 @@ def fake_opener_for(
                     "jsonrpc": "2.0",
                     "id": payload["id"],
                     "result": receipt,
+                }
+            )
+        if method == "eth_getBlockByNumber":
+            assert params[0] == receipt_block_number
+            assert params[1] is False
+            return FakeResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "hash": block_response_hash,
+                        "number": block_response_number,
+                        "receiptsRoot": block_response_receipts_root,
+                    },
                 }
             )
         raise AssertionError(f"unexpected method {method}")
@@ -240,6 +266,51 @@ def test_evm_source_json_rpc_rejects_duplicate_json_keys():
         raise AssertionError("duplicate-key EVM source JSON-RPC response was accepted")
 
 
+def test_evm_source_json_rpc_rejects_envelope_drift():
+    module = load_live_module()
+
+    cases = (
+        (
+            {"jsonrpc": "2.0", "id": 2, "result": "0x38"},
+            "response id",
+            "mismatched JSON-RPC id was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0", "id": "1", "result": "0x38"},
+            "response id",
+            "string JSON-RPC id was accepted",
+        ),
+        (
+            {"id": 1, "result": "0x38"},
+            "protocol version",
+            "missing JSON-RPC protocol version was accepted",
+        ),
+        (
+            {"jsonrpc": "2.0 ", "id": 1, "result": "0x38"},
+            "protocol version",
+            "padded JSON-RPC protocol version was accepted",
+        ),
+    )
+
+    for payload, expected_message, failure in cases:
+        def opener(_request, timeout, payload=payload):
+            del timeout
+            return FakeResponse(payload)
+
+        try:
+            module._json_rpc(
+                "https://bsc.example",
+                "eth_chainId",
+                [],
+                opener=opener,
+                timeout=3.0,
+            )
+        except RuntimeError as exc:
+            assert expected_message in str(exc)
+        else:
+            raise AssertionError(failure)
+
+
 def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     module = load_live_module()
 
@@ -274,6 +345,20 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     else:
         raise AssertionError("padded EVM source component hash was accepted")
 
+    for value, expected in (
+        ("0X" + "11" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+        ("aa" * 32, "lowercase 0x hex"),
+    ):
+        try:
+            module._parse_hex32(value, label="component hash")
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(
+                f"noncanonical EVM source component hash {value!r} was accepted"
+            )
+
     for value, parser, expected in (
         ("0x1 ", module._rpc_quantity, "non-canonical"),
         ("0x01", module._rpc_quantity, "non-canonical"),
@@ -305,6 +390,8 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
         "deployment_transaction_hash": "0x" + "de" * 32,
         "deployment_receipt_block_hash": "0x" + "99" * 32,
         "deployment_receipt_block_number": "4660",
+        "deployment_receipt_block_receipts_root": "0x" + "bc" * 32,
+        "deployment_receipt_block_receipts_root_verified": True,
     }
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
 
@@ -347,6 +434,10 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert source["deployment_receipt_status"] == "0x1"
     assert source["deployment_receipt_contract_address"] == fake.bridge
     assert source["deployment_receipt_block_number"] == 0x1234
+    assert source["deployment_receipt_block_hash_matches"] is True
+    assert source["deployment_receipt_block_receipts_root"] == "0x" + "bc" * 32
+    assert source["deployment_receipt_block_receipts_root_verified"] is True
+    assert source["deployment_receipt_block_code_hash_matches"] is True
     assert summary["source_records"] == {
         "source_verifier_material_hash": "0x" + material_hash.hex(),
         "source_adapter_engine_deployment_hash": "0x" + deployment_hash.hex(),
@@ -375,6 +466,12 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     )
     assert '# sccp_evm_source_deployment_receipt_status = "0x1"' in rendered
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
+    assert (
+        '# sccp_evm_source_deployment_block_receipts_root = "0x'
+        + "bc" * 32
+        + '"'
+        in rendered
+    )
     assert rendered.count("# sccp_evm_source_rpc_chain_id") == 1
     assert rendered.count("# sccp_evm_source_bridge_address") == 1
     assert rendered.count("# sccp_evm_source_bridge_runtime_code_hash") == 1
@@ -384,6 +481,7 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert rendered.count("# sccp_evm_source_deployment_contract_address") == 1
     assert rendered.count("# sccp_evm_source_deployment_block_hash") == 1
     assert rendered.count("# sccp_evm_source_deployment_block_number") == 1
+    assert rendered.count("# sccp_evm_source_deployment_block_receipts_root") == 1
     assert 'source_chain = "eth"' in rendered
     assert 'source_bridge_emitter_code_hash = "0x' + fake.bridge_code_hash.hex() in rendered
     assert "--source-bridge-runtime-bytecode-hex" in summary["offline_evidence_args"]
@@ -434,6 +532,27 @@ def test_evm_source_live_toml_revalidates_imported_summary_metadata():
                 "0x6001",
             ),
             "runtime bytecode",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
+                "deployment_receipt_block_hash_matches",
+                False,
+            ),
+            "deployment receipt block hash",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
+                "deployment_receipt_block_receipts_root_verified",
+                False,
+            ),
+            "deployment receipt block receiptsRoot",
+        ),
+        (
+            lambda forged: forged["source_bridge"].__setitem__(
+                "deployment_receipt_block_code_hash_matches",
+                False,
+            ),
+            "deployment receipt block code hash",
         ),
         (
             lambda forged: forged["source_records"].__setitem__(
@@ -687,6 +806,102 @@ def test_evm_source_live_rejects_noncanonical_receipt_block_hash():
         assert "blockHash" in str(exc)
     else:
         raise AssertionError("noncanonical deployment receipt blockHash was accepted")
+
+
+def test_evm_source_live_rejects_receipt_block_hash_drift():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        domain=module.SCCP_DOMAIN_BSC,
+        rpc_chain_id=56,
+        receipt_block_hash="0x" + "99" * 32,
+        block_response_hash="0x" + "98" * 32,
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_BSC,
+            bridge_address=fake.bridge,
+            block_tag="latest",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "blockHash does not match eth_getBlockByNumber" in str(exc)
+    else:
+        raise AssertionError("drifted deployment receipt blockHash was accepted")
+
+
+def test_evm_source_live_rejects_receipt_block_number_drift():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        receipt_block_number="0x1234",
+        block_response_number="0x1235",
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            block_tag="latest",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "block number does not match eth_getBlockByNumber" in str(exc)
+    else:
+        raise AssertionError("drifted deployment receipt block number was accepted")
+
+
+def test_evm_source_live_rejects_zero_receipt_block_receipts_root():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        block_response_receipts_root="0x" + "00" * 32,
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            block_tag="latest",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "receiptsRoot" in str(exc)
+    else:
+        raise AssertionError("zero deployment receipt block receiptsRoot was accepted")
+
+
+def test_evm_source_live_rejects_receipt_block_code_hash_drift():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        receipt_block_runtime=bytes.fromhex("60806040526004"),
+    )
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            block_tag="latest",
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            opener=fake.opener,
+            timeout=1.0,
+        )
+    except RuntimeError as exc:
+        assert "deployment receipt block" in str(exc)
+    else:
+        raise AssertionError("drifted deployment receipt block bytecode was accepted")
 
 
 def test_evm_source_live_toml_requires_independent_pins():

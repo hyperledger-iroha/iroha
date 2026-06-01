@@ -256,7 +256,7 @@ object SccpTon {
         val shardFileHashBytes = nonZeroHex32Bytes(shardFileHash, "shardFileHash")
         val out = ByteArrayOutputStream()
         out.write(1)
-        out.write(hex32Bytes(sourceEventDigest, "sourceEventDigest"))
+        out.write(nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"))
         writeU64Le(out, normalizedMasterchainSeqno)
         out.write(hex32Bytes(masterchainBlockHash, "masterchainBlockHash"))
         writeI32Le(out, shardWorkchainId)

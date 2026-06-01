@@ -4599,7 +4599,9 @@ pub struct WorldView<'world> {
 }
 
 /// Verifying-key binding enforced for a ZK asset operation.
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ZkAssetVerifierBinding {
     /// Verifying key identifier recorded in the registry.
     pub id: iroha_data_model::proof::VerifyingKeyId,
@@ -4644,7 +4646,9 @@ impl json::JsonDeserialize for ZkAceIdentityStatus {
 }
 
 /// On-chain ZK-ACE identity commitment record.
-#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
 pub struct ZkAceIdentityRecord {
     /// Policy hash bound by the authorization proof.
     pub policy_hash: [u8; 32],
@@ -4660,6 +4664,95 @@ pub struct ZkAceIdentityRecord {
     pub status: ZkAceIdentityStatus,
     /// Replacement commitment when this record has been rotated.
     pub successor: Option<[u8; 32]>,
+}
+
+#[cfg(test)]
+mod zk_ace_identity_record_tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{account::AccountId, proof::VerifyingKeyId};
+
+    use super::*;
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn record(status: ZkAceIdentityStatus) -> ZkAceIdentityRecord {
+        ZkAceIdentityRecord {
+            policy_hash: [0xA1; 32],
+            allowed_accounts: vec![account(1), account(2)],
+            action_class: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+                .to_owned(),
+            domain_tag: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+            verifier: ZkAssetVerifierBinding {
+                id: VerifyingKeyId::new(
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+                    iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+                ),
+                commitment: [0xB2; 32],
+            },
+            status,
+            successor: Some([0xC3; 32]),
+        }
+    }
+
+    #[test]
+    fn zk_ace_identity_record_norito_roundtrip_preserves_allowlist() {
+        let expected = record(ZkAceIdentityStatus::Rotated);
+        let bytes = norito::to_bytes(&expected).expect("serialize ZK-ACE identity record");
+        let decoded: ZkAceIdentityRecord =
+            norito::decode_from_bytes(&bytes).expect("deserialize ZK-ACE identity record");
+
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.allowed_accounts, vec![account(1), account(2)]);
+        assert_eq!(decoded.successor, Some([0xC3; 32]));
+    }
+
+    #[test]
+    fn zk_ace_identity_record_json_roundtrip_preserves_allowlist() {
+        let expected = record(ZkAceIdentityStatus::Active);
+        let json = norito::json::to_json(&expected).expect("serialize ZK-ACE record to JSON");
+        assert!(json.contains("allowed_accounts"));
+        assert!(json.contains("zk_ace_pq_authorization_v0"));
+
+        let decoded: ZkAceIdentityRecord =
+            norito::json::from_json(&json).expect("deserialize ZK-ACE record from JSON");
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.allowed_accounts, vec![account(1), account(2)]);
+    }
+
+    #[test]
+    fn zk_ace_identity_status_json_rejects_unknown_status() {
+        let err = norito::json::from_json::<ZkAceIdentityStatus>("\"Suspended\"")
+            .expect_err("unknown ZK-ACE identity status must fail");
+        assert!(err.to_string().contains("Suspended"));
+    }
+
+    #[test]
+    fn zk_ace_identity_record_binding_supports_equality_for_roundtrip_guards() {
+        let lhs = ZkAssetVerifierBinding {
+            id: VerifyingKeyId::new("stark/fri/sha256-goldilocks", "zk-ace"),
+            commitment: [0xD4; 32],
+        };
+        let rhs = ZkAssetVerifierBinding {
+            id: VerifyingKeyId::new("stark/fri/sha256-goldilocks", "zk-ace"),
+            commitment: [0xD4; 32],
+        };
+        assert_eq!(lhs, rhs);
+    }
+
+    #[test]
+    fn zk_ace_identity_record_distinguishes_allowlist_order_after_storage() {
+        let mut first = record(ZkAceIdentityStatus::Active);
+        let mut second = first.clone();
+        second.allowed_accounts.reverse();
+
+        assert_ne!(first, second);
+        first.allowed_accounts.sort_unstable();
+        second.allowed_accounts.sort_unstable();
+        assert_eq!(first, second);
+    }
 }
 
 /// Policy and state for a shielded asset.
@@ -25756,6 +25849,18 @@ fn zk_policy_put_sccp_route_allowlists(
                     .cmp(&right.evm_route_canary_log_index)
             })
             .then_with(|| {
+                left.evm_route_canary_receipt_block_number
+                    .cmp(&right.evm_route_canary_receipt_block_number)
+            })
+            .then_with(|| {
+                left.evm_route_canary_receipt_block_hash
+                    .cmp(&right.evm_route_canary_receipt_block_hash)
+            })
+            .then_with(|| {
+                left.evm_route_canary_block_receipts_root
+                    .cmp(&right.evm_route_canary_block_receipts_root)
+            })
+            .then_with(|| {
                 left.evm_route_canary_call_data_sha256
                     .cmp(&right.evm_route_canary_call_data_sha256)
             })
@@ -25945,6 +26050,21 @@ fn zk_policy_put_sccp_route_allowlists(
             hasher,
             "evm_route_canary_log_index",
             allowlist.evm_route_canary_log_index,
+        );
+        zk_policy_put_option_u64(
+            hasher,
+            "evm_route_canary_receipt_block_number",
+            allowlist.evm_route_canary_receipt_block_number,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_receipt_block_hash",
+            allowlist.evm_route_canary_receipt_block_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "evm_route_canary_block_receipts_root",
+            allowlist.evm_route_canary_block_receipts_root.as_deref(),
         );
         zk_policy_put_option_str(
             hasher,
@@ -52302,6 +52422,9 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x12; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_receipt_block_number: None,
+                evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
                 evm_route_canary_payload_hash: None,
@@ -52357,6 +52480,14 @@ mod tests {
         assert_ne!(
             changed_hash,
             compute_zk_consensus_policy_hash(&evm_route_canary_changed)
+        );
+
+        let mut evm_route_canary_receipt_block_changed = changed.clone();
+        evm_route_canary_receipt_block_changed.sccp_route_allowlists[0]
+            .evm_route_canary_receipt_block_number = Some(18_765_432);
+        assert_ne!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&evm_route_canary_receipt_block_changed)
         );
 
         let mut evm_route_canary_finality_changed = changed.clone();
@@ -52490,6 +52621,9 @@ mod tests {
                 route_canary_destination_binding_hash: Some(hex::encode([0x37; 32])),
                 evm_route_canary_transaction_hash: None,
                 evm_route_canary_log_index: None,
+                evm_route_canary_receipt_block_number: None,
+                evm_route_canary_receipt_block_hash: None,
+                evm_route_canary_block_receipts_root: None,
                 evm_route_canary_call_data_sha256: None,
                 evm_route_canary_message_id: None,
                 evm_route_canary_payload_hash: None,

@@ -3,6 +3,7 @@
 import hashlib
 import importlib
 import json
+import re
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -20,12 +21,103 @@ PHASES = (
     "swift-sdk",
     "kotlin-sdk",
     "java-android",
+    "dotnet-sdk",
     "contract-smoke",
     "core-admission",
 )
 SDK_PHASES = ("js-sdk", "python-sdk", "swift-sdk", "kotlin-sdk", "java-android")
-JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn")
-PYTHON_CALLBACK_HOOK_SYMBOLS = ("witness_provider", "prove")
+EVM_SDK_PHASES = (*SDK_PHASES, "dotnet-sdk")
+JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn", "consensusProvider")
+PYTHON_CALLBACK_HOOK_SYMBOLS = ("witness_provider", "prove", "consensus_provider")
+BSC_MAINNET_SDK_SOURCE_PATHS = {
+    "js-sdk": ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
+    "python-sdk": ROOT / "python" / "iroha_torii_client" / "sccp.py",
+    "swift-sdk": ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SccpEvmProver.swift",
+    "kotlin-sdk": (
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProver.kt"
+    ),
+    "java-android": (
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "BscMainnetSccp.java"
+    ),
+    "dotnet-sdk": (
+        (
+            ROOT
+            / "csharp"
+            / "src"
+            / "Hyperledger.Iroha.Sdk"
+            / "Sccp"
+            / "BscMainnetSccp.cs"
+        ),
+        (
+            ROOT
+            / "csharp"
+            / "src"
+            / "Hyperledger.Iroha.Sdk"
+            / "Sccp"
+            / "BscMainnetSccpOutbound.cs"
+        ),
+    ),
+}
+ETHEREUM_MAINNET_SDK_SOURCE_PATHS = {
+    **{
+        sdk: path
+        for sdk, path in BSC_MAINNET_SDK_SOURCE_PATHS.items()
+        if sdk not in {"java-android", "dotnet-sdk"}
+    },
+    "java-android": (
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EthereumMainnetSccp.java"
+    ),
+    "dotnet-sdk": (
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs"
+    ),
+}
+BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS = {
+    "WebAssembly": re.compile(r"\bWebAssembly\b"),
+    "wasm": re.compile(r"\bwasm\b", re.IGNORECASE),
+    "snarkjs": re.compile(r"\bsnarkjs\b", re.IGNORECASE),
+    "remoteProver": re.compile(r"\bremoteProver\b"),
+    "remote prover": re.compile(r"\bremote prover\b", re.IGNORECASE),
+    "proverUrl": re.compile(r"\bproverUrl\b"),
+    "proverEndpoint": re.compile(r"\bproverEndpoint\b"),
+}
 
 
 def phase_command_lines(fragments) -> list[str]:
@@ -100,6 +192,31 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, evidence_payload
 
 
+def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
+    """Write only the active launch-lane evidence records."""
+
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    report = load_report_module()
+    active_domain = report.ACTIVE_LAUNCH_DOMAIN
+    records = helpers.complete_bundle(evidence_module)
+    for section, domain_key in {
+        "sccp_source_verifier_materials": "source_domain",
+        "sccp_source_adapter_engine_deployments": "source_domain",
+        "sccp_destination_rollouts": "domain",
+        "sccp_route_allowlists": "domain",
+    }.items():
+        records[section] = [
+            record
+            for record in records[section]
+            if record.get(domain_key) == active_domain
+        ]
+    evidence = tmp_path / f"{report.ACTIVE_LAUNCH_CHAIN}-launch.toml"
+    evidence_payload = helpers.render_records(records)
+    evidence.write_text(evidence_payload, encoding="utf-8")
+    return evidence, evidence_payload
+
+
 def sdk_source_text(sdk: str) -> str:
     """Return the SDK source text that must expose readiness helper symbols."""
 
@@ -147,6 +264,8 @@ def sdk_source_text(sdk: str) -> str:
         paths = sorted((source_root / "sccp").glob("*.java")) + [
             source_root / "client" / "BridgeProofSubmitRequest.java"
         ]
+    elif sdk == "dotnet-sdk":
+        paths = sorted((ROOT / "csharp" / "src" / "Hyperledger.Iroha.Sdk" / "Sccp").glob("*.cs"))
     else:
         raise AssertionError(f"unhandled SCCP SDK phase: {sdk}")
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
@@ -164,16 +283,45 @@ def sdk_symbol_tokens(symbol: str) -> tuple[str, ...]:
     return (symbol,)
 
 
+def sdk_symbol_export_tokens(symbol: str) -> tuple[str, ...]:
+    """Return package-root tokens needed to expose a readiness helper symbol."""
+
+    if ".init(" in symbol:
+        owner, _, _ = symbol.partition(".init(")
+        return (owner,)
+    if "." in symbol:
+        owner, _ = symbol.rsplit(".", 1)
+        return (owner,)
+    return (symbol,)
+
+
+def helper_matches_hook_marker(sdk: str, helper: str, marker: str) -> bool:
+    """Return whether a helper symbol satisfies a UI-owned hook marker."""
+
+    if sdk == "python-sdk":
+        return helper == marker
+    return marker in helper
+
+
 def test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources() -> None:
     """Readiness helper maps must name SDK symbols that exist in source."""
 
     report = load_report_module()
     passed_phases = {
         phase: "passed"
-        for phase in (*report.USER_PROVER_SDK_PHASES, "contract-smoke", "core-admission")
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
     }
     surfaces = report._submission_surfaces(passed_phases)
-    sources = {sdk: sdk_source_text(sdk) for sdk in report.USER_PROVER_SDK_PHASES}
+    sources = {
+        sdk: sdk_source_text(sdk)
+        for surface in surfaces
+        for sdk in surface["sdk_helper_symbols_by_sdk"]
+    }
     missing: list[str] = []
 
     for surface in surfaces:
@@ -191,13 +339,56 @@ def test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources() -> None:
     assert missing == []
 
 
+def test_release_readiness_bsc_sdk_sources_are_native_local_prover_only() -> None:
+    """BSC SDK facades must stay native/local-prover owned, with no WASM fallback."""
+
+    violations: list[str] = []
+    for sdk, path_or_paths in BSC_MAINNET_SDK_SOURCE_PATHS.items():
+        paths = path_or_paths if isinstance(path_or_paths, tuple) else (path_or_paths,)
+        for path in paths:
+            if not path.is_file():
+                violations.append(f"{sdk} missing BSC source file: {path.relative_to(ROOT)}")
+                continue
+            source = path.read_text(encoding="utf-8")
+            for label, pattern in BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS.items():
+                if pattern.search(source):
+                    violations.append(
+                        f"{sdk} {path.relative_to(ROOT)} contains forbidden {label}"
+                    )
+
+    assert violations == []
+
+
+def test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only() -> None:
+    """Ethereum SDK facades must stay native/local-prover owned, with no WASM fallback."""
+
+    violations: list[str] = []
+    for sdk, path in ETHEREUM_MAINNET_SDK_SOURCE_PATHS.items():
+        if not path.is_file():
+            violations.append(f"{sdk} missing Ethereum source file: {path.relative_to(ROOT)}")
+            continue
+        source = path.read_text(encoding="utf-8")
+        for label, pattern in BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS.items():
+            if pattern.search(source):
+                violations.append(
+                    f"{sdk} {path.relative_to(ROOT)} contains forbidden {label}"
+                )
+
+    assert violations == []
+
+
 def test_release_readiness_sdk_helper_symbols_are_unique() -> None:
     """Public user-prover helper rows must not hide missing hooks behind duplicates."""
 
     report = load_report_module()
     passed_phases = {
         phase: "passed"
-        for phase in (*report.USER_PROVER_SDK_PHASES, "contract-smoke", "core-admission")
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
     }
     duplicates: list[str] = []
 
@@ -218,7 +409,12 @@ def test_release_readiness_js_helper_symbols_exist_in_portal_artifacts() -> None
     report = load_report_module()
     passed_phases = {
         phase: "passed"
-        for phase in (*report.USER_PROVER_SDK_PHASES, "contract-smoke", "core-admission")
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
     }
     implementation_artifacts = {
         "src/sccp.js": ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
@@ -253,7 +449,7 @@ def test_release_readiness_js_helper_symbols_exist_in_portal_artifacts() -> None
                 continue
             for artifact, source in package_entry_artifact_text.items():
                 absent_tokens = [
-                    token for token in sdk_symbol_tokens(symbol) if token not in source
+                    token for token in sdk_symbol_export_tokens(symbol) if token not in source
                 ]
                 if absent_tokens:
                     missing.append(
@@ -269,7 +465,12 @@ def test_release_readiness_user_prover_surfaces_name_ui_hook_symbols() -> None:
     report = load_report_module()
     passed_phases = {
         phase: "passed"
-        for phase in (*report.USER_PROVER_SDK_PHASES, "contract-smoke", "core-admission")
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
     }
     required_hook_markers = {
         "js-sdk": ("witnessProvider", "proveFn"),
@@ -277,14 +478,20 @@ def test_release_readiness_user_prover_surfaces_name_ui_hook_symbols() -> None:
         "swift-sdk": ("WitnessProvider", "ProveFunction"),
         "kotlin-sdk": ("WitnessProvider", "ProofEngine"),
         "java-android": ("WitnessProvider", "ProofEngine"),
+        "dotnet-sdk": ("InboundProver", "InboundSubmitter"),
     }
     missing: list[str] = []
 
     for surface in report._submission_surfaces(passed_phases):
         for sdk, markers in required_hook_markers.items():
-            symbols = surface["sdk_helper_symbols_by_sdk"][sdk]
+            symbols = surface["sdk_helper_symbols_by_sdk"].get(sdk)
+            if symbols is None:
+                continue
             for marker in markers:
-                if not any(marker in symbol for symbol in symbols):
+                if not any(
+                    helper_matches_hook_marker(sdk, symbol, marker)
+                    for symbol in symbols
+                ):
                     missing.append(f"{surface['lanes']} {sdk} missing {marker}")
 
     assert missing == []
@@ -300,9 +507,10 @@ def test_release_readiness_python_helper_symbols_are_package_root_exports() -> N
     }
     required_exports = sorted(
         {
-            symbol
+            export
             for surface in report._submission_surfaces(passed_phases)
             for symbol in surface["sdk_helper_symbols_by_sdk"]["python-sdk"]
+            for export in sdk_symbol_export_tokens(symbol)
             if symbol not in PYTHON_CALLBACK_HOOK_SYMBOLS
         }
     )
@@ -425,6 +633,25 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "evmSccpReceiptProofHash",
         "canonicalBscSccpReceiptProofBytes",
         "bscSccpReceiptProofHash",
+        "buildBscMainnetSccpDestinationProofRequest",
+        "wrapBscMainnetSccpDestinationProofResult",
+        "EthereumMainnetSccp",
+        "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.proveOutboundToEthereum",
+        "EthereumMainnetSccp.buildEthereumCalldata",
+        "EthereumMainnetSccp.submitOutboundToEthereum",
+        "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
+        "EthereumMainnetSccp.proveInboundToSora",
+        "EthereumMainnetSccp.submitInboundToIroha",
+        "consensusProvider",
+        "BscMainnetSccpProver",
+        "BscMainnetSccp",
+        "BscMainnetSccp.collectInboundEvidenceFromReceipt",
+        "BscMainnetSccp.proveInboundToSora",
+        "BscMainnetSccp.submitInboundToIroha",
+        "BscMainnetSccp.buildBscCalldata",
+        "BscMainnetSccp.submitOutboundToBsc",
+        "buildBscMainnetSccpDestinationSubmission",
         "EvmSccpProver",
         "witnessProvider",
         "proveFn",
@@ -434,13 +661,41 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     assert surfaces["eth,bsc"]["sdk_helpers"] == ", ".join(
         surfaces["eth,bsc"]["sdk_helper_symbols"]
     )
-    assert set(surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]) == set(SDK_PHASES)
+    assert set(surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]) == set(EVM_SDK_PHASES)
     assert (
         surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["js-sdk"]
         == surfaces["eth,bsc"]["sdk_helper_symbols"]
     )
     assert (
         "build_evm_sccp_proof_request"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.build_ethereum_calldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.submit_outbound_to_ethereum"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.build_bsc_calldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.submit_outbound_to_bsc"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.collect_inbound_evidence_from_receipt"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.prove_inbound_to_sora"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
+    )
+    assert (
+        "consensus_provider"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["python-sdk"]
     )
     assert (
@@ -452,11 +707,99 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
     )
     assert (
+        "EthereumMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "EthereumMainnetBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "EthereumMainnetInboundEvidence.init(beaconFinalityEvidence:)"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.submitOutboundToEthereum"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.OutboundSubmitFunction"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.buildBscCalldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.submitOutboundToBsc"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.OutboundSubmitFunction"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
+        "BscMainnetInboundEvidence.init(parliaFinalityEvidence:)"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+    )
+    assert (
         "SccpEvm.buildProofRequest"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
     )
     assert (
         "EvmSccpProofEngine"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "EthereumMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "EthereumMainnetBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "EthereumMainnetInboundEvidence.withBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.submitOutboundToEthereum"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "EthereumMainnetOutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.buildBscCalldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.submitOutboundToBsc"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetOutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+    )
+    assert (
+        "BscMainnetInboundEvidence.withParliaFinalityEvidence"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
     )
     assert (
@@ -466,6 +809,146 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
     assert (
         "EvmSccpProver.ProofEngine"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "EthereumMainnetSccp.ConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "EthereumMainnetSccp.BeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "InboundEvidence.withBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "EthereumMainnetSccp.submitOutboundToEthereum"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "EthereumMainnetSccp.OutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "BscMainnetSccp.buildBscCalldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "BscMainnetSccp.submitOutboundToBsc"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "BscMainnetSccp.OutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "BscMainnetSccp.ConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "BscMainnetSccp.ParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "InboundEvidence.withParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
+    )
+    assert (
+        "EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.BuildOutboundProofRequest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.ProveOutboundToEthereumAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.BuildEthereumCalldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccp.SubmitOutboundToEthereumAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetOutboundProofRequestInput"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetSccpSubmission"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IEthereumMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "EthereumMainnetInboundEvidence.WithBeaconFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IBscMainnetConsensusProvider"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetInboundEvidence.WithParliaFinalityEvidence"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.BuildOutboundProofRequest"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.ProveOutboundToBscAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.BuildBscCalldata"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetSccp.SubmitOutboundToBscAsync"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetOutboundProofRequestInput"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "BscMainnetSccpSubmission"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IBscMainnetInboundProver"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IBscMainnetOutboundProver"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IBscMainnetOutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IEthereumMainnetOutboundProver"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
+    )
+    assert (
+        "IEthereumMainnetOutboundSubmitter"
+        in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
     )
     assert "canonicalTronSccpReceiptStateProofBytes" in surfaces["tron"]["sdk_helpers"]
     assert (
@@ -604,6 +1087,7 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "buildEvmSccpBridgeProofSubmitPayload"
         in surfaces["eth,bsc"]["sdk_helpers"]
     )
+    assert "dotnet-sdk" in surfaces["eth,bsc"]["required_phases"]
     assert "contract-smoke" in surfaces["eth,bsc"]["required_phases"]
     assert "core-admission" in surfaces["eth,bsc"]["required_phases"]
     assert any("missing source verifier material" in item for item in payload["blockers"])
@@ -739,6 +1223,53 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "`governed_deployment_evidence` | ready" in completed.stdout
     assert "`live_route_canary_evidence` | ready" in completed.stdout
     assert "## Blocking Items\n\n- None" in completed.stdout
+
+
+def test_release_readiness_report_passes_with_only_active_launch_lane(
+    tmp_path: Path,
+) -> None:
+    """Active launch readiness must not require future lanes to be complete."""
+
+    report = load_report_module()
+    active_domain = report.ACTIVE_LAUNCH_DOMAIN
+    evidence, _ = write_active_launch_evidence(tmp_path)
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--format",
+            "json",
+            "--phase-result",
+            "all=passed",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    payload = json.loads(completed.stdout)
+    assert payload["production_ready"] is True
+    assert payload["release_checklist"]["ready"] is True
+    assert payload["evidence"]["production_ready"] is False
+    assert all(
+        f"domain {active_domain}" not in blocker for blocker in payload["blockers"]
+    )
+    active_crypto = next(
+        row
+        for row in payload["cryptographic_evidence"]
+        if row["domain"] == active_domain
+    )
+    assert active_crypto["domain"] == active_domain
+    blocked_future_lanes = [
+        lane
+        for lane in payload["evidence"]["lanes"]
+        if lane["domain"] != active_domain and not lane["production_ready"]
+    ]
+    assert blocked_future_lanes
 
 
 def test_release_readiness_report_accepts_phase_evidence_dir(
@@ -951,6 +1482,124 @@ def test_release_readiness_report_requires_js_package_dist_transcript(
     ) in completed.stdout
 
 
+def test_release_readiness_report_requires_bsc_browser_no_wasm_marker(
+    tmp_path: Path,
+) -> None:
+    """The JS phase evidence must prove the browser BSC path stayed native JS."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    bsc_no_wasm_marker = (
+        "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned"
+    )
+    assert bsc_no_wasm_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != bsc_no_wasm_marker
+    ]
+    corridor_log = tmp_path / "js-sdk-without-bsc-no-wasm-marker.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "js-sdk=passed",
+            "--phase-evidence",
+            f"js-sdk={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {bsc_no_wasm_marker}"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_requires_bsc_parlia_declaration_marker(
+    tmp_path: Path,
+) -> None:
+    """The JS phase evidence must prove the BSC Parlia declarations were tested."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    declaration_marker = (
+        "package declarations expose BSC mainnet Parlia finality evidence hooks"
+    )
+    assert declaration_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != declaration_marker
+    ]
+    corridor_log = tmp_path / "js-sdk-without-bsc-parlia-declaration-marker.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "js-sdk=passed",
+            "--phase-evidence",
+            f"js-sdk={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {declaration_marker}"
+    ) in completed.stdout
+
+
 def test_release_readiness_report_requires_js_package_export_transcript(
     tmp_path: Path,
 ) -> None:
@@ -1004,6 +1653,68 @@ def test_release_readiness_report_requires_js_package_export_transcript(
         "production corridor phase js-sdk evidence artifact is missing "
         f"expected phase-block command: {required_export_test}"
     ) in completed.stdout
+
+
+def test_release_readiness_report_requires_js_mainnet_facade_transcripts(
+    tmp_path: Path,
+) -> None:
+    """The JS phase evidence must prove ETH/BSC mainnet facade tests ran."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    required_facade_tests = (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        "javascript/iroha_js/test/sccpBscMainnet.test.js",
+    )
+    for required_facade_test in required_facade_tests:
+        assert (
+            required_facade_test
+            in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+        )
+        required_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+            if fragment != required_facade_test
+        ]
+        corridor_log = tmp_path / f"js-sdk-without-{Path(required_facade_test).stem}.log"
+        corridor_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: js-sdk",
+                    *phase_command_lines(required_fragments),
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--require-phase-evidence",
+                "--phase-result",
+                "all=missing",
+                "--phase-result",
+                "js-sdk=passed",
+                "--phase-evidence",
+                f"js-sdk={corridor_log}",
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1
+        assert "Status: NOT READY" in completed.stdout
+        assert (
+            "production corridor phase js-sdk evidence artifact is missing "
+            f"expected phase-block command: {required_facade_test}"
+        ) in completed.stdout
 
 
 def test_release_readiness_report_rejects_phase_command_outside_claimed_block(

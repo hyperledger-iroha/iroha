@@ -438,6 +438,9 @@ fn verify_execution_proof(
         verifier.proof_backend.clone().into(),
         verifier.verifying_key_bytes.clone(),
     );
+    if envelope.vk_hash == [0u8; Hash::LENGTH] {
+        return Err("RAM-LFE proof envelope verifier-key hash must be non-zero".to_owned());
+    }
     if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
         return Err("RAM-LFE verifier metadata contains a mismatched verifying key".to_owned());
     }
@@ -623,5 +626,12 @@ mod tests {
         let err = verify_execution_proof(&aux, &execution, &verifier)
             .expect_err("non-empty auxiliary bytes must reject before proof parsing");
         assert!(err.contains("auxiliary bytes"), "unexpected error: {err}");
+
+        let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
+            envelope.vk_hash = [0u8; Hash::LENGTH];
+        });
+        let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier)
+            .expect_err("zero verifier-key hash must reject before proof parsing");
+        assert!(err.contains("non-zero"), "unexpected error: {err}");
     }
 }

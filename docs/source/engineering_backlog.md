@@ -188,9 +188,124 @@ track detailed unfinished engineering work.
   digest and signature verification, rejects tampered digests/signatures and
   unsupported algorithms, and keeps live `reject-unsupported` profiles rejecting
   embedded signature blocks.
-- Broaden deterministic XMLDSig/XAdES coverage beyond the supported P-256
-  enveloped subset, including profile-specific trust anchors, certificate-chain
-  fixtures, and canonicalization edge cases.
+- Completed 2026-06-01: tightened the deterministic XMLDSig/XAdES subset so
+  `require-verified` profiles only accept the C14N 1.0 + single enveloped
+  transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,
+  extra transforms, and duplicate `Sgntr` blocks now fail closed.
+- Completed 2026-06-01: added profile-level
+  `signature_public_key_sha256_pins` for `require-verified` XMLDSig/XAdES
+  profiles. The verifier now fails closed without configured pins, accepts raw
+  XMLDSig public keys and X.509 certificate subject public keys only when their
+  SHA-256 pin matches the profile, rejects malformed/all-zero pins, and rejects
+  ambiguous or duplicate key material.
+- Completed 2026-06-01: added profile-level
+  `x509_trust_anchor_sha256_pins` for X.509 XMLDSig key-info chains in the
+  supported P-256/SHA-256 subset. The verifier now validates leaf-to-anchor
+  issuer links, ECDSA certificate signatures, certificate validity windows,
+  CA/keyCertSign trust anchors, duplicate certificates, non-CA anchors, missing
+  anchors, issuer mismatches, and trust-anchor DER SHA-256 pins before using an
+  X.509 leaf key that is not directly pinned.
+- Completed 2026-06-01: added profile-level
+  `x509_required_certificate_policy_oids` for rail-specific X.509 XMLDSig
+  signer policy gates. X.509 leaf certificates must now carry every configured
+  certificate-policy OID before either direct leaf-key pins or validated
+  trust-anchor chains can authorize the XMLDSig key; malformed configured OIDs,
+  missing policy extensions, and wrong policy OIDs fail closed.
+- Completed 2026-06-01: added profile-level CRL revocation enforcement for
+  X.509 XMLDSig key-info chains. Profiles can require a fresh verified CRL via
+  `x509_require_crl_revocation_check` and can supply pinned rail CRL material
+  through `x509_crl_der_base64`; embedded `X509CRL` material is accepted only
+  on the X.509 path. The verifier checks CRL DER parsing, issuer matching,
+  issuer `cRLSign`, ECDSA/SHA-256 CRL signatures, freshness windows, duplicate
+  CRL rejection, missing required CRLs, wrong issuers, expired CRLs, and revoked
+  signer serials before using the X.509 leaf key.
+- Completed 2026-06-01: added fail-closed X.509 name-constraint processing for
+  trust-anchor-authorized XMLDSig key-info chains. The verifier now enforces
+  permitted and excluded subtrees from constrained issuer certificates across
+  subordinate signer certificates before using the leaf key, with local support
+  for DNS, RFC822, URI-host, IP subnet, and directory-name forms and closed
+  rejection for unsupported or invalid general names.
+- Completed 2026-06-01: added profile-level OCSP revocation enforcement for
+  X.509 XMLDSig key-info chains. Profiles can require fresh OCSP coverage via
+  `x509_require_ocsp_revocation_check` and can supply pinned rail response
+  material through `x509_ocsp_response_der_base64`; embedded `OCSPResponse` and
+  `EncapsulatedOCSPValue` material is accepted only on the X.509 path. The
+  verifier parses BasicOCSPResponse DER, binds SHA-256 CertID values to the
+  signer and issuer, verifies issuer-signed and delegated ECDSA/SHA-256
+  responders, enforces OCSPSigning EKU/digitalSignature key usage for
+  delegated responders, checks producedAt/thisUpdate/nextUpdate freshness, and
+  rejects missing, revoked, unknown, duplicate, stale, malformed, or unauthored
+  responses before using the X.509 leaf key.
+- Completed 2026-06-01: added X.509 path-length constraint enforcement for
+  trust-anchor-authorized XMLDSig key-info chains. The verifier now evaluates
+  BasicConstraints `pathLenConstraint` values across intermediate CAs and
+  rejects a chain when a constrained root or intermediate authorizes more
+  subordinate CA certificates than its policy allows.
+- Completed 2026-06-01: required X.509 XMLDSig signer certificates to be
+  end-entity certificates. The verifier now rejects signer leaves whose
+  BasicConstraints extension is missing or CA:true before either direct public
+  key pins or trust-anchor chains can authorize the key, with adversarial
+  coverage for CA-capable signer certificates accepted by neither path.
+- Completed 2026-06-01: added fail-closed unknown-critical X.509 extension
+  handling for XMLDSig signer material. Critical extensions that the parser
+  cannot decode or recognize now reject direct-pinned leaves, trust-anchor
+  chains, and delegated OCSP responder certificates before any public key is
+  accepted.
+- Completed 2026-06-01: made X.509 signer certificate validity windows
+  mandatory before direct public-key pins can authorize a key. Expired signer
+  leaves now fail before direct-pin acceptance as well as on trust-anchor
+  chains, with coverage for both paths.
+- Completed 2026-06-01: added X.509 signer Extended Key Usage purpose binding
+  for XMLDSig signer material. Signer leaves without EKU remain acceptable, but
+  EKU-constrained leaves must allow `codeSigning`, `anyExtendedKeyUsage`, or
+  the document-signing OID before either direct public-key pins or trust-anchor
+  chains can authorize the XMLDSig key; incompatible server-auth-only signer
+  leaves fail closed on both paths.
+- Completed 2026-06-01: added X.509 Authority Key Identifier / Subject Key
+  Identifier binding for trust-anchor XMLDSig chains. When a subordinate
+  certificate presents an AKI key identifier and the issuer presents an SKI, the
+  identifiers must match before the trust-anchor path can authorize the leaf
+  key; issuer-name/signature-valid chains with mismatched key identifiers fail
+  closed.
+- Remaining ISO signature work is path-policy processing beyond policy OID
+  presence/name constraints/path length/end-entity signer admission/
+  unknown-critical extension handling/signer validity enforcement/signer EKU
+  purpose binding/AKI-SKI issuer binding.
+- Completed 2026-06-01: tightened ISO idempotency so replayed Business
+  Application Header `BizMsgIdr` values are rejected across different durable
+  message identifiers, including after durable-store reload. Live-profile
+  validation now also has regression coverage proving recorded metadata carries
+  the exact reference-data snapshot checksum and that checksum changes when the
+  loaded reference snapshot provenance changes.
+- Completed 2026-06-01: broadened live-profile mismatch and lifecycle
+  transition coverage. Swift CBPR+ validation now has negative tests for
+  unsupported message-definition versions and business services, while
+  `pacs.002`, `pacs.004`, `camt.056`, and `sese.025` lifecycle updates fail
+  closed when the referenced durable record belongs to the wrong ISO family.
+- Completed 2026-06-01: added XSD document-root admission for real ISO XML
+  parsing. Each supported XML family now has a canonical `Document` child-root
+  gate, and real XML with a missing or mismatched family root fails before
+  field-level validation can materialize a message.
+- Completed 2026-06-01: added live rail XSD/profile fixture coverage for the
+  embedded Swift CBPR+, Fedwire Funds, SEPA SCT Inst, and securities CSD
+  profiles. The fixture matrix now validates accepted `pacs.008`/`pacs.009`
+  samples against required reference data, business services, message
+  definition versions, reference snapshot metadata, and minor-unit policy, with
+  adversarial wrong-service, wrong-version, and fractional-amount drift cases.
+- Completed 2026-06-01: added offline Standards Editor generated MDR/XSD
+  fixtures for `pacs.008.001.08` and `pacs.009.001.08` and bound them to the
+  live rail profile matrix. Swift CBPR+, Fedwire Funds, SEPA SCT Inst, and the
+  securities CSD profile now each validate at least one live profile payload
+  whose namespace and `Document` child root are asserted against the checked-in
+  XSD, with a root-drift negative case proving mismatched MDR roots fail before
+  profile admission.
+- Completed 2026-06-01: kept backward-compatible `trusted_public_key_sha256`
+  and `trusted_certificate_sha256` profile aliases while normalizing them into
+  the stricter `signature_public_key_sha256_pins` and
+  `x509_trust_anchor_sha256_pins` verifier inputs.
+- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
+  material, including full certificate-chain fixtures and official
+  rail/profile-specific trust-anchor packages.
 - Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
   profile mismatch, cancellation/return transitions, reference snapshot
   checksum expectations, and replay by business message id/UETR.

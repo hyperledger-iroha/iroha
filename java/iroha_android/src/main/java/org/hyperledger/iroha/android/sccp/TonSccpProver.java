@@ -389,7 +389,7 @@ public final class TonSccpProver {
     final byte[] shardFileHashBytes = nonZeroHex32Bytes(shardFileHash, "shardFileHash");
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
-    write(out, hex32Bytes(sourceEventDigest, "sourceEventDigest"));
+    write(out, nonZeroHex32Bytes(sourceEventDigest, "sourceEventDigest"));
     writeU64Le(out, normalizedMasterchainSeqno);
     write(out, hex32Bytes(masterchainBlockHash, "masterchainBlockHash"));
     writeI32Le(out, shardWorkchainId);

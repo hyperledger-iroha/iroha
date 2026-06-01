@@ -2,6 +2,3283 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 Kagemusha lineage previous-proof validation
+
+- Tightened record-backed recursive-spend lineage witness validation so every
+  `previous_recursive_proofs` entry must be a semantic aggregation proof, not a
+  reserved lineage proof, and must carry the one-based hop count matching its
+  position in the lineage witness. This rejects proof-profile substitution and
+  out-of-order previous-proof material at the data-model boundary before
+  bridge/core replay.
+- Tightened core record-backed lineage replay with the same previous-proof
+  preflight before Pallas hop evidence is reconstructed. Core now rejects wrong
+  proof backends, wrong verifier-key backends, backend/key mismatches, empty
+  previous proof bytes, stale public-input hashes, scalar-projection splices,
+  reserved lineage profiles, and out-of-order previous-proof hop counts before
+  running the heavier record-backed replay path.
+- Updated the offline Kagemusha docs and roadmap to make the witness invariant
+  explicit for SDK and wallet callers.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material --lib -- --nocapture`
+    (1 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --nocapture`
+    was not completed in this slice because an unrelated active Cargo test held
+    the shared target-directory lock; the waiting command was interrupted by
+    signaling only its own Cargo process.
+  - Core test execution for
+    `kagemusha_recursive_spend_lineage_previous_proof_profile_rejects_adversarial_inputs`
+    was deferred while unrelated Rust builds were already saturating local Cargo
+    targets; targeted `git diff --check` passed after the core edit.
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - `PYTHONPATH=python/iroha_python/src:python/norito_py/src:python /tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+    (16 passed)
+  - `node --check javascript/iroha_js/src/crypto.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (9 passed)
+
+## 2026-06-01 Kagemusha SDK complete ABI surface guards
+
+- Tightened Python recursive-spend helpers so direct `init`, `append`,
+  lineage-witness, `verify`, and `redeem` calls require the complete ABI-6
+  native surface, not only the ABI version and the specific method being
+  invoked. Partial native modules now fail closed before producing an init
+  bundle that could not later assemble a redeem witness.
+- Tightened Kotlin/JVM and Java Android native availability probing so malformed
+  library loading or ABI-version probes fail closed. Only the expected
+  empty-archive response from the required JNI symbol probes can prove that a
+  loaded native recursive-spend surface is usable.
+- Tightened the shared Kotlin/JVM and Java Android Kagemusha JNI probe helpers
+  for compact-token, recursive-aggregation, and recursive-spend surfaces so a
+  native symbol that accepts empty archives no longer counts as available.
+- Tightened the optional C# P/Invoke wrapper similarly: after ABI version
+  probing, direct calls now probe all required recursive Kagemusha symbols and
+  reject incomplete native bridge deployments. C# now also requires each symbol
+  probe to return the expected Kagemusha empty-archive bridge error instead of
+  accepting empty input.
+- Added .NET unit-test coverage for the C# availability policy through an
+  internal probe seam: ABI 6 plus a complete symbol surface is accepted, while
+  absent ABI probes, older ABI versions, missing recursive-spend symbols, bad
+  native images, and loader/probe exceptions all fail closed.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (9 passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (56 passed; includes package-root Kagemusha recursive-spend export and
+    declaration coverage)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - `PYTHONPATH=python/iroha_python/src /tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+    (16 passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain`
+    (passed; rerun after tightening empty-archive JNI probe acceptance)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --console=plain`
+    (passed; rerun after tightening empty-archive JNI probe acceptance)
+  - `git diff --check`
+    (passed)
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs csharp/src/Hyperledger.Iroha.Sdk/Properties/AssemblyInfo.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs`
+    (passed)
+  - `if [ ! -x /tmp/iroha-dotnet/dotnet ]; then curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/iroha-dotnet-install.sh && bash /tmp/iroha-dotnet-install.sh --channel 8.0 --install-dir /tmp/iroha-dotnet --no-path; fi; /tmp/iroha-dotnet/dotnet --info`
+    (installed/used .NET SDK 8.0.421 under `/tmp/iroha-dotnet`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~KagemushaRecursiveSpendNativeTests --logger "console;verbosity=minimal"`
+    (6 passed; rerun after tightening C# empty-archive probe acceptance)
+  - `test -e dist/NoritoBridge.xcframework && echo swift_bridge_present || echo swift_bridge_missing`
+    (`swift_bridge_missing`)
+
+## 2026-06-01 Kagemusha lineage witness archive validation
+
+- Tightened recursive-spend redeem request validation so record-backed lineage
+  witnesses must carry a decodable Pallas open-envelope archive with exactly one
+  envelope per hop. Directly constructed redeem requests now reject malformed or
+  count-mismatched lineage archives at the data-model boundary instead of
+  relying on later bridge/core replay failures.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `git diff --check -- crates/iroha_data_model/src/offline/mod.rs`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --nocapture`
+    (1 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material --lib -- --nocapture`
+    (1 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-data-model-target cargo test -p iroha_data_model kagemusha_recursive_spend_payload_size_is_hop_count_independent --lib -- --nocapture`
+    (1 passed; confirms the 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 hop
+    fixture payload remains fixed-size)
+
+## 2026-06-01 Kagemusha recursive spend SDK lineage witness wrappers
+
+- Exposed ABI-6 recursive spend lineage-witness assembly helpers across the C
+  bridge, JNI bridge, Node NAPI host, Python PyO3 host, and SDK surfaces so
+  wallets can keep the D2D bundle constant-size while retaining the separate
+  record-backed redeem witness:
+  Swift `lineageWitnessFromInitResult` / `lineageWitnessAppendResult`,
+  Kotlin/JVM and Java Android methods with the same names, JavaScript/Node and
+  Python native helper wrappers, and C# `LineageWitnessFromInitResult` /
+  `LineageWitnessAppendResult` DTO wrappers.
+- Availability now fails closed when old native libraries expose only the
+  four original recursive spend symbols. Swift requires both lineage helper
+  symbols in the loader; JavaScript/Node and Python require both helper methods
+  on the native host; Kotlin/JVM, Java Android, and C# probe bridge ABI 6 plus
+  all six required native calls - init, append, both lineage-witness helpers,
+  verify, and redeem - before reporting recursive spend support.
+- Filled the SDK validation blockers discovered while testing this change:
+  Kotlin/JVM and Java Android now expose `getOfflineV2Readiness` for
+  `/v1/offline/v2/readiness`, parse `OfflineV2Readiness`, and keep the Java
+  Android client interface free of duplicate default methods so the Android
+  harness can compile.
+- Validation:
+  - `cargo fmt --all --check`
+    (passed)
+  - `node --check javascript/iroha_js/src/crypto.js && node --check javascript/iroha_js/dist/crypto.js && node --check javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (9 passed)
+  - `node --test javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (56 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - `PYTHONPATH=python/iroha_python/src /tmp/iroha-kagemusha-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+    (16 passed)
+  - `javac -d /tmp/iroha-kagemusha-javac java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientV2ReadinessTest --console=plain`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest --console=plain`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests ./gradlew :core:test --console=plain`
+    (passed)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --console=plain`
+    (passed)
+  - `git diff --check`
+    (passed)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter FullyQualifiedName~KagemushaRecursiveSpendNativeTests --logger "console;verbosity=minimal"`
+    (5 passed)
+  - `git diff --name-only -- Cargo.lock '**/Cargo.lock' package-lock.json javascript/iroha_js/package-lock.json yarn.lock pnpm-lock.yaml`
+    (no lockfile changes)
+- Blocked validation:
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendProverTests`
+    could not load the package manifest because
+    `dist/NoritoBridge.xcframework` is missing locally.
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_witness --lib -- --test-threads=1`
+    was not restarted after the SDK validation pass because unrelated active
+    Cargo/rustc jobs were still compiling in this worktree, including
+    Kagemusha lineage-key and Torii focused runs. No other Cargo process was
+    killed or interrupted.
+
+## 2026-06-01 Kagemusha recursive spend lineage witness assembly
+
+- Added Rust data-model helpers for carrying the separate record-backed redeem
+  witness alongside constant-size recursive spend bundles:
+  `kagemusha_recursive_spend_lineage_witness_from_init_result` and
+  `kagemusha_recursive_spend_lineage_witness_append_result`.
+- The helpers validate one-hop init/append witness fragments, exact
+  verifier-record sets, Pallas open-envelope archive shape/counts, previous
+  witness binding, chain/asset continuity, previous recursive proof carry-over,
+  merged envelope archives, and conflicting verifier-record snapshots before a
+  witness can be attached to a redeem request.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-helper-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_lineage_witness_helpers_append_record_backed_material --lib -- --test-threads=1`
+    (1 passed; covers init witness assembly, append witness assembly, merged
+    Pallas archive count, redeem-request validation, malformed archive
+    rejection, and conflicting verifier-record rejection)
+  - Removed `/tmp/iroha-kagemusha-lineage-helper-target` after validation and
+    after checking no process was using that path.
+
+## 2026-06-01 Kagemusha recursive spend offline verification split
+
+- Split ABI-6 recursive spend verify results into receiver-side offline
+  validity and online chain-admission diagnostics. Backend-valid semantic v1
+  spend bundles now report `valid = true` for offline acceptance and
+  re-spend, while witnessless bundles still report `chain_admissible = false`
+  with the private-hop lineage diagnostic. Malformed or tampered proof material
+  remains `valid = false`; redeem remains fail-closed unless record-backed
+  lineage witness verification succeeds.
+- Added a shared `iroha_core::zk::kagemusha_recursive_spend_verify_result`
+  helper and routed the C bridge, Node NAPI host, and Python PyO3 host through
+  it so ABI-6 verify semantics cannot drift. Also updated the Norito data
+  model, offline Kagemusha docs, and roadmap notes for the split result
+  contract.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-verify-result-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-verify-bridge-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_verify --lib -- --test-threads=1`
+    (2 passed; covers malformed proof diagnostics and backend-valid semantic
+    bundles reporting offline-valid but chain-inadmissible)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-verify-bridge-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_verify_python_function --lib -- --test-threads=1`
+    (2 passed; PyO3 parity for the same split semantics)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-verify-bridge-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_bridge_abi_version_is_six --lib -- --test-threads=1`
+    (1 passed; verifies the NAPI host crate still compiles and links against
+    the shared core helper after the delegation change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-verify-bridge-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_real_halo2_ipa_proofs_verify_for_multiple_hops --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; real Halo2 recursive spend proofs across three hops still verify,
+    D2D payload length stays constant, and the shared verify result reports
+    offline-valid but chain-inadmissible without lineage evidence)
+  - A first bridge retry in `/tmp/iroha-kagemusha-verify-result-target` was
+    blocked by local disk exhaustion while compiling dependencies; only that
+    failed temporary target was removed after confirming no cargo/rustc process
+    was still using it.
+  - Removed `/tmp/iroha-kagemusha-verify-bridge-target` after all focused
+    validations completed and after checking no process was using that path,
+    recovering local disk space without interrupting unrelated cargo/rustc
+    processes.
+
+## 2026-06-01 Kagemusha recursive spend record-backed redemption admission
+
+- Added `KagemushaRecursiveSpendLineageWitnessV1` and threaded it through
+  recursive spend redeem requests and `RedeemKagemushaRecursive` instructions.
+  The witness carries the checked hop record bundle, Pallas open-envelope
+  archive, per-hop current-note descriptors, and the intermediate recursive
+  proofs needed to replay `recursive_proof_chain_digest`.
+- Chain-side recursive redemption now accepts semantic v1 recursive spend
+  bundles only when that record-backed witness verifies: core replays every
+  private hop from active records/open envelopes, verifies each intermediate
+  recursive proof against the recursive verifier, and requires the recomputed
+  accumulator to match the bundle before nullifier consumption or minting. The
+  lineage witness record bundle must be exact: every supplied hop verifier
+  record must be referenced, registered in WSV, and byte-equal to the registered
+  record, with no missing or duplicate record snapshots.
+  Each hop verifier record must also carry inline verifier-key material matching
+  the hop verifier key box, so absent record keys cannot defer trust to
+  out-of-band state.
+  Witnessless semantic v1 bundles and unwired reserved-lineage bundles still
+  fail closed.
+- Updated the C bridge, Node NAPI host, and Python PyO3 redeem constructors so
+  they serialize redeem instructions only when the optional witness verifies and
+  the final recursive proof verifies against the same transparent recursive
+  verifier key; otherwise they keep the existing chain-admission rejection.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_TARGET_DIR=target/kagemusha-lineage-target cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib`
+    (1 passed before the temporary target directory was removed to recover disk
+    space)
+  - `CARGO_TARGET_DIR=target/kagemusha-core-check CARGO_INCREMENTAL=0 cargo check -p iroha_core --features zk-halo2-ipa --lib`
+    (passed; temporary target directory removed afterward)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-core-test cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; covers positive two-hop record-backed lineage replay, missing
+    intermediate-proof rejection, and forged-accumulator rejection; temporary
+    target directory removed afterward)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-lineage-final-test cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib`
+    (1 passed; covers lineage-witness note/proof count checks and exact
+    verifier-record set rejection for missing, duplicate, and unreferenced
+    snapshots)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-lineage-final-test cargo test -p iroha_core kagemusha_recursive_lineage_records_must_match_registered_records --lib -- --test-threads=1`
+    (1 passed; covers chain-side WSV exact-record matching plus stale, missing,
+    duplicate, and unreferenced lineage record rejection; temporary target
+    directory removed afterward)
+  - `CARGO_TARGET_DIR=target/kagemusha-lineage-target cargo test -p iroha_core kagemusha_recursive_spend_chain_admission --lib --features zk-halo2-ipa`
+    (blocked by local disk exhaustion while writing rustc incremental query
+    cache; reran the narrower `cargo check` above successfully after cleanup)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-python-kagemusha-chain-gate-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python --lib -- --test-threads=1`
+    (5 passed; includes the positive PyO3 redeem path with a real one-hop
+    record-backed lineage witness)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-python-kagemusha-chain-gate-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend --lib -- --test-threads=1`
+    (8 passed; covers PyO3 ABI version, verify diagnostics, witnessless redeem
+    rejection, reserved-lineage rejection, positive record-backed witness redeem
+    serialization, and final recursive-proof tamper rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-zk1-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed after the inline-key verifier-record requirement; now also proves
+    record-backed lineage replay alone is not enough for SDK admission by
+    tampering the final recursive proof and requiring the shared helper to
+    reject it)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_verifies_record_backed_lineage_final_proof --lib -- --test-threads=1`
+    (1 passed; bridge accepts a real one-hop record-backed witness with a valid
+    final proof and rejects the same witness after final proof tampering)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge --lib -- --test-threads=1`
+    (4 passed; covers witnessless, reserved-lineage, adversarial
+    record-backed-lineage, missing inline-key, and final-proof tamper rejection)
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-sdk-adversarial-test cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_rejects_adversarial_lineage_witnesses --lib -- --test-threads=1`
+    (1 passed; covers missing, duplicate, and unreferenced hop verifier records,
+    inactive record status, missing inline key material, malformed Pallas
+    archive bytes, note mismatch, and unexpected previous recursive proof)
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-sdk-adversarial-test cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_rejects_adversarial_lineage_witnesses --lib -- --test-threads=1`
+    (1 passed; PyO3 rejects the same adversarial lineage-witness classes before
+    serializing a redeem instruction)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-js-host-kagemusha-chain-gate-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib -- --test-threads=1`
+    (2 passed; JS host redeem constructor still rejects witnessless semantic v1
+    and unwired reserved-lineage requests after switching to the shared helper)
+  - `CARGO_BUILD_JOBS=1 CARGO_INCREMENTAL=0 cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_rejects_malformed_lineage_witnesses --lib -- --test-threads=1`
+    (1 passed; JS host rejects missing, duplicate, and unreferenced records,
+    malformed Pallas archives, note mismatches, and invalid previous-proof
+    shapes before returning instruction bytes)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+    (passed)
+  - `cargo fmt --all --check`
+    (passed after the final status update)
+  - `git diff --check`
+    (passed after the final status update)
+  - `git diff --name-only -- Cargo.lock IrohaSwift/Package.resolved kotlin/gradle.lockfile java/iroha_android/gradle.lockfile javascript/iroha_js/package-lock.json javascript/iroha_js/npm-shrinkwrap.json`
+    (no output)
+
+## 2026-06-01 Kagemusha enabled-by-default config audit
+
+- Re-checked the offline settlement defaults after the chain-admission wrapper
+  changes: `kagemusha_enabled` remains `true` by default and
+  `kagemusha_force_legacy` remains opt-in.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-config-kagemusha-defaults-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_config kagemusha --lib -- --test-threads=1`
+    (3 passed)
+
+## 2026-06-01 Kagemusha JS/PyO3 recursive-spend chain-admission gate
+
+- Updated the JavaScript/NAPI and Python PyO3 recursive spend `verify` wrappers
+  to report backend-valid but chain-inadmissible bundles as `valid = false`
+  with the same private-hop-lineage diagnostic used by ledger redemption and the
+  C bridge.
+- Updated the JavaScript/NAPI and Python PyO3 recursive spend `redeem` wrappers
+  to apply the chain-admission lineage gate after public-binding validation, so
+  semantic v1 and reserved-lineage bundles do not serialize redeem instructions
+  before the production lineage verifier is wired.
+- Added Python native regression coverage with a real backend-valid semantic
+  recursive spend bundle, proving the PyO3 `verify` helper still reports it as
+  chain-inadmissible rather than spendable.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_js_host/src/lib.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-js-host-kagemusha-chain-gate-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib -- --test-threads=1`
+    (2 passed; first run exposed the reserved-lineage fixture's malformed proof
+    envelope and the assertion was tightened to preserve that stricter
+    fail-closed path)
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-python-chain-target-1780321122 RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend --lib -- --test-threads=1`
+    (7 passed; 37 filtered out)
+
+## 2026-06-01 Kagemusha recursive spend JS/Python/C# ABI-6 gates
+
+- JavaScript/Node recursive-spend availability now requires the native host to
+  expose `connectNoritoBridgeAbiVersion()` with ABI >= 6 before selecting
+  `recursive_spend_v1`; the `iroha_js_host` NAPI surface exports that probe.
+- Python recursive-spend availability now requires the PyO3 extension to expose
+  `kagemusha_recursive_spend_bridge_abi_version()` with ABI >= 6 before
+  selecting recursive mode or dispatching native init/append/verify/redeem.
+- C# now publishes `KagemushaRecursiveSpendNative.RequiredBridgeAbiVersion = 6`
+  and keeps the P/Invoke wrapper gated on that version before bridge calls.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `node --test test/kagemushaRecursiveSpend.test.js` from `javascript/iroha_js`
+    (8 passed)
+  - `PYTHONPATH=src:../norito_py/src:../iroha_torii_client /tmp/iroha-python-kagemusha-venv/bin/python -m pytest tests/kagemusha_test.py -q` from `python/iroha_python`
+    (8 passed; disposable `/tmp` venv used because global `python`/`pytest` were unavailable)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-js-host-target-1780321122 RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend --lib -- --test-threads=1`
+    (3 passed; first attempt with `/tmp/iroha-kagemusha-guard-target` failed because that target directory was missing during rustc temp-file creation)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-js-host-target-1780321122 RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend --lib -- --test-threads=1`
+    (4 passed)
+- Note: C# execution remains blocked locally because `dotnet` is not installed.
+
+## 2026-06-01 Kagemusha bridge recursive-spend redeem fails closed on lineage gate
+
+- Updated the ABI-6 recursive spend `redeem` bridge path to apply
+  chain-admission lineage gating after wallet-side public binding validation.
+- The bridge now returns no redeem instruction bytes for semantic v1 bundles or
+  the reserved lineage profile until the production private-hop lineage verifier
+  is wired, matching ledger fail-closed behavior before nullifier consumption or
+  minting.
+- Added focused direct bridge coverage proving semantic public-bindings can be
+  valid while redeem serialization is still rejected, plus reserved-lineage
+  no-output coverage and FFI regression coverage.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-bridge-recursive-verify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge --lib -- --test-threads=1`
+    (2 passed; 1.10s test time after a 3.75s incremental rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-bridge-recursive-verify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_ffi --lib -- --test-threads=1`
+    (2 passed; 1.74s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-js-host-target-1780321122 RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (8 passed; 48.34s test time after a 3m 57s isolated rebuild)
+
+## 2026-06-01 ISO XMLDSig OCSP revocation enforcement
+
+- Added rail-profile `x509_require_ocsp_revocation_check` and
+  `x509_ocsp_response_der_base64` config plus runtime normalization for ISO
+  20022 `require-verified` X.509 XMLDSig/XAdES profiles.
+- X.509 key-info validation now accepts configured or embedded OCSP material
+  only on the X.509 path and rejects signer certificates before using the leaf
+  key unless a fresh, verified, matching good response is available.
+- The DER verifier handles BasicOCSPResponse payloads with SHA-256 CertID
+  binding, ECDSA/SHA-256 response signatures, issuer-signed responders,
+  delegated responder certificates, OCSPSigning EKU, digitalSignature key usage,
+  producedAt/thisUpdate/nextUpdate freshness, and fail-closed duplicate,
+  revoked, unknown, missing, malformed, or unauthored responses.
+- Added positive configured-response, embedded-response, and delegated-responder
+  coverage plus adversarial tests for invalid configured material, missing
+  required OCSP, revoked signer status, and delegated responders that omit the
+  responder certificate.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-ocsp-target cargo test -p iroha_torii x509_ocsp --lib -- --nocapture`
+    (2 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-ocsp-target cargo test -p iroha_torii ocsp_response --lib -- --nocapture`
+    (4 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-ocsp-target cargo test -p iroha_torii delegated_ocsp --lib -- --nocapture`
+    (2 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-ocsp-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (37 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-ocsp-target cargo test -p iroha_config iso_bridge_parse --lib -- --nocapture`
+    (2 passed; invalid asset selector panic is expected and caught)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-final-target cargo test -p iroha_core profiles --lib -- --nocapture`
+    (5 passed; 6781 filtered out)
+
+## 2026-06-01 ISO XSD document-root parser gate
+
+- Added a real-XML parser gate that binds each supported ISO 20022 family to
+  its canonical XSD `Document` child root before field aliases are accepted.
+- Mismatched roots such as a `pacs.002` namespace carrying a `pacs.008`
+  `FIToFICstmrCdtTrf` body now fail as an unsupported message type, and empty
+  `Document` wrappers fail before validation can fall through to weaker
+  field-level errors.
+- Added a root matrix covering the supported payment, cash-management,
+  securities-settlement, customer-payment, and collateral message families,
+  plus negative missing-root and wrong-root fixtures.
+- Validation:
+  - `cargo fmt --package ivm`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-ivm-iso-root-target cargo test -p ivm xsd_document_root --lib -- --nocapture`
+    (3 passed; 327 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-ivm-iso-root-target cargo test -p ivm parse_sample --lib -- --nocapture`
+    (8 passed; 322 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-ivm-iso-root-target cargo test -p ivm parse_generated_md --lib -- --nocapture`
+    (5 passed; 325 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-ivm-iso-root-target cargo test -p ivm signature_blocks_marked_as_ignored --lib -- --nocapture`
+    (1 passed; 329 filtered out)
+
+## 2026-06-01 ISO live rail XSD/profile fixture matrix
+
+- Added synthetic real-XML fixture coverage for the embedded Swift CBPR+,
+  Fedwire Funds, SEPA SCT Inst, and securities CSD live rail profiles.
+- The positive matrix validates accepted `pacs.008`/`pacs.009` XML with the
+  required reference datasets loaded and asserts profile id, business service,
+  message type, and exact reference snapshot metadata in the audit result.
+- Added adversarial coverage for wrong business-service admission across live
+  rails, unsupported message-definition version drift, and SEPA fractional
+  amount minor-unit drift.
+- Validation:
+  - `cargo fmt --package iroha_torii --package ivm`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii live_rail_profile_xsd_fixtures --lib -- --nocapture`
+    (3 passed; 2069 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii live_profile --lib -- --nocapture`
+    (6 passed; 2066 filtered out)
+
+## 2026-06-01 ISO official MDR/XSD live-profile fixtures
+
+- Added offline Standards Editor generated XSD fixtures for
+  `pacs.008.001.08` and `pacs.009.001.08` under
+  `fixtures/iso20022/xsd/iso/`, with provenance documented in the fixture
+  README.
+- Bound those full XSD fixtures to the live rail matrix: Swift CBPR+, Fedwire
+  Funds, SEPA SCT Inst, and securities CSD each validate at least one live
+  profile payload whose namespace and `Document` child root are asserted
+  against the checked-in MDR/XSD file.
+- Added a root-drift adversarial case where a `pacs.008` payload is given the
+  `pacs.009` XSD document root and fails before profile admission.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii official_mdr_xsd --lib -- --nocapture`
+    (2 passed; 2075 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii live_rail_profile_xsd_fixtures --lib -- --nocapture`
+    (3 passed; 2074 filtered out)
+
+## 2026-06-01 ISO XMLDSig path-length constraint enforcement
+
+- Added fail-closed X.509 BasicConstraints `pathLenConstraint` processing for
+  trust-anchor-authorized ISO 20022 `require-verified` XMLDSig/XAdES chains.
+- The chain verifier now counts subordinate CA certificates below each issuer
+  in the supplied key-info chain and rejects chains that exceed a root or
+  intermediate CA path-length limit before using the leaf public key.
+- Added generated P-256 fixtures for a three-certificate leaf/intermediate/root
+  chain with a root `pathLenConstraint = 1`, plus a matching adversarial root
+  with `pathLenConstraint = 0` that must not authorize the same intermediate CA.
+- Validation:
+  - `cargo fmt --package iroha_torii --package iroha_core --package iroha_config`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii x509_path_length --lib -- --nocapture`
+    (2 passed; 2065 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (39 passed; 2028 filtered out)
+
+## 2026-06-01 ISO XMLDSig end-entity signer admission
+
+- Required X.509 XMLDSig signer leaves in ISO 20022 `require-verified`
+  profiles to carry BasicConstraints CA:false before the verifier accepts the
+  signer key.
+- The verifier now fails closed for signer certificates whose BasicConstraints
+  extension is missing or CA:true before either direct public-key pins or
+  trust-anchor chains can authorize that key.
+- Added a CA-capable signer fixture with digitalSignature, keyCertSign, and
+  cRLSign key usages, proving direct pins and trust anchors both reject it as
+  an XMLDSig signer.
+- Validation:
+  - `cargo fmt --package iroha_torii --package iroha_core --package iroha_config`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii x509_ca_signer --lib -- --nocapture`
+    (2 passed; 2067 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (41 passed; 2028 filtered out)
+
+## 2026-06-01 ISO XMLDSig unknown-critical extension rejection
+
+- Added fail-closed critical-extension handling for ISO 20022
+  `require-verified` XMLDSig/XAdES X.509 material. Certificates now reject
+  before key acceptance when a critical extension is unsupported, unparsed, or
+  failed to parse.
+- The guard is applied to direct-pinned signer leaves, trust-anchor-authorized
+  key-info chains, and delegated OCSP responder certificates.
+- Added adversarial P-256 fixtures for an unknown-critical signer leaf and a
+  clean signer leaf under an unknown-critical trust anchor.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii unknown_critical --lib -- --nocapture`
+    (3 passed; 2072 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (44 passed; 2031 filtered out)
+
+## 2026-06-01 ISO XMLDSig signer validity enforcement
+
+- Tightened X.509 XMLDSig signer admission so certificate validity windows are
+  checked before a directly pinned subject public key can authorize a signer.
+  Trust-anchor chains already validated all certificate windows; direct pins
+  now share the same fail-closed leaf expiry behavior.
+- Added an expired P-256 signer leaf fixture under a valid root and covered both
+  direct-pin and trust-anchor authorization paths.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii x509_expired_leaf --lib -- --nocapture`
+    (2 passed; 2077 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (46 passed; 2033 filtered out)
+
+## 2026-06-01 ISO XMLDSig signer EKU purpose binding
+
+- Added X.509 Extended Key Usage admission for ISO 20022 `require-verified`
+  XMLDSig/XAdES signer leaves. Certificates without EKU remain accepted, but
+  EKU-constrained leaves must allow code-signing, anyExtendedKeyUsage, or the
+  document-signing OID before the leaf key can be used.
+- Covered both authorization paths: directly pinned public keys and
+  trust-anchor chains now reject incompatible server-auth-only signer leaves
+  before signature verification can succeed.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii eku --lib -- --nocapture`
+    (4 passed; 2083 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (50 passed; 2037 filtered out)
+
+## 2026-06-01 ISO XMLDSig AKI/SKI issuer binding
+
+- Added X.509 Authority Key Identifier / Subject Key Identifier binding for
+  ISO 20022 `require-verified` trust-anchor XMLDSig/XAdES chains. When a
+  subordinate certificate carries an AKI key identifier and its issuer carries
+  an SKI, those values must match before the issuer path can authorize the
+  signer leaf.
+- Added matching and mismatched AKI P-256 chain fixtures. The mismatched chain
+  still has the expected issuer name and a valid issuer signature, proving the
+  key-identifier guard closes that issuer-confusion path.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii authority_key_identifier --lib -- --nocapture`
+    (2 passed; 2087 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-path-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (52 passed; 2037 filtered out)
+
+## 2026-06-01 ISO XMLDSig name-constraint enforcement
+
+- Added fail-closed X.509 name-constraint enforcement for trust-anchor
+  authorized ISO 20022 `require-verified` XMLDSig/XAdES chains.
+- Constrained issuer certificates now apply permitted and excluded subtrees to
+  subordinate signer certificates before the leaf key is accepted, covering DNS,
+  RFC822, URI-host, IP subnet, and directory-name forms while rejecting
+  unsupported or invalid general names.
+- Added generated P-256 X.509 fixtures for a constrained root, an allowed DNS
+  signer, a signer outside the permitted subtree, and a signer inside an
+  excluded subtree.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (31 passed; 2026 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_torii x509_name_constraint --lib -- --nocapture`
+    (4 passed; 2054 filtered out)
+
+## 2026-06-01 ISO XMLDSig CRL revocation enforcement
+
+- Added rail-profile `x509_require_crl_revocation_check` and
+  `x509_crl_der_base64` config plus runtime normalization for ISO 20022
+  `require-verified` X.509 XMLDSig/XAdES profiles.
+- X.509 key-info validation now rejects revoked signer certificates before
+  using the leaf key, requiring fresh verified issuer-matched CRLs when the
+  profile asks for CRL coverage or CRL material is present.
+- Added positive configured-CRL and embedded-CRL coverage plus adversarial tests
+  for missing required CRLs, revoked signer serials, expired CRLs, wrong CRL
+  issuers, and malformed configured CRL material.
+- Validation:
+  - `cargo fmt --check --package iroha_torii --package iroha_core --package iroha_config`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/iso_bridge/profiles.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_torii/src/iso20022_bridge.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (28 passed; 2026 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_torii profile_x509_crl --lib -- --nocapture`
+    (1 passed; 2053 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_config iso_bridge_parse --lib -- --nocapture`
+    (2 passed; 175 filtered out; invalid asset selector panic is expected and caught)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-crl-target cargo test -p iroha_core profiles --lib -- --nocapture`
+    (5 passed; 6775 filtered out)
+
+## 2026-06-01 Kagemusha bridge recursive-spend verify is chain-admission aware
+
+- Updated the ABI-6 recursive spend `verify` bridge path so a locally verifying
+  semantic recursive spend proof is not reported as spendable unless it also
+  passes the chain-admission lineage gate.
+- Current semantic v1 recursive spend proofs therefore return `valid = false`
+  with the private-hop-lineage diagnostic, matching ledger redemption behavior
+  before nullifier consumption or minting.
+- Added a focused bridge test that builds a real semantic recursive spend
+  bundle through the record-backed init path and verifies the bridge reports it
+  as not chain-admissible.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-bridge-recursive-verify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_verify_rejects_semantic_proof_as_not_chain_admissible --lib -- --test-threads=1`
+    (1 passed; 42.28s test time after a 4m 48s rebuild)
+
+## 2026-06-01 Kagemusha recursive spend Swift ABI-6 pin
+
+- Swift `KagemushaRecursiveSpendProver` now publishes the ABI-6 native bridge
+  requirement next to the recursive spend circuit-id constants.
+- Updated the Swift bridge-loader regression to assert packaged NoritoBridge
+  artifacts must advertise ABI 6, matching the loader and recursive spend
+  availability gate.
+- Validation:
+  - `swift test --filter KagemushaRecursiveSpendProverTests` from `IrohaSwift`
+    (blocked: `dist/NoritoBridge.xcframework` does not contain a binary artifact)
+  - `swift test --filter NativeBridgeLoaderTests/testExpectedBridgeAbiVersionIsSixForPackagedArtifacts` from `IrohaSwift`
+    (blocked by the same missing/invalid local binary artifact)
+
+## 2026-06-01 Kagemusha recursive spend JVM ABI-6 availability gate
+
+- Kotlin/JVM and Java Android recursive-spend wrappers now require the native
+  bridge ABI version to be at least 6 before reporting recursive Kagemusha spend
+  as available or choosing `recursive_spend_v1` via the default mode selector.
+- Added JNI ABI-version probes for both recursive-spend wrapper class names and
+  SDK tests for ABI 6 acceptance, ABI downgrade rejection, missing JNI
+  rejection, empty request rejection, circuit-id constants, and checked
+  pre-fold fallback selection.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain` from `kotlin`
+    (passed; pre-existing unchecked-cast warnings in unrelated fixture parsing)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` from `java/iroha_android`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (7 passed; 12.26s test time after a 1m 45s compile)
+- Note: `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:test --console=plain`
+  is still blocked by unrelated
+  `AndroidTransportTelemetryTests.webSocketEmitsTelemetryWithDefaultConnector`.
+
+## 2026-06-01 Kagemusha reserved lineage strict ZK1 envelope guards
+
+- Reserved `kagemusha-recursive-spend-lineage-v1` proof preverification now
+  requires the inner proof payload to expose public instance columns through the
+  strict no-trusted-setup ZK1 envelope parser. Legacy `Halo2ProofEnvelope`
+  instance wrappers remain accepted for semantic v1 recursive spend
+  preverification, but are rejected under the reserved lineage profile.
+- Updated the reserved-lineage record-preverification fixture and the recursive
+  redeem fail-closed fixture to emit strict ZK1 inner proof envelopes. The
+  adversarial record test now pins semantic-inner-envelope replay as a
+  `strict ZK1` rejection before the unwired lineage circuit can be mistaken for
+  an accepted chain-admission proof.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_data_model/src/isi/offline.rs crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-zk1-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 127.59s test time after the fixture was updated to use the
+    strict ZK1 inner proof for the verifier-key-hash mismatch case)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-zk1-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_reserved_lineage --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; 543.52s test time after a fresh isolated compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-data-model-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
+    (1 passed; 0.74s test time after a 7m 28s fresh isolated compile)
+
+- Reserved `kagemusha-recursive-spend-lineage-v1` record-backed
+  preverification now requires inline verifier keys to be strict
+  no-trusted-setup Halo2 IPA ZK1 key envelopes: exactly one reserved-lineage
+  `CID1`, exactly one bounded `IPAK` degree, exactly one non-empty `H2VK`, and
+  no unrelated verifier-key TLVs. The guard reads the cheap Halo2/Pasta H2VK
+  header and requires its internal domain degree to match the bounded `IPAK`,
+  then requires the payload to contain the declared fixed-column commitments,
+  so relabelled semantic recursive keys and truncated processed verifier keys
+  reject before the heavy one-hop verifier-slice circuit is materialized.
+- Updated the recursive redeem reserved-lineage chain-admission fixture to
+  install the same strict key-envelope shape, so fail-closed admission tests no
+  longer depend on a CID-only placeholder key.
+- Added adversarial coverage for missing `IPAK`, missing `H2VK`, wrong IPA
+  degree, unexpected verifier-key TLVs, duplicate `CID1`, and malformed
+  trailing verifier-key TLV material. The focused preflight tests now also
+  reject H2VK payloads that advertise fixed-column commitments without carrying
+  the corresponding commitment bytes.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-vk-shape-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 114.18s test time after a 2m 10s incremental rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-lineage-vk-shape-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_reserved_lineage --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; 189.67s test time after a 5m 19s fresh compile)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs`
+    (passed after switching reserved lineage key preverification from full
+    one-hop verifier-key deserialization to the bounded H2VK-header preflight)
+  - `nice -n 10 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-key-target-fast RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 77.11s test time after a fresh isolated compile)
+  - `nice -n 10 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-key-target-fast RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_reserved_lineage_profile_fails_closed_before_mint --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 99.02s test time against the warmed isolated target)
+  - `nice -n 10 env CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-key-preflight-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_lineage_key_preflight --lib -- --test-threads=1`
+    (2 passed; 6799 filtered out; 11m 48s isolated one-job rebuild)
+  - `git diff --check -- crates/iroha_core/src/zk.rs docs/source/offline_kagemusha.md`
+    (passed)
+
+## 2026-06-01 ISO XMLDSig certificate-policy OID enforcement
+
+- Added rail-profile `x509_required_certificate_policy_oids` config and runtime
+  wiring for ISO 20022 `require-verified` XMLDSig/XAdES profiles.
+- X.509 key-info validation now requires the signer leaf certificate to carry
+  every configured certificate-policy OID before either direct leaf-key pins or
+  X.509 trust-anchor chains can authorize the XMLDSig key.
+- Added positive policy-chain coverage plus adversarial tests for malformed
+  configured OIDs, missing policy extensions, and wrong policy OIDs on otherwise
+  valid signed X.509 XMLDSig chains.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-policy-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (22 passed; 2025 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-policy-target cargo test -p iroha_torii profile_ --lib -- --nocapture`
+    (44 passed; 2003 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-policy-target cargo test -p iroha_config iso_bridge_parse --lib -- --nocapture`
+    (2 passed; 175 filtered out; invalid asset selector panic is expected and caught)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-policy-target cargo test -p iroha_core profiles --lib -- --nocapture`
+    (5 passed; 6775 filtered out)
+
+## 2026-06-01 Offline redeem source-commitment topup-anchor regression
+
+- Added focused legacy Offline redeem coverage proving the source note
+  commitment itself must be issued by the online-to-offline topup or prior audit
+  lineage. A forged redemption whose claim key is manually anchored still
+  rejects before proof verification when its source commitment was never issued.
+- Updated the offline Kagemusha notes and roadmap to call out the forged redeem
+  source-commitment negative alongside the existing audit topup-anchor
+  adversarial coverage.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/offline.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-redeem-anchor-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core redeem_rejects_forged_source_commitment_even_when_claim_key_is_anchored --lib -- --test-threads=1`
+    (1 passed; 0.83s test time after a 7m 13s fresh compile)
+
+## 2026-06-01 Kagemusha record-backed zero verifier commitment sweep
+
+- Extended explicit all-zero verifier-record commitment rejection beyond
+  recursive spend records to record-backed compact folded-token verification,
+  recursive aggregation proof preverification, and checked fold-hop admission.
+- Added adversarial coverage so compact-token records, recursive aggregation
+  verifier records, and per-hop fold verifier records all reject zero
+  commitments before inline verifier-key hash comparison.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-record-zero-extra-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_record_preverify_rejects_registry_mismatches --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 21.31s test time after a fresh sequential rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-record-zero-extra-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_compact_payment_token_record_verifier_rejects_registry_mismatches --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 2.70s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-record-zero-extra-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_folded_public_inputs_from_bundle_with_records_rejects_bad_records --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 5.25s test time)
+  - Initial parallel test invocation hit a generated-target link failure under
+    disk pressure (`errno=28`); `/tmp/iroha-kagemusha-record-zero-extra-target`
+    was removed and the focused tests above were rerun sequentially.
+
+## 2026-06-01 Kagemusha recursive payload-size exact CI guard
+
+- Tightened the recursive Kagemusha spend payload-size test so a uniformly
+  larger D2D archive cannot pass by staying equal across hop counts. The guard
+  now pins the current fixed-256-byte-proof Norito fixture at 1,553 bytes,
+  applies a 1,600-byte material-growth ceiling, and still checks hop counts 1,
+  2, 3, 5, 8, 13, 21, 34, 55, and 64 for identical archive length.
+- Added data-model Norito roundtrip coverage for the ABI-6 recursive spend raw
+  archive surfaces: init, append, verify request, verify result, and redeem
+  request. This complements the existing record-bundle roundtrip and keeps SDK
+  wrappers on one shared archive contract instead of per-language DTO drift.
+- Added a C bridge regression for recursive spend append requests whose
+  previous bundle already advertises the reserved lineage circuit id. The
+  bridge now pins the core lineage-verifier-not-wired path as an
+  `ERR_KAGEMUSHA_PROVE` result with no output pointer or length.
+- Updated the offline Kagemusha recipe and roadmap notes so ABI-6 SDK work has
+  the same fixture-size contract as the data-model CI guard.
+- Validation:
+  - `cargo fmt --all`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --test-threads=1`
+    (1 passed; 0.50s test time after a 5m 11s compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_payload_size_is_hop_count_independent --lib -- --test-threads=1`
+    (1 passed; 5.11s test time after a 10m 42s compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (7 passed; 8.17s test time after a 5m 23s compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_append_ffi_rejects_reserved_lineage_previous_without_output --lib -- --test-threads=1`
+    (1 passed; 10.53s test time after a 4m 11s compile; pre-existing `iroha_core::zk::circuit_id_any` dead-code warning)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (7 passed; 12.89s test time after a 1m 55s compile; the retained `circuit_id_any` parser helper is now annotated and the previous dead-code warning is gone)
+
+## 2026-06-01 Kagemusha recursive spend zero verifier-record commitment guard
+
+- Recursive Kagemusha spend record preverification now rejects all-zero verifier
+  record commitments explicitly for both semantic
+  `kagemusha-recursive-aggregation-v1` records and reserved
+  `kagemusha-recursive-spend-lineage-v1` records before inline key-commitment
+  comparison.
+- Extended the record-preverification adversarial test to cover zero semantic
+  and zero lineage record commitments, keeping zero commitment metadata from
+  acting as wildcard or corrupted WSV binding material.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-record-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 60.71s test time after cold compile)
+
+## 2026-06-01 Kagemusha recursive spend cross-profile verifier record negatives
+
+- Extended recursive Kagemusha spend record-preverification adversarial coverage
+  so semantic `kagemusha-recursive-aggregation-v1` spend proofs cannot be
+  presented with reserved `kagemusha-recursive-spend-lineage-v1` verifier
+  records, and reserved lineage spend proofs cannot be presented with semantic
+  verifier records.
+- This keeps the admission-neutral semantic proof family and the fail-closed
+  reserved lineage family from being crossed at the WSV-style verifier-record
+  boundary before the production lineage verifier is wired.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-swap-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 57.40s test time after formatted rebuild)
+
+## 2026-06-01 ISO XMLDSig signer and X.509 chain trust pins
+
+- Added rail-profile `signature_public_key_sha256_pins` and
+  `x509_trust_anchor_sha256_pins` config with runtime wiring for ISO 20022
+  `require-verified` embedded XMLDSig/XAdES profiles.
+- The verifier now fails closed when neither direct signer-key pins nor X.509
+  trust-anchor pins are configured, accepts raw XMLDSig public keys only by
+  direct key pin, and accepts X.509 key-info either by direct leaf-key pin or
+  by a valid leaf-to-anchor ECDSA P-256/SHA-256 chain whose root/intermediate
+  DER hash matches a profile trust-anchor pin.
+- Added positive X.509 certificate-chain coverage plus adversarial tests for
+  unpinned keys, mismatched pins, malformed pins, all-zero placeholder pins,
+  ambiguous raw/X.509 key material, duplicate key material, wrong trust-anchor
+  pins, missing anchor certificates, non-CA anchors, and issuer mismatches.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-trust-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (19 passed; 2024 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-trust-target cargo test -p iroha_torii profile_ --lib -- --nocapture`
+    (40 passed; 2003 filtered out)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-trust-target cargo test -p iroha_config iso_bridge_parse --lib -- --nocapture`
+    (2 passed; 175 filtered out; invalid asset selector panic is expected and caught)
+
+## 2026-06-01 Kagemusha user-config default regression guard
+
+- Added user-config parse coverage so `settlement.offline` defaults preserve
+  `kagemusha_enabled = true` and keep `kagemusha_force_legacy = false` after
+  conversion into runtime parameters. An explicit legacy fallback opt-in still
+  round-trips, so the migration escape hatch remains operator-controlled rather
+  than default-disabled.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_config/src/parameters/user.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-config-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_config offline_parse_preserves --lib -- --test-threads=1`
+    (2 passed; 0 failed; 4m 11s compile after the initial low-disk retry)
+
+## 2026-06-01 ISO XMLDSig canonicalization fail-closed coverage
+
+- Tightened the Torii ISO 20022 `require-verified` XMLDSig/XAdES verifier so
+  it only accepts the canonicalization and transform shape it actually
+  verifies: C14N 1.0 plus exactly one enveloped-signature transform.
+- C14N 1.1, exclusive C14N, additional reference transforms, and duplicate
+  `Sgntr` blocks now fail closed instead of being treated as supported by the
+  P-256/SHA-256 embedded-signature subset.
+- Kept the existing valid P-256/SHA-256 enveloped XMLDSig/XAdES path green and
+  left remaining ISO signature work scoped to profile-specific trust anchors
+  and certificate-chain fixtures.
+- Updated the engineering backlog to distinguish the completed
+  canonicalization/transform hardening from the remaining trust-anchor work.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/iso20022_bridge.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-xmldsig-target cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (8 passed; 2020 filtered out)
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs`
+
+## 2026-06-01 SIS-with-hints anoncred SDK-builder dev fixture
+
+- Promoted `sis-hints-anoncred-pq-v0` from catalog-only to SDK-builder status
+  without enabling production SIS-with-hints credential proving, verifier
+  backends, or chain credential-admission state.
+- Added JavaScript SDK helpers for deterministic issuer commitment,
+  credential commitment, showing-policy hash, parameter hash, and domain
+  separator normalization, prepared credential proof envelope construction,
+  deterministic dev-fixture proof generation, and local dev-fixture
+  verification through OpenVerifyEnvelope.
+- The dev verifier binds issuer commitment, credential commitment,
+  showing-policy hash, parameter hash, domain separator, circuit id,
+  verifier-key hash, and canonical public-input bytes. It rejects arbitrary or
+  tampered proof bytes and remains explicitly `production: false`.
+- Because OpenVerify does not yet expose a production lattice credential
+  backend enum, the SIS-with-hints dev envelope uses the explicit `Unsupported`
+  backend variant and rejects Stark/Halo2/Groth16 substitution.
+- Kept `buildSisHintsAnonymousCredentialProofV0` and
+  `buildSubmitSisHintsCredentialProofInstruction` planned-only until concrete
+  SIS-with-hints parameters, issuer/credential registries, replay policy, and
+  production proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor
+  metadata, and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for commitment
+  derivation, prepared envelopes, malformed or missing issuer, credential,
+  showing-policy, and parameter material, blank domains, zero commitments,
+  verifier-key/backend/circuit errors, arbitrary/tampered dev proof bytes,
+  issuer/credential/policy/parameter/domain substitution, wrong backend,
+  non-canonical public-input JSON, public-input alias collisions, and zero
+  issuer commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (130 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check src/index.js`
+  - `node --check src/privacyAlgorithms.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --check dist/index.js`
+  - `node --check dist/privacyAlgorithms.js`
+  - `node --input-type=module -e "import { buildSisHintsCredentialDevProofFixture, verifySisHintsCredentialProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`,
+    `backend: unsupported`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 Jindo lattice PCS SDK-builder dev fixture
+
+- Promoted `jindo-lattice-pcs-zk-v0` from catalog-only to SDK-builder status
+  without enabling a production lattice PCS prover, verifier backend, or chain
+  verifier admission path.
+- Added JavaScript SDK helpers for deterministic Jindo public-input
+  normalization across polynomial commitment material, opening claims,
+  query-set material, parameter sets, and domain separators; prepared
+  OpenVerifyEnvelope construction; deterministic dev-fixture proof generation;
+  and local dev-fixture verification.
+- The dev verifier binds commitment, opening claim, query set, parameter hash,
+  domain separator, circuit id, verifier-key hash, and canonical public-input
+  bytes. It rejects arbitrary or tampered proof bytes and remains explicitly
+  `production: false`.
+- Because OpenVerify does not yet expose a production lattice backend enum,
+  the Jindo dev envelope uses the explicit `Unsupported` backend variant and
+  rejects Stark/Halo2/Groth16 substitution.
+- Kept `buildJindoLatticeProofV0` and
+  `verifyJindoPolynomialCommitmentV0` planned-only until concrete Jindo
+  parameters, verifier APIs, and production proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor
+  metadata, and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for public-input
+  derivation, prepared envelopes, malformed or missing polynomial/opening/
+  query/parameter material, blank domains, zero commitments,
+  verifier-key/backend/circuit errors, arbitrary/tampered dev proof bytes,
+  polynomial/opening/query/parameter/domain substitution, wrong backend,
+  non-canonical public-input JSON, public-input alias collisions, and zero
+  commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (127 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check src/index.js`
+  - `node --check src/privacyAlgorithms.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --check dist/index.js`
+  - `node --check dist/privacyAlgorithms.js`
+  - `node --input-type=module -e "import { buildJindoLatticeDevProofFixture, verifyJindoLatticeProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`,
+    `backend: unsupported`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 ZK-X.509 identity SDK-builder dev fixture
+
+- Promoted `zk-x509-onchain-identity-v0` from catalog-only to SDK-builder
+  status without enabling chain trust-root/revocation/policy state or
+  production X.509 proof submission.
+- Added JavaScript SDK helpers for deterministic CA-root commitment,
+  certificate-policy hash, revocation-root, subject commitment, and
+  domain-separated wallet/address binding derivation, prepared ZK-X.509
+  identity envelope construction, deterministic dev-fixture proof generation,
+  and local dev-fixture verification through OpenVerifyEnvelope.
+- The dev verifier binds CA root, certificate policy, revocation root,
+  subject commitment, address binding, domain separator, circuit id,
+  verifier-key hash, and canonical public-input bytes. It rejects arbitrary or
+  tampered proof bytes and remains explicitly `production: false`.
+- Kept `buildZkX509IdentityProofV0` and
+  `buildSubmitZkX509IdentityProofInstruction` planned-only until trusted CA
+  registries, certificate policy state, revocation-root freshness, address
+  binding policy, and production ZK-X.509 proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor
+  metadata, and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for commitment
+  derivation, prepared envelopes, malformed or missing CA roots, certificate
+  policies, revocation roots, subjects, address bindings, blank domains, zero
+  commitments, invalid account ids, verifier-key/backend/circuit errors,
+  arbitrary/tampered dev proof bytes, CA/policy/revocation/subject/address/
+  domain substitution, wrong backend, non-canonical public-input JSON,
+  public-input alias collisions, and zero CA-root commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (124 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check src/index.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --check dist/index.js`
+  - `node --check dist/privacyAlgorithms.js`
+  - `node --input-type=module -e "import { AccountAddress, buildZkX509IdentityDevProofFixture, verifyZkX509IdentityProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 Silent-threshold anoncred SDK-builder dev fixture
+
+- Promoted `silent-threshold-anoncred-v0` from catalog-only to SDK-builder
+  status without enabling chain credential-state mutation or production
+  anonymous credential showing proofs.
+- Added JavaScript SDK helpers for deterministic issuer-set commitment,
+  threshold-policy hash, credential-showing commitment, showing-nullifier, and
+  verifier-policy hash derivation, prepared silent-threshold credential
+  envelope construction, deterministic dev-fixture proof generation, and local
+  dev-fixture verification through OpenVerifyEnvelope.
+- The dev verifier binds issuer-set commitment, threshold-policy hash,
+  credential-showing commitment, showing nullifier, verifier-policy hash,
+  domain separator, circuit id, verifier-key hash, and canonical public-input
+  bytes. It rejects arbitrary or tampered proof bytes and remains explicitly
+  `production: false`.
+- Kept `buildSilentThresholdCredentialShowingProofV0` and
+  `buildSubmitSilentThresholdCredentialProofInstruction` planned-only until
+  threshold issuer registries, credential parameters, verifier-policy state,
+  showing replay policy, and production proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor metadata,
+  and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for commitment derivation,
+  prepared envelopes, malformed or missing issuer sets, threshold policies,
+  credential showings, showing nullifiers, verifier policies, blank domains,
+  zero commitments, verifier-key/backend/circuit errors, arbitrary/tampered dev
+  proof bytes, issuer/policy/showing/nullifier/domain substitution, wrong
+  backend, non-canonical public-input JSON, public-input alias collisions, and
+  zero issuer-set commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (121 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --check dist/index.js`
+  - `node --input-type=module -e "import { buildSilentThresholdCredentialDevProofFixture, verifySilentThresholdCredentialProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 Vega SDK-builder dev credential proof
+
+- Promoted `vega-existing-credential-zk-v0` from catalog-only to SDK-builder
+  status without enabling chain credential-policy state or production Vega
+  predicate proving.
+- Added JavaScript SDK helpers for deterministic predicate commitment
+  derivation, prepared Vega credential proof envelope construction,
+  deterministic dev-fixture proof generation, and local dev-fixture
+  verification through OpenVerifyEnvelope.
+- The dev verifier binds issuer commitment, credential schema, predicate
+  commitment, wallet or identity subject binding, expiration epoch, domain
+  separator, circuit id, verifier-key hash, and canonical public-input bytes.
+  It rejects arbitrary or tampered proof bytes and remains explicitly
+  `production: false`.
+- Kept `buildVegaCredentialPredicateProofV0` and
+  `buildSubmitVegaCredentialProofInstruction` planned-only until chain issuer,
+  schema, predicate, revocation/expiration policy state, and production Vega
+  proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor metadata,
+  and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for predicate commitment
+  derivation, prepared envelopes, malformed predicate commitments, missing
+  predicates or issuers, blank schemas, zero commitments, subject-binding drift,
+  invalid account ids, invalid expiration epochs, verifier-key/backend/circuit
+  errors, arbitrary/tampered dev proof bytes, issuer/predicate/subject/schema/
+  domain/expiration substitution, wrong backend, non-canonical public-input
+  JSON, public-input alias collisions, and zero issuer commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (118 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --check dist/index.js`
+  - `node --input-type=module -e "import { AccountAddress, buildVegaCredentialDevProofFixture, verifyVegaCredentialProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 Kagemusha recursive redeem lineage admission gate
+
+- Added a chain-admission guard for `RedeemKagemushaRecursive` so the current
+  semantic `kagemusha-recursive-aggregation-v1` spend proof remains
+  admission-neutral and cannot authorize nullifier consumption or public minting
+  until the recursive circuit proves every private hop and accumulator
+  transition in-circuit.
+- Reserved `kagemusha-recursive-spend-lineage-v1` as the chain-admission
+  circuit family for that production proof. The profile remains fail-closed
+  until its verifier is wired and rejects missing scalar-projection bindings.
+  It now also binds accumulator-derived recursive public inputs, proof and
+  verifier-key backend labels, non-empty proof bytes, the refreshed
+  public-input hash, and the inner `OpenVerifyEnvelope` backend, lineage
+  circuit id, non-zero verifier-key hash, public-input schema, empty auxiliary
+  metadata, and public instance columns before returning the unwired-profile
+  error. Record-backed preverification additionally pins the lineage envelope
+  verifier-key hash to the verifier-record commitment and requires the inline
+  verifier-key envelope to carry exactly one matching lineage `CID1`; duplicate
+  `CID1` tags now reject as malformed circuit identity.
+- Split reserved lineage record preverification from the chain-admission gate:
+  a well-formed `kagemusha-recursive-spend-lineage-v1` profile can pass WSV
+  verifier-record, inline-key `CID1`, proof-envelope, and public-input binding
+  checks, but only `RedeemKagemushaRecursive` admission can emit the explicit
+  unwired-verifier error. That preserves final unshield proof diagnostics ahead
+  of the fail-closed lineage gate while still blocking proof verification,
+  nullifier consumption, and public minting.
+- Made recursive spend bundle validation lineage-aware in the data model. The
+  append proof-artifact digest and redeem-request validator now accept both the
+  semantic v1 aggregation proof id and the reserved lineage proof id, while
+  requiring lineage proofs to carry a non-zero scalar-projection digest and the
+  same accumulator-derived public fields. This lets future lineage D2D states
+  be represented in the accumulator and serialized for redeem through ABI-6 and
+  the Node host before chain admission reaches the explicit fail-closed
+  verifier gate. Recursive spend proof generation and append verification still
+  use the semantic v1 verifier until the production lineage verifier is wired.
+- Added an explicit core append-prover guard for previous bundles that already
+  advertise the reserved lineage proof id. These append attempts now fail with a
+  lineage-verifier-not-wired diagnostic instead of a generic previous-proof
+  verification failure.
+- Tightened the recursive redeem negative test fixture so the stale-root case
+  mutates the shielded asset definition id returned by that fixture, instead of
+  relying on another fixture's id staying identical.
+- Added SDK-level circuit-id constants for the semantic v1 recursive
+  aggregation proof and the reserved recursive spend lineage proof across
+  Swift, Kotlin/JVM, Java Android, JavaScript, Python, and C# so wallet code can
+  classify bundle profiles without duplicating literals.
+- Kept the existing verifier-record, recursive bundle, and final redeem
+  public-input checks ahead of the gate so malformed envelopes and final-note
+  binding errors still fail with their more specific rejection reasons.
+- Updated recursive redeem coverage to assert that a valid semantic recursive
+  spend bundle rejects before mutating nullifiers or recipient balance, and
+  added direct adversarial tests for semantic scalar-projection splices,
+  unwired reserved lineage profiles, stale lineage public-input hashes,
+  accumulator public-input splices, malformed lineage envelopes, semantic
+  inner-envelope replay, envelope schema substitution, zero or
+  record-mismatched envelope verifier-key hashes, envelope public-instance
+  substitution, semantic verifier-key replay under lineage record metadata,
+  duplicate verifier-key `CID1` smuggling, malformed trailing verifier-key TLV
+  material, trusted-setup proof backend substitution, unrecognized lineage
+  circuit ids, and reserved lineage verifier-record metadata substitution.
+- Updated the Kagemusha documentation and roadmap to distinguish the D2D
+  recursive spend payload from chain-side mint admission.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_chain_admission_rejects_semantic_v1 --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; latest rerun 0.80s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_chain_admission --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; latest rerun 2.38s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_chain_admission_rejects_unwired_lineage_profile --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 1.85s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 94.22s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 1192.24s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (6 passed; 9.29s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (6 passed; 16.75s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction --lib -- --test-threads=1`
+    (2 passed; 0.91s test time after rebuild)
+  - `node --test test/kagemushaRecursiveSpend.test.js`
+    (7 passed)
+  - `node --check src/crypto.js`
+  - `node --check dist/crypto.js`
+  - `node --check src/index.js`
+  - `node --check dist/index.js`
+  - `PYTHONPATH=src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q tests/kagemusha_test.py`
+    (7 passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain`
+    (Kotlin/JVM build successful)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :android:test --console=plain`
+    (Java Android module build successful)
+  - `swift test --filter KagemushaRecursiveSpendProverTests`
+    (blocked: local binary target `dist/NoritoBridge.xcframework` does not contain a binary artifact)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter KagemushaRecursiveSpendNativeTests`
+    (blocked: `dotnet` command not found)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (blocked outside Kagemusha: `:core:test` fixture generator failed with `No space left on device` while compiling `iroha_data_model`)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 443.21s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_record_preverify_rejects_bad_registry_metadata --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; latest rerun 101.31s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_reserved_lineage --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; 426.40s test time after cold repo-local target build)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_chain_admission --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; latest rerun 1.24s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (7 passed; 8.16s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core wrong_cid_verifier_key_replay --lib --features zk-halo2-ipa -- --test-threads=1`
+    (2 passed; latest rerun 52.25s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_bundle_rejects_public_input_tampering --lib -- --test-threads=1`
+    (1 passed; 0.61s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_rejects_malformed_notes_and_lineage --lib -- --test-threads=1`
+    (1 passed; 0.70s test time)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_data_model/src/offline/mod.rs`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_data_model/src/offline/mod.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+    (passed)
+  - `git diff --name-only -- Cargo.lock`
+    (no output)
+
+## 2026-06-01 ZK-AMS SDK-builder dev admission
+
+- Promoted `zk-ams-recursive-admission-v0` from catalog-only to SDK-builder
+  status without enabling chain admission-state mutation or production
+  recursive proof generation.
+- Added JavaScript SDK helpers for deterministic admission-batch root
+  derivation, prepared ZK-AMS proof envelope construction, deterministic
+  dev-fixture proof generation, and local dev-fixture verification through
+  OpenVerifyEnvelope.
+- The dev verifier binds issuer root, admission batch root, issuer-scoped
+  nullifiers, anonymous account commitments, recursive proof digest, domain
+  separator, circuit id, verifier-key hash, and canonical public-input bytes.
+  It rejects arbitrary or tampered proof bytes and remains explicitly
+  `production: false`.
+- Kept `buildZkAmsAdmissionBatchProofV0` and
+  `buildSubmitZkAmsAdmissionBatchInstruction` planned-only until chain issuer
+  roots, admission nullifier state, anonymous account commitment registries,
+  and production recursive proof support exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor metadata,
+  and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for admission-batch root
+  derivation, prepared envelopes, malformed issuer roots, empty/duplicate
+  nullifiers, duplicate or overlapping account commitments, batch-size
+  mismatch, recursive-proof digest mismatch, explicit batch-root drift, proof
+  backend/circuit/verifier-key errors, arbitrary/tampered dev proof bytes,
+  issuer/nullifier/account/recursive-proof/domain substitution, wrong backend,
+  non-canonical public-input JSON, duplicate public-input nullifiers, and zero
+  issuer roots.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (115 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --input-type=module -e "import { buildZkAmsAdmissionDevProofFixture, verifyZkAmsAdmissionProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py status.md`
+
+## 2026-06-01 Kagemusha recursive spend carried-state collision hardening
+
+- Tightened recursive spend append validation so an offline re-spend cannot
+  create carried-state collisions with the previous spendable commitment or
+  original top-up anchors. The next note spend nullifier may not reuse the
+  previous spendable note commitment, and no appended output commitment,
+  including unselected sibling outputs, may reuse the previous spendable
+  commitment or any carried top-up anchor nullifier.
+- Extended data-model adversarial coverage for all three cases and updated the
+  long-hop size/cap fixtures to use per-hop hashed output commitments so they
+  satisfy the stricter accumulator invariant while continuing to test
+  hop-count-independent D2D payload size and the 64-hop cap.
+- Reordered recursive redeem execution so semantic
+  `kagemusha-recursive-aggregation-v1` spend proofs still pass the cheap bundle,
+  verifier-record, and final redeem public-input diagnostics, but hit the
+  private-hop lineage admission gate before recursive backend proof
+  verification, nullifier consumption, redeem-proof verification, or minting.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_rejects_malformed_notes_and_lineage --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (6 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 zkAt SDK-builder dev authenticator
+
+- Promoted `zkat-policy-private-auth-v1` from catalog-only to SDK-builder
+  status without enabling chain policy registration or authorized-transaction
+  execution.
+- Added JavaScript SDK helpers for deterministic policy-commitment
+  normalization, prepared zkAt authenticator envelope construction,
+  deterministic dev-fixture proof generation, and local dev-fixture verification
+  through the shared OpenVerifyEnvelope path.
+- The dev verifier binds policy commitment, transaction digest, canonical
+  account id, action class, domain separator, policy epoch, circuit id,
+  verifier-key hash, and canonical public-input bytes. It rejects arbitrary or
+  tampered proof bytes and remains explicitly `production: false`.
+- Kept policy-commitment chain registration, production zkAt proving, and
+  authorized transaction builders in `plannedSdkEntrypoints` until chain state
+  and validator semantics exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor metadata,
+  and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for policy commitment
+  derivation, prepared authenticator envelopes, malformed epochs, policy
+  commitment drift, payload digest mismatch, invalid account ids, blank action
+  classes, zero verifier hashes, empty prepared proofs, arbitrary/tampered dev
+  proof bytes, payload substitution, policy substitution, action substitution,
+  epoch substitution, wrong backend, non-canonical public-input JSON, and zero
+  policy commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (112 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --input-type=module -e "import { AccountAddress, buildZkAtDevProofFixture, verifyZkAtAuthenticatorLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+
+## 2026-06-01 Anonymous PGC SDK-builder dev fixture
+
+- Promoted `anonymous-pgc-k-out-of-n-v1` from catalog-only to SDK-builder
+  status without enabling chain transfer execution or production proof claims.
+- Added JavaScript SDK helpers for deterministic receiver-set normalization,
+  Anonymous PGC dev-fixture proof envelope generation, and local dev-fixture
+  verification through the shared OpenVerifyEnvelope path.
+- The dev verifier binds anonymity-set root, transaction digest, balance
+  commitments, receiver-set commitment, receiver ciphertext commitments,
+  receiver threshold/count, link tag, range commitments, chain id, domain
+  separator, circuit id, verifier-key hash, and canonical public-input bytes.
+  It rejects arbitrary or tampered proof bytes and remains explicitly
+  `production: false`.
+- Kept account-commitment registration, production k-out-of-n proving, and
+  transfer-instruction builders in `plannedSdkEntrypoints` until chain state and
+  validator semantics exist.
+- Synced TypeScript declarations, packaged `dist` exports, descriptor metadata,
+  and the Python static privacy catalog mirror.
+- Added positive and adversarial JavaScript coverage for receiver-set binding,
+  malformed thresholds, duplicate receiver commitments, missing ciphertext
+  commitments, ciphertext digest mismatch, receiver-set commitment drift,
+  payload substitution, receiver-set substitution, wrong chain id, wrong
+  backend, non-canonical public-input JSON, and duplicate receiver ciphertext
+  commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (109 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --input-type=module -e "import { buildAnonymousPgcReceiverSet, buildAnonymousPgcDevProofFixture, verifyAnonymousPgcDevProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+
+## 2026-06-01 VeRange component dev-fixture verifier
+
+- Promoted the VeRange range-proof descriptor from SDK-builder to component
+  status while keeping the production prover entrypoint planned-only.
+- Added JavaScript SDK helpers for deterministic dev-fixture proof generation
+  and local verification through the shared OpenVerifyEnvelope path. The local
+  verifier rejects arbitrary proof bytes and only accepts the explicit
+  `verange-dev-fixture-v1` proof format bound to the decoded circuit id,
+  verifier-key hash, canonical public inputs, payload digest, commitments, range
+  parameters, domain separator, and aggregation count.
+- Synced TypeScript declarations, packaged `dist` exports, and the Python static
+  privacy catalog mirror so BOI consumers see component availability without a
+  production-crypto claim.
+- Added adversarial JavaScript coverage for tampered dev proof bytes, arbitrary
+  prepared proof bytes, payload substitution, commitment substitution, wrong
+  backend, non-canonical public-input JSON, and duplicate commitments.
+- Validation:
+  - `node --test test/instructionBuilders.test.js`
+    (106 passed)
+  - `PYTHONPATH=python/iroha_python/src /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (10 passed)
+  - `node --check src/instructionBuilders.js`
+  - `node --check dist/instructionBuilders.js`
+  - `node --input-type=module -e "import { buildVeRangeDevProofFixture, verifyVeRangeProofLocally } from './dist/index.js'; ..."`
+    (dist export smoke returned `ok: true`, `production: false`)
+  - `git diff --check -- javascript/iroha_js/src/instructionBuilders.js javascript/iroha_js/src/index.js javascript/iroha_js/src/privacyAlgorithms.js javascript/iroha_js/index.d.ts javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/dist/instructionBuilders.js javascript/iroha_js/dist/index.js javascript/iroha_js/dist/privacyAlgorithms.js python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+
+## 2026-06-01 Kagemusha recursive instance-shape admission guard
+
+- Added a shared recursive Kagemusha proof-admission guard that requires
+  aggregation and spend proof envelopes to expose exactly 43 one-row Pasta
+  public instance columns before semantic public-input comparison.
+- Added adversarial coverage for shortened, extended, and multi-row recursive
+  aggregation public instance vectors. The multi-row case exercises the legacy
+  ZK1 `I10P` instance parser, while the count mismatch cases exercise the
+  Halo2 proof envelope path.
+- Extended the real recursive spend proof tamper test to reject missing public
+  instance columns and scalar-projection public instance splices in the ZK1
+  wrapper before backend verification.
+- Hardened the shared Halo2 proof envelope parser so declared proof length must
+  consume the whole byte string; trailing unbound suffix bytes now reject before
+  Kagemusha or other transparent IPA callers can extract public instances.
+  Recursive aggregation preverification now has a direct negative for an
+  otherwise well-formed inner Halo2 envelope with an appended suffix.
+- Added Kagemusha-specific strict ZK1 inner-envelope parsing for recursive
+  aggregation/spend proof admission. Recursive Kagemusha now accepts only one
+  non-empty `PROF` TLV and one non-empty `I10P` TLV and rejects unexpected,
+  duplicate, malformed, oversized, non-canonical, or trailing instance TLV
+  material before public-instance comparison.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_zkp_halo2 parse_rejects_trailing_bytes_after_proof --lib`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_zkp_halo2 envelope --lib`
+    (17 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib -- --test-threads=1`
+    (10 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering --lib -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 SCCP BSC local-admission finalization
+
+- Restored BSC mainnet as the active SCCP production launch policy across the
+  Rust policy default, Core/Torii configured launch-policy tests, and public
+  release-readiness/release-bundle scripts.
+- Kept BSC -> SORA inbound proofs on the explicit local-admission submission
+  package path, with the source proof bound to configured BSC verifier material
+  plus governed source-adapter deployment evidence instead of outbound EVM
+  Groth16 destination packaging.
+- Resolved generated conflict markers in the SCCP/Core/Torii/status/roadmap
+  surfaces by preserving the local worktree side, then rechecked the final tree
+  for marker-free BSC launch-policy sources.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs bsc_mainnet_source_chain_proof -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`3 passed`)
+  - `cargo fmt --all --check`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'launch or json_tracks_corridor_phase_results or sdk_helper_symbols or user_prover_surfaces'`
+    (`6 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch or submission_surface or helper_inventory_is_independent'`
+    (`15 passed, 129 deselected`)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py status.md roadmap.md`
+
+## 2026-06-01 TradFi XMLDSig profile trust-pin aliases
+
+- Kept profile-level `trusted_public_key_sha256` and
+  `trusted_certificate_sha256` aliases for ISO bridge rail profiles, with
+  lowercase non-zero SHA-256 validation and normalization into the stricter
+  `signature_public_key_sha256_pins` / `x509_trust_anchor_sha256_pins`
+  verifier inputs before Torii accepts a `require-verified` profile.
+- Hardened Torii XMLDSig/XAdES verification so a P-256/SHA-256 enveloped
+  payload must pass payload-digest verification, signature verification,
+  supported canonicalization-method checks, and selected-profile trust-pin
+  matching before it is accepted.
+- Cleared manifest conflict markers that prevented Cargo from loading the
+  workspace while preserving the existing superset dependency/features in the
+  affected manifests; a follow-up conflict-marker scan found no remaining real
+  merge markers before rerunning the focused Torii unit tests.
+- Validation:
+  - `cargo test -p iroha_core iso_bridge::profiles --lib -- --nocapture`
+    (`5 passed`)
+  - `cargo test -p iroha_config iso_bridge_json_deserializes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo check -p iroha_torii --lib`
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`8 passed`)
+
+## 2026-06-01 SCCP .NET BSC outbound facade and verifier closure
+
+- Added .NET BSC outbound proof-request/prove/calldata/submit parity through
+  `BscMainnetSccp`, including typed public-input, proof-request, proof-result,
+  submission, prover, and submitter records/interfaces for SORA -> BSC.
+- Hardened .NET BSC proof wrapping and calldata construction with the same
+  native BN254 proof tuple, public-input, destination-binding, chain-id, and
+  route checks used by the Ethereum facade before app-owned submitters receive
+  calldata.
+- Tightened release-readiness and strict release-bundle inventories so the
+  `dotnet-sdk` `eth,bsc` row now names the BSC outbound calldata/submit facade
+  symbols, and made the active launch-lane fixture/verifier tests follow the
+  configured active BSC lane instead of hard-coding row positions.
+- Validation:
+  - `/tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`4 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (`170 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+
+## 2026-06-01 SCCP BSC launch policy evidence alignment
+
+- Re-audited the current SCCP launch policy against the release scripts and
+  core admission path: `sccp_production_policy_v1()` is `BscMainnetLane`, and
+  the public release-readiness scripts now use the same active BSC domain.
+- Verified the BSC -> SORA positive `SubmitBridgeProof` path uses the local
+  admission package with configured BSC source verifier material,
+  deployment-bound source-adapter evidence, BSC destination rollout, and BSC
+  route allowlist material.
+- Updated the public docs/roadmap wording that still described the older
+  Ethereum-active policy, so operator-facing release evidence matches the
+  runtime gate that is actually compiled.
+- Validation:
+  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`35 passed`)
+  - `cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_root_blockers`
+    (`3 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs`
+
+## 2026-06-01 SCCP BSC source proof deployment binding
+
+- Added a BSC mainnet Parlia source-proof fixture in core bridge-proof tests,
+  including validator-set seals, receipt-MPT event inclusion, configured source
+  verifier material, and governed source-adapter deployment evidence.
+- The new coverage verifies that BSC -> SORA source-chain proofs expose local
+  transparent public inputs only when the proof is bound to the configured BSC
+  source adapter deployment, and that replayed deployment-receipt material is
+  rejected even when the replayed deployment descriptor is internally ready.
+- The BSC -> SORA positive `SubmitBridgeProof` path now uses that explicit
+  local-admission proof/package path; the outbound EVM Groth16 destination
+  package still intentionally rejects local SORA target-domain public inputs
+  and was not weakened.
+- Validation:
+  - `cargo test -p iroha_core --test bridge_proofs bsc_mainnet_source_chain_proof -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs`
+
+## 2026-06-01 SCCP BSC outbound submit facade parity
+
+- Added app-owned BSC outbound submit hooks to Swift, Kotlin/JVM, Java Android,
+  and Python `BscMainnetSccp` facades, and required the already-exported
+  JavaScript `BscMainnetSccp.submitOutboundToBsc` path in release inventories.
+- The new submit paths build BSC mainnet verifier calldata through the
+  governed SORA -> BSC destination-binding checks before handing the package to
+  the app-supplied wallet/RPC submitter.
+- Tightened SCCP release-readiness and strict release-bundle helper
+  inventories so the `eth,bsc` JavaScript, Python, Swift, Kotlin/JVM, and Java
+  Android rows require BSC calldata and outbound submit symbols by name.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target`
+    (`1 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget --disable-swift-testing`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetFacadeRequiresChainId56AndBscTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`813 passed`)
+
+## 2026-06-01 SCCP Ethereum SDK native/no-WASM source guard
+
+- Added an Ethereum-mainnet release-readiness regression that scans the
+  JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET Ethereum SCCP
+  facade source files for forbidden `WebAssembly`, `wasm`, `snarkjs`, remote
+  prover, prover URL, and prover endpoint dependency markers.
+- This covers the Java Android and .NET Ethereum facade files directly, keeping
+  the new native outbound submission surfaces tied to local or app-owned proof
+  paths instead of a WASM or remote-prover fallback.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_sdk_sources_are_native_local_prover_only or bsc_sdk_sources_are_native_local_prover_only or sdk_helper_symbols or user_prover_surfaces'`
+    (`6 passed, 19 deselected`)
+
+## 2026-06-01 SCCP Python/JS Ethereum outbound API inventory
+
+- Added Python `EthereumMainnetSccp.submit_outbound_to_ethereum`, which builds
+  Ethereum mainnet verifier calldata and submits the resulting package through
+  an app-owned transaction hook.
+- Tightened SCCP release-readiness and strict release-bundle inventories so the
+  `eth,bsc` JavaScript row requires the explicit Ethereum outbound
+  build/prove/calldata/submit methods, and the Python row requires
+  `submit_outbound_to_ethereum` alongside the existing build/prove/calldata
+  methods.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target`
+    (`1 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 19 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+
+## 2026-06-01 SCCP native Ethereum outbound submit hooks
+
+- Added app-owned Ethereum outbound submit callbacks to Swift, Kotlin/JVM, and
+  Java Android `EthereumMainnetSccp` facades, completing the native
+  SORA -> Ethereum easy path after proof-request construction, local proving,
+  and verifier calldata generation.
+- Kotlin exposes `EthereumMainnetOutboundSubmitter`, Java Android exposes
+  `EthereumMainnetSccp.OutboundSubmitter`, and Swift exposes
+  `EthereumMainnetSccp.OutboundSubmitFunction`; each submit method builds and
+  validates Ethereum mainnet calldata before handing it to the app-supplied
+  submitter.
+- Updated SCCP release-readiness and strict release-bundle verifier inventories
+  so the `eth,bsc` Swift/Kotlin/Java Android rows require the Ethereum outbound
+  submit methods and callback hooks.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget --disable-swift-testing`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 19 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 129 deselected`)
+
+## 2026-06-01 SCCP BSC Parlia declaration release gate
+
+- Tightened SCCP release-readiness and strict release-bundle JS phase
+  transcript checks so published browser SDK evidence must include the package
+  declaration test for BSC mainnet Parlia finality evidence hooks, not only the
+  BSC no-WASM guard.
+- Added report and bundle-verifier negative regressions that remove that
+  declaration marker from an otherwise valid JS phase log and require the
+  readiness checks to fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_parlia_declaration_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_browser_no_wasm_marker`
+    (`2 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_parlia_declaration_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_phase_transcript_inventory_matches_report`
+    (`3 passed`)
+  - `node --test --test-name-pattern "package declarations expose BSC mainnet Parlia finality evidence hooks" javascript/iroha_js/test/package_dist.test.js`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`812 passed`)
+
+## 2026-06-01 SCCP BSC SDK native/no-WASM source guard
+
+- Added a release-readiness regression that scans the BSC SDK facade source
+  files across JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET.
+  The guard fails if a BSC facade file is missing or if any facade source
+  introduces `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, or
+  prover endpoint dependency markers.
+- This keeps BSC mainnet SDK readiness tied to native or app-owned local-prover
+  code paths instead of a WASM or endpoint-owned proving fallback.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_bsc_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources`
+    (`2 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'bsc_sdk_sources_are_native_local_prover_only or sdk_helper_symbols or user_prover_surfaces or bsc_browser_no_wasm_marker'`
+    (`6 passed, 17 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (`167 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`812 passed`)
+
+## 2026-06-01 Sumeragi TLA declaration and runner-input coverage guard
+
+- Hardened `scripts/formal/check_sumeragi_formal_coverage.py` so referenced
+  Sumeragi TLA modules now reject duplicate or non-leading `MODULE` headers,
+  missing or duplicate terminating `====` markers, trailing content after the
+  terminator,
+  duplicate constant declarations, duplicate top-level operator definitions, and
+  repeated top-level `RECURSIVE` declarations before either Apalache or TLC is
+  invoked. The guard now also requires duplicate-free TLA variable declarations
+  to match exactly one static top-level `vars` tuple, and requires every
+  selected CFG filename to belong to the selected TLA module by exact stem or
+  module-stem prefix. Runner proof inputs now also have single-assignment
+  checks, so duplicate `spec_file` or `cfg_file` assignments cannot be hidden by
+  Python dictionary conversion before static resolution, and resolved
+  `spec_file`/`cfg_file` inputs must remain flat direct children of the Sumeragi
+  formal directory with the expected `.tla`/`.cfg` suffixes. TLC `module`
+  assignments must now be TLA identifiers before the runner maps them to module
+  files.
+- The TLA operator parser now distinguishes top-level module operators from
+  scoped `LET` helpers, so CFG behavior/check references and TLC constraints
+  cannot be satisfied by a helper that is not available as a module-level
+  proof target. The new `vars` parser handles both inline tuples and multiline
+  tuples with unindented closing delimiters.
+- Added missing terminating `====` markers to the 127 Sumeragi TLA modules that
+  previously had a module header but no explicit terminator, bringing the
+  full 500-module formal corpus under the same terminator rule.
+- Added focused pytest coverage for duplicate TLA constant/operator rejection
+  and top-level-only operator parsing, duplicate or content-prefixed TLA module
+  headers, missing/duplicate/trailing TLA terminators, plus variable
+  declaration/`vars` tuple parity, duplicate tuple entries, undeclared tuple
+  variables, and dynamic tuple rejection. The tests also pin CFG/module filename
+  ownership for exact and module-prefixed CFG names while rejecting cross-module
+  CFG names, and verify duplicate or missing runner proof-input assignments fail
+  closed, including path-escape, nested-directory, and wrong-suffix proof
+  inputs. The TLC module-file tests now also reject non-identifier module names.
+  The formal coverage guard now also fails before inventory parsing when
+  Sumeragi formal wiring files or TLA+/CFG artifacts contain unresolved merge
+  conflict markers, and it rejects malformed runner case labels, unindented
+  case-block content, malformed case terminators, or labels with no exact `;;`
+  terminator before a malformed branch can hide from mode reachability checks.
+  CFG shape validation now counts only top-level `SPECIFICATION`, `INIT`,
+  `NEXT`, `INVARIANT(S)`, and `PROPERTY/PROPERTIES` directives when proving a
+  config has behavior and semantic checks, so indented continuation entries
+  cannot masquerade as behavior or check directives.
+  The current 500-module formal corpus passes with single leading headers,
+  exactly one terminal `====` per module, no duplicate TLA declarations,
+  variable/`vars` drift, CFG/module ownership drift, duplicate runner
+  proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
+  module names, malformed runner case-block shape, unresolved formal wiring or
+  artifact merge markers, indented CFG continuation spoofing, or formal-path
+  containment violations.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`79 passed`)
+  - TLA terminator audit across `docs/formal/sumeragi/*.tla`
+    (`missing 0`, `multi 0`, `trailing_after_end 0`)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `git diff --check -- scripts/formal/check_sumeragi_formal_coverage.py scripts/formal/sumeragi_tlc.sh scripts/formal/install_apalache.sh pytests/scripts/sumeragi_formal_coverage_test.py docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - trailing-whitespace and conflict-marker scans across the same touched
+    formal guard, runner, test, docs, roadmap, and status files, plus the
+    full Sumeragi TLA+/CFG corpus via the coverage guard
+
+## 2026-06-01 SCCP .NET Ethereum outbound facade parity
+
+- Added the .NET `EthereumMainnetSccp` outbound easy path for SORA -> Ethereum:
+  `BuildOutboundProofRequest`, `ProveOutboundToEthereumAsync`,
+  `BuildEthereumCalldata`, and `SubmitOutboundToEthereumAsync`, with typed
+  public-input, proof-request, proof-result, submission, prover, and submitter
+  records/interfaces.
+- Hardened .NET Ethereum proof wrapping and calldata construction so native
+  callers reject non-384-byte Groth16 blobs, all-zero proofs, malformed BN254
+  proof tuples, proof/message-id drift, proof/commitment-root drift,
+  source-domain drift, public-input drift, destination-binding drift, and
+  Ethereum mainnet chain-id binding drift before emitting verifier calldata.
+- Updated the SCCP release-readiness report and strict release-bundle verifier
+  inventories so the `dotnet-sdk` `eth,bsc` row requires the Ethereum outbound
+  facade, typed request/result/submission records, and app-owned outbound
+  prover/submitter hooks.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`4 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 18 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or helper_inventory_is_independent'`
+    (`14 passed, 128 deselected`)
+
+## 2026-06-01 SCCP native typed BSC Parlia finality evidence
+
+- Added typed BSC Parlia finality evidence helpers to Swift, Kotlin/JVM, Java
+  Android, and .NET. Native apps can now build the canonical
+  `executionBlockNumber`, `executionBlockHash`, and `executionReceiptsRoot`
+  evidence map/dictionary without hand-assembling raw provider payloads.
+- Added native typed inbound-evidence construction helpers so BSC -> SORA
+  source proving can receive that Parlia finality evidence through the same
+  ergonomic pattern already used by Ethereum beacon finality.
+- Tightened the SCCP release-readiness report and strict release-bundle
+  verifier inventories so native `eth,bsc` SDK rows require the typed BSC
+  Parlia helper symbols alongside the consensus-provider hooks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces'`
+    (`4 passed, 18 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or per_sdk_helper_symbol_drift'`
+    (`14 passed, 128 deselected`)
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetFacadeRequiresChainId56AndBscTarget --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`2 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`810 passed`)
+
+## 2026-06-01 SCCP EVM runtime bytecode canonicalization
+
+- Tightened `scripts/sccp_all_lanes_evidence.py` so staged ETH/BSC source and
+  destination runtime-bytecode metadata must use canonical lowercase hex with a
+  lowercase `0x` prefix when present; imported evidence using `0X` or uppercase
+  hex now fails before readiness can be reported.
+- Applied the same canonical lowercase-hex policy to the direct ETH source,
+  BSC source, and EVM-family destination evidence renderers, so operator CLI
+  inputs cannot be normalized into production TOML after review.
+- Tightened the EVM-family source live collector's operator-supplied hash pins
+  to require lowercase `0x` hex as well, keeping live source TOML generation
+  aligned with the exact remote JSON-RPC and summary evidence checks.
+- Restored the release-bundle verifier's active BSC launch-lane boundary:
+  complete cryptographic-evidence row checks apply to the active lane, while
+  future-lane rows remain diagnostic until their launch policies open.
+- Added all-lanes regressions for non-canonical EVM source bridge and
+  destination verifier/bridge runtime-bytecode comments, plus direct parser
+  and source-live parser regressions for `0X` prefixes and uppercase
+  runtime-bytecode/address/hash input.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_evm_destination_evidence.py scripts/sccp_evm_source_live_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_eth_source_bridge_evidence_test.py::test_eth_address_parser_rejects_zero_and_wrong_width pytests/scripts/sccp_bsc_source_bridge_evidence_test.py::test_bsc_address_parser_rejects_zero_and_wrong_width pytests/scripts/sccp_evm_destination_evidence_test.py::test_evm_address_and_hash_parsers_reject_zero_and_wrong_width`
+    (`3 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`20 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_source_gate_hash_named_role_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_domain_policy_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift`
+    (`6 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_rejects_evm_destination_noncanonical_runtime_bytecode_metadata pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_rejects_evm_source_noncanonical_runtime_bytecode_metadata pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_accepts_verified_evm_source_live_toml`
+    (`3 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+
+## 2026-06-01 SCCP BSC browser no-WASM release gate
+
+- Added an explicit packaged JavaScript BSC mainnet no-WASM regression beside
+  the Ethereum browser guard, keeping the BSC package source, dist bundle, and
+  declarations free of `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover
+  URL, and prover endpoint dependency markers.
+- Tightened SCCP release-readiness and strict release-bundle transcript checks
+  so a JS phase must include the BSC no-WASM test name before BSC browser SDK
+  readiness can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`46 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_phase_transcript_inventory_matches_report`
+    (`3 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'bsc_browser_no_wasm_marker or js_package_dist_transcript or js_package_export_transcript or js_mainnet_facade_transcripts or phase_transcript_inventory'`
+    (`9 passed, 155 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`807 passed`)
+
+## 2026-06-01 SCCP BSC consensus-provider release evidence
+
+- Tightened SCCP release-readiness and strict release-bundle helper inventories
+  so native `eth,bsc` SDK rows require the BSC consensus-provider hooks used to
+  collect Parlia finality: Swift `BscMainnetConsensusProvider`, Kotlin
+  `BscMainnetConsensusProvider`, Java Android
+  `BscMainnetSccp.ConsensusProvider`, and .NET
+  `IBscMainnetConsensusProvider`.
+- Kept the JavaScript/web row tied to its runtime `consensusProvider` hook while
+  leaving the typed `BscMainnetConsensusProvider` declaration covered by the
+  package declaration tests, since TypeScript-only types are not runtime
+  source/dist exports.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface or per_sdk_helper_symbol_drift'`
+    (`14 passed, 127 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+
+## 2026-06-01 SCCP Python ETH inbound finality facade
+
+- Added Python `EthereumMainnetSccp` inbound collection/proving/submission
+  hooks to match the web/native Ethereum mainnet facade shape. Python apps can
+  now inject execution and consensus providers, collect receipt and block
+  evidence, bind beacon finality to the execution block number/hash and
+  receipts root, and reject missing beacon finality before app-owned prover
+  callbacks run.
+- Updated Python regressions for mainnet `eth_chainId`, receipt/block drift,
+  finality drift, proof-byte copying, and the no-finality prove-time guard.
+- Updated SCCP release-readiness and strict release-bundle helper inventories
+  so the `eth,bsc` Python SDK row requires the Ethereum inbound
+  collect/prove/submit facade methods and the `consensus_provider` hook.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs python/iroha_torii_client/tests/sccp_test.py::test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs python/iroha_torii_client/tests/sccp_test.py::test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence`
+    (`5 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_python_helper_symbols_are_package_root_exports pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_user_prover_surfaces_name_ui_hook_symbols`
+    (`4 passed`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_per_sdk_helper_symbol_drift pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_sdk_phase_inventory_matches_report pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_sdk_phase_inventory_is_independent pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_duplicate_submission_surface_helpers pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_submission_surface_ui_hooks`
+    (`6 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk,evidence-scripts`
+    (`evidence-scripts`: `805 passed`; `python-sdk`: `85 passed`)
+
+## 2026-06-01 SCCP native typed ETH finality evidence
+
+- Added typed Ethereum mainnet beacon-finality evidence helpers to Swift,
+  Kotlin/JVM, Java Android, and .NET. Native apps can now construct the
+  canonical evidence map/dictionary for `executionBlockNumber`,
+  `executionBlockHash`, and `executionReceiptsRoot` without hand-assembling
+  unstructured provider payloads.
+- Added native typed inbound-evidence construction helpers so Swift,
+  Kotlin/JVM, Java Android, and .NET callers can feed the finality helper into
+  ETH -> SORA source proving without manually copying the finality map.
+- Updated native Ethereum inbound regressions to use those helpers while still
+  proving that finality evidence is bound to the collected receipt/block before
+  app-owned source prover callbacks run.
+- Updated the SCCP release-readiness report and strict release-bundle verifier
+  inventories so the `eth,bsc` native SDK rows require those typed
+  beacon-finality and inbound-evidence helper symbols alongside the
+  consensus-provider hooks.
+- Added a packaged JavaScript regression that keeps the browser Ethereum
+  mainnet SCCP artifacts free of `WebAssembly`, `wasm`, `snarkjs`, remote
+  prover, prover URL, and prover endpoint dependency markers.
+- Tightened the SCCP release report and strict bundle verifier so the JS phase
+  transcript must include that no-WASM browser guard's test name before a
+  readiness bundle can be accepted.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols or user_prover_surfaces or json_tracks_corridor_phase_results'`
+    (`5 passed, 16 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'submission_surface'`
+    (`13 passed, 128 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase or json_tracks_corridor_phase_results or sdk_helper_symbols or user_prover_surfaces'`
+    (`13 passed, 8 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'js_phase or phase or submission_surface'`
+    (`31 passed, 110 deselected`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`45 passed`)
+
+## 2026-06-01 SCCP BSC prove-time Parlia finality guard
+
+- Tightened the JavaScript/web, Python, Swift, Kotlin/JVM, Java Android, and
+  .NET `BscMainnetSccp` inbound easy paths so they collect/normalize BSC
+  receipt evidence before app-owned source prover callbacks run, and reject
+  missing Parlia finality evidence before calling those callbacks.
+- Aligned the JavaScript BSC inbound collector with the Ethereum mainnet
+  collector for fully supplied evidence: a default `null` execution provider no
+  longer forces JSON-RPC validation when the caller already supplied receipt and
+  block evidence.
+- Promoted the JavaScript BSC Parlia finality shape from `unknown` to explicit
+  TypeScript declarations and exposed per-call execution/consensus providers on
+  `BscMainnetSccp.proveInboundToSora`, matching the runtime collection path.
+- Hardened the Swift BSC inbound facade to collect Parlia finality through an
+  app-supplied consensus provider, normalize supplied or collected finality
+  against the collected receipt block number, block hash, and receipts root, and
+  reject missing Parlia finality before the native app-owned prover callback
+  runs.
+- Added the same Parlia finality binding to Kotlin/JVM, Java Android, and .NET:
+  app-supplied consensus providers can populate finality evidence, supplied or
+  collected finality must match the collected execution block number/hash and
+  receipts root, and proof outputs are rejected if empty or all-zero.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade'`
+    (`3 passed, 82 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`11 passed`)
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`45 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`155 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`85 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`77` SCCP tests and `1` Torii test passed)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+
+## 2026-06-01 SCCP native ETH prove provider overrides
+
+- Added per-call execution and consensus provider overrides to the Swift,
+  Kotlin/JVM, and Java Android `EthereumMainnetSccp.proveInboundToSora`
+  methods. Native apps can now collect, finality-bind, and prove an Ethereum
+  mainnet inbound receipt in one call without constructing a new facade around
+  each app-owned RPC/finality provider pair.
+- Added regressions proving those per-call providers are used for mainnet
+  `eth_chainId`, receipt, block, and beacon-finality collection, while the
+  missing-finality guard still prevents app-owned prover callbacks from
+  running.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP JavaScript ETH finality declarations
+
+- Promoted the JavaScript Ethereum mainnet beacon-finality evidence shape from
+  `unknown` to explicit TypeScript declarations. Browser callers now see
+  `EthereumMainnetBeaconFinalityEvidenceInput`,
+  `EthereumMainnetBeaconFinalityEvidence`, and
+  `EthereumMainnetConsensusProviderInput` with the execution block number,
+  execution block hash, and execution receipts root fields required by the
+  runtime validator.
+- Updated the `EthereumMainnetSccp.proveInboundToSora` options declaration to
+  include execution and consensus providers, matching the runtime path that
+  collects and validates evidence before the app-owned prover callback.
+- Validation:
+  - `node --test javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`52 passed`)
+
+## 2026-06-01 SCCP Ethereum prove-time finality guard
+
+- Added prove-time beacon-finality guards to the JavaScript, Swift, Kotlin/JVM,
+  Java Android, and .NET `EthereumMainnetSccp` inbound facades. The app-owned
+  local source prover is no longer called unless collection produced or
+  preserved Ethereum beacon finality evidence for the mainnet receipt.
+- Added negative regressions proving missing finality is rejected before prover
+  callbacks run, while the positive app-supplied consensus-provider path still
+  reaches the callback with finality-bound evidence.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    (`51 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP JavaScript ETH prove-time collection
+
+- Tightened the browser `EthereumMainnetSccp.proveInboundToSora` path so it now
+  runs `collectInboundEvidenceFromReceipt` before invoking the app-owned local
+  prover. The prover callback therefore receives the same mainnet chain-id
+  checked, receipt/block validated, and beacon-finality-bound evidence as the
+  explicit collection API.
+- Accepted precomputed `receiptProofHash` as already-collected Ethereum receipt
+  proof material in the JavaScript inbound collector, while still rejecting
+  incomplete prove inputs before the app callback can run.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    (`51 passed`)
+
+## 2026-06-01 SCCP Ethereum finality block binding
+
+- Hardened the JavaScript, Swift, Kotlin/JVM, Java Android, and .NET
+  `EthereumMainnetSccp` inbound collectors so supplied or app-collected beacon
+  finality evidence must bind back to the validated execution block before any
+  local source-prover callback sees it.
+- The collectors now require finality execution block number, execution block
+  hash, and execution receipts root fields, normalize their canonical forms,
+  and reject mismatches against the receipt/block number, block hash, or
+  `receiptsRoot` gathered from the app-owned Ethereum mainnet RPC provider.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist && node --check src/sccp.js && node --check dist/sccp.js && node --test test/sccpEthereumMainnet.test.js`
+    (`8 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP production corridor rerun with native .NET phase
+
+- Re-ran the SCCP production-readiness corridor on the current BSC-mainnet
+  SDK/release-gate tree, including the newly added `dotnet-sdk` phase.
+- The first full logged run proved the Rust SCCP phase (`240` tests plus doc
+  tests); the evidence helper inventory changed during the long run, so the
+  remaining phases were rerun individually after the current release-readiness
+  files settled.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --log-dir /tmp/sccp-full-corridor.pYpcxW`
+    rust-sccp phase: `240 passed`, `0` doc tests
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk`
+    (`149 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`83 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`77` SCCP tests plus `1` Torii bridge-proof submit test)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (both Gradle invocations `BUILD SUCCESSFUL`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32 passed`)
+
+## 2026-06-01 SCCP native Ethereum finality hooks
+
+- Added app-supplied Ethereum mainnet consensus/finality provider hooks to the
+  Swift, Kotlin/JVM, Java Android, and .NET `EthereumMainnetSccp` facades. When
+  inbound evidence collection starts from an execution receipt without
+  pre-supplied `beaconFinality`, the native facade can now collect beacon
+  finality evidence from the app-owned provider and attach it before the local
+  source prover or submitter path runs.
+- Extended the public SCCP release-helper inventory and independent
+  release-bundle verifier so the Ethereum/BSC helper row names the native
+  consensus-provider hook symbols alongside the existing execution-provider,
+  prover, submitter, and facade method symbols.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or dotnet'`
+    (`5 passed, 16 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_inventory_is_independent or submission_surface_helper or submission_surface_ui_hooks or per_sdk_helper_symbol_drift or field_type_drift'`
+    (`10 passed, 131 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+
+## 2026-06-01 SCCP JS/.NET corridor evidence hardening
+
+- Strengthened the SCCP production corridor so `js-sdk` now runs the
+  JavaScript Ethereum and BSC mainnet facade regressions alongside the Solana,
+  package `dist`, and package-root export tests.
+- Kept strict release-readiness and release-bundle verification in sync with
+  the corridor by requiring the JS ETH/BSC facade test transcripts and the
+  native `.NET` ETH/BSC facade phase evidence before public release artifacts
+  can be marked complete.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_js_mainnet_facade_transcripts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_writes_hash_bound_public_artifacts pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_js_mainnet_facade_transcripts`
+    (`16 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts,js-sdk,dotnet-sdk`
+  - `evidence-scripts`: `805` tests
+  - `js-sdk`: `149` tests
+  - `dotnet-sdk`: `4` tests
+
+## 2026-06-01 SCCP BSC facade-method release evidence
+
+- Tightened the public `eth,bsc` SCCP user-prover helper rows so BSC mainnet
+  readiness now requires the concrete inbound facade methods, not only the
+  `BscMainnetSccp` class names. JavaScript, Python, Swift, Kotlin/JVM, and
+  Java Android rows now pin the collect/prove/submit inbound method symbols in
+  both the report generator and the independent release-bundle verifier.
+- Kept Python UI-owned prover hook validation exact so
+  `BscMainnetSccp.prove_inbound_to_sora` cannot stand in for the app-owned
+  `prove` callback marker, and fixed the verifier's canonical Markdown
+  renderer so the `eth,bsc` `.NET` helper set is rendered and checked alongside
+  the other SDK rows.
+- Hardened verifier diagnostics for malformed submission-surface rows so
+  non-string `lanes` values report schema errors instead of crashing during
+  canonical Markdown regeneration.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or json_tracks_corridor_phase_results'`
+    (`6 passed, 15 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_symbol or submission_surface or crypto_evidence_inventory_drift'`
+    (`15 passed, 126 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`805 passed`)
+
+## 2026-06-01 SCCP .NET release-helper inventory
+
+- Added the .NET ETH/BSC SCCP facade methods and app-owned execution,
+  inbound-prover, and inbound-submitter interfaces to the structured
+  release-readiness helper inventory. The `eth,bsc` user-prover row now has a
+  `dotnet-sdk` helper-symbol set instead of treating the .NET corridor phase as
+  unstructured evidence.
+- Tightened the strict release-bundle verifier so the ETH/BSC row must retain
+  the .NET helper symbols and the `.NET` inbound prover/submitter hooks, while
+  non-EVM rows continue to reject unexpected SDK helper maps.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'helper_symbols or user_prover_surfaces_name_ui_hook_symbols or dotnet'`
+    (`5 passed, 16 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_inventory_is_independent or submission_surface_helper or submission_surface_ui_hooks or per_sdk_helper_symbol_drift or field_type_drift'`
+    (`10 passed, 131 deselected`)
+
+## 2026-06-01 SCCP native .NET corridor phase
+
+- Added a `dotnet-sdk` phase to the focused SCCP production corridor and the
+  GitHub Actions attachment, so native .NET/C# Ethereum and BSC mainnet facade
+  tests are first-class release evidence instead of ad-hoc local validation.
+- Mirrored the new phase in the release-readiness report and independent
+  release-bundle verifier, and made the `eth,bsc` public release row require
+  the .NET phase alongside the web, Python, Swift, Kotlin/JVM, Java Android,
+  contract-smoke, and core-admission phases.
+- Strengthened the C# BSC inbound facade regression with copied prover output,
+  copied submitter input, and zero `receiptsRoot` rejection.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`12 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`4 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'phase or corridor or submission_surface or sdk_phase_inventory'`
+    (`44 passed, 118 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`162 passed`)
+
+## 2026-06-01 SCCP SDK inbound block-number hardening
+
+- Tightened the easy ETH/BSC inbound evidence collectors across JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET so any collected receipt
+  must carry a positive canonical `receipt.blockNumber`, and any collected or
+  fetched block must carry a positive canonical `block.number` before the local
+  source prover can run.
+- Added focused adversarial coverage for missing and zero receipt/block numbers
+  alongside the existing failed-receipt, transaction drift, block-hash drift,
+  block-number drift, uppercase hash, and missing `receiptsRoot` checks.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`17 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence'`
+    (`1 passed, 82 deselected`)
+  - `cd IrohaSwift && swift test --filter 'SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift|SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget'`
+    (`2 passed`)
+  - `cd kotlin && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.bscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    (`BUILD SUCCESSFUL`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter 'SccpEthereumMainnetTests|SccpBscMainnetTests' --nologo`
+    (`4 passed`)
+  - `git diff --check`
+
+## 2026-06-01 SCCP BSC mainnet public helper inventory
+
+- Expanded the public SCCP release-readiness helper inventory and the
+  independent release-bundle verifier inventory so the `eth,bsc` row now
+  requires BSC-mainnet facade/prover/submission helpers across JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android instead of allowing generic EVM
+  helpers alone to stand in for BSC UI readiness.
+- The Python row now names `BscMainnetSccp`,
+  `BscMainnetSccpProver`, `build_bsc_mainnet_sccp_destination_proof_request`,
+  `wrap_bsc_mainnet_sccp_destination_proof_result`, and
+  `build_bsc_mainnet_sccp_destination_submission`; the verifier owns the same
+  per-SDK helper list independently from the report generator.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'json_tracks_corridor_phase_results or helper_symbols'`
+    (`5 passed, 15 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'helper_symbol or submission_surface'`
+    (`14 passed, 126 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP full production corridor rerun after receipt-root schema closure
+
+- Re-ran the full SCCP production-readiness corridor on the current tree after
+  the EVM source and route-canary receipt-block schema closure.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh`
+  - `rust-sccp`: `240` tests plus `0` doc tests
+  - `evidence-scripts`: `802` tests
+  - `js-sdk`: `132` tests
+  - `python-sdk`: `81` tests
+  - `swift-sdk`: `77` SCCP prover tests plus `1` Torii bridge-proof submit test
+  - `kotlin-sdk`: `BUILD SUCCESSFUL`
+  - `java-android`: both SCCP harness invocations `BUILD SUCCESSFUL`
+  - `contract-smoke`: `sccp_message_bridge_smoke: ok`
+  - `core-admission`: `32` tests
+
+## 2026-06-01 SCCP JavaScript BSC inbound submit hardening
+
+- Hardened the JavaScript `BscMainnetSccp` and `EthereumMainnetSccp` inbound
+  prove/submit helpers so empty or all-zero local prover output is rejected
+  before being returned, and app-linked Iroha submitters only receive copied
+  proof bytes after the same proof-byte checks pass. This aligns the
+  browser/web SDK facade with the native Swift, Kotlin/JVM, Java Android, and
+  .NET submit guards.
+- Added BSC facade regressions covering copied accepted proof bytes plus empty
+  and all-zero prove/submit proof rejection, and reran the package `dist`
+  export suite after mirroring the source change into the checked-in
+  distribution file.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`9 passed`)
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`42 passed`)
+
+## 2026-06-01 SCCP TRON route-canary finality-height role parity
+
+- Aligned the Python TRON source bridge evidence helper with the Rust
+  route-canary v3 runtime transcript policy by rejecting `finality_height`
+  reuse across TRON route-canary transcript hash roles before full rollout TOML
+  can be rendered.
+- Extended the TRON full-TOML regression so `route_canary_finality_height`
+  replay fails with the same distinct-hash-role error as transaction, calldata,
+  message, payload, statement, commitment, finality block, and signature hash
+  replay.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_tron_source_bridge_evidence.py pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py -k 'route_canary_transcript_hash_reuse or route_canary'`
+    (`19 passed, 61 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_tron_source_bridge_evidence_test.py`
+    (`80 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP Python BSC mainnet facade
+
+- Added a first-class Python `BscMainnetSccp` facade so Python callers get the
+  same easy BSC-mainnet shape as the other SDKs: a chain-id-56 guard, governed
+  destination binding/hash helpers, outbound request construction,
+  linked-prover execution, BSC calldata construction from wrapped proof
+  results, inbound receipt/block collection, Parlia finality preservation,
+  native source-proof generation, and copied non-zero proof submission.
+- Kept `BscMainnetSccpProver` as a compatibility wrapper over the new facade
+  and exported both `BscMainnetSccp` and `require_bsc_mainnet_chain_id` from the
+  package root.
+- Added adversarial inbound coverage for Ethereum/padded BSC chain ids, failed
+  receipts, transaction-hash drift, uppercase hashes, block hash/number drift,
+  zero receipt roots, duplicate domain aliases, and empty/all-zero proof bytes.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade'`
+    (`3 passed, 80 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`83 passed`)
+
+## 2026-06-01 SCCP EVM route-canary finality-height role parity
+
+- Aligned the Python EVM destination evidence helper with the Rust route-canary
+  v3 runtime transcript policy by rejecting `finality_height` reuse across the
+  EVM route-canary transcript hash roles before direct TOML can be rendered.
+- Extended the destination evidence regression so a reused finality-height word
+  fails with the same distinct-hash-role error as transaction, calldata,
+  message, payload, statement, commitment, and finality block hash replay.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py -k 'route_canary_transaction_hash_binds_target_domain or route_canary'`
+    (`2 passed, 11 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`13 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+
+## 2026-06-01 SCCP EVM live JSON-RPC envelope hardening
+
+- Hardened the ETH/BSC live source and destination evidence collectors so
+  successful JSON-RPC responses must carry the exact `jsonrpc = "2.0"` envelope
+  and the request id `1` before any `result` is trusted. Missing, padded, typed
+  as a string, or mismatched ids now fail closed alongside the existing
+  duplicate-key, size-bound, and canonical hex/quantity checks.
+- Added adversarial coverage for BSC-facing source and destination collectors so
+  forged success envelopes cannot feed BSC source material, destination rollout,
+  or route-canary TOML rendering.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`42 passed`)
+
+## 2026-06-01 SCCP EVM route-canary v3 runtime binding
+
+- Promoted the ETH/BSC route-canary receipt block tuple into first-class
+  route allowlist readiness/config fields:
+  `evm_route_canary_receipt_block_number`,
+  `evm_route_canary_receipt_block_hash`, and
+  `evm_route_canary_block_receipts_root`.
+- Bumped the canonical EVM route-canary evidence label/layout to `v3`; the
+  runtime hash now binds receipt block number/hash/`receiptsRoot` before
+  calldata and rejects stale or role-reused receipt block hashes in the same
+  way as the transaction, message, public-input, and finality hash roles.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py scripts/sccp_evm_live_evidence.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py -k 'route_canary or full_toml or live or destination_binding'`
+    (`4 passed, 9 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary or full_toml_revalidates_imported_summary_metadata or collects_destination'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'config_route_canary_fields or evm_route_canary or route_canary_metadata or verified_evm_live_toml or direct_evm_destination'`
+    (`11 passed, 118 deselected`)
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp route_allowlist_lane_canary_builder_rejects_source_record_hash_replay --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core configured_sccp_all_lanes_launch -- --nocapture`
+    (`13 passed` matching tests)
+  - `cargo test -p iroha_core zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists --lib -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`802 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`240 passed`, `0` doc tests)
+  - `git diff --check`
+
+## 2026-06-01 SCCP release-bundle route-canary receipt metadata regressions
+
+- Pinned the public release-bundle verifier tests for the EVM route-canary
+  receipt-block schema: receipt block numbers must remain positive, receipt
+  block hashes and block `receiptsRoot` values must be non-zero bytes32 values,
+  and the new receipt-block hash roles cannot reuse existing transaction or
+  transcript hashes.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py scripts/sccp_verify_release_bundle.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'evm_route_canary'`
+    (`3 passed, 137 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'route_canary'`
+    (`18 passed, 122 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`800 passed`)
+
+## 2026-06-01 SCCP EVM source deployment receiptsRoot binding
+
+- Hardened ETH/BSC source deployment evidence so direct source TOML and live
+  source collection now require the deployment receipt block `receiptsRoot` as
+  non-zero bytes32 evidence alongside the receipt transaction hash, contract
+  address, block hash, and block number.
+- `scripts/sccp_evm_source_live_evidence.py` now fetches the receipt block root
+  with `eth_getBlockByNumber`, carries it into rendered TOML, and refuses
+  imported summaries that lack the verified receipts-root marker. The all-lanes
+  preflight now requires the same metadata comment before accepting ETH/BSC
+  source material.
+- Completed the adjacent EVM route-canary receipt-block integration exposed by
+  the full corridor: the live destination helper now accepts optional expected
+  canary receipt block number/hash/root values and verifies them against the
+  fetched transaction, while the public release-bundle verifier schema accepts
+  and validates those all-lanes route-canary fields.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py scripts/sccp_eth_source_bridge_evidence.py scripts/sccp_bsc_source_bridge_evidence.py scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py pytests/scripts/sccp_eth_source_bridge_evidence_test.py pytests/scripts/sccp_bsc_source_bridge_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`193 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`800 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet launch policy switch
+
+- Switched the first-lane SCCP production policy back to
+  `EthereumMainnetLane`, so configured ETH mainnet source material,
+  source-adapter deployment evidence, destination rollout material, route
+  allowlist evidence, and route-canary evidence can open the Ethereum lane
+  without waiting for every advertised SCCP remote lane.
+- Kept `BscMainnetLane` and `AllLanesAtOnce` as explicit policy modes, but core
+  admission now rejects non-ETH source proofs under the default
+  Ethereum-mainnet launch policy before evaluating route-canary,
+  route-allowlist, or destination-rollout drift for those future lanes.
+- Torii deployment-bound destination packaging now applies the same configured
+  launch policy per lane, so ETH can proceed with complete ETH evidence while
+  BSC/TRON/Solana/TON/Substrate remain closed until their lane policies open.
+- Re-ran the stale BSC transition-chain verifier regression that previously had
+  only an incomplete local validation note.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target/codex-sccp-bsc-transition-rerun cargo test -p iroha_sccp bsc_validator_set_transition_chain_requires_increasing_transition_blocks -- --nocapture`
+    (`1 passed`)
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii 'configured_ethereum_mainnet_lane_launch|destination_binding_query_respects_ethereum_lane_launch_policy' --features app_api --lib -- --nocapture`
+  - Pending rerun in this working session:
+    `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_audited_sol_source_adapter_waits_for_lane_launch -- --nocapture`
+
+## 2026-06-01 SCCP .NET full unit rerun after BSC receipt facade
+
+- Re-ran the full C# unit project with the temporary .NET 8 SDK after the BSC
+  receipt facade and async inbound helper updates.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`153` tests)
+
+## 2026-06-01 SCCP EVM route-canary duplicate event hardening
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so transaction-derived EVM
+  route-canary evidence now requires the supplied receipt/log-index tuple to
+  identify exactly one matching `MessageProofAccepted` event. Duplicate
+  matching events at the same supplied log index now fail closed before
+  calldata, used-message, or evidence-hash checks run.
+- Added a focused fake-RPC regression covering duplicated accepted-event logs
+  in the route-canary receipt path.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata'`
+    (`1 passed, 20 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary'`
+    (`2 passed, 19 deselected`)
+
+## 2026-06-01 SCCP evidence-scripts corridor after route-canary block binding
+
+- Re-ran the full SCCP evidence-script production-corridor phase after the EVM
+  route-canary receipt block-binding hardening.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`797` tests)
+
+## 2026-06-01 SCCP Rust/Python corridor rerun after Substrate digest hardening
+
+- Re-ran the Rust and Python SCCP production-corridor phases after the
+  Substrate-family storage-proof digest hardening, complementing the SDK
+  corridor rerun below.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp,python-sdk`
+  - `rust-sccp`: `240` tests (`0` doc tests; Rust test suite finished in
+    `540.02s`)
+  - `python-sdk`: `81` tests
+
+## 2026-06-01 SCCP EVM route-canary receipt block binding
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so transaction-derived
+  ETH/BSC route-canary evidence now fetches the receipt block with
+  `eth_getBlockByNumber`, requires the block number and block hash to match the
+  receipt, and rejects zero `receiptsRoot` values before full rollout TOML can
+  be rendered.
+- The saved-summary replay path now treats forged receipt-block verification
+  metadata as missing verified route-canary transaction evidence, preventing a
+  stale imported JSON summary from bypassing live block binding.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary or full_toml_revalidates_imported_summary_metadata or collects_destination'`
+    (`4 passed, 17 deselected`)
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k 'config_route_canary_fields or evm_route_canary or route_canary_metadata'`
+    (`9 passed, 120 deselected`)
+
+## 2026-06-01 SCCP TON shard digest zero-value hardening
+
+- Hardened Rust plus JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  TON shard-proof transcript builders so all-zero `sourceEventDigest` values
+  are rejected before deriving the shard-proof source witness hash.
+- Added focused regressions beside the existing TON shard-proof hash vectors
+  and regenerated the JavaScript dist bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp ton_shard_state_proof_transcript_matches_sdk_fixture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ton_and_substrate_source_proof_transcripts'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --test --test-name-pattern 'derives TON SCCP shard proof hashes from branch witness material' test/sccpSolanaProver.test.js`
+    in `javascript/iroha_js` (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check dist/sccp.js` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+  - `swift test --filter SccpSolanaProverTests.testTonShardProofHashBindsWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest.derivesTonShardProofHashFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.TonSccpProverTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC native Swift and .NET receipt facades
+
+- Added/validated native BSC-mainnet receipt facades for Swift and .NET,
+  completing parity with the JavaScript, Kotlin/JVM, and Java Android BSC
+  inbound SDK path. The facades validate canonical BSC mainnet chain id `56`
+  (`eth_chainId == 0x38` at the RPC boundary), collect receipts and receipt
+  blocks through app-supplied JSON-RPC providers, preserve Parlia finality
+  evidence, and reject foreign routes, failed receipts, transaction-hash drift,
+  block hash/number drift, uppercase hashes, missing receipt roots,
+  zero receipt-proof hashes, and zero inbound proof bytes before native proving
+  or submission.
+- The .NET BSC facade now exposes `CollectInboundEvidenceFromReceiptAsync`,
+  `ProveInboundToSoraAsync`, and `SubmitInboundToIrohaAsync` beside its
+  existing BSC-mainnet route, chain-id, network-id, and destination-binding hash
+  guards.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    in `IrohaSwift` (`1 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests --nologo`
+    (`2 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --nologo`
+    (`4 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`153 passed`)
+
+## 2026-06-01 SCCP Ethereum sync-committee transition hardening
+
+- Hardened the Ethereum mainnet source adapter verifier so sync-committee
+  transition chains must advance exactly one mainnet sync-committee period per
+  transition. A transition proof can no longer skip from period `N` directly to
+  `N + k` while carrying an otherwise self-consistent next-committee payload
+  and BLS signature.
+- Added Ethereum mainnet period constants from the consensus mainnet presets
+  (`SLOTS_PER_EPOCH = 32`, `EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256`) and a
+  focused negative regression for skipped-period transition evidence.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp eth_source_adapter_verifies_sync_committee_transition_chain --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-01 SCCP SDK corridor rerun after native receipt updates
+
+- Re-ran the impacted SCCP production-corridor SDK phases after the JavaScript
+  BSC facade, native Ethereum inbound facade, receipt-digest zero-value, and
+  .NET facade validation updates.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/check_sccp_production_corridor.sh --phase js-sdk,swift-sdk,kotlin-sdk,java-android`
+  - `js-sdk`: `132` tests
+  - `swift-sdk`: `SccpSolanaProverTests` (`76` tests) plus the Torii bridge
+    submit request test (`1` test)
+  - `kotlin-sdk`: `:core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.*`
+    (`BUILD SUCCESSFUL`)
+  - `java-android`: EVM, source-proof, Substrate, TON, TRON harness tests plus
+    `SolanaSccpProverTests` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP Substrate storage digest zero-value hardening
+
+- Hardened Rust plus JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  Substrate-family storage-proof transcript builders so all-zero
+  `sourceEventDigest` values are rejected before deriving the storage-proof
+  witness hash or runtime-storage verification statement.
+- Added focused regressions beside the existing Substrate source-proof hash
+  vectors and regenerated the JavaScript dist bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_bsc_and_substrate_source_adapters_bind_proof_hashes_to_inclusion_witnesses --lib -- --nocapture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'derives_all_source_proof_hashes_from_canonical_witness_material'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --test --test-name-pattern "derives EVM, BSC, TRON, and Substrate source proof hashes" test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest.derivesSourceProofHashesFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC native mobile receipt facades
+
+- Added Kotlin/JVM and Java Android `BscMainnetSccp` native facades mirroring
+  the Ethereum mobile receipt path. They validate BSC mainnet chain id `56`
+  (`eth_chainId == 0x38` at the RPC boundary), collect receipts and receipt
+  blocks through app-supplied JSON-RPC providers, retain Parlia finality
+  evidence, and reject foreign source domains, failed receipts, transaction-hash
+  drift, block hash/number drift, uppercase hashes, and zero inbound proof
+  bytes before app-linked proving or submission.
+- The same Kotlin and Java Android facades keep the outbound path BSC-only and
+  build verifier calldata only through the governed SORA -> BSC destination
+  binding wrappers.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP native receipt digest zero-value parity
+
+- Hardened Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
+  builders so all-zero `sourceEventDigest` values are rejected before deriving
+  source witness hashes, matching the Rust, JavaScript, and Python behavior.
+- Added native SDK regressions beside the existing EVM/BSC source-proof hash
+  vectors for both ETH and BSC receipt transcripts.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.SourceSccpProofHashesTest.derivesSourceProofHashesFromWitnessMaterial --console=plain`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP native Ethereum inbound SDK parity
+
+- Added native Ethereum-mainnet inbound SDK surfaces for Swift, Kotlin/JVM,
+  Java Android, and .NET: `collectInboundEvidenceFromReceipt` /
+  `CollectInboundEvidenceFromReceiptAsync`, `proveInboundToSora` /
+  `ProveInboundToSoraAsync`, and `submitInboundToIroha` /
+  `SubmitInboundToIrohaAsync`.
+- Each native facade now uses an app-supplied Ethereum JSON-RPC execution
+  provider, validates canonical mainnet `eth_chainId == 0x1`, rejects failed
+  receipts, non-canonical transaction/block hashes, receipt transaction-hash
+  drift, block hash/number drift, missing canonical `receiptsRoot`, and all-zero
+  inbound proof bytes before invoking app-linked native prover/submitter code.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    in `IrohaSwift` (`1 passed`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    (`2 passed`)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests 'org.hyperledger.iroha.android.GradleHarnessTests'`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP .NET facade validation closure
+
+- Installed a temporary .NET 8 SDK under `/tmp/iroha-dotnet/sdk` to close the
+  previously blocked C# validation gap without changing the repository or
+  relying on a machine-global SDK.
+- Focused SCCP facade validation exposed that `Convert.TryFromHexString` is not
+  available on the SDK target used here. The Ethereum and BSC mainnet facades
+  now keep their existing canonical length checks and decode with
+  `Convert.FromHexString`, wrapping invalid hex as parameterized
+  `ArgumentException`s.
+- Validation:
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk /tmp/iroha-dotnet/sdk/dotnet --info`
+    (`8.0.421`)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter "FullyQualifiedName~SccpEthereumMainnetTests|FullyQualifiedName~SccpBscMainnetTests" --nologo`
+    (`2` tests)
+  - `DOTNET_ROOT=/tmp/iroha-dotnet/sdk DOTNET_CLI_TELEMETRY_OPTOUT=1 /tmp/iroha-dotnet/sdk/dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore --nologo`
+    (`151` tests)
+
+## 2026-06-01 SCCP BSC JS inbound receipt facade
+
+- Added the JavaScript package-root `BscMainnetSccp` facade so browser/mobile
+  apps can use an easy native BSC-mainnet SDK path without WASM. The facade
+  validates canonical `eth_chainId == 0x38`, collects BSC transaction receipts
+  and receipt blocks from EIP-1193-style providers, preserves app-linked Parlia
+  finality evidence, and rejects failed receipts, transaction-hash drift, block
+  hash/number drift, uppercase hashes, and missing `receiptsRoot` before
+  invoking the local prover.
+- The same facade keeps the outbound path BSC-only and builds verifier calldata
+  only from wrapped proof results carrying the governed SORA -> BSC destination
+  binding. TypeScript declarations, root exports, and generated `dist` now
+  expose the new helper.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/src/index.js`
+  - `node --check javascript/iroha_js/test/sccpBscMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js` (`7 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --check javascript/iroha_js/dist/sccp.js && node --check javascript/iroha_js/dist/index.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js --test-name-pattern "package dist entrypoint exports SCCP EVM-family Groth16 helpers"` (`42 passed`)
+
+## 2026-06-01 SCCP production corridor core-admission policy precedence
+
+- Ran the remaining SCCP production-corridor phases after SDK callback parity:
+  Rust SCCP, release evidence scripts, EVM contract smoke, and core admission.
+- Core admission initially exposed four stale Solana/TRON test expectations:
+  they expected route-canary, route-allowlist, or destination-rollout drift
+  diagnostics even though the current first-release policy is
+  `EthereumMainnetLane`.
+- Updated those tests to assert the production gate order that ships now:
+  configured non-Ethereum source-adapter evidence is recognized, then the lane
+  launch policy stops the source proof before route or destination drift
+  validation. Lower-level all-lanes readiness tests continue to cover the
+  non-Ethereum route-drift diagnostics for the future all-lanes launch mode.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp,evidence-scripts,contract-smoke,core-admission`
+    completed `rust-sccp` (`240` tests), `evidence-scripts` (`794` tests), and
+    `contract-smoke` (`sccp_message_bridge_smoke: ok`) before surfacing the
+    stale core-admission expectations.
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs waits_for -- --nocapture`
+    (`7` tests)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`32` tests)
+
+## 2026-06-01 SCCP EVM/BSC receipt digest zero-value hardening
+
+- Hardened Rust, JavaScript, and Python ETH/BSC receipt-proof transcript
+  builders so all-zero `sourceEventDigest` values are rejected before deriving
+  source witness hashes. This keeps UI-side witness hashing aligned with the
+  production source-proof requirement that every proof commits to a concrete
+  emitted SCCP event.
+- Added focused Rust, Python, and JavaScript regressions beside the existing
+  EVM/BSC source-proof hash coverage, and regenerated the JavaScript dist
+  bundle from the hardened source.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_sccp bsc_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness --lib -- --nocapture`
+    (`1 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'derives_all_source_proof_hashes_from_canonical_witness_material'`
+    (`1 passed, 80 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --test --test-name-pattern "derives EVM, BSC, TRON, and Substrate source proof hashes" test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js` in `javascript/iroha_js`
+    (`42 passed`)
+
+## 2026-06-01 SCCP .NET Ethereum mainnet destination-binding parity
+
+- Extended the .NET `EthereumMainnetSccp` facade from route guards only to a
+  native SORA -> ETH destination-binding and binding-hash builder, including
+  Keccak-based EVM binding hashing, canonical chain-id-1 network-id checks,
+  verifier/bridge address separation, and expected key/hash pins.
+- Expanded the .NET Ethereum mainnet tests to cover the canonical binding key
+  and hash, uppercase input normalization, wrong-network replay, zero address,
+  wrong target-domain, expected-binding-hash drift, and expected-key drift.
+- Validation:
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs`
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests --nologo`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP BSC live source deployment block binding
+
+- Hardened the EVM-family live source evidence collector used by the BSC source
+  lane so deployment receipt metadata is no longer trusted by itself. When a
+  deployment transaction is supplied, the helper now fetches
+  `eth_getBlockByNumber` for the receipt block, requires the returned block
+  number and hash to match the receipt, and only then rechecks source bridge
+  bytecode at that exact block.
+- The production TOML path now requires both receipt-block hash verification
+  and receipt-block code-hash verification, preventing forged BSC deployment
+  receipt metadata from carrying a wrong block hash into governed source
+  material.
+- Added focused negative tests for BSC receipt block-hash drift, receipt block
+  number drift, receipt-block bytecode drift, imported-summary metadata
+  forgery, and the positive BSC canonical-profile live evidence path.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`18 passed`)
+  - `python3 -m py_compile pytests/scripts/sccp_all_lanes_evidence_test.py scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py::test_all_lanes_accepts_verified_evm_source_live_toml pytests/scripts/sccp_evm_source_live_evidence_test.py`
+    (`19 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`797 passed`)
+
+## 2026-06-01 SCCP Ethereum JS inbound receipt guard hardening
+
+- Hardened the JavaScript `EthereumMainnetSccp.collectInboundEvidenceFromReceipt`
+  path so browser/mobile apps reject failed Ethereum receipts, non-canonical
+  JSON-RPC transaction or block hashes, transaction-hash drift, block hash or
+  block-number drift, and block objects without a canonical `receiptsRoot`
+  before invoking the app-linked local prover.
+- Regenerated the JavaScript dist bundle and added browser-style negative
+  tests for failed receipts, mismatched receipt transaction hashes, mismatched
+  fetched blocks, and uppercase/non-canonical JSON-RPC hashes.
+- Validation:
+  - `node --test test/sccpEthereumMainnet.test.js` in `javascript/iroha_js`
+    (`8 passed`)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    in `javascript/iroha_js` (`50 passed`)
+
+## 2026-06-01 SCCP Python Ethereum mainnet facade parity
+
+- Added Python `EthereumMainnetSccp` helpers for the Ethereum-mainnet SCCP
+  lane, including chain-id `1` validation, chain-id-1 destination
+  binding/hash derivation, proof-request and proof-result wrappers, and a
+  calldata helper that requires a wrapped proof result carrying the governed
+  Ethereum destination binding.
+- Exported the new Ethereum-mainnet constants, facade, binding helpers, request
+  wrappers, submission helper, and proof-result wrapper through
+  `iroha_torii_client.__all__` so package-root parity checks cover the public
+  Python SDK surface.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade or bsc_mainnet_sccp_facade or package_all_exports_public_sccp_symbols'`
+    (`3 passed, 78 deselected`)
+
+## 2026-06-01 SCCP EVM receipt duplicate source-log hardening
+
+- Hardened the EVM-family receipt source-event verifier so a production ETH/BSC
+  receipt must contain exactly one matching `SccpSourceEvent(bytes32)` log.
+  Receipts with duplicate matching SCCP logs are now rejected instead of being
+  accepted on the first match.
+- Extended the focused Rust receipt/MPT test to cover duplicate matching logs
+  through both direct receipt decoding and MPT-backed event verification.
+- Validation:
+  - `cargo fmt --package iroha_sccp`
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-01 SCCP EVM source live-evidence receipt-block hardening
+
+- Hardened `scripts/sccp_evm_source_live_evidence.py` so ETH/BSC production
+  source TOML now requires the source bridge bytecode collected at the selected
+  block tag to match the bytecode re-read at the deployment receipt block
+  number. This prevents a latest-block code hash from satisfying source
+  evidence unless it is also bound to the verified deployment receipt block.
+- Added adversarial pytest coverage for drifted deployment-receipt-block
+  bytecode and forged imported summaries that try to clear the receipt evidence
+  without the new code-hash verification marker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_source_live_evidence.py pytests/scripts/sccp_evm_source_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_source_live_evidence_test.py -k "evm_source_live"`
+    (`16 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet lane admission and native SDK facades
+
+- Switched the default SCCP production launch policy from global all-lanes
+  readiness to an Ethereum-mainnet lane policy. Ethereum source proofs can now
+  be admitted when ETH source, destination, route allowlist, and route-canary
+  evidence are complete, while non-ETH source domains continue to fail closed
+  until their lanes are explicitly enabled.
+- Added configured-lane admission checks in `iroha_core` so inbound SCCP proofs
+  validate the Ethereum mainnet deployment material, bridge/verifier bindings,
+  and route-canary evidence without waiting on BSC, Solana, TON, TRON, or
+  Substrate readiness.
+- Added first-class Ethereum-mainnet SCCP SDK facades and chain-id/domain
+  guards for JavaScript, Swift, Kotlin/JVM, Java Android, and .NET, including
+  browser-style provider validation for `eth_chainId == 1` without WASM or a
+  remote prover fallback.
+- Updated bridge-proof documentation and roadmap notes to describe the
+  lane-local ETH launch path and the native SDK facade coverage.
+- Validation:
+  - `cargo fmt --package iroha_sccp --package iroha_core`
+  - `cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+  - `cargo test -p iroha_sccp production_readiness_lists_source_destination_and_route_blockers --lib -- --nocapture`
+  - `cargo test -p iroha_sccp lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles --lib -- --nocapture`
+  - `cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane --lib -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs waits_for_lane_launch -- --nocapture`
+  - `cargo test -p iroha_core --test bridge_proofs before_lane_launch -- --nocapture`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js`
+    in `javascript/iroha_js`
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    in `IrohaSwift`
+  - Kotlin/JVM and Java Android focused facade suites are covered in the
+    subsequent facade-hardening status entry.
+  - .NET facade tests were added; `dotnet test` was attempted but `dotnet` is
+    not installed in this environment.
+
+## 2026-06-01 SCCP Ethereum mainnet facade submission hardening
+
+- Hardened the Swift, Kotlin/JVM, Java Android, and JavaScript
+  `EthereumMainnetSccp` facades so the easy calldata path requires a wrapped
+  EVM-family proof result carrying an Ethereum mainnet destination binding.
+  The facades now reject raw manual ETH-targeted submissions before calldata is
+  emitted, and verify that the wrapped proof result's binding hash matches the
+  embedded chain-id-1 destination binding.
+- Added the JavaScript Ethereum-mainnet bytes32 network-id constant and
+  destination-binding/hash helpers to the source, package root, declarations,
+  and regenerated `dist` bundle so web consumers can build the same governed
+  binding explicitly.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/src/index.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js` in `javascript/iroha_js`
+    (`7 passed`)
+  - `node --test --test-name-pattern "(package SCCP entrypoint and declarations cover public source exports|package dist entrypoint exports SCCP EVM-family Groth16 helpers)" test/package_dist.test.js`
+    in `javascript/iroha_js` (`2 passed`)
+  - `swift test --filter 'SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget|SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget'`
+    in `IrohaSwift` (`2 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP BSC mainnet SDK facade parity
+
+- Extended the BSC mainnet SCCP SDK facade across Rust, JavaScript, Python,
+  Swift, Kotlin/JVM, and Java Android so SORA -> BSC proof requests, wrapped
+  proof results, proof-job helpers, and submission packaging pin chain id `56`
+  and require the governed destination binding before calldata or relay
+  envelopes are emitted. Added matching native .NET BSC-mainnet chain-id,
+  network-id, route, and destination-binding hash guards for C# callers.
+- Added negative/adversarial coverage for ETH/BSC domain replay, non-mainnet
+  destination bindings, mutated wrapped proof results, raw unwrapped
+  submissions, destination-binding hash/key mismatches, duplicate verifier and
+  bridge addresses, and zero deployment addresses across the focused SDK
+  suites.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed, 238 filtered out`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k bsc_mainnet`
+    (`1 passed, 79 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js`
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js --test-name-pattern "BSC mainnet SDK facade"`
+    (`84 passed`)
+  - `node --test --test-name-pattern "package.*SCCP|SCCP.*exports|BSC" test/package_dist.test.js`
+    in `javascript/iroha_js` (`12 passed`)
+  - `swift test --filter SccpSolanaProverTests/testBscMainnetSccpFacadeRequiresChainId56AndBscTarget`
+    in `IrohaSwift` (`1 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest'`
+    in `kotlin` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+  - `git diff --check --no-index /dev/null csharp/src/Hyperledger.Iroha.Sdk/Sccp/BscMainnetSccp.cs`
+    and `git diff --check --no-index /dev/null csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpBscMainnetTests.cs`
+    produced no whitespace diagnostics; `--no-index` exits non-zero because
+    each new file differs from `/dev/null`.
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpBscMainnetTests`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP Python BSC mainnet facade validation
+
+- Validated the Python BSC mainnet SCCP facade that pins destination bindings
+  to chain id `56`, rejects ETH-targeted EVM requests, wraps external Groth16
+  proof bytes, and builds BSC verifier calldata only from wrapped proof results
+  that carry the same deployment binding.
+- Rechecked the EVM-family callback snapshot regression alongside the BSC facade
+  so `bundle_bytes` and `source_proof_bytes` remain immutable bytes inside
+  linked-prover callbacks.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'bsc_mainnet_sccp_facade or evm_family_sccp_prover_wraps_externally_generated_proof_bytes'`
+    (`2 passed, 78 deselected`)
+
+## 2026-06-01 SCCP .NET Ethereum mainnet route guard
+
+- Added a native .NET `EthereumMainnetSccp` route guard surface for C# callers,
+  covering Ethereum mainnet chain id, ETH -> SORA inbound routing, SORA -> ETH
+  outbound routing, and the canonical 32-byte network-id string.
+- Tightened the network-id guard to exact ordinal matching so uppercase or
+  padded variants cannot alias the canonical Ethereum mainnet destination
+  binding id.
+- Added focused xUnit coverage for accepted Ethereum mainnet routes plus BSC,
+  uppercase, and padded network-id rejection.
+- Validation:
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter SccpEthereumMainnetTests`
+    was attempted but `dotnet` is not installed in this environment.
+
+## 2026-06-01 SCCP Android mainnet facade snapshot hardening
+
+- Fixed the new Java Android `EthereumMainnetSccp` and `BscSccpProver`
+  facades so witness-provider inputs copy `bundleBytes` and `sourceProofBytes`
+  before user callbacks run, matching the generic EVM-family prover snapshot
+  contract.
+- Added focused Java Android regressions for Ethereum/BSC mainnet facade
+  witness-provider byte isolation, chain-id-specific destination bindings, and
+  ETH/BSC target-domain rejection.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 SCCP Ethereum mainnet JS facade export hardening
+
+- Tightened the JavaScript `EthereumMainnetSccp` facade so provider
+  `eth_chainId` values must be canonical JSON-RPC quantities; padded values
+  such as `0x01` now fail closed instead of aliasing Ethereum mainnet.
+- Exported the Ethereum-mainnet facade and chain-id constant through the
+  package root and regenerated `dist`, so published package consumers get the
+  same source and declaration surface.
+- Added focused source and dist regressions for mainnet chain-id validation,
+  padded-chain-id rejection, package-root exports, declarations, and
+  Ethereum-only outbound request construction.
+- Validation:
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`6 passed`)
+  - `node --test --test-name-pattern "(package SCCP entrypoint and declarations cover public source exports|package dist entrypoint exports SCCP EVM-family Groth16 helpers)" test/package_dist.test.js`
+    in `javascript/iroha_js` (`2 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/src/index.js && node --check javascript/iroha_js/test/sccpEthereumMainnet.test.js && node --check javascript/iroha_js/test/package_dist.test.js`
+
+## 2026-06-01 SCCP BSC mainnet SDK facade hardening
+
+- Added BSC mainnet-specific Rust SCCP helpers for SORA -> BSC Groth16 proof
+  requests, proof-result wrapping, counterparty proof-job/submission packaging,
+  and BSC -> SORA source-proof verification.
+- The helpers pin the BSC EVM chain id to `56`, require the canonical
+  deployment-bound destination binding before UI/mobile prover requests or
+  relay packages are built, and require BSC source proofs to bind governed
+  source-adapter deployment evidence before the production gate opens.
+- Extended focused SCCP regressions for BSC mainnet request/result mutation
+  rejection, non-mainnet destination bindings, ETH manifest/bundle replay, and
+  wrong-source/wrong-target source-proof bundles.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
+    (`2 passed, 238 filtered out`)
+
+## 2026-06-01 SCCP SDK callback source-proof snapshot coverage
+
+- Extended Python, Swift, Kotlin/JVM, and Java Android SCCP callback-snapshot
+  regressions so callback-exposed `sourceProofBytes` are mutation-tested like
+  `bundleBytes` across EVM-family, TRON, TON, and Substrate-family proof
+  engines.
+- This keeps portal and mobile final-proof callback tests aligned with the web
+  prover callback snapshot contract and the existing TON final-proof byte-copy
+  tests.
+- The Swift static bridge installer now resolves newer Kagemusha symbols with
+  `dlsym`, matching the dynamic-loader path so stale prebuilt bridge artifacts
+  no longer break package compilation; Kagemusha features remain unavailable
+  until those symbols are present in the loaded bridge.
+- Validation:
+  - `swift test --filter 'SccpSolanaProverTests/test(Ton|Tron|Evm|Substrate)ProverWrapsExternalProofBytes'`
+    from `IrohaSwift` (`4` tests)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`73` SCCP tests plus `1` Torii bridge-proof submit test)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ton_sccp_prover_wraps_externally_generated_proof_bytes or evm_family_sccp_prover_wraps_externally_generated_proof_bytes or substrate_sccp_prover_wraps_externally_generated_proof_bytes or tron_sccp_prover_wraps_externally_generated_proof_bytes'`
+    (`4 passed, 75 deselected`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase python-sdk`
+    (`79 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest' --tests 'org.hyperledger.iroha.sdk.sccp.TronSccpProverTest' --tests 'org.hyperledger.iroha.sdk.sccp.SubstrateSccpProverTest'`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests,org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests ./gradlew :core:test --console=plain --tests 'org.hyperledger.iroha.android.GradleHarnessTests'`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL`)
+
+## 2026-06-01 Sumeragi TLC coverage guard hardening
+
+- Extended `scripts/formal/check_sumeragi_formal_coverage.py` so the formal
+  coverage guard now parses `scripts/formal/sumeragi_tlc.sh` alongside the
+  Apalache runner.
+- The guard now proves every documented fast-mode table row has both a
+  documented TLC command and a TLC runner branch, proves every exact TLC
+  `*-fast` branch is represented in the fast-mode table, and checks the
+  referenced TLC config file exists. It also now checks that the PR workflow
+  invokes `ci/check_sumeragi_formal.sh` only after the pinned Apalache install
+  command, the nightly workflow invokes the pinned install, formal baseline, and
+  `frontier-nightly` in that order, and the baseline script runs the coverage
+  guard before its first Apalache invocation. Apalache version pins
+  across the Apalache runner, TLC runner, local installer, PR/nightly workflows,
+  formal README, and CI README must agree on the same checker version. Every
+  referenced config must be non-empty, define either `SPECIFICATION` or both
+  `INIT` and `NEXT`, and include at least one invariant/property directive.
+  Top-level CFG directives must be from the supported TLA+/TLC set, and
+  malformed or duplicated `CHECK_DEADLOCK` values are rejected before model
+  checking.
+  Malformed `CONSTANTS` block lines are also rejected before model checking, so
+  bounds and mutation flags cannot silently disappear from a checked model.
+  Every referenced `.tla` file must declare the module name matching its
+  filename, and every `EXTENDS` or `INSTANCE` dependency must name either a
+  known TLA standard module or an existing local `.tla` file. Every Apalache
+  branch must set a non-negative integer `apalache_length`, the README length
+  table must match the runner's effective lengths for all 505 documented rows
+  and cover all 502 PR baseline modes, and each TLC runner `module="..."`
+  assignment must resolve to an existing `.tla` file with a matching module
+  declaration. CFG
+  `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
+  `PROPERTY/PROPERTIES` references must use static TLA operator-name syntax and
+  are now checked against the selected TLA module's operator definitions.
+  Multi-line `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
+  continuation line. CFG constant bindings are checked against the selected TLA
+  module's constant declarations in both directions, and duplicated constant or
+  behavior/check targets are rejected. Every referenced CFG must also include at
+  least one
+  non-`TypeInvariant` invariant/property target, so no baseline, scheduled, or
+  expected-failure run can degrade into a type-only check. Every `.tla` and
+  `.cfg` file in the Sumeragi formal directory must also be reached by at least
+  one checked or documented formal mode, so orphan proof artifacts cannot drift
+  outside the guard. This turns the
+  previous manual `0`-missing TLC runner gap check into CI-enforced coverage.
+  The current audit covers 39,135 CFG constant bindings across 20,581
+  Apalache/TLC module-config pairings with zero undeclared constants, zero
+  missing bindings for declared TLA constants, and zero duplicate constant
+  bindings across 10,301 referenced CFGs. It also covers the full current
+  inventory of 500 TLA modules and 10,301 CFGs with zero unreferenced formal
+  files. The guard now caches file reads and parsed CFG/TLA helper results
+  within a single run so the expanded static checks do not repeatedly reload or
+  reparse the same TLA+/CFG corpus.
+- The guard also rejects duplicated fast-mode table rows or duplicated README
+  TLC commands so one repeated documented mode cannot hide a missing one.
+  Apalache and TLC runner case labels are also checked for duplicates and
+  shell-case wildcard shadowing so an exact override cannot be made unreachable
+  by a broader earlier wildcard branch.
+  PR CI, expected-failure CI, scheduled/manual workflow commands, and README
+  Apalache command lists are checked for duplicates too, and modes cannot
+  appear in both PR and expected-failure CI. Every exact Apalache runner mode
+  must now appear in PR, expected-failure, or scheduled/manual formal CI, and
+  Apalache/TLC runner branches with no CI or README mode are rejected.
+  The guard also compares each TLC-routed mode with an Apalache counterpart and
+  requires both runners to target the same TLA module, while preserving
+  intentionally TLC-only modes such as `frontier-small`.
+  Every README-documented Apalache `-bug-` mutation is now required to appear in
+  expected-failure CI, while mutation modes are rejected from PR CI and
+  non-mutation modes are rejected from expected-failure CI. The same documented
+  mutation corpus must now resolve through the TLC runner, including wildcard
+  mappings and exact cfg-name overrides, and the matching TLC branch must set
+  `expect_failure=1`. The Apalache and TLC expected-failure runner paths are
+  now also checked for fail-closed semantics: clean passes are rejected, Apalache
+  mutations must fail with the invariant-rejection exit code, and TLC mutations
+  must report invariant/property counterexamples rather than arbitrary tool
+  errors. PR, scheduled/manual, and README non-mutation TLC modes are rejected
+  if they set `expect_failure=1`, so baseline corridors cannot accept
+  counterexamples as success. Runner invocation shape is now checked too:
+  Apalache local and Docker paths must pass the selected length, config, run
+  directory, and spec, while TLC must pass the selected worker count, metadata
+  directory, config, and module. Static CFG constraints and TLC runner-generated
+  constraints must resolve to selected-module operators, so constrained TLC runs
+  cannot silently target stale or missing predicates. The guard also compares
+  the resolved Apalache and TLC mutation CFG targets, allowing only the explicit
+  commit-root `_tlc_bug_` configs to diverge from the Apalache CFG names.
+- Added TLC runner coverage for the eleven original frontier recovery mutation
+  configs via `frontier-bug-*`, plus exact TLC mapping overrides for
+  `rbc-bug-duplicate-ready` and `engine-proposal-bug-skip-validation`.
+- Added focused pytest coverage for the documented-fast-row parser, TLC command
+  regex path, exact-fast runner branch projection, duplicate-mode detector,
+  command duplicate projection, workflow entrypoint presence, pinned-install
+  ordering, and guard-before-Apalache order checks, Apalache version pin
+  extraction and drift rejection, expected-failure counterexample semantics
+  checks, baseline expected-failure marker rejection, malformed proof-input and
+  scalar runner assignment rejection, runner command-shape validation, runner
+  invocation proof-input binding checks, Apalache length-table parsing and
+  runner drift
+  rejection, CFG directive validation including duplicate `CHECK_DEADLOCK`
+  rejection, mutation-mode filter, runner case-label parser, wildcard TLC
+  mutation dispatch, exact mutation override dispatch, and expected-failure
+  marker enforcement. The helper tests now also
+  cover unused
+  runner-branch detection, TLC module-file reference validation, Apalache
+  length validation, length-table-derived fast-mode extraction, malformed,
+  wrong-width, empty-purpose, and duplicate README Apalache length-row
+  detection, TLA module-header validation, and CFG behavior/check validation.
+  The runner-order tests now cover wildcard shadowing and exact
+  overrides that intentionally precede broad wildcard branches, and the
+  cross-runner mutation CFG tests now pin both exact CFG equivalence and the
+  explicit commit-root TLC-specific allowance. The module-identity tests pin
+  same-module Apalache/TLC routing, TLC-only mode allowance, and cross-runner
+  module drift rejection. The TLA dependency tests now pin parsing for
+  `EXTENDS`, `LOCAL INSTANCE`, and named `INSTANCE` dependencies, plus
+  fail-closed rejection of missing local modules. The CFG operator-reference
+  tests now pin single-line and multi-line behavior/check/constraint directive
+  parsing, static TLA operator-name syntax, TLA operator definition parsing, and
+  fail-closed rejection when a CFG names an operator missing from the selected
+  module. TLC constraint tests now pin static CFG
+  `CONSTRAINT` parsing and fail-closed runner constraint validation. The CFG
+  constant-binding tests now pin inline/block CFG bindings, annotated TLA
+  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines,
+  fail-closed rejection when a CFG binds a constant missing from the selected
+  module, and fail-closed rejection when a declared TLA constant is not bound by
+  the CFG. The duplicate constant binding
+  tests now pin acceptance for unique constant bindings and rejection for
+  repeated constant bindings. The CFG semantic-check tests now pin
+  acceptance for `TypeInvariant` plus a semantic check and rejection for
+  type-only CFGs. The duplicate CFG target tests now pin acceptance for unique
+  behavior/check targets and rejection for repeated behavior directives or
+  repeated invariant/property operators. The formal inventory tests now pin
+  fail-closed rejection of unreferenced `.tla` or `.cfg` files.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`74 passed`)
+  - `bash scripts/formal/install_apalache.sh 0.52.2`
+    (checksum verified and installed `target/apalache/toolchains/v0.52.2`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh frontier-bug-stale-owner`
+    (expected TLC failure: `StaleRecoveryOwnerHasClearProgress`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh rbc-bug-duplicate-ready`
+    (expected TLC failure: `ReadyCountUsesDistinctSenders`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh engine-proposal-bug-skip-validation`
+    (expected TLC failure: `SafeProposalsValidate`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh commit-roots-bug-under-quorum-accept`
+    (expected TLC failure: `AcceptedMatchesSpec`)
+  - `bash -n ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh`
+  - `git diff --check -- scripts/formal/check_sumeragi_formal_coverage.py scripts/formal/sumeragi_tlc.sh pytests/scripts/sumeragi_formal_coverage_test.py docs/formal/sumeragi/README.md ci/README.md roadmap.md status.md`
+  - trailing-whitespace scan across the same touched files, including the new
+    pytest file
+  - conflict-marker scan across the touched formal coverage script, TLC runner,
+    pytest, formal README, CI README, roadmap, and status files
+
 ## 2026-06-01 TAIRA TRON SCCP XOR settlement admission
 
 - Aligned `TairaXorSccpBridge.finalizeFromTaira` with canonical SCCP
@@ -147,7 +3424,14 @@ Last updated: 2026-06-01
   asserted the CLI reports verifier errors without a Python traceback.
 - Updated the bridge-proof documentation and roadmap to describe the UTF-8
   fail-closed release evidence rule.
-- Validation: pending.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k non_utf8`
+    (`3 passed, 137 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`160 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`794 passed`)
 
 ## 2026-06-01 SCCP web prover callback immutability coverage
 
@@ -1335,8 +4619,40 @@ Last updated: 2026-06-01
   zero verifier-key commitments, mismatched envelope hashes, recursive spend bundle
   STARK backends, and empty recursive proof bytes before chain-side WSV
   verifier-record checks run.
+- Chain-side Kagemusha transfer and recursive redeem admission now also rejects
+  all-zero verifier-key commitment metadata before comparing it with the
+  asset-bound verifier record, so a malformed zero commitment cannot act as an
+  implicit wildcard if WSV binding state is corrupted.
+- The Python/PyO3 recursive spend redeem fixture now carries the same non-zero
+  final redeem verifier-key commitment as the C bridge fixture, and its native
+  builder coverage explicitly rejects missing and zero redeem commitments.
+- The Node NAPI host recursive spend redeem fixture now mirrors the same
+  non-zero final redeem verifier-key commitment, with native-host coverage for
+  missing and zero redeem commitments.
+- Compact-token verification plus recursive aggregation/spend preverification
+  now reject all-zero `OpenVerifyEnvelope.vk_hash` values explicitly instead of
+  relying only on verifier-key hash mismatch, keeping zero verifier hashes from
+  acting as wildcard metadata in future verifier-key edge cases.
+- Chain-side Kagemusha transfer and final recursive redeem proof envelopes now
+  also reject all-zero `OpenVerifyEnvelope.vk_hash` before asset-bound verifier
+  comparison, giving those ledger paths the same explicit zero-hash guard.
+- Legacy Offline recursive verifier resolution now rejects all-zero
+  `OpenVerifyEnvelope.vk_hash` before verifier-record comparison, so the
+  non-Kagemusha recursive proof path cannot treat zero as wildcard metadata
+  under corrupted verifier state.
+- The shared chain `OpenVerifyEnvelope` metadata validator and ZK-ACE STARK
+  authorization envelope guard now also reject all-zero verifier-key hashes
+  explicitly before generic commitment-mismatch handling.
+- RAM-LFE execution receipts, identifier RAM-LFE receipts, and Kaigi privacy
+  proof metadata now reject all-zero `OpenVerifyEnvelope.vk_hash` before
+  verifier-key commitment comparison, keeping the documented canonical envelope
+  policy consistent across those ISI proof consumers.
+- Verified Kagemusha fold hops now reject all-zero proof-envelope verifier-key
+  hashes in both the direct attachment check and the record-backed verifier
+  admission path before proof verification.
 - Validation:
   - `rustfmt --edition 2024 --check crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/offline.rs`
   - `git diff --check -- crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs docs/source/offline_kagemusha.md roadmap.md status.md`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-redeem-request-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
     (1 passed; 0.57s test time)
@@ -1344,6 +4660,44 @@ Last updated: 2026-06-01
     (1 passed; 1.79s test time after rebuild)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-redeem-request-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
     (1 passed; 1.08s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_transfer_rejects_zero_verifier_key_commitment_metadata --lib -- --test-threads=1`
+    (1 passed; 3.30s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_resolver_rejects_missing_or_zero_vk_commitment_metadata --lib -- --test-threads=1`
+    (1 passed; 1.27s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.54s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.55s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify_rejects_envelope_metadata_substitution --lib -- --test-threads=1`
+    (1 passed; 17.04s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering --lib -- --test-threads=1`
+    (1 passed; 41.60s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_compact_payment_token_rejects_envelope_backend_and_vk_hash_substitution --lib -- --test-threads=1`
+    (1 passed; 7.37s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_transfer_rejects_confidential_v2_envelope_mismatches --lib -- --test-threads=1`
+    (1 passed; 59.24s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed; 4491.00s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core offline_note_rejects_recursive_envelope_unbound_metadata --lib -- --test-threads=1`
+    (1 passed; 2.17s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core envelope_metadata --lib -- --test-threads=1`
+    (12 passed; 35.62s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core zk_ace_authorized_transfer_rejects_wrong_domain_chain_and_verifier --lib -- --test-threads=1`
+    (1 passed; 1.97s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core noncanonical_envelope_metadata --lib -- --test-threads=1`
+    (6 passed; 10.25s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core privacy_proof_envelope_metadata_rejects_zero_verifier_hash --lib -- --test-threads=1`
+    (1 passed; 0.00s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_folded_public_inputs_rejects_hop_envelope_aux_substitution --lib -- --test-threads=1`
+    (1 passed; 4.43s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-zero-vk-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_fold_step_rejects_envelope_vk_hash_mismatch --lib -- --test-threads=1`
+    (1 passed; 8.94s test time after rebuild)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs crates/iroha_core/src/smartcontracts/isi/identifier.rs crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/iroha_core/src/smartcontracts/isi/offline.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/src/smartcontracts/isi/ram_lfe.rs crates/iroha_core/src/smartcontracts/isi/identifier.rs crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+    (passed)
+  - `git diff --name-only -- Cargo.lock IrohaSwift/Package.resolved kotlin/gradle.lockfile java/iroha_android/gradle.lockfile javascript/iroha_js/package-lock.json javascript/iroha_js/npm-shrinkwrap.json`
+    (no output)
 
 ## 2026-06-01 Kagemusha recursive verifier slice LEN=4 binding
 
@@ -2163,8 +5517,10 @@ Last updated: 2026-06-01
   and reject empty or malformed inputs.
 - Added the recursive payload-size benchmark for hop counts 1, 2, 3, 5, 8, 13,
   21, 34, 55, and 64. The short Criterion run recorded
-  `*_1454_bytes` for every hop target with a fixed 256-byte proof payload and
-  asserts that the D2D archive length stays hop-count-independent.
+  `*_1553_bytes` for every hop target with a fixed 256-byte proof payload; CI
+  now also pins the same 1,553-byte data-model fixture, applies a 1,600-byte
+  material-growth ceiling, and asserts that the D2D archive length stays
+  hop-count-independent.
 - Validation:
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check -p iroha_data_model --benches`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check -p iroha_core -p connect_norito_bridge`

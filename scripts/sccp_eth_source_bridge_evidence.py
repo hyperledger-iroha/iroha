@@ -86,8 +86,13 @@ ETH_TEMPLATE_TRANSCRIPT_PREFIXES = (
 )
 
 
-def _strip_0x(value: str) -> str:
-    return value[2:] if value.lower().startswith("0x") else value
+def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if value.startswith("0X"):
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
+    text = value[2:] if value.startswith("0x") else value
+    if text != text.lower():
+        raise argparse.ArgumentTypeError(f"{label} must use lowercase hex")
+    return text
 
 
 def parse_hex_bytes(
@@ -101,7 +106,7 @@ def parse_hex_bytes(
 
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = _strip_0x(value)
+    text = _strip_lower_0x_hex(value, label=label)
     if len(text) != byte_length * 2:
         raise argparse.ArgumentTypeError(f"{label} must be {byte_length} bytes")
     try:
@@ -124,8 +129,7 @@ def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
 
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
-    text = value
-    text = _strip_0x(text)
+    text = _strip_lower_0x_hex(value, label=label)
     if not text:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if len(text) % 2 != 0:
@@ -609,6 +613,10 @@ def _require_toml_receipt_metadata(
         ("deployment_receipt_contract_address", "--deployment-receipt-contract-address"),
         ("deployment_receipt_block_hash", "--deployment-receipt-block-hash"),
         ("deployment_receipt_block_number", "--deployment-receipt-block-number"),
+        (
+            "deployment_receipt_block_receipts_root",
+            "--deployment-receipt-block-receipts-root",
+        ),
     ):
         if getattr(args, field, None) is None:
             raise ValueError(f"--{output} requires {flag}")
@@ -819,6 +827,8 @@ def render_toml(args: argparse.Namespace) -> str:
             + json.dumps(_hex(args.deployment_receipt_block_hash)),
             "# sccp_evm_source_deployment_block_number = "
             + json.dumps(str(args.deployment_receipt_block_number)),
+            "# sccp_evm_source_deployment_block_receipts_root = "
+            + json.dumps(_hex(args.deployment_receipt_block_receipts_root)),
             "# sccp_eth_source_verifier_material_hash = "
             + json.dumps(_hex(material_hash)),
         ]
@@ -999,6 +1009,15 @@ def build_parser() -> argparse.ArgumentParser:
             label="deployment receipt block number",
         ),
         help="Audited positive deployment receipt block number; required for TOML.",
+    )
+    parser.add_argument(
+        "--deployment-receipt-block-receipts-root",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="deployment receipt block receiptsRoot",
+            byte_length=32,
+        ),
+        help="Audited deployment receipt block receiptsRoot; required for TOML.",
     )
     parser.add_argument(
         "--toml",

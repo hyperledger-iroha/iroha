@@ -14,7 +14,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     confidential::ConfidentialStatus,
     proof::{ProofBox, VerifyingKeyId},
-    zk::OpenVerifyEnvelope,
+    zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_data_model::{
     kaigi::{KaigiParticipantCommitment, KaigiParticipantNullifier},
@@ -407,20 +407,12 @@ fn verify_with_config(
     let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes)
         .map_err(|_| privacy_error("failed to decode privacy proof envelope"))?;
 
-    if record_backend != envelope.backend {
-        return Err(privacy_error("privacy proof backend mismatch"));
-    }
-    if record_circuit_id != envelope.circuit_id {
-        return Err(privacy_error("privacy proof circuit mismatch"));
-    }
-    if !envelope.aux.is_empty() {
-        return Err(privacy_error(
-            "privacy proof envelope auxiliary bytes must be empty",
-        ));
-    }
-    if envelope.vk_hash != record_commitment {
-        return Err(privacy_error("privacy proof verifier commitment mismatch"));
-    }
+    validate_privacy_proof_envelope_metadata(
+        &envelope,
+        record_backend,
+        &record_circuit_id,
+        record_commitment,
+    )?;
 
     state_transaction.register_confidential_proof(proof_bytes.len())?;
 
@@ -454,6 +446,35 @@ fn verify_with_config(
         return Err(privacy_error("privacy proof verification failed"));
     }
 
+    Ok(())
+}
+
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+fn validate_privacy_proof_envelope_metadata(
+    envelope: &OpenVerifyEnvelope,
+    record_backend: BackendTag,
+    record_circuit_id: &str,
+    record_commitment: [u8; Hash::LENGTH],
+) -> Result<(), Error> {
+    if record_backend != envelope.backend {
+        return Err(privacy_error("privacy proof backend mismatch"));
+    }
+    if record_circuit_id != envelope.circuit_id.as_str() {
+        return Err(privacy_error("privacy proof circuit mismatch"));
+    }
+    if !envelope.aux.is_empty() {
+        return Err(privacy_error(
+            "privacy proof envelope auxiliary bytes must be empty",
+        ));
+    }
+    if envelope.vk_hash == [0u8; Hash::LENGTH] {
+        return Err(privacy_error(
+            "privacy proof verifier-key hash must be non-zero",
+        ));
+    }
+    if envelope.vk_hash != record_commitment {
+        return Err(privacy_error("privacy proof verifier commitment mismatch"));
+    }
     Ok(())
 }
 
@@ -519,5 +540,44 @@ mod tests {
         let mut mismatched = columns.clone();
         mismatched[2][0] = Fp::from(999u64);
         assert!(verify_roster_root_limbs(&mismatched, &root).is_err());
+    }
+
+    #[test]
+    fn privacy_proof_envelope_metadata_rejects_zero_verifier_hash() {
+        let commitment = Hash::new(b"kaigi-privacy-verifier-key");
+        let commitment: [u8; Hash::LENGTH] = commitment.into();
+        let mut envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: "kaigi/roster".to_owned(),
+            vk_hash: commitment,
+            public_inputs: Vec::new(),
+            proof_bytes: Vec::new(),
+            aux: Vec::new(),
+        };
+        assert!(
+            validate_privacy_proof_envelope_metadata(
+                &envelope,
+                BackendTag::Halo2IpaPasta,
+                "kaigi/roster",
+                commitment,
+            )
+            .is_ok()
+        );
+
+        envelope.vk_hash = [0u8; Hash::LENGTH];
+        let err = validate_privacy_proof_envelope_metadata(
+            &envelope,
+            BackendTag::Halo2IpaPasta,
+            "kaigi/roster",
+            commitment,
+        )
+        .expect_err("zero verifier-key hash must reject");
+        let Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+        ) = err
+        else {
+            panic!("unexpected zero-hash rejection: {err:?}");
+        };
+        assert!(message.contains("non-zero"), "unexpected error: {message}");
     }
 }

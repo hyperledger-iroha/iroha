@@ -1414,6 +1414,7 @@ _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS = (
     "payload_hash",
     "statement_hash",
     "commitment_root",
+    "finality_height",
     "finality_block_hash",
     "signature_sha256",
 )

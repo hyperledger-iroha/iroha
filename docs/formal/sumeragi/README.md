@@ -5527,6 +5527,8 @@ view-change, native AMX attestation, native AMX receipt validation, native AMX
 routing-plan, NPoS VRF epoch seal, post-commit cleanup, and restart replay
 independently exhaust the same 36, 13, 14, 31, 30, 26, 25, 28, 30, 17, 31,
 26, 30, 31, and 28 expected-failure configs as Apalache.
+Static CFG `CONSTRAINT` directives and TLC runner `tlc_constraint` injections
+must resolve to operators defined by the selected `.tla` module.
 
 `SumeragiValidatorSetTransition.tla` captures the validator-set activation
 gate for one scheduled reconfiguration:
@@ -7720,6 +7722,8 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_bug_height_only_recovery.cfg`: expected-failure height-only stale recovery mutation.
 - `SumeragiFrontierRecovery_tlc_fast.cfg`: TLC fast-bound canonical frontier witness cross-check config.
 - `SumeragiFrontierRecovery_tlc_small.cfg`: small TLC cross-check config.
+- `scripts/formal/sumeragi_tlc.sh frontier-bug-*`: TLC expected-failure
+  routing for the frontier recovery mutation configs.
 - `.github/workflows/nightly_sumeragi_formal.yml`: scheduled/manual longer-bound
   frontier check using `frontier-nightly`.
 
@@ -12018,6 +12022,9 @@ because it expands to millions of initial states; Apalache remains the full
 bounded fast/deep/wide frontier proof.
 `scripts/formal/sumeragi_tlc.sh frontier-small` remains the small exhaustive TLC
 cross-check using the same module and TLC-friendly weak-fairness specification.
+The TLC runner also accepts `frontier-bug-*` modes so the documented frontier
+recovery mutations can be independently cross-checked against TLC counterexample
+search as well as Apalache.
 Both TLC configs disable generic deadlock rejection because resolved terminal
 states, such as a legitimate zero-evidence drop, are valid endpoints; invariants
 and temporal properties remain checked.
@@ -23490,8 +23497,9 @@ If Apalache is not in `PATH`, you can:
 Examples:
 
 ```bash
-APALACHE_BIN=/opt/apalache/bin/apalache-mc bash scripts/formal/sumeragi_apalache.sh fast
-APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 bash scripts/formal/sumeragi_apalache.sh frontier-deep
+APALACHE_BIN=/opt/apalache/bin/apalache-mc scripts/formal/sumeragi_apalache.sh fast
+APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 scripts/formal/sumeragi_apalache.sh frontier-deep
+bash scripts/formal/sumeragi_apalache.sh frontier-nightly
 ```
 
 ## Notes
@@ -23503,7 +23511,101 @@ APALACHE_DOCKER_IMAGE=ghcr.io/apalache-mc/apalache:0.52.2 bash scripts/formal/su
 - The checks are bounded by constant values in the `.cfg` files.
 - `scripts/formal/check_sumeragi_formal_coverage.py` checks that CI-invoked
   modes are supported by `scripts/formal/sumeragi_apalache.sh`, documented
-  here, and backed by existing TLA+/CFG files.
+  here, and backed by existing TLA+/CFG files. It also checks that the PR and
+  nightly workflows install pinned Apalache before invoking the formal baseline,
+  and that the baseline script runs this guard before invoking Apalache.
+  Formal runners, CI scripts, workflows, this README, and every TLA+/CFG
+  artifact in this directory must be free of unresolved merge conflict markers
+  before mode inventory parsing starts.
+  Apalache version pins in the
+  Apalache/TLC runners, installer, workflows, and formal docs must agree.
+  Expected-failure runner paths must reject clean passes and only accept
+  invariant/property counterexamples, not arbitrary tool failures. PR,
+  scheduled/manual, and README non-mutation TLC modes must not set
+  `expect_failure=1`, so baseline corridors cannot accept counterexamples as
+  success. Runner invocations must pass the selected config, length/run
+  metadata, and spec/module to Apalache/TLC. Each runner branch must assign the
+  selected `spec_file`, `cfg_file`, and TLC `module` proof inputs exactly once
+  before those inputs are resolved, and selected `spec_file`/`cfg_file` paths
+  must stay flat direct children of this formal directory with the expected
+  `.tla`/`.cfg` suffix. Malformed `spec_file`/`cfg_file` assignment lines are
+  rejected even when a branch also contains one parseable assignment. Malformed
+  `module`, `tlc_constraint`, and `apalache_length` assignment lines are
+  rejected the same way before model checking.
+  Referenced configs must be
+  non-empty, define either top-level `SPECIFICATION` or top-level `INIT` plus
+  top-level `NEXT`, and include at least one top-level invariant/property
+  directive. Top-level CFG directives
+  must be from the supported TLA+/TLC set; malformed or duplicated
+  `CHECK_DEADLOCK` values and unknown directive spellings are rejected before
+  model checking. Every CFG
+  `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
+  `PROPERTY/PROPERTIES` operator reference must use static TLA operator-name
+  syntax and be defined by the selected `.tla` module. Top-level TLA operator
+  definitions are distinguished from scoped `LET` helpers, and duplicate
+  top-level operator definitions or `RECURSIVE` declarations are rejected before
+  model checking. Multi-line
+  `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
+  continuation line. Behavior directives and invariant/property check entries
+  must not be duplicated. CFG
+  constant bindings must also match constants declared by the selected `.tla`
+  module, every declared TLA constant must be bound by the CFG, malformed
+  `CONSTANTS` block lines must fail before model checking, duplicate TLA
+  constant declarations are rejected, and bindings must not be duplicated.
+  TLA variable declarations must also be duplicate-free and match exactly one
+  static top-level `vars` tuple, so temporal specifications cannot omit state
+  variables or include undeclared ones.
+  CFG filenames must belong to their selected TLA module by using the module
+  stem or a module-stem prefix, preventing runner edits from reusing a
+  cross-module config by accident.
+  Every `.tla` and `.cfg` file in this directory must be reached by at least
+  one checked or documented formal mode, so orphan proof artifacts cannot drift
+  outside the guard.
+  Referenced `.tla` files must declare exactly one top-of-file module name
+  matching their filename and exactly one terminating `====` with no trailing
+  content, and every `EXTENDS` or `INSTANCE` dependency must name either a known
+  TLA standard module or an existing local `.tla` file.
+  Every Apalache branch must
+  set a non-negative integer `apalache_length`, and
+  the documented length table must match the runner's effective
+  `apalache_length` values for all PR baseline modes. Duplicate, wrong-width,
+  malformed, or empty-purpose length-table rows are rejected so a repeated mode,
+  invalid bound, or undocumented purpose cannot hide a contradictory
+  declaration.
+  It also checks that
+  every validated length-table `*-fast` row has a matching
+  `scripts/formal/sumeragi_tlc.sh` command and TLC runner branch, and that
+  every exact TLC `*-fast` branch is represented in the length table. TLC
+  runner `module="..."` assignments
+  must be TLA identifiers and resolve to existing `.tla` files with matching
+  module declarations, so an existing CFG cannot mask a stale TLC module target.
+  CI/README Apalache and TLC command lines must also provide exactly one static
+  mode token after the runner path.
+  Duplicate fast-mode rows or duplicated TLC commands are rejected so one
+  repeated mode cannot hide a missing one, and
+  malformed Apalache/TLC runner case labels, malformed case terminators,
+  unindented case-block content, duplicate Apalache/TLC runner case labels,
+  shell-case wildcard shadowing, or CI/README Apalache commands, including
+  scheduled/manual workflow commands, are rejected before a malformed, shadowed,
+  or repeated branch can drift from CI.
+  Every exact Apalache runner mode
+  must appear in PR, expected-failure, or scheduled/manual formal CI, and every
+  Apalache/TLC runner branch must be reached by at least one CI or README mode.
+  Every TLC-routed mode that also has an Apalache counterpart must resolve to
+  the same TLA module through both runners; TLC-only modes such as
+  `frontier-small` remain allowed.
+  Every documented Apalache `-bug-` mutation must be run by
+  `ci/check_sumeragi_formal_expected_failures.sh`, and mutation modes are kept
+  out of the PR baseline script. Every referenced CFG must include at least one
+  non-`TypeInvariant` invariant/property check so baseline, scheduled, and
+  expected-failure coverage cannot degrade into type-only checks. The guard also
+  resolves every documented mutation mode through
+  `scripts/formal/sumeragi_tlc.sh`, including wildcard mappings and exact naming
+  overrides, and requires the matching TLC branch to set `expect_failure=1`.
+  The Apalache and TLC mutation modes must resolve to the same CFG file, except
+  for the explicitly allowed commit-root TLC-specific `_tlc_bug_` configs, so
+  the TLC expected-failure corridor stays routable and fail-closed without
+  silently drifting to unrelated checks.
 - PR CI runs these checks in `.github/workflows/pr.yml` via
   `ci/check_sumeragi_formal.sh`.
 - Scheduled/manual CI runs the same formal baseline plus the longer

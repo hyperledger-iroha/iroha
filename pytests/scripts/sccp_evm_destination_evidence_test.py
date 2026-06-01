@@ -20,10 +20,10 @@ BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
 )
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "b2a393cf1e28a4d8ab5182e51b53ae3b3e144c0d24087e73ce77216b4773abac"
+    "a1866900d19941f95aa804caccee87d2eac23c5724ded8d30bb616d4c593761b"
 )
 BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "bc66a1abd4546341a9e59753712deee600d1447b8eeb118471481c156be4d7c2"
+    "a835789acb0317dc287dc894f653b3c42b1ab5e14aae053b31dd14574b47c04f"
 )
 
 
@@ -67,6 +67,9 @@ def evm_runtime_material(module, *, domain=1):
         destination_binding_hash=destination_binding_hash,
     )
     route_canary_transaction_hash = bytes.fromhex("44" * 32)
+    route_canary_receipt_block_number = 0x1234
+    route_canary_receipt_block_hash = bytes.fromhex("45" * 32)
+    route_canary_block_receipts_root = bytes.fromhex("46" * 32)
     route_canary_message_id = bytes.fromhex("55" * 32)
     route_canary_call_data_sha256 = bytes.fromhex("88" * 32)
     route_canary_payload_hash = bytes.fromhex("99" * 32)
@@ -79,6 +82,9 @@ def evm_runtime_material(module, *, domain=1):
         bridge_address=bridge_address,
         transaction_hash=route_canary_transaction_hash,
         log_index=0,
+        receipt_block_number=route_canary_receipt_block_number,
+        receipt_block_hash=route_canary_receipt_block_hash,
+        block_receipts_root=route_canary_block_receipts_root,
         call_data_sha256=route_canary_call_data_sha256,
         message_id=route_canary_message_id,
         payload_hash=route_canary_payload_hash,
@@ -110,6 +116,9 @@ def evm_runtime_material(module, *, domain=1):
         route_allowlist_hash=route_allowlist_hash,
         route_canary_transaction_hash=route_canary_transaction_hash,
         route_canary_log_index=0,
+        route_canary_receipt_block_number=route_canary_receipt_block_number,
+        route_canary_receipt_block_hash=route_canary_receipt_block_hash,
+        route_canary_block_receipts_root=route_canary_block_receipts_root,
         route_canary_call_data_sha256=route_canary_call_data_sha256,
         route_canary_message_id=route_canary_message_id,
         route_canary_payload_hash=route_canary_payload_hash,
@@ -128,6 +137,9 @@ def add_route_canary_args(args, material):
     args.route_canary_evidence_hash = material.route_canary_evidence_hash
     args.route_canary_transaction_hash = material.route_canary_transaction_hash
     args.route_canary_log_index = material.route_canary_log_index
+    args.route_canary_receipt_block_number = material.route_canary_receipt_block_number
+    args.route_canary_receipt_block_hash = material.route_canary_receipt_block_hash
+    args.route_canary_block_receipts_root = material.route_canary_block_receipts_root
     args.route_canary_call_data_sha256 = material.route_canary_call_data_sha256
     args.route_canary_message_id = material.route_canary_message_id
     args.route_canary_payload_hash = material.route_canary_payload_hash
@@ -209,6 +221,28 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
         label="bridge runtime bytecode",
     ) == bytes.fromhex("6080604052")
 
+    for value, expected in (
+        ("0X" + "11" * 20, "lowercase 0x prefix"),
+        ("0x" + "AA" * 20, "lowercase hex"),
+    ):
+        try:
+            module.parse_evm_address(value, label="verifier address")
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("non-canonical EVM address was accepted")
+
+    for value, expected in (
+        ("0X" + "33" * 32, "lowercase 0x prefix"),
+        ("0x" + "AA" * 32, "lowercase hex"),
+    ):
+        try:
+            module.parse_hex_bytes(value, label="network id", byte_length=32)
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("non-canonical EVM network id was accepted")
+
     for value in (" 0x6080604052", "0x6080\n604052"):
         try:
             module.parse_runtime_bytecode_hex(
@@ -219,6 +253,20 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
             assert "must not contain whitespace" in str(exc)
         else:
             raise AssertionError("padded EVM runtime bytecode was accepted")
+
+    for value, expected in (
+        ("0X6080604052", "lowercase 0x prefix"),
+        ("0x60806040AB", "lowercase hex"),
+    ):
+        try:
+            module.parse_runtime_bytecode_hex(
+                value,
+                label="bridge runtime bytecode",
+            )
+        except module.argparse.ArgumentTypeError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("non-canonical EVM runtime bytecode was accepted")
 
     runtime_file = tmp_path / "runtime.hex"
     runtime_file.write_text("0x6080\n604052\n", encoding="ascii")
@@ -316,6 +364,9 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         "bridge_address": bytes.fromhex("22" * 20),
         "transaction_hash": bytes.fromhex("44" * 32),
         "log_index": 0,
+        "receipt_block_number": 0x1234,
+        "receipt_block_hash": bytes.fromhex("45" * 32),
+        "block_receipts_root": bytes.fromhex("46" * 32),
         "call_data_sha256": bytes.fromhex("88" * 32),
         "message_id": bytes.fromhex("55" * 32),
         "payload_hash": bytes.fromhex("99" * 32),
@@ -359,6 +410,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         ("message_id", "transaction_hash"),
         ("payload_hash", "call_data_sha256"),
         ("commitment_root", "statement_hash"),
+        ("finality_height", "transaction_hash"),
         ("finality_block_hash", "transaction_hash"),
     ):
         reused = dict(common)
@@ -531,6 +583,9 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         destination_binding_hash=destination_binding_hash,
     )
     route_canary_transaction_hash = bytes.fromhex("44" * 32)
+    route_canary_receipt_block_number = 0x1234
+    route_canary_receipt_block_hash = bytes.fromhex("45" * 32)
+    route_canary_block_receipts_root = bytes.fromhex("46" * 32)
     route_canary_message_id = bytes.fromhex("55" * 32)
     route_canary_call_data_sha256 = bytes.fromhex("88" * 32)
     route_canary_payload_hash = bytes.fromhex("99" * 32)
@@ -543,6 +598,9 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         bridge_address=bridge_address,
         transaction_hash=route_canary_transaction_hash,
         log_index=0,
+        receipt_block_number=route_canary_receipt_block_number,
+        receipt_block_hash=route_canary_receipt_block_hash,
+        block_receipts_root=route_canary_block_receipts_root,
         call_data_sha256=route_canary_call_data_sha256,
         message_id=route_canary_message_id,
         payload_hash=route_canary_payload_hash,
@@ -575,6 +633,9 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         route_canary_evidence_hash=route_canary_evidence_hash,
         route_canary_transaction_hash=route_canary_transaction_hash,
         route_canary_log_index=0,
+        route_canary_receipt_block_number=route_canary_receipt_block_number,
+        route_canary_receipt_block_hash=route_canary_receipt_block_hash,
+        route_canary_block_receipts_root=route_canary_block_receipts_root,
         route_canary_call_data_sha256=route_canary_call_data_sha256,
         route_canary_message_id=route_canary_message_id,
         route_canary_payload_hash=route_canary_payload_hash,
@@ -651,6 +712,9 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
             route_canary_evidence_hash=material.route_canary_evidence_hash,
             route_canary_transaction_hash=material.route_canary_transaction_hash,
             route_canary_log_index=material.route_canary_log_index,
+            route_canary_receipt_block_number=material.route_canary_receipt_block_number,
+            route_canary_receipt_block_hash=material.route_canary_receipt_block_hash,
+            route_canary_block_receipts_root=material.route_canary_block_receipts_root,
             route_canary_call_data_sha256=material.route_canary_call_data_sha256,
             route_canary_message_id=material.route_canary_message_id,
             route_canary_payload_hash=material.route_canary_payload_hash,
@@ -829,11 +893,14 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
     missing_canary_args = SimpleNamespace(
         **{
             **eth_args.__dict__,
-            "route_canary_evidence_hash": None,
-            "route_canary_transaction_hash": None,
-            "route_canary_log_index": None,
-            "route_canary_call_data_sha256": None,
-            "route_canary_message_id": None,
+                "route_canary_evidence_hash": None,
+                "route_canary_transaction_hash": None,
+                "route_canary_log_index": None,
+                "route_canary_receipt_block_number": None,
+                "route_canary_receipt_block_hash": None,
+                "route_canary_block_receipts_root": None,
+                "route_canary_call_data_sha256": None,
+                "route_canary_message_id": None,
             "route_canary_payload_hash": None,
             "route_canary_target_domain": None,
             "route_canary_statement_hash": None,
@@ -961,6 +1028,12 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
         "0x" + eth.route_canary_transaction_hash.hex(),
         "--route-canary-log-index",
         str(eth.route_canary_log_index),
+        "--route-canary-receipt-block-number",
+        str(eth.route_canary_receipt_block_number),
+        "--route-canary-receipt-block-hash",
+        "0x" + eth.route_canary_receipt_block_hash.hex(),
+        "--route-canary-block-receipts-root",
+        "0x" + eth.route_canary_block_receipts_root.hex(),
         "--route-canary-call-data-sha256",
         "0x" + eth.route_canary_call_data_sha256.hex(),
         "--route-canary-message-id",

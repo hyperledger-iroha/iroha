@@ -26,8 +26,14 @@ and completed history lives in [`status.md`](./status.md).
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
-  the engineering backlog for broader XMLDSig/XAdES trust-anchor and
-  canonicalization fixture coverage, plus official MDR/XSD fixtures.
+  the engineering backlog for deeper XMLDSig/XAdES path-policy processing
+  beyond the implemented trust-anchor, signer-admission, key-identifier, and
+  revocation corridor, XMLDSig/XAdES certificate-chain trust-anchor packages,
+  and broader MDR/XSD validation breadth beyond the checked-in live-profile
+  fixture corridor.
+  `require-verified` profiles now require profile-specific public-key or
+  X.509 trust-anchor DER-certificate SHA-256 pins before a P-256/SHA-256
+  enveloped signature can pass.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
   aliases; the current TON shard-state source-state path rejects duplicate
   camelCase/snake_case names inside nested validator-set transition proofs,
@@ -40,14 +46,115 @@ and completed history lives in [`status.md`](./status.md).
 - Keep the web portal SCCP proof-generation surface aligned with package
   artifacts; release-readiness tests now require every JavaScript/web helper
   named in the public user-prover rows to exist in source, packaged `dist`,
-  package entrypoints, and TypeScript declarations, and strict release evidence
-  plus published release-bundle verification must include the package-root SCCP
-  export test transcript.
-- Keep web SCCP linked-prover callback snapshots immutable across production
-  destinations; JavaScript callback regressions now assert frozen request
-  metadata where exposed and copy-backed bundle/source-proof bytes across TON,
-  EVM-family, TRON, and Substrate-family proof engines before app-linked
-  callbacks return proof bytes.
+  package entrypoints, and TypeScript declarations. The JavaScript
+  Ethereum-mainnet facade is now exported from the package root, rejects
+  non-mainnet `eth_chainId` values before treating a provider as ready, and
+  keeps the easy outbound path ETH-only. Swift, Kotlin/JVM, Java Android, and
+  .NET now expose the same easy Ethereum-mainnet inbound method shape with
+  app-supplied execution providers and fail-closed receipt/block drift checks
+  before native prover or submitter callbacks run; those native Ethereum
+  facades also accept app-supplied consensus/finality providers so collected
+  mainnet receipts can attach beacon-finality evidence before local source
+  proving, and browser/native collectors now reject beacon-finality evidence
+  whose execution block number, execution block hash, or execution receipts root
+  does not match the validated execution receipt/block. The JavaScript
+  Ethereum `proveInboundToSora` path now runs that collection and binding step
+  before invoking app-owned prover callbacks, including inputs that already
+  carry a precomputed `receiptProofHash`, and JavaScript/native Ethereum
+  inbound proving rejects missing beacon finality before app-owned prover
+  callbacks can run. Python now matches that Ethereum-mainnet inbound shape
+  with execution/consensus provider injection, receipt/block collection,
+  beacon-finality binding, non-zero proof-byte copying, and a prove-time
+  missing-finality guard. Swift, Kotlin/JVM, and Java Android now accept per-call
+  execution/consensus providers on `proveInboundToSora`, matching the
+  JavaScript/.NET prove-time collection path. The JavaScript package declarations now expose typed
+  Ethereum beacon-finality evidence and consensus-provider input shapes so
+  browser apps see the required execution block number/hash and receipts-root
+  fields before runtime, and Swift, Kotlin/JVM, Java Android, and .NET now
+  expose typed beacon-finality helper records/builders that produce the same
+  canonical native map/dictionary shape for provider-collected evidence, plus
+  typed inbound-evidence construction helpers for feeding that finality object
+  into ETH -> SORA source proving without manual map copying. The
+  release-readiness report and strict bundle verifier now require those native
+  helper symbols in the `eth,bsc` SDK rows. The JavaScript package-dist tests
+  now also guard the browser Ethereum and BSC mainnet SCCP artifacts against
+  `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, and prover
+  endpoint dependency markers, and release-bundle verification requires both
+  no-WASM guard test names plus the BSC Parlia declaration test name in the JS
+  phase transcript. Release-readiness tests
+  also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET facade sources for missing files or forbidden
+  WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
+  paths native or local-prover owned. The Python, Swift,
+  Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
+  now also require wrapped proof results carrying the chain-id-1 destination
+  binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
+  .NET now expose matching Ethereum-mainnet guards/facades over their native
+  EVM proof surfaces; the .NET guard rejects uppercase or padded network-id
+  strings before treating destination material as canonical, the C# Ethereum
+  facade now exposes native outbound proof-request/prove/calldata/submit hooks
+  with BN254 tuple and public-input binding checks before calldata emission,
+  Swift/Kotlin/JVM/Java Android Ethereum facades now expose app-owned outbound
+  submit hooks after calldata validation, Python now exposes the same
+  app-owned Ethereum outbound submit hook, and the release inventories require
+  the JavaScript/Python Ethereum outbound methods by name. The JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET BSC facades now also expose or
+  require app-owned BSC outbound submit hooks after BSC calldata validation, and
+  the release inventories require those BSC calldata/submit symbols by SDK. The
+  C# facade unit suite now validates the ETH/BSC bindings on .NET 8 without
+  relying on newer try-style hex conversion APIs, while Rust, JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android ETH/BSC receipt-proof transcript
+  builders now reject zero source-event digests before deriving source witness
+  hashes. The
+  same zero-digest guard now applies to TON shard-proof and Substrate-family
+  storage-proof transcripts across Rust and the web/Python/native SDK surfaces.
+  Strict release evidence plus published release-bundle verification must
+  include the package-root SCCP export test transcript, the JavaScript
+  Ethereum/BSC mainnet facade transcripts, and the BSC-mainnet
+  facade/prover/submission helpers plus the concrete BSC inbound
+  collect/prove/submit facade methods across JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET, plus BSC outbound calldata/submit facade
+  methods in the `eth,bsc` row for JavaScript, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET, plus the concrete Python
+  Ethereum inbound collect/prove/submit facade methods, including the Ethereum
+  beacon-finality consensus-provider hook symbols, native BSC Parlia
+  consensus-provider hook symbols, and typed native BSC Parlia finality
+  helper records/builders on the SDKs that collect finality evidence,
+  and the JavaScript/Python/Swift BSC prove-time guards that require Parlia
+  finality before app-owned source prover callbacks run. Swift now also
+  supports a BSC consensus-provider collection hook and binds supplied or
+  collected Parlia finality to the collected receipt block number, block hash,
+  and receipts root, while the JavaScript declarations expose the BSC Parlia
+  finality evidence and consensus-provider input shapes used by that runtime
+  path.
+  The strict bundle
+  verifier's canonical Markdown renderer now emits the `.NET` helper set for
+  that row, and Python hook validation requires the exact app-owned `prove`
+  callback rather than accepting method names that merely contain the word.
+- Keep Ethereum mainnet source-adapter transition chains period-contiguous:
+  sync-committee updates now advance exactly one mainnet period at a time, using
+  the consensus `32 * 256` slot period geometry, so skipped-period transition
+  evidence cannot satisfy the ETH source proof verifier.
+- Keep EVM route-canary live evidence bound to the receipt block: the live
+  helper now checks receipt block number/hash against `eth_getBlockByNumber`,
+  requires a non-zero block `receiptsRoot`, rejects duplicate matching
+  `MessageProofAccepted` events at the supplied log index, and refuses imported
+  full-TOML summaries whose route-canary block verification metadata was
+  forged. Strict release-bundle verification now also owns regressions for
+  positive receipt block numbers, non-zero receipt block hashes, non-zero block
+  `receiptsRoot` values, receipt-block hash-role separation, and direct helper
+  parity with the runtime's finality-height hash-role rejection.
+- Keep TRON route-canary helper and runtime transcript policy aligned: the
+  source bridge evidence helper, all-lanes preflight, release-bundle verifier,
+  and Rust runtime now all reject finality-height replay across TRON v3
+  route-canary hash roles before full rollout TOML or launch readiness can pass.
+- Keep SCCP linked-prover callback snapshots immutable across production
+  destinations; JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  callback regressions now assert frozen request metadata where exposed and
+  copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
+  Substrate-family proof engines, including the Java Android Ethereum/BSC
+  mainnet facade witness-provider path, before app-linked callbacks return
+  proof bytes.
 - Keep TAIRA-to-TRON XOR source records economically bound at consensus
   admission; `taira_tron_xor` record overlays must include same-overlay
   whole-unit XOR burns by the payload sender, with the TAIRA burn-record
@@ -63,6 +170,18 @@ and completed history lives in [`status.md`](./status.md).
   command lines instead of phase output. The verifier owns its required phase
   and phase transcript inventories independently of the report generator, with
   parity tests preventing drift.
+- Keep core-admission SCCP tests aligned with the first-release BSC-mainnet
+  lane launch policy; non-BSC source proofs may recognize configured
+  source-adapter evidence but must stop at lane launch before route-canary,
+  route-allowlist, or destination-rollout drift checks.
+- Keep BSC mainnet inbound admission on an explicit local-admission proof path:
+  core now has a Parlia receipt/validator fixture proving configured source
+  verifier material plus source-adapter deployment binding, including replayed
+  deployment-receipt rejection before public-input extraction, and the positive
+  BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
+  instead of outbound EVM Groth16 destination packaging. The remaining release
+  work is broader corridor evidence after stale Ethereum-lane validation jobs
+  are no longer racing the active BSC policy files.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.
@@ -85,7 +204,11 @@ and completed history lives in [`status.md`](./status.md).
   entrypoints, plus the exact expected row construction and submission text, so
   weakening the report generator cannot remove cryptographic prover helpers or
   define a shorter portal/mobile table as canonical for published rows.
-- Keep public SCCP user-prover rows gated by the real release phases; strict
+- Keep public SCCP user-prover rows gated by the real release phases; BSC
+  mainnet source proofs now use lane-local configured readiness instead of the
+  global all-lanes gate, so BSC can open with complete mainnet source,
+  destination, route allowlist, and canary evidence while other advertised
+  lanes remain fail-closed until their own launch policy opens. Strict
   bundle verification now rejects duplicate, unknown, or missing required
   phases, requires every SDK plus core-admission on each row, and keeps
   EVM/TRON proof backends tied to contract-smoke evidence.
@@ -284,11 +407,12 @@ and completed history lives in [`status.md`](./status.md).
   `--source-bridge-runtime-bytecode-hex` or
   `--source-bridge-runtime-bytecode-file` so the Keccak-256 runtime code hash is
   replayable from operator evidence.
-- EVM route-canary evidence now uses a v2 transcript aligned with the TRON
-  hardening model: ETH/BSC canary hashes bind submitted calldata SHA-256,
-  decoded payload/finality public inputs, proof version/source domain, target
-  domain, and consumed-message state before all-lanes preflight or Rust
-  `iroha_sccp` route admission can mark route evidence launch-ready. TRON live
+- EVM route-canary evidence now uses a v3 transcript aligned with the TRON
+  hardening model: ETH/BSC canary hashes bind the receipt block
+  number/hash/`receiptsRoot`, submitted calldata SHA-256, decoded
+  payload/finality public inputs, proof version/source domain, target domain,
+  and consumed-message state before all-lanes preflight or Rust `iroha_sccp`
+  route admission can mark route evidence launch-ready. TRON live
   evidence also requires source-event and
   route-canary transaction readback to contain exactly one matching governed log
   and rejects explicit `logIndex`/`log_index` metadata that disagrees with the
@@ -314,14 +438,14 @@ and completed history lives in [`status.md`](./status.md).
   non-TRON lanes must keep those fields null, so release notes cannot publish a
   forged or lane-shifted canary height after refreshing attachment hashes.
   Source-event block transactions apply the same alias binding before deriving
-  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v2
-  route-canary fields are also first-class config and ZK policy-hash material,
-  keeping Core/Torii
+  java-tron transaction Merkle leaves for source proofs. The EVM/BSC v3
+  route-canary fields, including the receipt block number/hash/`receiptsRoot`,
+  are also first-class config and ZK policy-hash material, keeping Core/Torii
   configured admission bound to the same calldata, payload, finality, and proof
   transcript that `iroha_sccp` validates. The full SCCP production corridor
   passes end to end with Rust SCCP verification, operator evidence scripts,
-  JS/Python/Swift/Kotlin/Java Android SDK prover surfaces, EVM/TRON contract
-  smoke, and core bridge-proof admission.
+  JS/Python/Swift/Kotlin/Java Android/.NET SDK prover surfaces, EVM/TRON
+  contract smoke, and core bridge-proof admission.
 - Substrate route-canary evidence now publishes the finalized runtime code hash
   alongside the finalized head and runtime versions in public readiness JSON;
   release-bundle verification rejects zero or governed-hash-reused
@@ -329,8 +453,9 @@ and completed history lives in [`status.md`](./status.md).
 - The focused SCCP production corridor is now captured by
   `scripts/check_sccp_production_corridor.sh`, with phase selection for the
   Rust verifier crate, operator evidence scripts, web/Python/Swift/Kotlin/Java
-  Android SDK proof generators, the EVM/TRON Groth16 contract smoke, and core
-  bridge-proof admission target. The Java Android phase now matches the current
+  Android SDK proof generators, native .NET/C# ETH/BSC facade tests, the
+  EVM/TRON Groth16 contract smoke, and core bridge-proof admission target. The
+  Java Android phase now matches the current
   test surface by running the
   main-method SCCP classes through `GradleHarnessTests` and the Solana prover
   through its direct JUnit selector, with the evidence-scripts phase also
@@ -535,7 +660,9 @@ and completed history lives in [`status.md`](./status.md).
   topup or a prior audited output before proof verification. `RedeemOfflineNote`
   applies the same source-commitment anchor before final
   redemption, so claim-only metadata cannot redeem a note whose commitment was
-  never issued by topup or prior audit lineage. Audit output
+  never issued by topup or prior audit lineage; focused redeem coverage also
+  rejects a forged source commitment even when the forged claim key has been
+  anchored separately. Audit output
   certificate replay keys are checked against existing topup/audit lineage before
   recursive proof verification, so a one-use certificate anchored by the
   online-to-offline topup cannot be recycled as a new bearer output. Note
@@ -915,9 +1042,15 @@ and completed history lives in [`status.md`](./status.md).
   prevalidates that bundle against active Kagemusha verifier records by checking
   the non-empty transparent Halo2 IPA envelope, canonical circuit id, verifier-key hash,
   public-input schema,
-  empty auxiliary bytes, Pasta instance columns, proof-size cap, inline key
-  length, and verifier-key commitment, and it exposes a canonical verifier-record
-  helper for supplied transparent Halo2 IPA recursive aggregation key bytes.
+  empty auxiliary bytes, exactly 43 one-row Pasta instance columns, proof-size
+  cap, inline key length, and verifier-key commitment, rejecting shortened,
+  extended, or multi-row recursive instance vectors before semantic public-input
+  comparison. The shared Halo2 proof-envelope parser also rejects trailing
+  unbound suffix bytes after the declared proof payload, and Kagemusha
+  recursive preverification treats ZK1 inner proof envelopes as canonical
+  `PROF + I10P` material, rejecting unexpected or duplicate TLVs. Core exposes
+  a canonical verifier-record helper for supplied transparent Halo2 IPA
+  recursive aggregation key bytes.
   The detached-evidence prover and raw metadata evidence builder are
   crate-private implementation helpers, leaving the public proof-bundle API on
   the record-backed native Pallas preflight/open-envelope paths. The
@@ -1055,10 +1188,11 @@ and completed history lives in [`status.md`](./status.md).
   symbol and Rust compact-token proving entry points remain present for ABI
   compatibility but reject even valid `KagemushaVerifiedFoldBundle` input
   without returning a token.
-  Bridge ABI 6 adds recursive spend `init`, `append`, `verify`, and `redeem`
-  entry points over raw Norito archives, and the C header plus Swift,
-  Kotlin/JVM, Java Android/JNI, JavaScript/Node NAPI, Python/PyO3, and C#
-  surfaces mirror them with empty-input and malformed-archive rejection. The
+  Bridge ABI 6 adds recursive spend `init`, `append`, lineage-witness assembly,
+  `verify`, and `redeem` entry points over raw Norito archives, and the C header
+  plus Swift, Kotlin/JVM, Java Android/JNI, JavaScript/Node NAPI, Python/PyO3,
+  and C# surfaces mirror them with empty-input and malformed-archive rejection.
+  The
   SDK/native-output guard now also distinguishes missing native proof archives
   from zero-length archives across Python, Swift, JavaScript/Node, Kotlin/JVM,
   and Java Android, keeping native prover boundaries fail-closed without
@@ -1069,17 +1203,140 @@ and completed history lives in [`status.md`](./status.md).
   empty proof bytes, omit or publish a zero verifier-key commitment, or carry a
   mismatched envelope hash before native/bridge instruction construction. It
   also rejects recursive spend bundle proofs that are not `halo2/ipa` or carry
-  empty proof bytes, keeping native/bridge redeem construction inside the same
-  production corridor as ledger-side verifier-record admission. The
+  empty proof bytes, while ledger-side transfer and recursive redeem admission
+  now independently reject all-zero verifier-key commitments and all-zero proof
+  envelope verifier-key hashes before WSV verifier-record comparison. Legacy
+  Offline recursive verifier resolution now applies the same zero envelope-hash
+  rejection before verifier-record comparison. Record-backed compact-token
+  verification, recursive aggregation preverification, and checked fold-hop
+  admission now also reject all-zero verifier-record commitments explicitly
+  before inline key commitment comparison. These guards keep native/bridge
+  redeem construction inside the same production corridor as chain-side
+  verifier-record admission. Chain-side recursive redemption now has a
+  production record-backed admission path for current semantic
+  `kagemusha-recursive-aggregation-v1` spend proofs: the redeem instruction can
+  carry a full lineage witness with the checked hop record bundle, Pallas
+  open-envelope archive, per-hop current-note descriptors, and the intermediate
+  recursive proofs committed by `recursive_proof_chain_digest`. Execution
+  first requires the supplied hop verifier-record snapshots to be the exact
+  currently registered WSV records, then verifies the private hop records and
+  envelopes, replays the accumulator, verifies those intermediate recursive
+  proofs, and requires the recomputed accumulator to equal the redeem bundle
+  before nullifier consumption or public minting. Semantic v1 spend proofs
+  without that witness still fail closed as admission-neutral, because they do
+  not prove every private hop and accumulator
+  transition in-circuit. The reserved chain-admission circuit id for the future
+  constant-size proof is
+  `kagemusha-recursive-spend-lineage-v1`; profile attempts under that id still
+  fail closed until the verifier is wired, but first they must stay in the
+  transparent `halo2/ipa` corridor, carry non-empty proof bytes, bind the
+  accumulator-derived recursive public inputs through a fresh public-input
+  hash, include a non-zero recursive verifier scalar-projection digest, and
+  expose an inner `OpenVerifyEnvelope` whose backend tag, lineage circuit id,
+  schema, empty auxiliary metadata, non-zero verifier-key hash, and public
+  instance columns match that reserved profile. Those instance columns must now
+  come from a strict ZK1 no-trusted-setup inner proof envelope; legacy Halo2
+  proof-envelope wrappers remain accepted only for semantic v1 preverification
+  and are rejected under the reserved lineage id. Record-backed preverification
+  also requires the inline verifier-key envelope to be a strict
+  no-trusted-setup Halo2 IPA ZK1 key container: exactly one matching lineage
+  `CID1`, exactly one bounded `IPAK` degree, exactly one non-empty `H2VK`, and
+  no unrelated key TLVs. The guard reads the cheap Halo2/Pasta verifier-key
+  header and requires the `H2VK` domain degree to match the bounded `IPAK`, so
+  relabelled semantic keys reject before the heavy one-hop verifier-slice
+  circuit is materialized; it also requires the payload to contain the declared
+  fixed-column commitments so truncated processed verifier keys fail during
+  cheap preflight. It also rejects zero verifier-record commitments explicitly
+  and pins the lineage proof envelope verifier-key hash to the verifier-record
+  commitment. That
+  preverification remains admission-neutral: a well-formed reserved lineage
+  profile can pass registry and envelope checks, but only the chain-admission
+  guard emits the explicit unwired-verifier error after final redeem
+  public-input validation and before proof verification, nullifier consumption,
+  or minting. Missing `IPAK`, missing `H2VK`, wrong IPA degree, duplicate
+  verifier-key `CID1` tags, unexpected verifier-key TLVs, malformed trailing
+  TLV material, truncated fixed-column commitments, and legacy semantic inner
+  proof envelopes now reject as malformed instead of allowing last-tag-wins,
+  prefix-only circuit identity, or cross-profile proof payload replay.
+  The recursive spend accumulator, append proof-artifact digest, and bridge
+  redeem request validation now understand both semantic v1 and reserved
+  lineage proof ids, so lineage-profile states can be represented in the
+  accumulator and serialized for redeem through the native bridge and Node host.
+  Recursive spend proof generation and append verification still use the
+  semantic v1 verifier until the production lineage verifier is wired; append
+  attempts from a previous reserved-lineage bundle now fail with an explicit
+  lineage-verifier-not-wired diagnostic, and the C bridge, JavaScript host, and
+  Python PyO3 host now pin the same path as a no-output ABI failure. Bridge,
+  JavaScript host, and Python PyO3 recursive-spend verification now report
+  offline spendability separately from chain admission: a locally verifying
+  semantic v1 recursive proof without a record-backed lineage witness returns
+  `valid = true` for receiver-side offline acceptance, while
+  `chain_admissible = false` carries the private-hop-lineage diagnostic that
+  redeem would emit.
+  The recursive-spend redeem bridge, JavaScript host, and Python PyO3 host now
+  apply the same gate after public-binding validation: semantic v1 requests with
+  a verified record-backed lineage witness and a verifying final recursive proof
+  serialize instructions, while witnessless semantic v1, tampered final
+  recursive-proof, and unwired reserved-lineage bundles return no instruction
+  bytes.
+  Rust data-model helpers and all SDK wrappers now assemble the separate
+  record-backed redeem witness alongside recursive spend `init` and `append`:
+  they validate the recursive bundle public-input binding, one-hop fragments,
+  exact verifier-record sets, Pallas envelope archive decoding/counts, carry
+  ordered semantic previous recursive proofs forward, merge the archive, and
+  reject verifier record conflicts before the witness is attached to redeem.
+  Direct redeem-request validation applies the same archive decode/count guard
+  and previous-proof semantic/hop-order guard so malformed, count-mismatched,
+  reserved-lineage, scalar-spliced, or out-of-order lineage witnesses fail at
+  the data-model boundary. Core record-backed replay also preflights previous
+  proof backend/profile/hash/scalar/hop-order invariants before reconstructing
+  Pallas hop evidence. Recursive spend availability
+  probes now require the complete ABI-6 native surface - init, append, both
+  lineage-witness helpers, verify, and redeem - so old native libraries cannot claim
+  `recursive_spend_v1` support without the witness path needed for safe
+  redemption. Python direct helper calls and the optional C# P/Invoke wrapper
+  now apply the same complete-surface guard before producing recursive spend
+  output, and Python/Kotlin/JVM/Java Android availability probes now fail closed
+  on malformed native loading or ABI-version probes before symbol probing.
+  Kotlin/JVM, Java Android, and C# also reject a native probe that accepts empty
+  archives instead of producing the expected Kagemusha empty-archive rejection.
+  Swift exposes the witness helpers as
+  `lineageWitnessFromInitResult` and `lineageWitnessAppendResult`; Kotlin/JVM,
+  Java Android, JavaScript/Node, Python, and C# expose matching raw-archive
+  wrappers on their native recursive-spend surfaces.
+  Swift, Kotlin/JVM, Java Android, JavaScript,
+  Python, and C# now also expose stable constants for the semantic
+  v1 and reserved lineage circuit ids. Swift, JavaScript/Node, Python, and C#
+  now expose the recursive-spend bridge ABI-6 requirement beside those
+  constants; Swift bridge-loader tests pin packaged artifacts to ABI 6, the
+  Node NAPI host exports `connectNoritoBridgeAbiVersion`, and the Python PyO3
+  extension exports `kagemusha_recursive_spend_bridge_abi_version`. The
   SDK surfaces also expose a common preferred offline spend-mode selector:
   `recursive_spend_v1` when the ABI-6 recursive spend surface is available and
-  `checked_prefold_v1` as the compatibility fallback. The
-  recursive D2D payload benchmark records 1,454-byte fixture archives for hop
+  `checked_prefold_v1` as the compatibility fallback; Kotlin/JVM and Java
+  Android probe the native bridge ABI version plus verify and both lineage
+  witness JNI symbols, C# probes the matching P/Invoke symbols, and
+  JavaScript/Node plus Python probe their native hosts before reporting
+  recursive spend availability. The recursive spend data model
+  now round-trips the raw ABI-6 Norito archives for init, append,
+  lineage-witness assembly, verify-result, and redeem requests so SDKs share
+  one archive contract. The
+  recursive D2D payload benchmark records 1,553-byte fixture archives for hop
   counts 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 with a fixed 256-byte proof
-  payload and asserts that archive length remains hop-count-independent. The
+  payload, pins that exact fixture length in CI, applies a 1,600-byte
+  material-growth ceiling, and asserts that archive length remains
+  hop-count-independent. The
   recursive spend accumulator now validates that its aggregation transcript
   digest equals its lineage digest, keeping the recursive proof public input
   attached to the spend-lineage accumulator rather than a detached digest.
+  Recursive spend append validation now also rejects carried-state output
+  collisions where the next spend nullifier or any new output commitment reuses
+  the previous spendable commitment, or where a new output commitment reuses a
+  carried top-up anchor nullifier. Chain-side recursive redeem now reaches the
+  private-hop lineage admission gate before semantic recursive backend proof
+  verification, so admission-neutral v1 spend proofs fail closed before verifier
+  work, nullifier consumption, redeem-proof verification, or minting while still
+  preserving earlier metadata and final-binding diagnostics.
   Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
@@ -1141,8 +1398,8 @@ and completed history lives in [`status.md`](./status.md).
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
-**Next checkpoints:** governed deployment evidence, live canary evidence, and
-attaching the generated SCCP release-readiness report to public release notes.
+**Next checkpoints:** governed deployment evidence and live canary evidence for
+operator-provided rollout bundles.
 
 ## SORA Nexus and Taira
 
@@ -1591,11 +1848,20 @@ attaching the generated SCCP release-readiness report to public release notes.
   keys must be exact non-empty ASCII tokens without whitespace or control
   characters; file-backed keys may only carry terminal newlines.
   The all-lanes activation preflight now also rejects padded fixed-width
-  structured hashes, hash comments, route allowlist hashes, and route canary
-  hashes plus duplicate known metadata comments before final production
-  readiness can be reported; chain-specific metadata comment aliases that map
-  to the same internal field also fail instead of overwriting earlier reviewed
-  values. When both real
+  structured hashes, hash comments, route allowlist hashes, route canary
+  hashes, and non-canonical uppercase EVM runtime-bytecode preimages plus
+  duplicate known metadata comments before final production readiness can be
+  reported. The direct ETH/BSC source and EVM destination offline renderers
+  now apply the same lowercase `0x`/lowercase-hex policy before emitting
+  production TOML, and the EVM-family source live collector applies that rule
+  to operator-supplied hash pins before rendering source TOML, so CLI input
+  cannot be normalized after review; chain-specific metadata comment aliases
+  that map to the same internal field also fail instead of overwriting earlier
+  reviewed values. Strict release-bundle verification also keeps complete
+  cryptographic-evidence row checks scoped to the active BSC launch lane
+  while retaining future-lane rows as diagnostic evidence until their launch
+  policies open. When
+  both real
   `route_canary_*` config fields and imported canary metadata comments are
   present, the all-lanes gate now requires exact agreement so a direct
   `passed` value cannot override contradictory imported evidence.
@@ -1840,14 +2106,16 @@ attaching the generated SCCP release-readiness report to public release notes.
   destination hash roles. The
   EVM-family operator helpers and all-lanes preflight now require route canary
   evidence to be derived from a successful `MessageProofAccepted` transaction:
-  the receipt log, submitted `submitSccpMessageProof` calldata, 384-byte proof
-  tuple header, deployed binding/backend/family/network tuple, and
-  `usedMessageProofs(messageId)` state must all agree before the ETH/BSC route
-  canary hash is accepted. The canonical EVM canary transcript also commits
-  proof ABI version `1`, the SORA proof source-domain word, and the ETH/BSC
-  target-domain word before the commitment root, preventing proof-version or
-  EVM-family lane replay. The direct renderer, public hash helper, and
-  all-lanes preflight now also reject reuse across distinct EVM canary
+  the receipt log, receipt block number/hash/`receiptsRoot`, submitted
+  `submitSccpMessageProof` calldata, 384-byte proof tuple header, deployed
+  binding/backend/family/network tuple, and `usedMessageProofs(messageId)`
+  state must all agree before the ETH/BSC route canary hash is accepted. The
+  canonical EVM canary transcript now uses the `v3` evidence label and commits
+  proof ABI version `1`, the SORA proof source-domain word, the ETH/BSC
+  target-domain word, and the receipt block tuple, preventing proof-version,
+  stale-receipt-block, or EVM-family lane replay. The direct renderer, public
+  hash helper, runtime config gate, and all-lanes preflight now also reject
+  reuse across distinct EVM canary
   transcript hash roles, including transaction hash, calldata, message id,
   payload, statement, commitment, and finality block fields.
   Rust/Core/Torii configured readiness now carries the
@@ -2004,15 +2272,12 @@ attaching the generated SCCP release-readiness report to public release notes.
   default
   production path remains closed on the placeholder catalog when no complete
   configured lane material is present, and configured bridge-proof admission
-  now enforces the all-lanes-at-once launch policy across every advertised
-  remote SCCP domain. The same all-lanes gate now also runs when Torii receives
-  an explicit EVM/TRON deployment destination binding, so a single configured
-  outgoing destination rollout cannot expose production artifact/job/submission
-  packaging while any advertised remote lane is still missing governed evidence.
-  A complete source material, source-adapter deployment, destination rollout,
-  and route allowlist for one lane cannot open inbound production admission
-  while any other advertised lane is still missing production-ready governed
-  evidence. TRON source material and deployment
+  now uses BSC mainnet as the first production lane. BSC can open with complete
+  source material, source-adapter deployment, destination rollout, route
+  allowlist, and route-canary evidence while other advertised remote SCCP
+  domains remain behind their future lane policies. The all-lanes gate remains
+  available as the diagnostic release check when operators need to prove every
+  advertised lane at once. TRON source material and deployment
   records must additionally carry the same non-zero source bridge network id,
   governed owner address, and config hash derived from the deployed bridge
   address, network id, source/target domains, and owner, so a reused emitter
@@ -3257,7 +3522,35 @@ attaching the generated SCCP release-readiness report to public release notes.
   contract identities to the exact mainnet anchor id. The EVM destination
   evidence helper now renders exact ETH/BSC destination rollout and route
   allowlist records while recomputing the wrapper-bound destination binding
-  hash, closing the hand-assembled EVM destination rollout tooling gap. Route
+  hash, closing the hand-assembled EVM destination rollout tooling gap. The
+  BSC mainnet SDK facades across Rust, JavaScript, Python, Swift, Kotlin/JVM,
+  Java Android, and .NET now also pin chain id `56` and the governed deployment
+  binding before request, result, proof-job, or submission packaging. Python
+  now exposes the easy `BscMainnetSccp` outbound and inbound facade directly,
+  including BSC receipt/block collection, Parlia finality preservation,
+  native-prover execution, copied proof-byte submission, and
+  `BscMainnetSccpProver` as a compatibility wrapper for older prover-only
+  callers. The
+  JavaScript package-root `BscMainnetSccp` facade now additionally validates
+  canonical `eth_chainId == 0x38`, rejects failed or drifted BSC receipt/block
+  evidence before app-linked proving, and builds BSC verifier calldata only
+  from wrapped proof results carrying the governed destination binding. Its
+  inbound prove/submit helpers now reject empty/all-zero proof bytes and copy
+  the accepted bytes before calling the app-linked Iroha submitter. Swift,
+  Kotlin/JVM, Java Android, and .NET native `BscMainnetSccp` facades now mirror
+  that receipt hardening, collect or validate app-supplied Parlia finality, bind
+  it to the collected execution block number/hash and receipts root, and reject
+  missing finality before source proving. The browser and native ETH/BSC
+  inbound facades also require
+  positive canonical `receipt.blockNumber` and `block.number` values whenever
+  receipt/block evidence is collected, closing the last optional block-number
+  ambiguity in the easy SDK path. The `eth,bsc` public release row now also
+  requires the `dotnet-sdk` corridor phase, which runs the native C# Ethereum
+  and BSC facade tests before release evidence can pass. The .NET SDK also
+  exposes matching BSC-mainnet chain-id, network-id, route, native inbound
+  prove/submit, and destination-binding hash guards;
+  the remaining BSC destination work is live deployment evidence rather than
+  hand-rolled SDK chain-id guards. Route
   allowlist readiness is now profile-bound as well: every advertised counterparty requires the exact
   governed route allowlist id plus a non-zero policy hash, while missing,
   generic, malformed, or cross-domain allowlist material remains rejected.
@@ -3651,8 +3944,12 @@ and render all-lanes-ready rollout TOML, then finish
 recursive verifier deployment
 evidence for the current Parlia-header plus ValidatorSet-storage transition
 chain. The EVM live/source-live helpers now reject padded CLI chain ids,
-component hashes, and JSON-RPC quantity/hex results before rendering receipt,
-runtime-bytecode, source, or destination metadata. The EVM live helper's
+component hashes, JSON-RPC quantity/hex results, deployment receipt block
+hash/number drift, missing or zero deployment block `receiptsRoot`, and
+receipt-block source bytecode drift before rendering receipt, runtime-bytecode,
+source, or destination metadata; the source-live collector also rejects
+JSON-RPC success envelopes with a missing/padded protocol version or mismatched
+response id. The EVM live helper's
 rendered TOML now preserves the observed RPC chain
 id and bridge wrapper runtime code hash as metadata comments, and the all-lanes
 preflight rejects ETH/BSC source material and destination rollout records that
@@ -4699,8 +4996,35 @@ validation.
 - Keep permissioned and NPoS execution on one state machine; validator-set
   source and strict quorum math are the only mode differences.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
-  README commands, and referenced TLA+/CFG files stay synchronized as new gates
-  land.
+  workflow entrypoints, Apalache version pins, README commands,
+  conflict-marker-free formal wiring and TLA+/CFG artifact files,
+  well-formed runner case blocks,
+  length-table-derived bidirectional documented TLC fast-mode coverage,
+  duplicate-free and shadow-free
+  runner case labels, duplicate-free Apalache command lists including
+  scheduled/manual workflow commands, exact Apalache runner-mode CI reachability,
+  unused runner-branch rejection, documented mutation-mode expected-failure
+  coverage, TLC mutation-mode expected-failure runner routing, Apalache/TLC
+  mutation CFG equivalence, expected-failure counterexample semantics,
+  baseline expected-failure marker rejection, well-formed single-assignment
+  runner proof inputs and scalar runner assignments, flat direct-child formal
+  path and suffix containment, runner command shape, runner invocation
+  proof-input binding, TLC constraint operator binding,
+  non-type-only CFG checks, top-level-only CFG behavior/check detection,
+  TLC module identifier and module-file reachability,
+  Apalache/TLC TLA module identity, TLA dependency resolution, Apalache length
+  declarations, well-formed purpose-bearing duplicate-free README length rows,
+  and README length table agreement, single top-of-file TLA module-header
+  consistency, single terminating TLA `====` markers,
+  duplicate-free TLA constant and top-level operator declarations, TLA
+  variable/`vars` tuple consistency, CFG/module
+  filename ownership, supported CFG directive validation, CFG behavior/check
+  declarations, static CFG operator-name syntax, CFG-referenced top-level
+  behavior/check operator definitions, complete CFG constant bindings,
+  fail-closed CFG constant block binding shape, duplicate-free CFG
+  `CHECK_DEADLOCK` directives, duplicate-free CFG constant/check targets,
+  complete TLA+/CFG inventory reachability, and referenced TLA+/CFG files stay
+  synchronized as new gates land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Keep hardware acceleration paths feature-gated with deterministic scalar

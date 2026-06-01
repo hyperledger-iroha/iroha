@@ -783,6 +783,11 @@ pub mod isi {
                 ));
             }
         }
+        if envelope.vk_hash == [0u8; 32] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
+            ));
+        }
         if envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
@@ -7957,6 +7962,13 @@ pub mod isi {
                 .clone(),
             evm_route_canary_transaction_hash: configured.evm_route_canary_transaction_hash.clone(),
             evm_route_canary_log_index: configured.evm_route_canary_log_index,
+            evm_route_canary_receipt_block_number: configured.evm_route_canary_receipt_block_number,
+            evm_route_canary_receipt_block_hash: configured
+                .evm_route_canary_receipt_block_hash
+                .clone(),
+            evm_route_canary_block_receipts_root: configured
+                .evm_route_canary_block_receipts_root
+                .clone(),
             evm_route_canary_call_data_sha256: configured.evm_route_canary_call_data_sha256.clone(),
             evm_route_canary_message_id: configured.evm_route_canary_message_id.clone(),
             evm_route_canary_payload_hash: configured.evm_route_canary_payload_hash.clone(),
@@ -8122,6 +8134,90 @@ pub mod isi {
         Ok(())
     }
 
+    fn validate_configured_sccp_lane_launch_ready(
+        zk_config: &iroha_config::parameters::actual::Zk,
+        domain: u32,
+        material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+        deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+        destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
+        route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
+    ) -> Result<(), Error> {
+        let (launch_domain, launch_policy_label, launch_source_label) =
+            match iroha_sccp::sccp_production_policy_v1().launch_mode {
+                iroha_sccp::SccpLaunchModeV1::AllLanesAtOnce => {
+                    return validate_configured_sccp_all_lanes_launch_ready(zk_config);
+                }
+                iroha_sccp::SccpLaunchModeV1::EthereumMainnetLane => (
+                    iroha_sccp::SCCP_DOMAIN_ETH,
+                    "SCCP Ethereum mainnet lane launch policy",
+                    "Ethereum mainnet",
+                ),
+                iroha_sccp::SccpLaunchModeV1::BscMainnetLane => (
+                    iroha_sccp::SCCP_DOMAIN_BSC,
+                    "SCCP BSC mainnet lane launch policy",
+                    "BSC mainnet",
+                ),
+            };
+        if domain != launch_domain {
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
+
+        let readiness =
+            iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+                domain,
+                material,
+                deployment,
+                destination_rollout,
+                route_allowlist,
+            )
+            .ok_or_else(|| {
+                invalid_bridge_proof(format!(
+                    "{launch_policy_label} cannot evaluate domain {domain}"
+                ))
+            })?;
+        if !readiness.production_ready {
+            let blockers = format_sccp_readiness_blockers(
+                &readiness.blockers,
+                "no lane-specific blockers were reported",
+            );
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} requires production-ready lane material for domain {domain}: {blockers}"
+            )));
+        }
+
+        let route_canary_hash = parse_sccp_route_allowlist_h256(
+            route_allowlist
+                .route_canary_evidence_hash
+                .as_deref()
+                .ok_or_else(|| {
+                    invalid_bridge_proof(format!(
+                        "SCCP route allowlist for domain {domain} is missing route canary evidence hash"
+                    ))
+                })?,
+            "route_canary_evidence_hash",
+        )?;
+        for (role, source_hash) in [
+            (
+                "source verifier material",
+                iroha_sccp::sccp_source_verifier_material_hash(material),
+            ),
+            (
+                "source-adapter deployment",
+                iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+            ),
+        ] {
+            if route_canary_hash == source_hash {
+                return Err(invalid_bridge_proof(format!(
+                    "{launch_policy_label} requires route canary evidence hash for domain {domain} to be distinct from {role} record hash"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     fn validate_sccp_message_transparent_bridge_proof(
         artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
         state_transaction: &StateTransaction<'_, '_>,
@@ -8179,29 +8275,14 @@ pub mod isi {
                         "SCCP route allowlist for domain {source_domain} is not production-ready"
                     ))
                 })?;
-            let readiness =
-                iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
-                    source_domain,
-                    material,
-                    deployment,
-                    &destination_rollout,
-                    &route_allowlist,
-                )
-                .ok_or_else(|| {
-                    invalid_bridge_proof(format!(
-                        "SCCP lane for domain {source_domain} is not production-ready"
-                    ))
-                })?;
-            if !readiness.production_ready {
-                let blockers = format_sccp_readiness_blockers(
-                    &readiness.blockers,
-                    "no lane-specific blockers were reported",
-                );
-                return Err(invalid_bridge_proof(format!(
-                    "SCCP lane for domain {source_domain} is not production-ready: {blockers}"
-                )));
-            }
-            validate_configured_sccp_all_lanes_launch_ready(&state_transaction.zk)?;
+            validate_configured_sccp_lane_launch_ready(
+                &state_transaction.zk,
+                source_domain,
+                material,
+                deployment,
+                &destination_rollout,
+                &route_allowlist,
+            )?;
         }
         let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
@@ -10199,6 +10280,13 @@ pub mod isi {
                 "ZK-ACE verifying key is not bound to zk_ace_pq_authorization_v0".into(),
             ));
         }
+        if record.public_inputs_schema_hash
+            != iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key public input schema hash mismatch".into(),
+            ));
+        }
         let key = record.key.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "ZK-ACE verifying key bytes missing".into(),
@@ -10276,6 +10364,11 @@ pub mod isi {
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
+            ));
+        }
+        if env.vk_hash == [0u8; 32] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
             ));
         }
         if env.vk_hash != record.commitment {
@@ -15565,6 +15658,9 @@ pub mod isi {
                     iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
                     [0xe0 | (domain as u8); 32],
                     0,
+                    10_000 + u64::from(domain),
+                    [0xd5u8.wrapping_add(domain as u8); 32],
+                    [0xd6u8.wrapping_add(domain as u8); 32],
                     [0xd0u8.wrapping_add(domain as u8); 32],
                     [0xd1u8.wrapping_add(domain as u8); 32],
                     [0xd2u8.wrapping_add(domain as u8); 32],
@@ -15830,6 +15926,14 @@ pub mod isi {
                     .evm_route_canary_transaction_hash
                     .clone(),
                 evm_route_canary_log_index: allowlist.evm_route_canary_log_index,
+                evm_route_canary_receipt_block_number: allowlist
+                    .evm_route_canary_receipt_block_number,
+                evm_route_canary_receipt_block_hash: allowlist
+                    .evm_route_canary_receipt_block_hash
+                    .clone(),
+                evm_route_canary_block_receipts_root: allowlist
+                    .evm_route_canary_block_receipts_root
+                    .clone(),
                 evm_route_canary_call_data_sha256: allowlist
                     .evm_route_canary_call_data_sha256
                     .clone(),
@@ -15965,6 +16069,100 @@ pub mod isi {
         }
 
         #[test]
+        fn configured_sccp_bsc_mainnet_lane_launch_accepts_bsc_without_other_lanes() {
+            let mut zk = crate::state::default_zk_config();
+            zk.sccp_source_verifier_materials.clear();
+            zk.sccp_source_adapter_engine_deployments.clear();
+            zk.sccp_destination_rollouts.clear();
+            zk.sccp_route_allowlists.clear();
+
+            let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+            let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
+            let deployment =
+                test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
+            let rollout = test_sccp_destination_rollout_for_domain(domain, 0x20);
+            let allowlist =
+                test_sccp_route_allowlist_for_domain(domain, &material, &deployment, &rollout);
+            zk.sccp_source_verifier_materials
+                .push(test_actual_sccp_source_verifier_material(&material));
+            zk.sccp_source_adapter_engine_deployments.push(
+                test_actual_sccp_source_adapter_deployment(&material, &deployment),
+            );
+            zk.sccp_destination_rollouts
+                .push(test_actual_sccp_destination_rollout(&rollout));
+            zk.sccp_route_allowlists
+                .push(test_actual_sccp_route_allowlist(&allowlist));
+
+            let configured_material =
+                super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
+                    .expect("configured BSC source material")
+                    .expect("BSC source material");
+            let configured_deployment =
+                super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
+                    .expect("configured BSC source deployment")
+                    .expect("BSC source deployment");
+            let configured_rollout =
+                super::configured_sccp_destination_rollout_for_domain(&zk, domain)
+                    .expect("configured BSC destination rollout")
+                    .expect("BSC destination rollout");
+            let configured_allowlist =
+                super::configured_sccp_route_allowlist_for_domain(&zk, domain)
+                    .expect("configured BSC route allowlist")
+                    .expect("BSC route allowlist");
+
+            super::validate_configured_sccp_lane_launch_ready(
+                &zk,
+                domain,
+                &configured_material,
+                &configured_deployment,
+                &configured_rollout,
+                &configured_allowlist,
+            )
+            .expect("BSC lane should launch with complete BSC material only");
+
+            let all_lanes_err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
+                .expect_err("single BSC lane must not satisfy the all-lanes diagnostic helper");
+            assert!(
+                format!("{all_lanes_err:?}").contains("all-lanes launch policy"),
+                "unexpected all-lanes diagnostic error: {all_lanes_err:?}",
+            );
+        }
+
+        #[test]
+        fn configured_sccp_bsc_mainnet_lane_launch_rejects_other_domains() {
+            let zk = test_configured_sccp_all_lanes_zk_config();
+            let domain = iroha_sccp::SCCP_DOMAIN_ETH;
+            let material = super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
+                .expect("configured ETH source material")
+                .expect("ETH source material");
+            let deployment =
+                super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
+                    .expect("configured ETH source deployment")
+                    .expect("ETH source deployment");
+            let rollout = super::configured_sccp_destination_rollout_for_domain(&zk, domain)
+                .expect("configured ETH destination rollout")
+                .expect("ETH destination rollout");
+            let allowlist = super::configured_sccp_route_allowlist_for_domain(&zk, domain)
+                .expect("configured ETH route allowlist")
+                .expect("ETH route allowlist");
+
+            let err = super::validate_configured_sccp_lane_launch_ready(
+                &zk,
+                domain,
+                &material,
+                &deployment,
+                &rollout,
+                &allowlist,
+            )
+            .expect_err("ETH should remain outside the BSC-mainnet launch policy");
+            let err = format!("{err:?}");
+            assert!(
+                err.contains("BSC mainnet lane launch policy") && err.contains("domain 1"),
+                "unexpected error: {err}",
+            );
+        }
+
+        #[test]
         fn configured_sccp_all_lanes_launch_accepts_substrate_runtime_storage_verifier_evidence() {
             let zk = test_configured_sccp_all_lanes_zk_config();
 
@@ -15974,6 +16172,12 @@ pub mod isi {
                 .find(|route| route.domain == iroha_sccp::SCCP_DOMAIN_ETH)
                 .expect("configured ETH route");
             assert_eq!(eth_route.evm_route_canary_log_index, Some(0));
+            assert_eq!(
+                eth_route.evm_route_canary_receipt_block_number,
+                Some(10_000 + u64::from(iroha_sccp::SCCP_DOMAIN_ETH))
+            );
+            assert!(eth_route.evm_route_canary_receipt_block_hash.is_some());
+            assert!(eth_route.evm_route_canary_block_receipts_root.is_some());
             assert!(eth_route.evm_route_canary_call_data_sha256.is_some());
             assert!(eth_route.evm_route_canary_payload_hash.is_some());
             assert_eq!(
@@ -16033,6 +16237,9 @@ pub mod isi {
                 .expect("configured ETH route");
             eth_route.evm_route_canary_transaction_hash = None;
             eth_route.evm_route_canary_log_index = None;
+            eth_route.evm_route_canary_receipt_block_number = None;
+            eth_route.evm_route_canary_receipt_block_hash = None;
+            eth_route.evm_route_canary_block_receipts_root = None;
             eth_route.evm_route_canary_call_data_sha256 = None;
             eth_route.evm_route_canary_message_id = None;
             eth_route.evm_route_canary_payload_hash = None;
@@ -17026,14 +17233,17 @@ pub mod isi {
                 Vec::new(),
                 Vec::new(),
             );
+            let err = validate_open_verify_envelope_metadata(
+                "ballot",
+                "halo2/ipa",
+                &zero_commitment,
+                &vk_rec,
+            )
+            .expect_err("zero OpenVerifyEnvelope verifier hash must reject explicitly");
             assert!(
-                validate_open_verify_envelope_metadata(
-                    "ballot",
-                    "halo2/ipa",
-                    &zero_commitment,
-                    &vk_rec
-                )
-                .is_err()
+                err.to_string()
+                    .contains("verifier-key hash must be non-zero"),
+                "unexpected zero-hash rejection: {err}"
             );
 
             let mut non_empty_aux = OpenVerifyEnvelope::new(
@@ -17821,7 +18031,7 @@ pub mod isi {
                 "zk-ace",
                 BackendTag::Stark,
                 "goldilocks",
-                [0x91; 32],
+                iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1(),
                 commitment,
             );
             record.vk_len =
@@ -17925,6 +18135,17 @@ pub mod isi {
                 .expect("fixture carries one STARK public input");
             first_word[0] ^= 0x01;
             envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        fn mutate_zk_ace_envelope_vk_hash(
+            mut proof: ProofAttachment,
+            vk_hash: [u8; 32],
+        ) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            envelope.vk_hash = vk_hash;
             proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
             proof
         }
@@ -18156,6 +18377,136 @@ pub mod isi {
                 msg.contains("source account is not in the identity allowlist"),
                 "unexpected non-allowlisted source error: {msg}"
             );
+        }
+
+        #[test]
+        fn zk_ace_identity_management_permission_is_account_scoped() {
+            let fixture = zk_ace_transfer_fixture();
+            let delegate = gen_account_in(fixture.asset_def_id.domain()).0;
+            let outsider = gen_account_in(fixture.asset_def_id.domain()).0;
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+
+            Register::account(new_account_in_domain(&delegate))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ZK-ACE delegate account");
+            Register::account(new_account_in_domain(&outsider))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ZK-ACE outsider account");
+
+            let alice_permission: Permission = CanManageZkAceIdentityForAccount {
+                account: ALICE_ID.clone(),
+                asset: fixture.asset_def_id.clone(),
+            }
+            .into();
+            Grant::account_permission(alice_permission.clone(), delegate.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant delegate authority for Alice ZK-ACE identity");
+            Grant::account_permission(alice_permission, outsider.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant outsider authority only for Alice ZK-ACE identity");
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                [0x66; 32],
+                fixture.policy_hash,
+                vec![ALICE_ID.clone(), fixture.receiver.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&outsider, &mut stx)
+            .expect_err("partial ZK-ACE account authority must not register a wider allowlist");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("CanManageZkAceIdentityForAccount"),
+                "unexpected partial registration authority error: {msg}"
+            );
+
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect("delegated account authority registers Alice ZK-ACE identity");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&fixture.identity_commitment))
+                .expect("delegated ZK-ACE registration creates identity record");
+            assert_eq!(record.allowed_accounts, vec![ALICE_ID.clone()]);
+
+            let replacement_commitment = [0x67; 32];
+            let err = iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                replacement_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone(), fixture.receiver.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect_err("partial ZK-ACE account authority must not rotate to a wider allowlist");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("CanManageZkAceIdentityForAccount"),
+                "unexpected partial rotation authority error: {msg}"
+            );
+
+            let receiver_permission: Permission = CanManageZkAceIdentityForAccount {
+                account: fixture.receiver.clone(),
+                asset: fixture.asset_def_id.clone(),
+            }
+            .into();
+            Grant::account_permission(receiver_permission, delegate.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant delegate authority for receiver ZK-ACE identity");
+            iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                replacement_commitment,
+                fixture.policy_hash,
+                vec![fixture.receiver.clone(), ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect("fully delegated account authority rotates to the wider allowlist");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
+                .expect("delegated ZK-ACE rotation creates replacement identity record");
+            let mut expected_allowed_accounts = vec![fixture.receiver.clone(), ALICE_ID.clone()];
+            expected_allowed_accounts.sort();
+            assert_eq!(record.allowed_accounts, expected_allowed_accounts);
+
+            iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                replacement_commitment,
+                None,
+            )
+            .execute(&delegate, &mut stx)
+            .expect("fully delegated account authority revokes ZK-ACE identity");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
+                .expect("revoked replacement ZK-ACE identity remains recorded");
+            assert_eq!(record.status, crate::state::ZkAceIdentityStatus::Revoked);
         }
 
         #[test]
@@ -18562,6 +18913,28 @@ pub mod isi {
                 "unexpected domain error: {msg}"
             );
 
+            let zero_vk_hash_proof = mutate_zk_ace_envelope_vk_hash(proof.clone(), [0u8; 32]);
+            let zero_vk_hash_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                zero_vk_hash_proof,
+            );
+            let err = zero_vk_hash_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("zero ZK-ACE envelope verifier hash must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("verifier-key hash must be non-zero"),
+                "unexpected zero verifier-hash error: {msg}"
+            );
+
             let wrong_vk_id = VerifyingKeyId::new(
                 iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
                 "wrong_zk_ace_verifier",
@@ -18597,6 +18970,37 @@ pub mod isi {
             assert!(
                 msg.contains("verifying key reference mismatch"),
                 "unexpected verifier error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_rejects_verifier_schema_hash_mismatch() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            stx.world
+                .verifying_keys
+                .get_mut(&fixture.vk_id)
+                .expect("ZK-ACE verifier is installed")
+                .public_inputs_schema_hash[0] ^= 1;
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id,
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id,
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("wrong ZK-ACE verifier schema hash must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("public input schema hash mismatch"),
+                "unexpected verifier schema error: {msg}"
             );
         }
 
@@ -21568,7 +21972,7 @@ pub mod isi {
                 (
                     "zero_vk_hash",
                     Tamper::ZeroVerifyingKeyHash,
-                    "verifying key commitment mismatch",
+                    "verifier-key hash must be non-zero",
                 ),
                 (
                     "wrong_vk_hash",
@@ -25271,7 +25675,7 @@ pub mod isi {
                 (
                     "zero_vk_hash",
                     Tamper::ZeroVerifyingKeyHash,
-                    "verifying key commitment mismatch",
+                    "verifier-key hash must be non-zero",
                 ),
                 (
                     "vk_hash",

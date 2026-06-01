@@ -32,17 +32,24 @@ public final class KagemushaCompactPaymentTokenProver {
   private static boolean loadLibrary() {
     return detectNativeAvailability(
         () -> System.loadLibrary(LIBRARY_NAME),
-        () -> nativeProveVerifiedCompactPaymentTokenWithRecords(new byte[0]));
+        () ->
+            expectIllegalArgumentProbe(
+                () -> nativeProveVerifiedCompactPaymentTokenWithRecords(new byte[0])));
   }
 
   static boolean detectNativeAvailability(
-      final NativeProbe loadLibrary, final NativeProbe probeSymbol) {
+      final NativeProbe loadLibrary, final NativeSymbolProbe probeSymbol) {
     try {
       loadLibrary.run();
-      probeSymbol.run();
-      return true;
     } catch (final IllegalArgumentException error) {
-      return true;
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    try {
+      return probeSymbol.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -50,6 +57,19 @@ public final class KagemushaCompactPaymentTokenProver {
 
   interface NativeProbe {
     void run();
+  }
+
+  interface NativeSymbolProbe {
+    boolean run();
+  }
+
+  static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
+    try {
+      probe.run();
+      return false;
+    } catch (final IllegalArgumentException expected) {
+      return true;
+    }
   }
 
   static byte[] requireNativeOutput(final byte[] output, final String label) {

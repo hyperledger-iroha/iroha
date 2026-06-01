@@ -3233,6 +3233,34 @@ fn message_type_from_namespace(ns: &str) -> Option<String> {
     ns.rsplit(':').next().map(|s| s.to_owned())
 }
 
+fn document_root_matches_message(message_type: &str, root: &str) -> Option<bool> {
+    Some(match canonical_message_type(message_type).as_ref() {
+        "colr.007" => root == "CollSbstitnConf",
+        "pacs.002" => root == "FIToFIPmtStsRpt",
+        "pacs.004" => root == "PmtRtr",
+        "pacs.007" => root == "FIToFIPmtRvsl",
+        "pacs.008" => root == "FIToFICstmrCdtTrf",
+        "pacs.009" => root == "FICdtTrf",
+        "pacs.028" => root == "FIToFIPmtStsReq",
+        "pacs.029" => root == "RsltnOfInvstgtn",
+        "pain.001" => root == "CstmrCdtTrfInitn",
+        "pain.002" => root == "CstmrPmtStsRpt",
+        "camt.029" => root == "RsltnOfInvstgtn",
+        "camt.052" => root == "BkToCstmrAcctRpt",
+        "camt.053" => root == "BkToCstmrStmt",
+        "camt.054" => root == "BkToCstmrDbtCdtNtfctn",
+        "camt.056" => root == "FIToFIPmtCxlReq",
+        "sese.023" => root == "SctiesSttlmTxInstr",
+        "sese.024" => root == "SctiesSttlmTxStsAdvc",
+        "sese.025" => root == "SctiesSttlmTxConf",
+        _ => return None,
+    })
+}
+
+fn message_type_requires_document_root(message_type: &str) -> bool {
+    document_root_matches_message(message_type, "").is_some()
+}
+
 fn repeating_bases_for(message_type: &str) -> Vec<String> {
     schema_for(message_type)
         .map(|schema| {
@@ -3415,6 +3443,7 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     let repeating_bases = repeating_bases_for(message_type);
     let mut repeat_counters: HashMap<String, usize> = HashMap::new();
     let mut declared_message_type: Option<String> = None;
+    let mut document_root_seen = false;
 
     let mut idx = 0usize;
     let bytes = text.as_bytes();
@@ -3497,6 +3526,22 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         }
 
         let attrs = parse_attributes(tag_body);
+        let parent_is_document = skip_depth == 0
+            && stack
+                .last()
+                .is_some_and(|parent| local_name(parent) == "Document");
+        if parent_is_document
+            && !should_skip_element(lname)
+            && let Some(matches) = document_root_matches_message(message_type, lname)
+        {
+            if !matches {
+                return Err(MsgError::UnknownMessageType);
+            }
+            if document_root_seen {
+                return Err(MsgError::InvalidFormat);
+            }
+            document_root_seen = true;
+        }
         let mut parts = normalised_parts(&stack);
         parts.push(lname.to_owned());
         let base_path = parts.join("/");
@@ -3559,6 +3604,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         if canonical_requested != "head.001" && canonical_declared != canonical_requested {
             return Err(MsgError::UnknownMessageType);
         }
+    }
+    if message_type_requires_document_root(message_type) && !document_root_seen {
+        return Err(MsgError::InvalidFormat);
     }
     Ok(())
 }
@@ -5410,6 +5458,68 @@ mod tests {
             msg_get("IntrBkSttlmAmt").as_deref(),
             Some(b"1400.00".as_ref())
         );
+    }
+
+    #[test]
+    fn iso_xsd_document_roots_cover_supported_xml_families() {
+        for (message_type, root) in [
+            ("colr.007.001.08", "CollSbstitnConf"),
+            ("pacs.002.001.10", "FIToFIPmtStsRpt"),
+            ("pacs.004.001.09", "PmtRtr"),
+            ("pacs.007.001.09", "FIToFIPmtRvsl"),
+            ("pacs.008.001.08", "FIToFICstmrCdtTrf"),
+            ("pacs.009.001.10", "FICdtTrf"),
+            ("pacs.028.001.09", "FIToFIPmtStsReq"),
+            ("pacs.029.001.09", "RsltnOfInvstgtn"),
+            ("pain.001.001.11", "CstmrCdtTrfInitn"),
+            ("pain.002.001.12", "CstmrPmtStsRpt"),
+            ("camt.029.001.09", "RsltnOfInvstgtn"),
+            ("camt.052.001.08", "BkToCstmrAcctRpt"),
+            ("camt.053.001.08", "BkToCstmrStmt"),
+            ("camt.054.001.08", "BkToCstmrDbtCdtNtfctn"),
+            ("camt.056.001.08", "FIToFIPmtCxlReq"),
+            ("sese.023.001.11", "SctiesSttlmTxInstr"),
+            ("sese.024.001.10", "SctiesSttlmTxStsAdvc"),
+            ("sese.025.001.10", "SctiesSttlmTxConf"),
+        ] {
+            assert_eq!(
+                document_root_matches_message(message_type, root),
+                Some(true)
+            );
+            assert_eq!(
+                document_root_matches_message(message_type, "WrongDocumentRoot"),
+                Some(false)
+            );
+        }
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_mismatched_xsd_document_root() {
+        reset();
+        let xml = r#"
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr><MsgId>WRONG-ROOT</MsgId></GrpHdr>
+  </FIToFICstmrCdtTrf>
+</Document>
+"#;
+        let err = parse_message("pacs.002.001.10", xml.as_bytes())
+            .expect_err("pacs.002 must not accept pacs.008 document root");
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_missing_xsd_document_root() {
+        reset();
+        let xml = r#"
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+</Document>
+"#;
+        let err = parse_message("pacs.002.001.10", xml.as_bytes())
+            .expect_err("real pacs.002 XML must carry its XSD document root");
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
 
     #[test]

@@ -136,9 +136,13 @@ public final class TronSccpProverTests {
     assert Arrays.equals(callbackSnapshot.sourceProofBytes(), request.sourceProofBytes())
         : "snapshot source proof bytes must match";
     final byte[] snapshotBundle = callbackSnapshot.bundleBytes();
+    final byte[] snapshotSourceProof = callbackSnapshot.sourceProofBytes();
     snapshotBundle[0] = 77;
+    snapshotSourceProof[0] = 77;
     assert Arrays.equals(new byte[] {5, 6, 7}, callbackSnapshot.bundleBytes())
         : "snapshot bundle bytes must be defensive copies";
+    assert Arrays.equals(new byte[] {9, 10}, callbackSnapshot.sourceProofBytes())
+        : "snapshot source proof bytes must be defensive copies";
 
     final SourceSccpProofs.TronDestinationBinding destinationBinding =
         sampleDestinationBinding(samplePublicInputs());
