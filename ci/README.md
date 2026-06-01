@@ -1595,6 +1595,7 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   `scripts/formal/check_sumeragi_formal_coverage.py` so runner modes, CI
   commands, workflow entrypoints, Apalache version pins, README commands,
   length-table-derived bidirectional TLC fast-mode runner coverage,
+  conflict-marker-free formal wiring files, well-formed runner case blocks,
   duplicate-free and shadow-free runner case labels,
   duplicate-free Apalache command lists including scheduled/manual workflow
   commands, exact Apalache runner-mode CI reachability, unused runner-branch

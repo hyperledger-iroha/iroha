@@ -178,6 +178,33 @@ def test_command_shape_errors_rejects_malformed_mode_tokens(
     ]
 
 
+def test_conflict_marker_errors_rejects_unresolved_merge_markers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "commands.sh"
+    docs = tmp_path / "README.md"
+    script.write_text(
+        "\n".join(
+            [
+                "<<<<<<< HEAD",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "=======",
+                "bash scripts/formal/sumeragi_apalache.sh deep",
+                ">>>>>>> origin",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    docs.write_text("TLA terminator text: ====\n", encoding="utf-8")
+
+    assert module.conflict_marker_errors((script, docs)) == [
+        f"{script}:1 contains merge conflict marker: <<<<<<< HEAD",
+        f"{script}:3 contains merge conflict marker: =======",
+        f"{script}:5 contains merge conflict marker: >>>>>>> origin",
+    ]
+
+
 def test_command_mode_duplicates_are_visible_to_guard(tmp_path: Path) -> None:
     module = load_coverage_module()
     script = tmp_path / "commands.sh"
@@ -500,6 +527,8 @@ def test_runner_case_shape_errors_rejects_malformed_case_lines(
                 "    ;;",
                 "  trailing-fast) echo hidden",
                 "    ;; # comment",
+                "  missing-term)",
+                "    echo no terminator",
                 "  *)",
                 "    exit 2",
                 "    ;;",
@@ -514,6 +543,34 @@ def test_runner_case_shape_errors_rejects_malformed_case_lines(
         f"TLC runner {runner}:8 has malformed case label: "
         "trailing-fast) echo hidden",
         f"TLC runner {runner}:9 has malformed case terminator: ;; # comment",
+        f"TLC runner {runner}:10 case label has no exact terminator: "
+        "missing-term)",
+    ]
+
+
+def test_runner_case_shape_errors_rejects_unindented_case_content(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    runner = tmp_path / "runner.sh"
+    runner.write_text(
+        "\n".join(
+            [
+                'case "$mode" in',
+                "  frontier-fast)",
+                "<<<<<<< HEAD",
+                "    ;;",
+                "  *)",
+                "    exit 2",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.runner_case_shape_errors(runner, "Apalache") == [
+        f"Apalache runner {runner}:3 has malformed case content: <<<<<<< HEAD"
     ]
 
 

@@ -23514,6 +23514,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   here, and backed by existing TLA+/CFG files. It also checks that the PR and
   nightly workflows install pinned Apalache before invoking the formal baseline,
   and that the baseline script runs this guard before invoking Apalache.
+  Formal runners, CI scripts, workflows, and this README must be free of
+  unresolved merge conflict markers before mode inventory parsing starts.
   Apalache version pins in the
   Apalache/TLC runners, installer, workflows, and formal docs must agree.
   Expected-failure runner paths must reject clean passes and only accept
@@ -23579,9 +23581,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   mode token after the runner path.
   Duplicate fast-mode rows or duplicated TLC commands are rejected so one
   repeated mode cannot hide a missing one, and
-  duplicate Apalache/TLC runner case labels, shell-case wildcard shadowing, or
-  CI/README Apalache commands, including scheduled/manual workflow commands,
-  are rejected before a shadowed branch or repeated command can drift from CI.
+  malformed Apalache/TLC runner case labels, malformed case terminators,
+  unindented case-block content, duplicate Apalache/TLC runner case labels,
+  shell-case wildcard shadowing, or CI/README Apalache commands, including
+  scheduled/manual workflow commands, are rejected before a malformed, shadowed,
+  or repeated branch can drift from CI.
   Every exact Apalache runner mode
   must appear in PR, expected-failure, or scheduled/manual formal CI, and every
   Apalache/TLC runner branch must be reached by at least one CI or README mode.

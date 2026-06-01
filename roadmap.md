@@ -4851,6 +4851,7 @@ validation.
   source and strict quorum math are the only mode differences.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
   workflow entrypoints, Apalache version pins, README commands,
+  conflict-marker-free formal wiring files, well-formed runner case blocks,
   length-table-derived bidirectional documented TLC fast-mode coverage,
   duplicate-free and shadow-free
   runner case labels, duplicate-free Apalache command lists including

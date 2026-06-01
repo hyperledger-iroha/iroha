@@ -65,6 +65,7 @@ APALACHE_COMMAND_RE = re.compile(
 TLC_COMMAND_RE = re.compile(
     rf"\b{re.escape(TLC_COMMAND_PREFIX)}\s+({COMMAND_MODE_PATTERN})"
 )
+CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}|={7}|>{7})(?:\s|$)")
 CASE_LABEL_RE = re.compile(r"^  ([A-Za-z0-9_-]+(?:-\*)?)\)\s*$", re.MULTILINE)
 CASE_LABEL_LINE_RE = re.compile(
     r"^  (?:[A-Za-z0-9_-]+(?:-\*)?|\*)\)\s*$"
@@ -250,6 +251,18 @@ def command_shape_errors(path: Path, command_prefix: str, owner: str) -> list[st
     return errors
 
 
+def conflict_marker_errors(paths: tuple[Path, ...]) -> list[str]:
+    errors: list[str] = []
+    for path in paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), 1):
+            if CONFLICT_MARKER_RE.match(line):
+                errors.append(
+                    f"{display_path(path)}:{line_number} contains merge "
+                    f"conflict marker: {line.strip()}"
+                )
+    return errors
+
+
 def documented_fast_table_modes(path: Path = README) -> list[str]:
     return [
         mode
@@ -382,6 +395,11 @@ def runner_case_shape_errors(path: Path, runner_name: str) -> list[str]:
                 )
             else:
                 label_lines.append((index - 1, index, stripped))
+        elif not line.startswith("    "):
+            errors.append(
+                f"{runner_name} runner {display_path(path)}:{index} "
+                f"has malformed case content: {stripped}"
+            )
         if stripped.startswith((";;", ";&", ";;&")) and line != "    ;;":
             errors.append(
                 f"{runner_name} runner {display_path(path)}:{index} "
@@ -1474,6 +1492,12 @@ def format_items(values: list[str], limit: int = 80) -> str:
     return "\n".join(f"  - {value}" for value in shown) + suffix
 
 
+def print_error_sections(errors: list[str]) -> None:
+    print("Sumeragi formal coverage check failed:", file=sys.stderr)
+    for section in errors:
+        print(f"\n{section}", file=sys.stderr)
+
+
 def required_command_errors(
     path: Path,
     commands: tuple[str, ...],
@@ -1827,12 +1851,41 @@ def mutation_cfg_equivalence_errors(
 def main() -> int:
     errors: list[str] = []
 
+    conflict_marker_mismatches = conflict_marker_errors(
+        (
+            APALACHE_RUNNER,
+            TLC_RUNNER,
+            FAST_CI,
+            EXPECTED_FAILURE_CI,
+            PR_WORKFLOW,
+            NIGHTLY_WORKFLOW,
+            README,
+        )
+    )
+    if conflict_marker_mismatches:
+        print_error_sections(
+            [
+                "Sumeragi formal wiring files contain merge conflict markers:\n"
+                + format_items(conflict_marker_mismatches)
+            ]
+        )
+        return 1
+
     runner_case_shape_mismatches = runner_case_shape_errors(
         APALACHE_RUNNER, "Apalache"
     )
     runner_case_shape_mismatches.extend(
         runner_case_shape_errors(TLC_RUNNER, "TLC")
     )
+    if runner_case_shape_mismatches:
+        print_error_sections(
+            [
+                "Sumeragi formal runner case blocks are malformed:\n"
+                + format_items(runner_case_shape_mismatches)
+            ]
+        )
+        return 1
+
     apalache_cases = parse_runner_cases(APALACHE_RUNNER)
     tlc_cases = parse_runner_cases(TLC_RUNNER)
     duplicate_apalache_case_labels = duplicate_values(
@@ -2334,9 +2387,7 @@ def main() -> int:
         )
 
     if errors:
-        print("Sumeragi formal coverage check failed:", file=sys.stderr)
-        for section in errors:
-            print(f"\n{section}", file=sys.stderr)
+        print_error_sections(errors)
         return 1
 
     print(

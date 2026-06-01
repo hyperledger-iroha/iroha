@@ -231,17 +231,23 @@ Last updated: 2026-06-01
   CFG names, and verify duplicate or missing runner proof-input assignments fail
   closed, including path-escape, nested-directory, and wrong-suffix proof
   inputs. The TLC module-file tests now also reject non-identifier module names.
+  The formal coverage guard now also fails before inventory parsing when
+  Sumeragi formal wiring files contain unresolved merge conflict markers, and
+  it rejects malformed runner case labels, unindented case-block content,
+  malformed case terminators, or labels with no exact `;;` terminator before a
+  malformed branch can hide from mode reachability checks.
   The current 500-module formal corpus passes with single leading headers,
   exactly one terminal `====` per module, no duplicate TLA declarations,
   variable/`vars` drift, CFG/module ownership drift, duplicate runner
   proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
-  module names, or formal-path containment violations.
+  module names, malformed runner case-block shape, unresolved formal wiring
+  merge markers, or formal-path containment violations.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
     (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
   - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
-    (`67 passed`)
+    (`77 passed`)
   - TLA terminator audit across `docs/formal/sumeragi/*.tla`
     (`missing 0`, `multi 0`, `trailing_after_end 0`)
   - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
