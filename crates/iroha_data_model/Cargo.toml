@@ -122,6 +122,10 @@ harness = false
 name = "chain_wire"
 harness = false
 
+[[bench]]
+name = "kagemusha_recursive_spend_payload"
+harness = false
+
 [[test]]
 name = "ui"
 required-features = ["trybuild-tests"]

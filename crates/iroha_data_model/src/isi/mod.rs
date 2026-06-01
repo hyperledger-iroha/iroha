@@ -262,6 +262,21 @@ impl From<crate::isi::zk::RegisterAssetHiddenZkPool> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::zk::RegisterZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RegisterZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::RotateZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RotateZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::RevokeZkAceIdentityCommitment> for InstructionBox {
+    fn from(i: crate::isi::zk::RevokeZkAceIdentityCommitment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::zk::ScheduleConfidentialPolicyTransition> for InstructionBox {
     fn from(i: crate::isi::zk::ScheduleConfidentialPolicyTransition) -> Self {
         InstructionBox(Box::new(i))
@@ -284,6 +299,11 @@ impl From<crate::isi::zk::ZkTransfer> for InstructionBox {
 }
 impl From<crate::isi::zk::AssetHiddenZkTransfer> for InstructionBox {
     fn from(i: crate::isi::zk::AssetHiddenZkTransfer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::zk::SubmitZkAceAuthorizedTransfer> for InstructionBox {
+    fn from(i: crate::isi::zk::SubmitZkAceAuthorizedTransfer) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1109,6 +1129,12 @@ impl From<crate::isi::offline::AuditOfflineNote> for InstructionBox {
 
 impl From<crate::isi::offline::KagemushaTransfer> for InstructionBox {
     fn from(i: crate::isi::offline::KagemushaTransfer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RedeemKagemushaRecursive> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemKagemushaRecursive) -> Self {
         InstructionBox(Box::new(i))
     }
 }

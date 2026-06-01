@@ -5,8 +5,10 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
+import java.security.MessageDigest;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -193,10 +195,13 @@ public final class HttpClientTransportTests {
     resolveAccountAliasRejectsNonIntegerIndex();
     resolveAccountAliasFailsOnMalformedJson();
     identifierNormalizationCanonicalizesInputs();
+    identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors();
+    sharedSoracloudBfvKeyBundleComponentVectorsAreComplete();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
     identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters();
     identifierReceiptVerifierAcceptsEd25519Receipt();
     identifierReceiptVerifierRejectsAdversarialReceipts();
+    identifierReceiptVerifierMatchesSharedReceiptVectors();
     invalidateAndCancelDelegatesToExecutor();
     System.out.println("[IrohaAndroid] HTTP client transport tests passed.");
   }
@@ -3192,6 +3197,37 @@ public final class HttpClientTransportTests {
     assert request.outputOpening() == opening : "Encrypted request must keep output opening";
   }
 
+  private static void identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors()
+      throws Exception {
+    final Map<String, Object> fixture = loadSharedBfvFixture();
+    assert "soracloud-bfv-identifier-envelope-v1".equals(fixture.get("vector_set"))
+        : "shared BFV fixture set mismatch";
+    assertBfvOperationKeyComponentVectors(object(fixture, "operation_vectors"));
+    final IdentifierPolicySummary policy = identifierPolicyFromBfvFixture(object(fixture, "policy"));
+    final List<Map<String, Object>> vectors = objectList(fixture, "vectors");
+    final List<String> observedDigests = new ArrayList<>();
+
+    for (final Map<String, Object> vector : vectors) {
+      final String ciphertextHex =
+          policy.encryptInput(
+              string(vector, "input_utf8"),
+              hexToBytes(string(vector, "seed_hex")));
+      assert number(vector, "expected_ciphertext_bytes").intValue() == ciphertextHex.length() / 2
+          : string(vector, "name") + " ciphertext byte length mismatch";
+      final String digest = sha256Hex(hexToBytes(ciphertextHex));
+      assert string(vector, "expected_ciphertext_sha256").equals(digest)
+          : string(vector, "name") + " ciphertext digest mismatch";
+      assert !observedDigests.contains(digest)
+          : "fixture ciphertext digest must be unique: " + digest;
+      observedDigests.add(digest);
+    }
+  }
+
+  private static void sharedSoracloudBfvKeyBundleComponentVectorsAreComplete()
+      throws Exception {
+    assertBfvOperationKeyComponentVectors(object(loadSharedBfvFixture(), "operation_vectors"));
+  }
+
   private static void identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters() {
     final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
     final IdentifierBfvPublicParameters base = sampleIdentifierBfvPublicParameters();
@@ -3313,6 +3349,286 @@ public final class HttpClientTransportTests {
         3);
   }
 
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> loadSharedFixture(final String relativePath) throws Exception {
+    Path cursor = Paths.get("").toAbsolutePath();
+    while (cursor != null) {
+      final Path candidate = cursor.resolve(relativePath);
+      if (Files.exists(candidate)) {
+        return (Map<String, Object>)
+            JsonParser.parse(new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8));
+      }
+      cursor = cursor.getParent();
+    }
+    throw new IllegalStateException(relativePath + " was not found");
+  }
+
+  private static Map<String, Object> loadSharedBfvFixture() throws Exception {
+    return loadSharedFixture("fixtures/soracloud/bfv_identifier_vectors_v1.json");
+  }
+
+  private static Map<String, Object> loadSharedReceiptFixture() throws Exception {
+    return loadSharedFixture("fixtures/soracloud/identifier_receipt_vectors_v1.json");
+  }
+
+  private static IdentifierPolicySummary identifierPolicyFromReceiptFixture(
+      final Map<String, Object> policy) {
+    return identifierPolicyFromReceiptFixture(policy, null, null);
+  }
+
+  private static IdentifierPolicySummary identifierPolicyFromReceiptFixture(
+      final Map<String, Object> policy,
+      final String policyIdOverride,
+      final String resolverPublicKeyOverride) {
+    return new IdentifierPolicySummary(
+        policyIdOverride != null ? policyIdOverride : string(policy, "policy_id"),
+        string(policy, "owner"),
+        Boolean.TRUE.equals(policy.get("active")),
+        IdentifierNormalization.PHONE_E164,
+        resolverPublicKeyOverride != null ? resolverPublicKeyOverride : string(policy, "resolver_public_key"),
+        string(policy, "backend"),
+        policy.get("input_encryption") instanceof String ? (String) policy.get("input_encryption") : null,
+        null,
+        null,
+        null);
+  }
+
+  private static IdentifierResolutionReceipt identifierReceiptFromFixture(
+      final Map<String, Object> receipt) {
+    return identifierReceiptFromFixture(receipt, null, null, null);
+  }
+
+  private static IdentifierResolutionReceipt identifierReceiptFromFixture(
+      final Map<String, Object> receipt,
+      final String outputCiphertextHashOverride,
+      final String signatureOverride,
+      final Map<String, Object> attestationOverride) {
+    return new IdentifierResolutionReceipt(
+        identifierPayloadFromFixture(object(receipt, "payload"), outputCiphertextHashOverride),
+        identifierAttestationFromFixture(
+            attestationOverride != null ? attestationOverride : object(receipt, "attestation"),
+            signatureOverride));
+  }
+
+  private static IdentifierResolutionPayload identifierPayloadFromFixture(
+      final Map<String, Object> payload, final String outputCiphertextHashOverride) {
+    return new IdentifierResolutionPayload(
+        string(payload, "policy_id"),
+        identifierExecutionFromFixture(object(payload, "execution"), outputCiphertextHashOverride),
+        outputOpeningFromFixture(object(payload, "opening")),
+        string(payload, "opaque_id"),
+        string(payload, "receipt_hash"),
+        string(payload, "uaid"),
+        string(payload, "account_id"));
+  }
+
+  private static IdentifierResolutionExecutionPayload identifierExecutionFromFixture(
+      final Map<String, Object> execution, final String outputCiphertextHashOverride) {
+    return new IdentifierResolutionExecutionPayload(
+        string(execution, "program_id"),
+        string(execution, "program_digest"),
+        string(execution, "backend"),
+        string(execution, "verification_mode"),
+        string(execution, "input_ciphertext_hash"),
+        outputCiphertextHashOverride != null
+            ? outputCiphertextHashOverride
+            : string(execution, "output_ciphertext_hash"),
+        string(execution, "parameter_digest"),
+        string(execution, "evaluation_key_digest"),
+        string(execution, "output_hash"),
+        string(execution, "associated_data_hash"),
+        number(execution, "executed_at_ms").longValue(),
+        optionalLong(execution, "expires_at_ms"));
+  }
+
+  private static RamLfeOutputOpening outputOpeningFromFixture(final Map<String, Object> opening) {
+    final Map<String, Object> payload = object(opening, "payload");
+    return new RamLfeOutputOpening(
+        new RamLfeOutputOpeningPayload(
+            string(payload, "program_id"),
+            string(payload, "input_ciphertext_hash"),
+            string(payload, "output_ciphertext_hash"),
+            string(payload, "parameter_digest"),
+            string(payload, "evaluation_key_digest"),
+            string(payload, "opened_output_hash"),
+            number(payload, "opened_at_ms").longValue(),
+            optionalLong(payload, "expires_at_ms")),
+        string(opening, "signature"));
+  }
+
+  private static IdentifierReceiptAttestation identifierAttestationFromFixture(
+      final Map<String, Object> attestation, final String signatureOverride) {
+    return new IdentifierReceiptAttestation(
+        string(attestation, "kind"),
+        signatureOverride != null ? signatureOverride : stringOrNull(attestation, "signature"),
+        stringOrNull(attestation, "proof_backend"),
+        stringOrNull(attestation, "proof_b64"));
+  }
+
+  private static IdentifierPolicySummary identifierPolicyFromBfvFixture(
+      final Map<String, Object> policy) {
+    return new IdentifierPolicySummary(
+        string(policy, "policy_id"),
+        string(policy, "owner"),
+        Boolean.TRUE.equals(policy.get("active")),
+        IdentifierNormalization.EXACT,
+        string(policy, "resolver_public_key"),
+        string(policy, "backend"),
+        string(policy, "input_encryption"),
+        null,
+        identifierBfvParametersFromFixture(
+            object(policy, "input_encryption_public_parameters_decoded")),
+        null);
+  }
+
+  private static IdentifierBfvPublicParameters identifierBfvParametersFromFixture(
+      final Map<String, Object> params) {
+    final Map<String, Object> parameters = object(params, "parameters");
+    final Map<String, Object> publicKey = object(params, "public_key");
+    return new IdentifierBfvPublicParameters(
+        new IdentifierBfvPublicParameters.Parameters(
+            number(parameters, "polynomial_degree").longValue(),
+            number(parameters, "plaintext_modulus").longValue(),
+            number(parameters, "ciphertext_modulus").longValue(),
+            number(parameters, "decomposition_base_log").intValue()),
+        new IdentifierBfvPublicParameters.PublicKey(
+            longList(publicKey, "b"),
+            longList(publicKey, "a")),
+        number(params, "max_input_bytes").intValue());
+  }
+
+  private static String sha256Hex(final byte[] bytes) throws Exception {
+    return hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+  }
+
+  private static void assertBfvOperationKeyComponentVectors(
+      final Map<String, Object> operationVectors) {
+    assert "soracloud-bfv-operation-v1".equals(operationVectors.get("vector_set"))
+        : "operation vector set mismatch";
+    final Map<String, Object> publicParameters = object(operationVectors, "public_parameters");
+    final long publicDegree = number(publicParameters, "polynomial_degree").longValue();
+    final Map<String, Object> evaluationKey = object(operationVectors, "evaluation_key_bundle");
+    assert number(publicParameters, "decomposition_base_log").longValue()
+            == number(evaluationKey, "decomposition_base_log").longValue()
+        : "evaluation-key decomposition base log mismatch";
+    assert number(evaluationKey, "decomposition_digit_count").longValue()
+            == number(evaluationKey, "relinearization_entry_count").longValue()
+        : "evaluation-key decomposition digit count mismatch";
+    final List<Map<String, Object>> entries =
+        objectList(evaluationKey, "relinearization_entries");
+    assert entries.size() == number(evaluationKey, "relinearization_entry_count").intValue()
+        : "relinearization entry count mismatch";
+    final List<String> componentDigests = new ArrayList<>();
+    for (int index = 0; index < entries.size(); index++) {
+      final Map<String, Object> entry = entries.get(index);
+      assert number(entry, "index").intValue() == index : "relinearization entry index mismatch";
+      assert number(entry, "coefficient_count").longValue() == publicDegree
+          : "relinearization entry coefficient count mismatch";
+      assertBfvComponentDigest("relinearization entry " + index + " b", string(entry, "b_sha256"), componentDigests);
+      assertBfvComponentDigest("relinearization entry " + index + " a", string(entry, "a_sha256"), componentDigests);
+    }
+    final List<Map<String, Object>> rotationKeys = objectList(operationVectors, "rotation_keys");
+    assert rotationKeys.size() == number(evaluationKey, "rotation_key_count").intValue()
+        : "rotation key count mismatch";
+    for (final Map<String, Object> key : rotationKeys) {
+      final Map<String, Object> components = object(key, "zero_refresh_components");
+      final long steps = number(key, "rotation_steps").longValue();
+      assert number(components, "coefficient_count").longValue() == publicDegree
+          : "rotation key " + steps + " coefficient count mismatch";
+      assertBfvComponentDigest("rotation key " + steps + " c0", string(components, "c0_sha256"), componentDigests);
+      assertBfvComponentDigest("rotation key " + steps + " c1", string(components, "c1_sha256"), componentDigests);
+    }
+    final Map<String, Object> bootstrap = object(operationVectors, "bootstrap_key");
+    assert string(evaluationKey, "bootstrap_key_id").equals(string(bootstrap, "key_id"))
+        : "bootstrap key id mismatch";
+    final Map<String, Object> bootstrapComponents = object(bootstrap, "zero_refresh_components");
+    assert number(bootstrapComponents, "coefficient_count").longValue() == publicDegree
+        : "bootstrap coefficient count mismatch";
+    assertBfvComponentDigest("bootstrap c0", string(bootstrapComponents, "c0_sha256"), componentDigests);
+    assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests);
+  }
+
+  private static void assertBfvComponentDigest(
+      final String label, final String value, final List<String> seen) {
+    assert value.matches("[0-9A-F]{64}") : label + " must be canonical uppercase SHA-256";
+    assert !value.equals("0".repeat(64)) : label + " must not be zero";
+    assert !seen.contains(value) : label + " must be unique";
+    seen.add(value);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> object(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof Map)) {
+      throw new IllegalArgumentException(key + " must be an object");
+    }
+    return (Map<String, Object>) value;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<Map<String, Object>> objectList(
+      final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof List)) {
+      throw new IllegalArgumentException(key + " must be a list");
+    }
+    return (List<Map<String, Object>>) value;
+  }
+
+  private static String string(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(key + " must be a string");
+    }
+    return (String) value;
+  }
+
+  private static String stringOrNull(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(key + " must be a string");
+    }
+    return (String) value;
+  }
+
+  private static Number number(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof Number)) {
+      throw new IllegalArgumentException(key + " must be a number");
+    }
+    return (Number) value;
+  }
+
+  private static Long optionalLong(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (value == null) {
+      return null;
+    }
+    if (!(value instanceof Number)) {
+      throw new IllegalArgumentException(key + " must be a number");
+    }
+    return ((Number) value).longValue();
+  }
+
+  private static List<Long> longList(final Map<String, Object> root, final String key) {
+    final Object value = root.get(key);
+    if (!(value instanceof List)) {
+      throw new IllegalArgumentException(key + " must be a list");
+    }
+    final List<?> raw = (List<?>) value;
+    final List<Long> out = new ArrayList<>();
+    for (final Object entry : raw) {
+      if (!(entry instanceof Number)) {
+        throw new IllegalArgumentException(key + " entries must be numbers");
+      }
+      out.add(((Number) entry).longValue());
+    }
+    return out;
+  }
+
   private static List<Long> withoutFirst(final List<Long> values) {
     final ArrayList<Long> truncated = new ArrayList<>(values);
     truncated.remove(0);
@@ -3427,6 +3743,93 @@ public final class HttpClientTransportTests {
                     new IdentifierReceiptAttestation("signed", "abc", null, null)),
                 policy),
         "identifier verifier must reject malformed signature hex");
+  }
+
+  private static void identifierReceiptVerifierMatchesSharedReceiptVectors()
+      throws Exception {
+    final Map<String, Object> fixture = loadSharedReceiptFixture();
+    assert "identifier-receipt-attestation-v1".equals(fixture.get("vector_set"))
+        : "shared identifier receipt fixture set mismatch";
+    final IdentifierPolicySummary policy = identifierPolicyFromReceiptFixture(object(fixture, "policy"));
+    final IdentifierResolutionReceipt receipt = identifierReceiptFromFixture(object(fixture, "receipt"));
+
+    assert string(fixture, "canonical_payload_sha256")
+        .equals(sha256Hex(IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload())))
+        : "canonical receipt payload digest mismatch";
+    assert receipt.verifyAttestation(policy)
+        : "shared identifier receipt vector must verify";
+
+    for (final Map<String, Object> vector : objectList(fixture, "attestation_vectors")) {
+      final String name = string(vector, "name");
+      final IdentifierReceiptAttestation attestation =
+          identifierAttestationFromFixture(object(vector, "attestation"), null);
+      final byte[] encoded = IdentifierReceiptCanonicalEncoder.encodeAttestation(attestation);
+      assert number(vector, "expected_attestation_bytes").intValue() == encoded.length
+          : name + " attestation byte length mismatch";
+      assert string(vector, "expected_attestation_sha256").equals(sha256Hex(encoded))
+          : name + " attestation digest mismatch";
+
+      final IdentifierReceiptAttestation decoded =
+          IdentifierReceiptCanonicalEncoder.decodeAttestation(encoded);
+      assert attestation.kind().equals(decoded.kind()) : name + " attestation kind mismatch";
+      if ("signed".equals(attestation.kind())) {
+        assert attestation.signature().equalsIgnoreCase(decoded.signature())
+            : name + " signature roundtrip mismatch";
+      } else if ("proof".equals(attestation.kind())) {
+        assert Objects.equals(attestation.proofBackend(), decoded.proofBackend())
+            : name + " proof backend roundtrip mismatch";
+        assert Objects.equals(attestation.proofB64(), decoded.proofB64())
+            : name + " proof payload roundtrip mismatch";
+        expectIllegalArgument(
+            () -> new IdentifierResolutionReceipt(receipt.payload(), attestation)
+                .verifyAttestation(policy),
+            name + " proof verifier gate");
+      } else {
+        throw new IllegalArgumentException("Unhandled attestation kind " + attestation.kind());
+      }
+    }
+
+    for (final Map<String, Object> negative : objectList(fixture, "negative_cases")) {
+      final String mutation = string(negative, "mutation");
+      final IdentifierPolicySummary mutatedPolicy;
+      if ("policy.resolver_public_key".equals(mutation)) {
+        mutatedPolicy =
+            identifierPolicyFromReceiptFixture(
+                object(fixture, "policy"), null, string(negative, "value"));
+      } else if ("policy.policy_id".equals(mutation)) {
+        mutatedPolicy =
+            identifierPolicyFromReceiptFixture(
+                object(fixture, "policy"), string(negative, "value"), null);
+      } else {
+        mutatedPolicy = policy;
+      }
+      final IdentifierResolutionReceipt mutatedReceipt;
+      if ("receipt.payload.execution.output_ciphertext_hash".equals(mutation)) {
+        mutatedReceipt =
+            identifierReceiptFromFixture(
+                object(fixture, "receipt"), string(negative, "value"), null, null);
+      } else if ("receipt.attestation.signature".equals(mutation)) {
+        mutatedReceipt =
+            identifierReceiptFromFixture(
+                object(fixture, "receipt"), null, string(negative, "value"), null);
+      } else if ("receipt.attestation".equals(mutation)) {
+        mutatedReceipt =
+            identifierReceiptFromFixture(
+                object(fixture, "receipt"), null, null, object(negative, "value"));
+      } else {
+        mutatedReceipt = receipt;
+      }
+
+      if (negative.get("expected_error_contains") instanceof String) {
+        expectIllegalArgument(
+            () -> mutatedReceipt.verifyAttestation(mutatedPolicy),
+            string(negative, "name"));
+      } else {
+        final boolean expected = Boolean.TRUE.equals(negative.get("expected_result"));
+        assert mutatedReceipt.verifyAttestation(mutatedPolicy) == expected
+            : string(negative, "name") + " expected " + expected;
+      }
+    }
   }
 
   private static IdentifierResolutionPayload sampleIdentifierResolutionPayload(

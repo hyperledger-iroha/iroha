@@ -776,7 +776,23 @@ fn pagination_query_parameters() -> Vec<Value> {
             "Optional starting offset (default 0).",
             Some("uint64"),
         ),
+        string_query_param(
+            "count_mode",
+            "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`.",
+        ),
     ]
+}
+
+fn app_list_query_parameters() -> Vec<Value> {
+    let mut params = vec![
+        string_query_param(
+            "filter",
+            "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
+        ),
+        string_query_param("sort", "Optional CSV sort spec, e.g., `id:asc`."),
+    ];
+    params.extend(pagination_query_parameters());
+    params
 }
 
 fn explorer_pagination_query_parameters() -> Vec<Value> {
@@ -1543,6 +1559,50 @@ fn transaction_paths() -> Map {
             iso_profile_selection_parameters(),
         )),
     );
+    for (path, message_type, summary) in [
+        (
+            "/v1/iso20022/pacs002",
+            "pacs.002",
+            "Submit ISO 20022 pacs.002 lifecycle payload.",
+        ),
+        (
+            "/v1/iso20022/pacs004",
+            "pacs.004",
+            "Submit ISO 20022 pacs.004 lifecycle payload.",
+        ),
+        (
+            "/v1/iso20022/camt056",
+            "camt.056",
+            "Submit ISO 20022 camt.056 lifecycle payload.",
+        ),
+        (
+            "/v1/iso20022/sese023",
+            "sese.023",
+            "Submit ISO 20022 sese.023 settlement instruction payload.",
+        ),
+        (
+            "/v1/iso20022/sese024",
+            "sese.024",
+            "Submit ISO 20022 sese.024 settlement status payload.",
+        ),
+        (
+            "/v1/iso20022/sese025",
+            "sese.025",
+            "Submit ISO 20022 sese.025 settlement confirmation payload.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "ISO20022",
+                summary,
+                &format!("Submit a {message_type} message for ISO 20022 lifecycle bridging."),
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                iso_profile_selection_parameters(),
+            )),
+        );
+    }
     paths.insert(
         "/v1/iso20022/status/{msg_id}".to_owned(),
         Value::Object(json_get_operation(
@@ -1573,6 +1633,43 @@ fn transaction_paths() -> Map {
             vec![string_path_param("msg_id", "ISO 20022 message id.")],
         )),
     );
+    for (path, message_type, summary, description) in [
+        (
+            "/v1/iso20022/messages/{msg_id}/pacs004",
+            "pacs.004",
+            "Fetch ISO 20022 pacs.004 return XML.",
+            "Return a payment return message from the durable ISO bridge record.",
+        ),
+        (
+            "/v1/iso20022/messages/{msg_id}/camt029",
+            "camt.029",
+            "Fetch ISO 20022 camt.029 cancellation-resolution XML.",
+            "Return a cancellation resolution message from the durable ISO bridge record.",
+        ),
+        (
+            "/v1/iso20022/messages/{msg_id}/sese024",
+            "sese.024",
+            "Fetch ISO 20022 sese.024 settlement-status XML.",
+            "Return a securities settlement status advice from the durable ISO bridge record.",
+        ),
+        (
+            "/v1/iso20022/messages/{msg_id}/sese025",
+            "sese.025",
+            "Fetch ISO 20022 sese.025 settlement-confirmation XML.",
+            "Return a securities settlement confirmation from the durable ISO bridge record.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_get_operation(
+                "ISO20022",
+                summary,
+                &format!("{description} The response body is {message_type} XML."),
+                "#/components/schemas/XmlText",
+                vec![string_path_param("msg_id", "ISO 20022 message id.")],
+            )),
+        );
+    }
     paths
 }
 
@@ -3022,7 +3119,7 @@ fn account_paths() -> Map {
             "Accounts",
             "List accounts.",
             "List accounts visible to the caller. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AccountListResponse",
             Vec::new(),
         )),
     );
@@ -3033,7 +3130,7 @@ fn account_paths() -> Map {
             "Query accounts.",
             "Query accounts with JSON envelope. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AccountQueryResponse",
             Vec::new(),
         )),
     );
@@ -3126,7 +3223,7 @@ fn account_paths() -> Map {
                 "Accounts",
                 "List account assets.",
                 "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering). Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
-                "#/components/schemas/JsonValue",
+                "#/components/schemas/AccountAssetListResponse",
                 params,
             )
         }),
@@ -3138,7 +3235,7 @@ fn account_paths() -> Map {
             "Query account assets.",
             "Query assets held by an account. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AccountAssetQueryResponse",
             vec![string_path_param(
                 "account_id",
                 "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -3305,8 +3402,8 @@ fn domain_paths() -> Map {
             "Domains",
             "List domains.",
             "List registered domains.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "#/components/schemas/DomainListResponse",
+            app_list_query_parameters(),
         )),
     );
     paths.insert(
@@ -3316,7 +3413,7 @@ fn domain_paths() -> Map {
             "Query domains.",
             "Query domains with JSON envelope.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/DomainQueryResponse",
             Vec::new(),
         )),
     );
@@ -3331,7 +3428,7 @@ fn asset_paths() -> Map {
             "Assets",
             "List asset definitions.",
             "List asset definitions as full objects with canonical Base58 id, optional alias, and `alias_binding` lease metadata when an alias exists.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AssetDefinitionListResponse",
             Vec::new(),
         )),
     );
@@ -3355,7 +3452,7 @@ fn asset_paths() -> Map {
             "Query asset definitions.",
             "Query asset definitions with a JSON envelope and full asset-definition objects in the response, including `alias_binding` lease metadata when present.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AssetDefinitionQueryResponse",
             Vec::new(),
         )),
     );
@@ -3371,7 +3468,7 @@ fn asset_paths() -> Map {
                 "Assets",
                 "List asset holders.",
                 "List holders for an asset definition (supports pagination plus optional account_id and scope filtering).",
-                "#/components/schemas/JsonValue",
+                "#/components/schemas/AssetHolderListResponse",
                 params,
             )
         }),
@@ -3383,7 +3480,7 @@ fn asset_paths() -> Map {
             "Query asset holders.",
             "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Aggregate mode supports exact PAYNET-style PKR directory queries such as grouping by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. In production aggregate mode Torii serves published DA projection shards from local cache/storage (`query_source=projection_da_cache`) and hydrates missing shards from approved SoraFS providers on demand (`query_source=projection_da_hydrated`). Incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/AssetHolderQueryResponse",
             vec![string_path_param(
                 "definition_id",
                 "Asset selector (unprefixed Base58 id or alias).",
@@ -3414,8 +3511,8 @@ fn nft_paths() -> Map {
             "NFTs",
             "List NFTs.",
             "List NFTs visible to the caller.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "#/components/schemas/NftListResponse",
+            app_list_query_parameters(),
         )),
     );
     paths.insert(
@@ -3425,7 +3522,7 @@ fn nft_paths() -> Map {
             "Query NFTs.",
             "Query NFTs with JSON envelope.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/NftQueryResponse",
             Vec::new(),
         )),
     );
@@ -3440,8 +3537,8 @@ fn rwa_paths() -> Map {
             "RWAs",
             "List RWA lots.",
             "List RWA lots visible to the caller.",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "#/components/schemas/RwaListResponse",
+            app_list_query_parameters(),
         )),
     );
     paths.insert(
@@ -3451,7 +3548,7 @@ fn rwa_paths() -> Map {
             "Query RWA lots.",
             "Query RWA lots with JSON envelope.",
             "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/RwaQueryResponse",
             Vec::new(),
         )),
     );
@@ -5602,6 +5699,7 @@ fn repo_agreements_get_operation() -> Map {
             query_param("offset", "integer", "Zero-based pagination offset (default 0)."),
             query_param("sort", "string", "Optional comma-separated sort expression (e.g., `id:asc,maturity_timestamp_ms:desc`)."),
             query_param("filter", "string", "JSON-encoded FilterExpr limiting results (fields: id, initiator, counterparty, custodian)."),
+            query_param("count_mode", "string", "Count mode: `bounded` omits exact totals; `exact` includes an exact `total`."),
         ]),
     );
     operation.insert(
@@ -7793,6 +7891,41 @@ fn versioned_json_payload_schema(content_description: &str) -> Value {
     })
 }
 
+fn app_page_schema(item_schema_ref: &str) -> Value {
+    let mut schema = norito::json!({
+        "allOf": [
+            { "$ref": "#/components/schemas/AppPageMetadata" },
+            {
+                "type": "object",
+                "required": ["items"],
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "description": "Current result page."
+                    }
+                }
+            }
+        ]
+    });
+    let items = schema
+        .get_mut("allOf")
+        .and_then(Value::as_array_mut)
+        .and_then(|all_of| all_of.get_mut(1))
+        .and_then(Value::as_object_mut)
+        .and_then(|object| object.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut("items"))
+        .and_then(Value::as_object_mut)
+        .expect("app page schema items property exists");
+    items.insert(
+        "items".into(),
+        norito::json!({
+            "$ref": item_schema_ref
+        }),
+    );
+    schema
+}
+
 fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
     schemas.insert(
@@ -7809,6 +7942,210 @@ fn openapi_schemas() -> Map {
             "type": "array",
             "items": { "$ref": "#/components/schemas/JsonValue" }
         }),
+    );
+    schemas.insert(
+        "AppPageMetadata".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["items", "has_more", "count_mode"],
+            "additionalProperties": true,
+            "properties": {
+                "total": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Exact number of matching rows when `count_mode` is `exact`; omitted or null for bounded count mode."
+                },
+                "has_more": {
+                    "type": "boolean",
+                    "description": "Whether a later page is available from the same query."
+                },
+                "count_mode": {
+                    "type": "string",
+                    "enum": ["bounded", "exact"],
+                    "description": "Actual count mode used by Torii for this response."
+                },
+                "indexed_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Indexed block height for generic/projection query responses when present."
+                },
+                "indexed_block_hash": {
+                    "type": ["string", "null"],
+                    "description": "Indexed block hash for generic/projection query responses when present."
+                },
+                "query_source": {
+                    "type": "string",
+                    "description": "Backend source label for generic/projection query responses when present."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": true,
+            "properties": {
+                "id": { "type": "string" },
+                "primary_alias": { "type": ["string", "null"] },
+                "primary_alias_name": { "type": ["string", "null"] },
+                "primary_alias_dataspace": { "type": ["string", "null"] },
+                "primary_alias_domain": { "type": ["string", "null"] },
+                "has_primary_alias": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountListResponse".to_owned(),
+        app_page_schema("#/components/schemas/AccountListItem"),
+    );
+    schemas.insert(
+        "AccountQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/AccountListItem"),
+    );
+    schemas.insert(
+        "DomainListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": true,
+            "properties": {
+                "id": { "type": "string" },
+                "owned_by": { "type": ["string", "null"] },
+                "metadata": { "$ref": "#/components/schemas/JsonValue" }
+            }
+        }),
+    );
+    schemas.insert(
+        "DomainListResponse".to_owned(),
+        app_page_schema("#/components/schemas/DomainListItem"),
+    );
+    schemas.insert(
+        "DomainQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/DomainListItem"),
+    );
+    schemas.insert(
+        "AccountAssetListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["asset", "quantity"],
+            "additionalProperties": true,
+            "properties": {
+                "account_id": { "type": "string" },
+                "asset": { "type": "string" },
+                "asset_id": { "type": "string" },
+                "asset_name": { "type": ["string", "null"] },
+                "asset_alias": { "type": ["string", "null"] },
+                "scope": { "type": "string" },
+                "quantity": { "type": "string" },
+                "primary_alias": { "type": ["string", "null"] },
+                "primary_alias_name": { "type": ["string", "null"] },
+                "primary_alias_dataspace": { "type": ["string", "null"] },
+                "primary_alias_domain": { "type": ["string", "null"] },
+                "has_primary_alias": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountAssetListResponse".to_owned(),
+        app_page_schema("#/components/schemas/AccountAssetListItem"),
+    );
+    schemas.insert(
+        "AccountAssetQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/AccountAssetListItem"),
+    );
+    schemas.insert(
+        "AssetDefinitionListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": true,
+            "properties": {
+                "id": { "type": "string" },
+                "name": { "type": "string" },
+                "alias": { "type": ["string", "null"] },
+                "alias_binding": { "$ref": "#/components/schemas/JsonValue" },
+                "metadata": { "$ref": "#/components/schemas/JsonValue" },
+                "owned_by": { "type": ["string", "null"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetDefinitionListResponse".to_owned(),
+        app_page_schema("#/components/schemas/AssetDefinitionListItem"),
+    );
+    schemas.insert(
+        "AssetDefinitionQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/AssetDefinitionListItem"),
+    );
+    schemas.insert(
+        "AssetHolderListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "asset", "scope", "quantity"],
+            "additionalProperties": true,
+            "properties": {
+                "account_id": { "type": "string" },
+                "asset": { "type": "string" },
+                "asset_alias": { "type": ["string", "null"] },
+                "scope": { "type": "string" },
+                "quantity": { "type": "string" },
+                "primary_alias": { "type": ["string", "null"] },
+                "primary_alias_name": { "type": ["string", "null"] },
+                "primary_alias_dataspace": { "type": ["string", "null"] },
+                "primary_alias_domain": { "type": ["string", "null"] },
+                "has_primary_alias": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetHolderListResponse".to_owned(),
+        app_page_schema("#/components/schemas/AssetHolderListItem"),
+    );
+    schemas.insert(
+        "AssetHolderQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/AssetHolderListItem"),
+    );
+    schemas.insert(
+        "NftListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": true,
+            "properties": {
+                "id": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "NftListResponse".to_owned(),
+        app_page_schema("#/components/schemas/NftListItem"),
+    );
+    schemas.insert(
+        "NftQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/NftListItem"),
+    );
+    schemas.insert(
+        "RwaListItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["id"],
+            "additionalProperties": true,
+            "properties": {
+                "id": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "RwaListResponse".to_owned(),
+        app_page_schema("#/components/schemas/RwaListItem"),
+    );
+    schemas.insert(
+        "RwaQueryResponse".to_owned(),
+        app_page_schema("#/components/schemas/RwaListItem"),
     );
     schemas.insert(
         "Hash".to_owned(),
@@ -10288,21 +10625,7 @@ fn openapi_schemas() -> Map {
     );
     schemas.insert(
         "RepoAgreementListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "additionalProperties": false,
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": { "$ref": "#/components/schemas/RepoAgreement" }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64"
-                }
-            }
-        }),
+        app_page_schema("#/components/schemas/RepoAgreement"),
     );
     schemas.insert(
         "RepoAgreementsQueryRequest".to_owned(),
@@ -10311,6 +10634,9 @@ fn openapi_schemas() -> Map {
             "required": ["pagination"],
             "additionalProperties": false,
             "properties": {
+                "query": {
+                    "type": ["string", "null"]
+                },
                 "pagination": {
                     "type": "object",
                     "required": ["offset"],
@@ -10344,9 +10670,15 @@ fn openapi_schemas() -> Map {
                     "type": "object",
                     "description": "Norito filter expression tree."
                 },
+                "select": { "$ref": "#/components/schemas/JsonValue" },
+                "aggregate": { "$ref": "#/components/schemas/JsonValue" },
                 "fetch_size": {
-                    "type": "integer",
+                    "type": ["integer", "null"],
                     "format": "uint64"
+                },
+                "count_mode": {
+                    "type": ["string", "null"],
+                    "enum": ["bounded", "exact", null]
                 }
             }
         }),
@@ -12890,6 +13222,14 @@ mod tests {
         for key in [
             "JsonValue",
             "JsonList",
+            "AppPageMetadata",
+            "AccountQueryResponse",
+            "DomainQueryResponse",
+            "AccountAssetQueryResponse",
+            "AssetHolderQueryResponse",
+            "NftQueryResponse",
+            "RwaQueryResponse",
+            "RepoAgreementListResponse",
             "ApiVersionInfo",
             "PeerIdList",
             "PrivateUploadedModelExecuteRequest",
@@ -12933,6 +13273,163 @@ mod tests {
             "continue_cursor",
         ] {
             assert!(properties.contains_key(key), "metadata field missing {key}");
+        }
+    }
+
+    #[test]
+    fn generated_spec_documents_app_query_page_metadata() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        for (path, method, expected_ref) in [
+            (
+                "/v1/accounts",
+                "get",
+                "#/components/schemas/AccountListResponse",
+            ),
+            (
+                "/v1/accounts/query",
+                "post",
+                "#/components/schemas/AccountQueryResponse",
+            ),
+            (
+                "/v1/domains",
+                "get",
+                "#/components/schemas/DomainListResponse",
+            ),
+            (
+                "/v1/domains/query",
+                "post",
+                "#/components/schemas/DomainQueryResponse",
+            ),
+            (
+                "/v1/accounts/{account_id}/assets",
+                "get",
+                "#/components/schemas/AccountAssetListResponse",
+            ),
+            (
+                "/v1/accounts/{account_id}/assets/query",
+                "post",
+                "#/components/schemas/AccountAssetQueryResponse",
+            ),
+            (
+                "/v1/assets/definitions",
+                "get",
+                "#/components/schemas/AssetDefinitionListResponse",
+            ),
+            (
+                "/v1/assets/definitions/query",
+                "post",
+                "#/components/schemas/AssetDefinitionQueryResponse",
+            ),
+            (
+                "/v1/assets/{definition_id}/holders",
+                "get",
+                "#/components/schemas/AssetHolderListResponse",
+            ),
+            (
+                "/v1/assets/{definition_id}/holders/query",
+                "post",
+                "#/components/schemas/AssetHolderQueryResponse",
+            ),
+            ("/v1/nfts", "get", "#/components/schemas/NftListResponse"),
+            (
+                "/v1/nfts/query",
+                "post",
+                "#/components/schemas/NftQueryResponse",
+            ),
+            ("/v1/rwas", "get", "#/components/schemas/RwaListResponse"),
+            (
+                "/v1/rwas/query",
+                "post",
+                "#/components/schemas/RwaQueryResponse",
+            ),
+            (
+                "/v1/repo/agreements",
+                "get",
+                "#/components/schemas/RepoAgreementListResponse",
+            ),
+            (
+                "/v1/repo/agreements/query",
+                "post",
+                "#/components/schemas/RepoAgreementListResponse",
+            ),
+        ] {
+            let schema_ref = paths
+                .get(path)
+                .and_then(Value::as_object)
+                .and_then(|path_item| path_item.get(method))
+                .and_then(Value::as_object)
+                .and_then(|operation| operation.get("responses"))
+                .and_then(Value::as_object)
+                .and_then(|responses| responses.get("200"))
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("content"))
+                .and_then(Value::as_object)
+                .and_then(|content| content.get("application/json"))
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str)
+                .expect("path response schema ref");
+            assert_eq!(schema_ref, expected_ref, "{method} {path}");
+        }
+
+        let schemas = doc
+            .get("components")
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schema section");
+        let metadata = schemas
+            .get("AppPageMetadata")
+            .and_then(Value::as_object)
+            .expect("app page metadata schema");
+        let required = metadata
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("metadata required fields");
+        for field in ["items", "has_more", "count_mode"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "metadata required fields should include {field}"
+            );
+        }
+        assert!(
+            !required.iter().any(|value| value.as_str() == Some("total")),
+            "bounded count responses must not require total"
+        );
+        let properties = metadata
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("metadata properties");
+        for field in [
+            "total",
+            "has_more",
+            "count_mode",
+            "indexed_height",
+            "indexed_block_hash",
+            "query_source",
+        ] {
+            assert!(
+                properties.contains_key(field),
+                "metadata properties should include {field}"
+            );
+        }
+
+        let repo_request_properties = schemas
+            .get("RepoAgreementsQueryRequest")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("repo query request properties");
+        for field in ["filter", "select", "aggregate", "fetch_size", "count_mode"] {
+            assert!(
+                repo_request_properties.contains_key(field),
+                "repo query request should document {field}"
+            );
         }
     }
 

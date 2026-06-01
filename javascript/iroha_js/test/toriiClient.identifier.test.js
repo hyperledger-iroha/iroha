@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
-import { generateKeyPairSync, sign as signRaw } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as signRaw } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
   AccountAddress,
   ToriiClient,
   buildIdentifierRequestForPolicy,
+  encodeIdentifierResolutionReceiptAttestation,
   encodeIdentifierResolutionReceiptPayload,
   encryptIdentifierInputForPolicy,
   getIdentifierBfvPublicParameters,
@@ -56,6 +58,19 @@ const BFV_PUBLIC_PARAMETERS = {
 };
 const BFV_ENCRYPTED_INPUT_HEX =
   "4e52543000001042e5b988077612440e4cd45673596b00b0040000000000004887a2a6d485fb5100a804000000000000040000000000000020010000000000008800000000000000080000000000000008000000000000002cab6c00000000000800000000000000440e92000000000008000000000000005a25000000000000080000000000000049671100000000000800000000000000bd3e2300000000000800000000000000403d85000000000008000000000000005619f900000000000800000000000000bd73fc0000000000880000000000000008000000000000000800000000000000ed884300000000000800000000000000dc21b000000000000800000000000000fe7c50000000000008000000000000001639a3000000000008000000000000006b979b00000000000800000000000000ddd4410000000000080000000000000052086600000000000800000000000000ee13ae00000000002001000000000000880000000000000008000000000000000800000000000000d96d690000000000080000000000000092060e0000000000080000000000000034077500000000000800000000000000dcc4190000000000080000000000000062ea230000000000080000000000000055ef0a00000000000800000000000000ac52d400000000000800000000000000e945790000000000880000000000000008000000000000000800000000000000f3214400000000000800000000000000caedd2000000000008000000000000001cfb5b00000000000800000000000000d26e660000000000080000000000000016ec0e000000000008000000000000003cee83000000000008000000000000006d7ef900000000000800000000000000c2fbbb00000000002001000000000000880000000000000008000000000000000800000000000000c9c7eb00000000000800000000000000c8c04800000000000800000000000000ef1e8700000000000800000000000000aed22c000000000008000000000000006021990000000000080000000000000035ac8c00000000000800000000000000d24393000000000008000000000000008a206d0000000000880000000000000008000000000000000800000000000000407ded00000000000800000000000000d79c3400000000000800000000000000a0332c0000000000080000000000000091fe5700000000000800000000000000543de8000000000008000000000000005eb9df00000000000800000000000000a7c213000000000008000000000000006e03c20000000000200100000000000088000000000000000800000000000000080000000000000003d654000000000008000000000000005c874400000000000800000000000000567ab50000000000080000000000000007273100000000000800000000000000ff6d0a00000000000800000000000000077466000000000008000000000000006c1c1a000000000008000000000000006f4fc200000000008800000000000000080000000000000008000000000000002f884f0000000000080000000000000041b0a100000000000800000000000000caf929000000000008000000000000005848730000000000080000000000000061909200000000000800000000000000f5f5dd00000000000800000000000000435a3b000000000008000000000000009a9f690000000000";
+const BFV_VECTOR_FIXTURE = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/soracloud/bfv_identifier_vectors_v1.json", import.meta.url),
+    "utf8",
+  ),
+);
+const IDENTIFIER_RECEIPT_VECTOR_FIXTURE = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/soracloud/identifier_receipt_vectors_v1.json", import.meta.url),
+    "utf8",
+  ),
+);
+const BFV_COMPONENT_DIGEST_RE = /^[0-9A-F]{64}$/u;
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -89,6 +104,57 @@ function sampleOutputOpening(overrides = {}) {
     },
     signature: overrides.signature ?? "ab".repeat(64),
   };
+}
+
+function sha256HexFromHex(hex) {
+  return createHash("sha256")
+    .update(Buffer.from(hex, "hex"))
+    .digest("hex")
+    .toUpperCase();
+}
+
+function sha256Hex(bytes) {
+  return createHash("sha256").update(bytes).digest("hex").toUpperCase();
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function assertBfvComponentDigest(label, value, seen) {
+  assert.equal(typeof value, "string", `${label}: digest must be a string`);
+  assert.match(value, BFV_COMPONENT_DIGEST_RE, `${label}: digest must be canonical uppercase SHA-256`);
+  assert.notEqual(value, "0".repeat(64), `${label}: digest must not be zero`);
+  assert.equal(seen.has(value), false, `${label}: component digest must be unique`);
+  seen.add(value);
+}
+
+function assertBfvOperationKeyComponentVectors(operationVectors) {
+  assert.equal(operationVectors.vector_set, "soracloud-bfv-operation-v1");
+  const publicDegree = operationVectors.public_parameters.polynomial_degree;
+  const evaluationKey = operationVectors.evaluation_key_bundle;
+  assert.equal(evaluationKey.decomposition_base_log, operationVectors.public_parameters.decomposition_base_log);
+  assert.equal(evaluationKey.decomposition_digit_count, evaluationKey.relinearization_entry_count);
+  assert.equal(evaluationKey.relinearization_entries.length, evaluationKey.relinearization_entry_count);
+  const componentDigests = new Set();
+  for (const [index, entry] of evaluationKey.relinearization_entries.entries()) {
+    assert.equal(entry.index, index, `relinearization entry ${index}: index`);
+    assert.equal(entry.coefficient_count, publicDegree, `relinearization entry ${index}: coefficient count`);
+    assertBfvComponentDigest(`relinearization entry ${index} b`, entry.b_sha256, componentDigests);
+    assertBfvComponentDigest(`relinearization entry ${index} a`, entry.a_sha256, componentDigests);
+  }
+  assert.equal(operationVectors.rotation_keys.length, evaluationKey.rotation_key_count);
+  for (const key of operationVectors.rotation_keys) {
+    const components = key.zero_refresh_components;
+    assert.equal(components.coefficient_count, publicDegree, `rotation key ${key.rotation_steps}: coefficient count`);
+    assertBfvComponentDigest(`rotation key ${key.rotation_steps} c0`, components.c0_sha256, componentDigests);
+    assertBfvComponentDigest(`rotation key ${key.rotation_steps} c1`, components.c1_sha256, componentDigests);
+  }
+  const bootstrap = operationVectors.bootstrap_key;
+  assert.equal(bootstrap.key_id, evaluationKey.bootstrap_key_id);
+  assert.equal(bootstrap.zero_refresh_components.coefficient_count, publicDegree);
+  assertBfvComponentDigest("bootstrap key c0", bootstrap.zero_refresh_components.c0_sha256, componentDigests);
+  assertBfvComponentDigest("bootstrap key c1", bootstrap.zero_refresh_components.c1_sha256, componentDigests);
 }
 
 function sampleExecution(overrides = {}) {
@@ -353,6 +419,95 @@ test("verifyIdentifierResolutionReceipt rejects adversarial receipt mutations", 
   );
 });
 
+test("verifyIdentifierResolutionReceipt matches shared receipt vectors", () => {
+  assert.equal(
+    IDENTIFIER_RECEIPT_VECTOR_FIXTURE.vector_set,
+    "identifier-receipt-attestation-v1",
+  );
+  const payloadBytes = Buffer.from(
+    encodeIdentifierResolutionReceiptPayload(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload),
+  );
+  assert.equal(
+    sha256Hex(payloadBytes),
+    IDENTIFIER_RECEIPT_VECTOR_FIXTURE.canonical_payload_sha256,
+  );
+  assert.equal(
+    verifyIdentifierResolutionReceipt(
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt,
+      IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+    ),
+    true,
+  );
+
+  for (const vector of IDENTIFIER_RECEIPT_VECTOR_FIXTURE.attestation_vectors) {
+    const encoded = Buffer.from(
+      encodeIdentifierResolutionReceiptAttestation(vector.attestation),
+    );
+    assert.equal(
+      encoded.length,
+      vector.expected_attestation_bytes,
+      `${vector.name}: attestation byte length`,
+    );
+    assert.equal(
+      sha256Hex(encoded),
+      vector.expected_attestation_sha256,
+      `${vector.name}: attestation digest`,
+    );
+    if (vector.attestation.kind === "proof") {
+      assert.throws(
+        () =>
+          verifyIdentifierResolutionReceipt(
+            {
+              payload: IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt.payload,
+              attestation: vector.attestation,
+            },
+            IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy,
+          ),
+        /proof attestations require an external verifier/,
+        `${vector.name}: proof verifier gate`,
+      );
+    }
+  }
+
+  for (const negative of IDENTIFIER_RECEIPT_VECTOR_FIXTURE.negative_cases) {
+    const receipt = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.receipt));
+    const policy = JSON.parse(JSON.stringify(IDENTIFIER_RECEIPT_VECTOR_FIXTURE.policy));
+    switch (negative.mutation) {
+      case "receipt.payload.execution.output_ciphertext_hash":
+        receipt.payload.execution.output_ciphertext_hash = negative.value;
+        break;
+      case "policy.resolver_public_key":
+        policy.resolver_public_key = negative.value;
+        break;
+      case "policy.policy_id":
+        policy.policy_id = negative.value;
+        break;
+      case "receipt.attestation.signature":
+        receipt.attestation.signature = negative.value;
+        break;
+      case "receipt.attestation":
+        receipt.attestation = negative.value;
+        break;
+      default:
+        throw new Error(`unhandled receipt vector mutation ${negative.mutation}`);
+    }
+
+    if (negative.expected_error_contains) {
+      assert.throws(
+        () => verifyIdentifierResolutionReceipt(receipt, policy),
+        new RegExp(negative.expected_error_contains, "i"),
+        negative.name,
+      );
+    } else {
+      assert.equal(
+        verifyIdentifierResolutionReceipt(receipt, policy),
+        negative.expected_result,
+        negative.name,
+      );
+    }
+  }
+});
+
 test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes", () => {
   const policy = {
     policy_id: "string#retail",
@@ -381,6 +536,213 @@ test("encryptIdentifierInputForPolicy builds deterministic BFV Norito envelopes"
       encryptedInput: BFV_ENCRYPTED_INPUT_HEX,
       outputOpening: sampleOutputOpening(),
     },
+  );
+});
+
+test("encryptIdentifierInputForPolicy matches shared Soracloud BFV vectors", () => {
+  assert.equal(BFV_VECTOR_FIXTURE.vector_set, "soracloud-bfv-identifier-envelope-v1");
+  const observedDigests = new Set();
+
+  for (const vector of BFV_VECTOR_FIXTURE.vectors) {
+    const ciphertextHex = encryptIdentifierInputForPolicy(
+      BFV_VECTOR_FIXTURE.policy,
+      vector.input_utf8,
+      { seedHex: vector.seed_hex },
+    );
+    assert.equal(
+      Buffer.from(ciphertextHex, "hex").length,
+      vector.expected_ciphertext_bytes,
+      `${vector.name}: ciphertext byte length`,
+    );
+    assert.equal(
+      sha256HexFromHex(ciphertextHex),
+      vector.expected_ciphertext_sha256,
+      `${vector.name}: ciphertext digest`,
+    );
+    observedDigests.add(vector.expected_ciphertext_sha256);
+  }
+
+  assert.equal(
+    observedDigests.size,
+    BFV_VECTOR_FIXTURE.vectors.length,
+    "fixture vectors must not alias to the same encrypted payload digest",
+  );
+});
+
+test("encryptIdentifierInputForPolicy matches shared Soracloud BFV operation input vectors", () => {
+  const operationVectors = BFV_VECTOR_FIXTURE.operation_vectors;
+  assert.equal(operationVectors.vector_set, "soracloud-bfv-operation-v1");
+  assertBfvOperationKeyComponentVectors(operationVectors);
+  const policy = {
+    policy_id: "soracloud-operation#fixture",
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "exact",
+    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    backend: "bfv-programmed-sha3-256-v1",
+    input_encryption: "bfv-v1",
+    input_encryption_public_parameters_decoded:
+      operationVectors.public_parameters_decoded,
+  };
+  const observedDigests = new Set();
+  let inputCount = 0;
+
+  for (const vector of operationVectors.vectors) {
+    for (const input of vector.inputs) {
+      inputCount += 1;
+      const ciphertextHex = encryptIdentifierInputForPolicy(
+        policy,
+        Buffer.from(input.input_hex, "hex"),
+        { seed: Buffer.from(input.seed_utf8, "utf8") },
+      );
+      assert.equal(
+        Buffer.from(ciphertextHex, "hex").length,
+        input.expected_ciphertext_bytes,
+        `${vector.name}/${input.seed_utf8}: ciphertext byte length`,
+      );
+      assert.equal(
+        sha256HexFromHex(ciphertextHex),
+        input.expected_ciphertext_sha256,
+        `${vector.name}/${input.seed_utf8}: ciphertext digest`,
+      );
+      observedDigests.add(input.expected_ciphertext_sha256);
+    }
+  }
+
+  assert.equal(inputCount, 8, "fixture should cover all Add/Multiply/Rotate/Bootstrap inputs");
+  assert.equal(
+    observedDigests.size,
+    inputCount,
+    "operation input fixture vectors must not alias to the same encrypted payload digest",
+  );
+});
+
+test("shared Soracloud BFV key-bundle component vectors reject adversarial drift", () => {
+  assert.doesNotThrow(() => assertBfvOperationKeyComponentVectors(BFV_VECTOR_FIXTURE.operation_vectors));
+  for (const [name, mutate] of [
+    [
+      "missing relinearization component",
+      (operationVectors) => {
+        delete operationVectors.evaluation_key_bundle.relinearization_entries[0].b_sha256;
+      },
+    ],
+    [
+      "duplicate component digest",
+      (operationVectors) => {
+        operationVectors.evaluation_key_bundle.relinearization_entries[1].a_sha256 =
+          operationVectors.evaluation_key_bundle.relinearization_entries[0].b_sha256;
+      },
+    ],
+    [
+      "zero refresh component digest",
+      (operationVectors) => {
+        operationVectors.rotation_keys[0].zero_refresh_components.c1_sha256 = "0".repeat(64);
+      },
+    ],
+    [
+      "component coefficient-count drift",
+      (operationVectors) => {
+        operationVectors.bootstrap_key.zero_refresh_components.coefficient_count = 63;
+      },
+    ],
+  ]) {
+    const operationVectors = clone(BFV_VECTOR_FIXTURE.operation_vectors);
+    mutate(operationVectors);
+    assert.throws(
+      () => assertBfvOperationKeyComponentVectors(operationVectors),
+      assert.AssertionError,
+      name,
+    );
+  }
+});
+
+test("encryptIdentifierInputForPolicy rejects adversarial BFV operation vector inputs", () => {
+  const operationVectors = BFV_VECTOR_FIXTURE.operation_vectors;
+  const basePolicy = {
+    policy_id: "soracloud-operation#fixture",
+    owner: ACCOUNT_ID,
+    active: true,
+    normalization: "exact",
+    resolver_public_key: "ed25519:ed0120" + "11".repeat(32),
+    backend: "bfv-programmed-sha3-256-v1",
+    input_encryption: "bfv-v1",
+    input_encryption_public_parameters_decoded:
+      operationVectors.public_parameters_decoded,
+  };
+  const [input] = operationVectors.vectors[0].inputs;
+  const inputBytes = Buffer.from(input.input_hex, "hex");
+  const seed = Buffer.from(input.seed_utf8, "utf8");
+
+  assert.throws(
+    () =>
+      encryptIdentifierInputForPolicy(
+        { ...basePolicy, normalization: "lowercase_trimmed" },
+        inputBytes,
+        { seed },
+      ),
+    ValidationError,
+    "raw byte operation inputs must not bypass non-exact normalization",
+  );
+  assert.throws(
+    () => encryptIdentifierInputForPolicy(basePolicy, Buffer.alloc(0), { seed }),
+    ValidationError,
+    "empty raw byte operation inputs must be rejected",
+  );
+
+  const unsupportedEncoding = JSON.parse(
+    JSON.stringify(operationVectors.public_parameters_decoded),
+  );
+  unsupportedEncoding.norito_length_encoding = "compact-v9";
+  assert.throws(
+    () =>
+      encryptIdentifierInputForPolicy(
+        {
+          ...basePolicy,
+          input_encryption_public_parameters_decoded: unsupportedEncoding,
+        },
+        inputBytes,
+        { seed },
+      ),
+    ValidationError,
+    "unknown BFV Norito length encodings must be rejected",
+  );
+
+  const unsafeModulus = JSON.parse(
+    JSON.stringify(operationVectors.public_parameters_decoded),
+  );
+  unsafeModulus.parameters.ciphertext_modulus = Number(
+    unsafeModulus.parameters.ciphertext_modulus,
+  );
+  assert.throws(
+    () =>
+      encryptIdentifierInputForPolicy(
+        {
+          ...basePolicy,
+          input_encryption_public_parameters_decoded: unsafeModulus,
+        },
+        inputBytes,
+        { seed },
+      ),
+    ValidationError,
+    "unsafe numeric ciphertext moduli must be rejected instead of rounded",
+  );
+
+  const unsafePublicKey = JSON.parse(
+    JSON.stringify(operationVectors.public_parameters_decoded),
+  );
+  unsafePublicKey.public_key.b[2] = Number(unsafePublicKey.public_key.b[2]);
+  assert.throws(
+    () =>
+      encryptIdentifierInputForPolicy(
+        {
+          ...basePolicy,
+          input_encryption_public_parameters_decoded: unsafePublicKey,
+        },
+        inputBytes,
+        { seed },
+      ),
+    ValidationError,
+    "unsafe numeric public-key coefficients must be rejected instead of rounded",
   );
 });
 

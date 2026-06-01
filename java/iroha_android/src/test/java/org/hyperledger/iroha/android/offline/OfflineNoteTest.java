@@ -39,6 +39,7 @@ public final class OfflineNoteTest {
 
   public static void main(final String[] args) throws Exception {
     certificateSigningBytesMatchRustVector();
+    keyCertificatesRequireOneUseHardwareLimitWhenPresent();
     offlineNoteModelsMatchRustNoritoVectors();
     publicNoritoDecodersRoundTripFixturePayloads();
     publicNoritoInstructionDecodersReadExplorerEnvelopeBytes();
@@ -51,6 +52,8 @@ public final class OfflineNoteTest {
     auditInstanceValuesRejectUnanchoredClaimsAndHiddenOutputs();
     kagemushaRecordBackedNativeProverValidatesInput();
     kagemushaRecursiveAggregationNativeProverValidatesInput();
+    kagemushaRecursiveSpendNativeProverValidatesInput();
+    kagemushaNativeProversRejectMissingAndEmptyNativeOutputs();
     kagemushaNativeAvailabilityRequiresJniEntrypoint();
     kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
@@ -77,6 +80,7 @@ public final class OfflineNoteTest {
     walletLoadDoesNotBlockIssuerCompletionThread();
     walletLoadCompletesExceptionallyWhenIssuerThrowsSynchronously();
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
+    toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
@@ -130,6 +134,57 @@ public final class OfflineNoteTest {
                 Collections.singletonList(filledBytes(32, 0x42)))
             .verifyCertificate(sender),
         "wrong issuer root rejects");
+  }
+
+  private static void keyCertificatesRequireOneUseHardwareLimitWhenPresent() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final OfflineNote.KeyCertificate sender =
+        certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"));
+
+    assertThrows(
+        () ->
+            new OfflineNote.KeyCertificatePayload(
+                sender.version(),
+                sender.platform(),
+                sender.keyId(),
+                sender.deviceId(),
+                sender.accountId(),
+                sender.publicKey(),
+                sender.assertionScheme(),
+                sender.assertionKeyAlgorithm(),
+                sender.assertionPublicKey(),
+                Integer.valueOf(2),
+                true),
+        "certificate payload must reject multi-use hardware limit");
+    assertThrows(
+        () ->
+            new OfflineNote.KeyCertificate(
+                sender.version(),
+                sender.platform(),
+                sender.keyId(),
+                sender.deviceId(),
+                sender.accountId(),
+                sender.publicKey(),
+                sender.assertionScheme(),
+                sender.assertionKeyAlgorithm(),
+                sender.assertionPublicKey(),
+                Integer.valueOf(0),
+                true,
+                sender.issuerSignature()),
+        "certificate must reject zero hardware usage limit");
+    new OfflineNote.KeyCertificate(
+        sender.version(),
+        sender.platform(),
+        sender.keyId(),
+        sender.deviceId(),
+        sender.accountId(),
+        sender.publicKey(),
+        sender.assertionScheme(),
+        sender.assertionKeyAlgorithm(),
+        sender.assertionPublicKey(),
+        Integer.valueOf(1),
+        true,
+        sender.issuerSignature());
   }
 
   private static void offlineNoteModelsMatchRustNoritoVectors() throws Exception {
@@ -669,6 +724,78 @@ public final class OfflineNoteTest {
                       new byte[] {0x01, 0x02}, new byte[] {0x03, 0x04}),
           "Kagemusha recursive aggregation native prover must reject malformed archives");
     }
+  }
+
+  private static void kagemushaRecursiveSpendNativeProverValidatesInput() {
+    assertTrue(
+        KagemushaRecursiveSpendProver.preferredMode(true)
+            == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
+        "recursive Kagemusha spend should be preferred when available");
+    assertTrue(
+        KagemushaRecursiveSpendProver.preferredMode(false)
+            == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
+        "checked pre-fold should remain the compatibility fallback");
+    assertEquals(
+        "recursive_spend_v1",
+        KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName(),
+        "recursive Kagemusha spend wire mode");
+    assertEquals(
+        "checked_prefold_v1",
+        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
+        "checked pre-fold wire mode");
+
+    assertThrows(
+        () -> KagemushaRecursiveSpendProver.initSpend(new byte[0]),
+        "Kagemusha recursive spend init must reject empty archives before JNI");
+    assertThrows(
+        () -> KagemushaRecursiveSpendProver.appendSpend(new byte[0]),
+        "Kagemusha recursive spend append must reject empty archives before JNI");
+    assertThrows(
+        () -> KagemushaRecursiveSpendProver.verifySpend(new byte[0]),
+        "Kagemusha recursive spend verify must reject empty archives before JNI");
+    assertThrows(
+        () -> KagemushaRecursiveSpendProver.redeemSpend(new byte[0]),
+        "Kagemusha recursive spend redeem must reject empty archives before JNI");
+    if (KagemushaRecursiveSpendProver.isNativeAvailable()) {
+      assertThrows(
+          () -> KagemushaRecursiveSpendProver.initSpend(new byte[] {0x01, 0x02}),
+          "Kagemusha recursive spend init must reject malformed archives");
+      assertThrows(
+          () -> KagemushaRecursiveSpendProver.appendSpend(new byte[] {0x01, 0x02}),
+          "Kagemusha recursive spend append must reject malformed archives");
+      assertThrows(
+          () -> KagemushaRecursiveSpendProver.verifySpend(new byte[] {0x01, 0x02}),
+          "Kagemusha recursive spend verify must reject malformed archives");
+      assertThrows(
+          () -> KagemushaRecursiveSpendProver.redeemSpend(new byte[] {0x01, 0x02}),
+          "Kagemusha recursive spend redeem must reject malformed archives");
+    }
+  }
+
+  private static void kagemushaNativeProversRejectMissingAndEmptyNativeOutputs() {
+    try {
+      KagemushaCompactPaymentTokenProver.requireNativeOutput(null, "native test");
+      throw new AssertionError("native output guard must reject null output");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains("returned no output"),
+          "native output guard reports missing output");
+    }
+
+    try {
+      KagemushaCompactPaymentTokenProver.requireNativeOutput(new byte[0], "native test");
+      throw new AssertionError("native output guard must reject empty output");
+    } catch (final IllegalStateException expected) {
+      assertTrue(
+          expected.getMessage().contains("returned empty output"),
+          "native output guard reports empty output");
+    }
+
+    final byte[] output = new byte[] {0x01, 0x02};
+    assertTrue(
+        Arrays.equals(
+            output, KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native test")),
+        "native output guard returns valid proof archives unchanged");
   }
 
   private static void kagemushaNativeAvailabilityRequiresJniEntrypoint() {
@@ -2523,6 +2650,69 @@ public final class OfflineNoteTest {
       signature[index] = (byte) (message[index % message.length] ^ (index + 17));
     }
     return signature;
+  }
+
+  private static void toriiIssuerClientRejectsMalformedCertificateUsageLimits() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> baseCertificateJson =
+        obj(obj(fixture, "payment_token"), "sender_key_certificate");
+    final String accountId = string(baseCertificateJson, "account_id");
+    final String assetDefinitionId =
+        assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"));
+    final String offlinePublicKey = "a5".repeat(32);
+    final Map<String, Object> bindingJson = new LinkedHashMap<>();
+    bindingJson.put("device_id", "device-1");
+    bindingJson.put("attestation_key_id", "attestation-key-1");
+    bindingJson.put("offline_public_key", offlinePublicKey);
+    final OfflineNoteIssuerDeviceBinding binding =
+        new OfflineNoteIssuerDeviceBinding("device-1", offlinePublicKey, bindingJson);
+
+    for (final Object invalidLimit : List.of(0L, 2L, 4_294_967_297L, "1")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("assertion_usage_count_limit", invalidLimit);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+    for (final Object invalidVersion : List.of(0L, 2L, 4_294_967_297L, "1")) {
+      final Map<String, Object> certificateJson = new LinkedHashMap<>(baseCertificateJson);
+      certificateJson.put("version", invalidVersion);
+      assertToriiIssuerClientRejectsCertificateJson(
+          certificateJson, accountId, assetDefinitionId, binding);
+    }
+  }
+
+  private static void assertToriiIssuerClientRejectsCertificateJson(
+      final Map<String, Object> certificateJson,
+      final String accountId,
+      final String assetDefinitionId,
+      final OfflineNoteIssuerDeviceBinding binding) {
+    final ToriiOfflineNoteIssuerClient client =
+        new ToriiOfflineNoteIssuerClient(
+            new ToriiCanonicalRequestAuth(accountId, OfflineNoteTest::fakeIssuerSignature),
+            (chainId, requestAccountId, requestAssetDefinitionId) -> binding,
+            (chainId, requestAccountId, requestAssetDefinitionId, operation, lineageId, proofAmount) -> Map.of(),
+            new OfflineIssuerExecutor(certificateJson),
+            URI.create("https://torii.example"),
+            java.time.Duration.ofSeconds(15),
+            Map.of(),
+            List.of(),
+            () -> 1_700_000_000_000L,
+            new SequenceIdGenerator("operation-refill-malformed", "auth-refill-malformed"));
+
+    final Throwable cause =
+        assertFutureFailsWithin(
+            client.prepareLoad("chain-1", accountId, assetDefinitionId, "5"),
+            "malformed certificate metadata must reject");
+    Throwable root = cause;
+    while (root instanceof java.util.concurrent.CompletionException completionException
+        && completionException.getCause() != null) {
+      root = completionException.getCause();
+    }
+    assertTrue(
+        root instanceof OfflineToriiException
+            || root instanceof IllegalStateException
+            || root instanceof IllegalArgumentException,
+        "malformed certificate metadata failure type");
   }
 
   private static void walletLoadDoesNotBlockIssuerCompletionThread() throws Exception {

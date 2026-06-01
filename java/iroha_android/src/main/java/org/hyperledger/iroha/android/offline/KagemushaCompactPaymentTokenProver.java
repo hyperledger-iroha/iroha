@@ -19,11 +19,8 @@ public final class KagemushaCompactPaymentTokenProver {
     requireNative();
     final byte[] tokenArchive =
         nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive);
-    if (tokenArchive == null || tokenArchive.length == 0) {
-      throw new IllegalStateException(
-          "nativeProveVerifiedCompactPaymentTokenWithRecords returned empty output");
-    }
-    return tokenArchive;
+    return requireNativeOutput(
+        tokenArchive, "nativeProveVerifiedCompactPaymentTokenWithRecords");
   }
 
   private static void requireNative() {
@@ -53,6 +50,16 @@ public final class KagemushaCompactPaymentTokenProver {
 
   interface NativeProbe {
     void run();
+  }
+
+  static byte[] requireNativeOutput(final byte[] output, final String label) {
+    if (output == null) {
+      throw new IllegalStateException(label + " returned no output");
+    }
+    if (output.length == 0) {
+      throw new IllegalStateException(label + " returned empty output");
+    }
+    return output;
   }
 
   private static native byte[] nativeProveVerifiedCompactPaymentTokenWithRecords(

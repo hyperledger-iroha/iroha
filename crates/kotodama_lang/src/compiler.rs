@@ -6781,6 +6781,450 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_static_peer_helpers() {
+        let public_key = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774";
+        let peer = iroha_data_model::peer::PeerId::from(
+            public_key
+                .parse::<iroha_crypto::PublicKey>()
+                .expect("public key"),
+        );
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn peers() permission(Admin) {{
+    register_peer(json("{{\"public_key\":\"{public_key}\",\"pop\":[]}}"));
+    unregister_peer(json("{{\"public_key\":\"{public_key}\"}}"));
+  }}
+}}
+"#
+        );
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static peer helpers should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let peers = entrypoints
+            .iter()
+            .find(|entry| entry.name == "peers")
+            .expect("peers entrypoint");
+        let peer_key = format!("peer:{peer}");
+        assert_eq!(peers.access_hints_complete, Some(true));
+        assert!(peers.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&peers.read_keys);
+        assert_taira_supported_access_keys(&peers.write_keys);
+        assert_eq!(peers.read_keys, [peer_key.clone()]);
+        assert_eq!(peers.write_keys, [peer_key]);
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_subscription_helpers() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn subscription() permission(Admin) {
+    subscription_bill();
+    subscription_record_usage();
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("subscription helpers should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let subscription = entrypoints
+            .iter()
+            .find(|entry| entry.name == "subscription")
+            .expect("subscription entrypoint");
+        let keys = [
+            "subscription:trigger_context:bill".to_owned(),
+            "subscription:trigger_context:usage".to_owned(),
+        ];
+        assert_eq!(subscription.access_hints_complete, Some(true));
+        assert!(subscription.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&subscription.read_keys);
+        assert_taira_supported_access_keys(&subscription.write_keys);
+        assert_eq!(subscription.read_keys, keys);
+        assert_eq!(subscription.write_keys, keys);
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_static_axt_helpers() {
+        let descriptor = crate::axt::AxtDescriptor {
+            dsids: vec![iroha_data_model::nexus::DataSpaceId::new(7)],
+            touches: vec![crate::axt::AxtTouchSpec {
+                dsid: iroha_data_model::nexus::DataSpaceId::new(7),
+                read: vec!["balance".to_owned()],
+                write: vec!["lock".to_owned()],
+            }],
+        };
+        let manifest = crate::axt::TouchManifest {
+            read: vec!["orders".to_owned()],
+            write: vec!["settlements".to_owned()],
+        };
+        let handle = crate::axt::AssetHandle {
+            scope: vec!["transfer".to_owned()],
+            subject: crate::axt::HandleSubject {
+                account: "alice@wonderland".to_owned(),
+                origin_dsid: Some(iroha_data_model::nexus::DataSpaceId::new(11)),
+            },
+            budget: crate::axt::HandleBudget {
+                remaining: 100,
+                per_use: Some(10),
+            },
+            handle_era: 1,
+            sub_nonce: 2,
+            group_binding: crate::axt::GroupBinding {
+                composability_group_id: b"group".to_vec(),
+                epoch_id: 3,
+            },
+            target_lane: iroha_data_model::nexus::LaneId::SINGLE,
+            axt_binding: vec![4; 32],
+            manifest_view_root: vec![5; 32],
+            expiry_slot: 99,
+            max_clock_skew_ms: Some(500),
+        };
+        let intent = crate::axt::RemoteSpendIntent {
+            asset_dsid: iroha_data_model::nexus::DataSpaceId::new(13),
+            op: crate::axt::SpendOp {
+                kind: "transfer".to_owned(),
+                from: "alice@wonderland".to_owned(),
+                to: "bob@wonderland".to_owned(),
+                amount: "10".to_owned(),
+            },
+        };
+        let descriptor_hex = hex::encode(norito::to_bytes(&descriptor).expect("descriptor"));
+        let manifest_hex = hex::encode(norito::to_bytes(&manifest).expect("manifest"));
+        let handle_hex = hex::encode(norito::to_bytes(&handle).expect("handle"));
+        let intent_hex = hex::encode(norito::to_bytes(&intent).expect("intent"));
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn axt() permission(Admin) {{
+    axt_begin(axt_descriptor("0x{descriptor_hex}"));
+    axt_touch(dataspace_id("7"), norito_bytes("0x{manifest_hex}"));
+    verify_ds_proof(dataspace_id("7"));
+    use_asset_handle(asset_handle("0x{handle_hex}"), norito_bytes("0x{intent_hex}"));
+    axt_commit();
+  }}
+}}
+"#
+        );
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static AXT helpers should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let axt = entrypoints
+            .iter()
+            .find(|entry| entry.name == "axt")
+            .expect("axt entrypoint");
+        assert_eq!(axt.access_hints_complete, Some(true));
+        assert!(axt.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&axt.read_keys);
+        assert_taira_supported_access_keys(&axt.write_keys);
+        assert!(!axt.read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY));
+        assert!(!axt.write_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY));
+        for key in [
+            "axt:dataspace:7",
+            "axt:dataspace:7:balance",
+            "axt:dataspace:7:lock",
+            "axt:dataspace:7:orders",
+            "axt:dataspace:7:settlements",
+            "axt:dataspace:7:proof",
+            "axt:dataspace:11",
+            "axt:dataspace:13",
+        ] {
+            assert!(
+                axt.read_keys.iter().any(|actual| actual == key),
+                "missing AXT read key {key}; got {:?}",
+                axt.read_keys
+            );
+        }
+        for key in [
+            "axt:dataspace:7",
+            "axt:dataspace:7:lock",
+            "axt:dataspace:7:settlements",
+            "axt:dataspace:11",
+            "axt:dataspace:13",
+        ] {
+            assert!(
+                axt.write_keys.iter().any(|actual| actual == key),
+                "missing AXT write key {key}; got {:?}",
+                axt.write_keys
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_static_soracloud_and_vrf_helpers() {
+        let request = iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 {
+            schema_version: iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: iroha_data_model::soracloud::SoracloudHostOperationV1::ReadConfig,
+            payload: iroha_data_model::soracloud::SoracloudHostRequestPayloadV1::ReadConfig(
+                iroha_data_model::soracloud::SoracloudReadConfigRequestV1 {
+                    config_name: "runtime".to_owned(),
+                },
+            ),
+        };
+        let request_hex = hex::encode(norito::to_bytes(&request).expect("request"));
+        let vrf_hex = hex::encode(norito::to_bytes(&(42_u64, true)).expect("vrf request"));
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn read() -> bytes permission(Admin) {{
+    let request = soracloud_request("0x{request_hex}");
+    let _config = soracloud_read_config(request);
+    let seed = vrf_epoch_seed(norito_bytes("0x{vrf_hex}"));
+    return seed;
+  }}
+}}
+"#
+        );
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static Soracloud and VRF helpers should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let read = entrypoints
+            .iter()
+            .find(|entry| entry.name == "read")
+            .expect("read entrypoint");
+        assert_eq!(read.access_hints_complete, Some(true));
+        assert!(read.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&read.read_keys);
+        assert_taira_supported_access_keys(&read.write_keys);
+        assert_eq!(read.write_keys, Vec::<String>::new());
+        for key in [
+            "soracloud:config:runtime",
+            "vrf:epoch_seed:42",
+            "vrf:epoch_seed:latest",
+        ] {
+            assert!(
+                read.read_keys.iter().any(|actual| actual == key),
+                "missing read key {key}; got {:?}",
+                read.read_keys
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_access_set_hints_include_static_soracloud_operation_keys() {
+        use iroha_data_model::soracloud::{
+            SORACLOUD_HOST_REQUEST_VERSION_V1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+            SoracloudAppendJournalRequestV1, SoracloudEgressFetchRequestV1,
+            SoracloudEmitMailboxMessageRequestV1, SoracloudEmitStateMutationRequestV1,
+            SoracloudHostOperationV1 as Op, SoracloudHostRequestEnvelopeV1,
+            SoracloudHostRequestPayloadV1 as Payload, SoracloudPublishCheckpointRequestV1,
+            SoracloudReadCommittedStateRequestV1, SoracloudReadConfigRequestV1,
+            SoracloudReadCredentialRequestV1, SoracloudReadSecretEnvelopeRequestV1,
+            SoracloudReadSecretRequestV1,
+        };
+
+        let name = |value: &str| -> iroha_data_model::name::Name { value.parse().expect("name") };
+        let request_hex = |operation: Op, payload: Payload| -> String {
+            let request = SoracloudHostRequestEnvelopeV1 {
+                schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+                operation,
+                payload,
+            };
+            hex::encode(norito::to_bytes(&request).expect("request"))
+        };
+        let read_state = request_hex(
+            Op::ReadCommittedState,
+            Payload::ReadCommittedState(SoracloudReadCommittedStateRequestV1 {
+                binding_name: name("wallet"),
+                state_key: "accounts/alice".to_owned(),
+            }),
+        );
+        let write_state = request_hex(
+            Op::EmitStateMutation,
+            Payload::EmitStateMutation(SoracloudEmitStateMutationRequestV1 {
+                binding_name: name("wallet"),
+                state_key: "accounts/alice".to_owned(),
+                operation: SoraStateMutationOperationV1::Upsert,
+                encryption: SoraStateEncryptionV1::Plaintext,
+                payload_bytes: Some(3),
+                payload: Some(vec![1, 2, 3]),
+                payload_commitment: None,
+            }),
+        );
+        let mailbox = request_hex(
+            Op::EmitMailboxMessage,
+            Payload::EmitMailboxMessage(SoracloudEmitMailboxMessageRequestV1 {
+                to_service: name("settlement"),
+                to_handler: name("on_message"),
+                payload_bytes: vec![4, 5],
+                available_after_sequence: 7,
+                expires_at_sequence: Some(11),
+            }),
+        );
+        let journal = request_hex(
+            Op::AppendJournal,
+            Payload::AppendJournal(SoracloudAppendJournalRequestV1 {
+                artifact_path: "journals/run-7.json".to_owned(),
+                payload_bytes: vec![6],
+            }),
+        );
+        let checkpoint = request_hex(
+            Op::PublishCheckpoint,
+            Payload::PublishCheckpoint(SoracloudPublishCheckpointRequestV1 {
+                artifact_path: "checkpoints/run-7.bin".to_owned(),
+                payload_bytes: vec![7],
+            }),
+        );
+        let config = request_hex(
+            Op::ReadConfig,
+            Payload::ReadConfig(SoracloudReadConfigRequestV1 {
+                config_name: "runtime".to_owned(),
+            }),
+        );
+        let envelope = request_hex(
+            Op::ReadSecretEnvelope,
+            Payload::ReadSecretEnvelope(SoracloudReadSecretEnvelopeRequestV1 {
+                secret_name: "api-key".to_owned(),
+            }),
+        );
+        let secret = request_hex(
+            Op::ReadSecret,
+            Payload::ReadSecret(SoracloudReadSecretRequestV1 {
+                secret_name: "node-token".to_owned(),
+            }),
+        );
+        let credential = request_hex(
+            Op::ReadCredential,
+            Payload::ReadCredential(SoracloudReadCredentialRequestV1 {
+                credential_name: "mtls-client".to_owned(),
+            }),
+        );
+        let egress = request_hex(
+            Op::EgressFetch,
+            Payload::EgressFetch(SoracloudEgressFetchRequestV1 {
+                url: "https://oracle.example/data".to_owned(),
+                max_bytes: 4096,
+                expected_hash: None,
+            }),
+        );
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn soracloud() permission(Admin) {{
+    let read_state = soracloud_request("0x{read_state}");
+    let write_state = soracloud_request("0x{write_state}");
+    let mailbox = soracloud_request("0x{mailbox}");
+    let journal = soracloud_request("0x{journal}");
+    let checkpoint = soracloud_request("0x{checkpoint}");
+    let config = soracloud_request("0x{config}");
+    let envelope = soracloud_request("0x{envelope}");
+    let secret = soracloud_request("0x{secret}");
+    let credential = soracloud_request("0x{credential}");
+    let egress = soracloud_request("0x{egress}");
+    let _read_state = soracloud_read_committed_state(read_state);
+    let _write_state = soracloud_emit_state_mutation(write_state);
+    let _mailbox = soracloud_emit_mailbox_message(mailbox);
+    let _journal = soracloud_append_journal(journal);
+    let _checkpoint = soracloud_publish_checkpoint(checkpoint);
+    let _config = soracloud_read_config(config);
+    let _envelope = soracloud_read_secret_envelope(envelope);
+    let _secret = soracloud_read_secret(secret);
+    let _credential = soracloud_read_credential(credential);
+    let _egress = soracloud_egress_fetch(egress);
+  }}
+}}
+"#
+        );
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("static Soracloud helpers should have complete access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let soracloud = entrypoints
+            .iter()
+            .find(|entry| entry.name == "soracloud")
+            .expect("soracloud entrypoint");
+        assert_eq!(soracloud.access_hints_complete, Some(true));
+        assert!(soracloud.access_hints_skipped.is_empty());
+        assert_taira_supported_access_keys(&soracloud.read_keys);
+        assert_taira_supported_access_keys(&soracloud.write_keys);
+        for key in [
+            "soracloud:state:wallet:accounts/alice",
+            "soracloud:config:runtime",
+            "soracloud:secret_envelope:api-key",
+            "soracloud:node_secret:node-token",
+            "soracloud:node_credential:mtls-client",
+            "soracloud:egress:https://oracle.example/data",
+        ] {
+            assert!(
+                soracloud.read_keys.iter().any(|actual| actual == key),
+                "missing Soracloud read key {key}; got {:?}",
+                soracloud.read_keys
+            );
+        }
+        for key in [
+            "soracloud:state:wallet:accounts/alice",
+            "soracloud:mailbox:settlement:on_message",
+            "soracloud:journal:journals/run-7.json",
+            "soracloud:checkpoint:checkpoints/run-7.bin",
+        ] {
+            assert!(
+                soracloud.write_keys.iter().any(|actual| actual == key),
+                "missing Soracloud write key {key}; got {:?}",
+                soracloud.write_keys
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_access_set_hints_reject_adversarial_static_host_payloads() {
+        let request = iroha_data_model::soracloud::SoracloudHostRequestEnvelopeV1 {
+            schema_version: iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: iroha_data_model::soracloud::SoracloudHostOperationV1::ReadConfig,
+            payload: iroha_data_model::soracloud::SoracloudHostRequestPayloadV1::ReadConfig(
+                iroha_data_model::soracloud::SoracloudReadConfigRequestV1 {
+                    config_name: "runtime".to_owned(),
+                },
+            ),
+        };
+        let request_hex = hex::encode(norito::to_bytes(&request).expect("request"));
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn bad_peer() permission(Admin) {{
+    register_peer(json("{{}}"));
+  }}
+
+  kotoage fn bad_axt() permission(Admin) {{
+    let descriptor = axt_descriptor(norito_bytes("0x00"));
+    axt_begin(descriptor);
+  }}
+
+  kotoage fn bad_soracloud() permission(Admin) {{
+    let request = soracloud_request("0x{request_hex}");
+    let _secret = soracloud_read_secret(request);
+  }}
+}}
+"#
+        );
+        let compiler = test_mode_compiler();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(&src)
+            .expect("test mode should report incomplete host access hints");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        for name in ["bad_peer", "bad_axt", "bad_soracloud"] {
+            let entry = entrypoints
+                .iter()
+                .find(|entry| entry.name == name)
+                .expect("entrypoint");
+            assert_eq!(entry.access_hints_complete, Some(false), "{name}");
+            assert!(!entry.access_hints_skipped.is_empty(), "{name}");
+        }
+
+        let err = Compiler::new()
+            .compile_source_with_manifest(&src)
+            .expect_err("production should reject adversarial host payloads");
+        assert!(err.contains("E_ACCESS_INCOMPLETE"));
+    }
+
+    #[test]
     fn manifest_trigger_decl_sets_authority() {
         use iroha_data_model::account::{AccountId, ParsedAccountId};
 
@@ -15828,8 +16272,13 @@ fn record_isi_access(
                 apply_fallback(access_set, hint_diagnostics);
             }
         }
-        ir::Instr::VrfEpochSeed { .. } => {
-            apply_fallback(access_set, hint_diagnostics);
+        ir::Instr::VrfEpochSeed { payload, .. } => {
+            let Some(raw) = string_map.get(&(func_idx, *payload)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_vrf_epoch_seed_access(raw, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
         }
         ir::Instr::BuildSubmitBallotInline { .. } | ir::Instr::BuildUnshieldInline { .. } => {}
         ir::Instr::TransferDomain { domain, to } => {
@@ -15853,22 +16302,82 @@ fn record_isi_access(
             };
             add_nft_detail_rw(access_set, &id, &key);
         }
-        // AXT/ZK/Soracloud helpers carry opaque host payloads; fall back to wildcard.
-        ir::Instr::RegisterPeer { .. }
-        | ir::Instr::UnregisterPeer { .. }
-        | ir::Instr::InvokeEntrypointAs { .. }
+        ir::Instr::RegisterPeer { json } | ir::Instr::UnregisterPeer { json } => {
+            let Some(raw) = string_map.get(&(func_idx, *json)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            let Some(peer) = peer_id_from_json_literal(raw) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_peer_rw(access_set, &peer);
+        }
+        ir::Instr::SubscriptionBill => add_subscription_context_rw(access_set, "bill"),
+        ir::Instr::SubscriptionRecordUsage => add_subscription_context_rw(access_set, "usage"),
+        ir::Instr::AxtBegin { descriptor } => {
+            let Some(raw) = string_map.get(&(func_idx, *descriptor)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            let Some(descriptor) = decode_axt_descriptor_literal(raw) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_axt_descriptor_access(access_set, &descriptor);
+        }
+        ir::Instr::AxtTouch { dsid, manifest } => {
+            let Some(dsid) = parse_dataspace_temp(string_map, func_idx, *dsid) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if let Some(manifest) = manifest {
+                let Some(raw) = string_map.get(&(func_idx, *manifest)) else {
+                    return apply_fallback(access_set, hint_diagnostics);
+                };
+                let Some(manifest) = decode_axt_touch_manifest_literal(raw) else {
+                    return apply_fallback(access_set, hint_diagnostics);
+                };
+                add_axt_touch_manifest_access(access_set, dsid, &manifest);
+            } else {
+                add_axt_dataspace_rw(access_set, dsid);
+            }
+        }
+        ir::Instr::VerifyDsProof { dsid, .. } => {
+            let Some(dsid) = parse_dataspace_temp(string_map, func_idx, *dsid) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_axt_dataspace_r(access_set, dsid);
+            access_set
+                .reads
+                .insert(format!("axt:dataspace:{}:proof", dsid.as_u64()));
+        }
+        ir::Instr::UseAssetHandle { handle, intent, .. } => {
+            let (Some(handle_raw), Some(intent_raw)) = (
+                string_map.get(&(func_idx, *handle)),
+                string_map.get(&(func_idx, *intent)),
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            let (Some(handle), Some(intent)) = (
+                decode_asset_handle_literal(handle_raw),
+                decode_remote_spend_intent_literal(intent_raw),
+            ) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            add_asset_handle_access(access_set, &handle, &intent);
+        }
+        ir::Instr::AxtCommit => {}
+        ir::Instr::SoracloudHostCall {
+            request, syscall, ..
+        } => {
+            let Some(raw) = string_map.get(&(func_idx, *request)) else {
+                return apply_fallback(access_set, hint_diagnostics);
+            };
+            if record_soracloud_request_access(raw, *syscall, access_set).is_none() {
+                apply_fallback(access_set, hint_diagnostics);
+            }
+        }
+        ir::Instr::InvokeEntrypointAs { .. }
         | ir::Instr::ExpectRejectAs { .. }
         | ir::Instr::ActorAccount { .. }
         | ir::Instr::ActorPublicKey { .. }
-        | ir::Instr::ActorSign { .. }
-        | ir::Instr::SubscriptionBill
-        | ir::Instr::SubscriptionRecordUsage
-        | ir::Instr::AxtBegin { .. }
-        | ir::Instr::AxtTouch { .. }
-        | ir::Instr::VerifyDsProof { .. }
-        | ir::Instr::UseAssetHandle { .. }
-        | ir::Instr::AxtCommit
-        | ir::Instr::SoracloudHostCall { .. } => apply_fallback(access_set, hint_diagnostics),
+        | ir::Instr::ActorSign { .. } => apply_fallback(access_set, hint_diagnostics),
         _ => apply_fallback(access_set, hint_diagnostics),
     }
 }
@@ -15948,6 +16457,189 @@ fn record_zk_vote_get_tally_access(raw: &str, access_set: &mut AccessSets) -> Op
     Some(())
 }
 
+fn record_vrf_epoch_seed_access(raw: &str, access_set: &mut AccessSets) -> Option<()> {
+    let payload = decode_norito_literal_payload(raw)?;
+    let (payload, flags) = decode_norito_archive_payload(&payload)?;
+    let mut fields = payload;
+    let epoch_field = take_norito_len_prefixed(&mut fields, flags)?;
+    let fallback_field = take_norito_len_prefixed(&mut fields, flags)?;
+    if !fields.is_empty() {
+        return None;
+    }
+    let epoch = decode_norito_u64_bare(epoch_field)?;
+    let fallback_to_latest = decode_norito_bool_bare(fallback_field)?;
+    access_set.reads.insert(format!("vrf:epoch_seed:{epoch}"));
+    if fallback_to_latest {
+        access_set.reads.insert("vrf:epoch_seed:latest".to_owned());
+    }
+    Some(())
+}
+
+fn decode_axt_descriptor_literal(raw: &str) -> Option<crate::axt::AxtDescriptor> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    norito::decode_from_bytes(&bytes).ok()
+}
+
+fn decode_axt_touch_manifest_literal(raw: &str) -> Option<crate::axt::TouchManifest> {
+    let payload = decode_norito_literal_payload(raw)?;
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn decode_asset_handle_literal(raw: &str) -> Option<crate::axt::AssetHandle> {
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    norito::decode_from_bytes(&bytes).ok()
+}
+
+fn decode_remote_spend_intent_literal(raw: &str) -> Option<crate::axt::RemoteSpendIntent> {
+    let payload = decode_norito_literal_payload(raw)?;
+    norito::decode_from_bytes(&payload).ok()
+}
+
+fn parse_dataspace_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<iroha_data_model::nexus::DataSpaceId> {
+    let raw = string_map.get(&(func_idx, temp))?;
+    if let Some(raw_id) = parse_u64_literal(raw) {
+        return Some(iroha_data_model::nexus::DataSpaceId::new(raw_id));
+    }
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    norito::decode_from_bytes(&bytes).ok()
+}
+
+fn public_key_from_json_value(value: &json::Value) -> Option<iroha_crypto::PublicKey> {
+    if let Some(key_str) = value.as_str() {
+        return key_str.parse().ok();
+    }
+    let map = value.as_object()?;
+    let value = map
+        .get("public_key")
+        .or_else(|| map.get("publicKey"))
+        .or_else(|| map.get("key"))?;
+    public_key_from_json_value(value)
+}
+
+fn peer_id_from_json_value(value: &json::Value) -> Option<iroha_data_model::peer::PeerId> {
+    if let Some(peer_str) = value.as_str() {
+        if let Ok(peer_id) = peer_str.parse::<iroha_data_model::peer::PeerId>() {
+            return Some(peer_id);
+        }
+        if let Ok(peer) = peer_str.parse::<iroha_data_model::peer::Peer>() {
+            return Some(peer.id().clone());
+        }
+        return None;
+    }
+    let map = value.as_object()?;
+    if let Some(value) = map
+        .get("peer")
+        .or_else(|| map.get("peer_id"))
+        .or_else(|| map.get("peerId"))
+    {
+        return peer_id_from_json_value(value);
+    }
+    let key = map
+        .get("public_key")
+        .or_else(|| map.get("publicKey"))
+        .or_else(|| map.get("key"))?;
+    public_key_from_json_value(key).map(iroha_data_model::peer::PeerId::from)
+}
+
+fn peer_id_from_json_literal(raw: &str) -> Option<iroha_data_model::peer::PeerId> {
+    let value: json::Value = json::from_slice(raw.as_bytes()).ok()?;
+    peer_id_from_json_value(&value)
+}
+
+fn record_soracloud_request_access(
+    raw: &str,
+    syscall: u32,
+    access_set: &mut AccessSets,
+) -> Option<()> {
+    use iroha_data_model::soracloud::{
+        SoracloudHostOperationV1 as Op, SoracloudHostRequestEnvelopeV1,
+        SoracloudHostRequestPayloadV1 as Payload,
+    };
+
+    let bytes = decode_hex_or_raw_bytes(raw).ok()?;
+    let request: SoracloudHostRequestEnvelopeV1 = norito::decode_from_bytes(&bytes).ok()?;
+    request.validate().ok()?;
+    let expected = soracloud_operation_for_syscall(syscall)?;
+    if request.operation != expected {
+        return None;
+    }
+    match (&request.operation, &request.payload) {
+        (Op::ReadCommittedState, Payload::ReadCommittedState(payload)) => {
+            add_soracloud_state_r(access_set, &payload.binding_name, &payload.state_key);
+        }
+        (Op::EmitStateMutation, Payload::EmitStateMutation(payload)) => {
+            add_soracloud_state_rw(access_set, &payload.binding_name, &payload.state_key);
+        }
+        (Op::EmitMailboxMessage, Payload::EmitMailboxMessage(payload)) => {
+            access_set.writes.insert(format!(
+                "soracloud:mailbox:{}:{}",
+                payload.to_service, payload.to_handler
+            ));
+        }
+        (Op::AppendJournal, Payload::AppendJournal(payload)) => {
+            access_set
+                .writes
+                .insert(format!("soracloud:journal:{}", payload.artifact_path));
+        }
+        (Op::PublishCheckpoint, Payload::PublishCheckpoint(payload)) => {
+            access_set
+                .writes
+                .insert(format!("soracloud:checkpoint:{}", payload.artifact_path));
+        }
+        (Op::ReadConfig, Payload::ReadConfig(payload)) => {
+            access_set
+                .reads
+                .insert(format!("soracloud:config:{}", payload.config_name));
+        }
+        (Op::ReadSecretEnvelope, Payload::ReadSecretEnvelope(payload)) => {
+            access_set
+                .reads
+                .insert(format!("soracloud:secret_envelope:{}", payload.secret_name));
+        }
+        (Op::ReadSecret, Payload::ReadSecret(payload)) => {
+            access_set
+                .reads
+                .insert(format!("soracloud:node_secret:{}", payload.secret_name));
+        }
+        (Op::ReadCredential, Payload::ReadCredential(payload)) => {
+            access_set.reads.insert(format!(
+                "soracloud:node_credential:{}",
+                payload.credential_name
+            ));
+        }
+        (Op::EgressFetch, Payload::EgressFetch(payload)) => {
+            access_set
+                .reads
+                .insert(format!("soracloud:egress:{}", payload.url));
+        }
+        _ => return None,
+    }
+    Some(())
+}
+
+fn soracloud_operation_for_syscall(
+    syscall: u32,
+) -> Option<iroha_data_model::soracloud::SoracloudHostOperationV1> {
+    use iroha_data_model::soracloud::SoracloudHostOperationV1 as Op;
+    match syscall {
+        syscalls::SYSCALL_SORACLOUD_READ_COMMITTED_STATE => Some(Op::ReadCommittedState),
+        syscalls::SYSCALL_SORACLOUD_EMIT_STATE_MUTATION => Some(Op::EmitStateMutation),
+        syscalls::SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE => Some(Op::EmitMailboxMessage),
+        syscalls::SYSCALL_SORACLOUD_APPEND_JOURNAL => Some(Op::AppendJournal),
+        syscalls::SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT => Some(Op::PublishCheckpoint),
+        syscalls::SYSCALL_SORACLOUD_READ_SECRET => Some(Op::ReadSecret),
+        syscalls::SYSCALL_SORACLOUD_READ_CREDENTIAL => Some(Op::ReadCredential),
+        syscalls::SYSCALL_SORACLOUD_EGRESS_FETCH => Some(Op::EgressFetch),
+        syscalls::SYSCALL_SORACLOUD_READ_CONFIG => Some(Op::ReadConfig),
+        syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => Some(Op::ReadSecretEnvelope),
+        _ => None,
+    }
+}
+
 fn decode_norito_archive_payload(bytes: &[u8]) -> Option<(&[u8], u8)> {
     if bytes.len() < norito::core::Header::SIZE || &bytes[0..4] != b"NRT0" || bytes[22] != 0 {
         return None;
@@ -15987,6 +16679,20 @@ fn decode_norito_u32_bare(bytes: &[u8]) -> Option<u32> {
         return None;
     }
     Some(u32::from_le_bytes(bytes.try_into().ok()?))
+}
+
+fn decode_norito_u64_bare(bytes: &[u8]) -> Option<u64> {
+    if bytes.len() != 8 {
+        return None;
+    }
+    Some(u64::from_le_bytes(bytes.try_into().ok()?))
+}
+
+fn decode_norito_bool_bare(bytes: &[u8]) -> Option<bool> {
+    if bytes.len() != 1 {
+        return None;
+    }
+    Some(bytes[0] != 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -16736,6 +17442,10 @@ fn key_zk_asset(id: &AssetDefinitionId) -> String {
     format!("zk_asset:{id}")
 }
 
+fn key_peer(id: &iroha_data_model::peer::PeerId) -> String {
+    format!("peer:{id}")
+}
+
 fn key_nft_detail(id: &NftId, key: &Name) -> String {
     format!("nft.detail:{id}:{key}")
 }
@@ -16850,6 +17560,12 @@ fn add_zk_asset_rw(set: &mut AccessSets, id: &AssetDefinitionId) {
 
 fn add_zk_asset_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_zk_asset(id));
+}
+
+fn add_peer_rw(set: &mut AccessSets, id: &iroha_data_model::peer::PeerId) {
+    let key = key_peer(id);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
 }
 
 fn add_zk_election_w(set: &mut AccessSets, election_id: &str) {
@@ -16989,6 +17705,103 @@ fn add_permission_account_hint_w(set: &mut AccessSets, account: &AccountAccessHi
 
 fn add_permission_role_w(set: &mut AccessSets, role: &RoleId, perm: &str) {
     set.writes.insert(key_perm_role(role, perm));
+}
+
+fn add_subscription_context_rw(set: &mut AccessSets, kind: &str) {
+    let key = format!("subscription:trigger_context:{kind}");
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_soracloud_state_r(set: &mut AccessSets, binding: &Name, state_key: &str) {
+    set.reads
+        .insert(format!("soracloud:state:{binding}:{state_key}"));
+}
+
+fn add_soracloud_state_rw(set: &mut AccessSets, binding: &Name, state_key: &str) {
+    let key = format!("soracloud:state:{binding}:{state_key}");
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn axt_dataspace_key(dsid: iroha_data_model::nexus::DataSpaceId) -> String {
+    format!("axt:dataspace:{}", dsid.as_u64())
+}
+
+fn add_axt_dataspace_r(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
+    set.reads.insert(axt_dataspace_key(dsid));
+}
+
+fn add_axt_dataspace_rw(set: &mut AccessSets, dsid: iroha_data_model::nexus::DataSpaceId) {
+    let key = axt_dataspace_key(dsid);
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_axt_touch_key_r(
+    set: &mut AccessSets,
+    dsid: iroha_data_model::nexus::DataSpaceId,
+    key: &str,
+) {
+    add_axt_dataspace_r(set, dsid);
+    set.reads
+        .insert(format!("axt:dataspace:{}:{key}", dsid.as_u64()));
+}
+
+fn add_axt_touch_key_rw(
+    set: &mut AccessSets,
+    dsid: iroha_data_model::nexus::DataSpaceId,
+    key: &str,
+) {
+    add_axt_dataspace_rw(set, dsid);
+    let key = format!("axt:dataspace:{}:{key}", dsid.as_u64());
+    set.reads.insert(key.clone());
+    set.writes.insert(key);
+}
+
+fn add_axt_touch_manifest_access(
+    set: &mut AccessSets,
+    dsid: iroha_data_model::nexus::DataSpaceId,
+    manifest: &crate::axt::TouchManifest,
+) {
+    add_axt_dataspace_rw(set, dsid);
+    for key in &manifest.read {
+        add_axt_touch_key_r(set, dsid, key);
+    }
+    for key in &manifest.write {
+        add_axt_touch_key_rw(set, dsid, key);
+    }
+}
+
+fn add_axt_descriptor_access(set: &mut AccessSets, descriptor: &crate::axt::AxtDescriptor) {
+    for dsid in &descriptor.dsids {
+        add_axt_dataspace_rw(set, *dsid);
+    }
+    for touch in &descriptor.touches {
+        add_axt_dataspace_rw(set, touch.dsid);
+        for key in &touch.read {
+            add_axt_touch_key_r(set, touch.dsid, key);
+        }
+        for key in &touch.write {
+            add_axt_touch_key_rw(set, touch.dsid, key);
+        }
+    }
+}
+
+fn add_asset_handle_access(
+    set: &mut AccessSets,
+    handle: &crate::axt::AssetHandle,
+    intent: &crate::axt::RemoteSpendIntent,
+) {
+    let encoded = norito::to_bytes(handle).expect("AssetHandle encoding is infallible");
+    let digest: [u8; 32] = iroha_crypto::Hash::new(&encoded).into();
+    let handle_key = format!("axt:asset_handle:{}", hex::encode(digest));
+    set.reads.insert(handle_key.clone());
+    set.writes.insert(handle_key);
+    add_axt_dataspace_rw(set, intent.asset_dsid);
+    if let Some(origin) = handle.subject.origin_dsid {
+        add_axt_dataspace_rw(set, origin);
+    }
 }
 
 fn add_trigger_rw(set: &mut AccessSets, id: &TriggerId) {

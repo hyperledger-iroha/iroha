@@ -3095,6 +3095,8 @@ pub struct FheExecutionPolicyV1 {
     pub param_set: Name,
     /// Referenced parameter-set version.
     pub param_set_version: NonZeroU32,
+    /// Domain-separated digest of the BFV evaluation-key bundle admitted for this policy.
+    pub evaluation_key_digest: Hash,
     /// Maximum admitted ciphertext size in bytes.
     pub max_ciphertext_bytes: NonZeroU64,
     /// Maximum admitted plaintext input size in bytes.
@@ -13350,6 +13352,7 @@ mod tests {
             policy_name: "fhe_policy_med".parse().expect("valid name"),
             param_set: "fhe_bfv_med".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(2).expect("nonzero"),
+            evaluation_key_digest: sample_hash(90),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(16_384).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(8).expect("nonzero"),
@@ -15665,6 +15668,62 @@ mod tests {
         assert!(
             job.deterministic_output_payload_bytes() > 0,
             "deterministic output size must be non-zero"
+        );
+    }
+
+    #[test]
+    fn fhe_job_spec_validate_for_execution_accepts_multi_input_add_and_multiply() {
+        let policy = sample_fhe_execution_policy();
+        let param_set = sample_fhe_param_set();
+        let mut job = sample_fhe_job_spec();
+        job.inputs.extend([
+            FheJobInputRefV1 {
+                state_key: "/state/health/patient-3".to_string(),
+                payload_bytes: NonZeroU64::new(4_096).expect("nonzero"),
+                commitment: sample_hash(123),
+            },
+            FheJobInputRefV1 {
+                state_key: "/state/health/patient-4".to_string(),
+                payload_bytes: NonZeroU64::new(1_024).expect("nonzero"),
+                commitment: sample_hash(124),
+            },
+        ]);
+
+        job.validate_for_execution(&policy, &param_set)
+            .expect("four-input add job must be admitted within policy");
+        assert_eq!(
+            job.deterministic_output_payload_bytes(),
+            4_096 + 16,
+            "multi-input add output projection uses the largest input plus add overhead"
+        );
+
+        job.operation = FheJobOperationV1::Multiply;
+        job.requested_multiplication_depth = 2;
+        job.validate_for_execution(&policy, &param_set)
+            .expect("four-input multiply job must be admitted within depth and input policy");
+        assert_eq!(
+            job.deterministic_output_payload_bytes(),
+            4_096 + 128,
+            "multiply output projection binds requested depth, not input count"
+        );
+    }
+
+    #[test]
+    fn fhe_job_spec_output_commitment_binds_multi_input_order() {
+        let mut job = sample_fhe_job_spec();
+        job.inputs.push(FheJobInputRefV1 {
+            state_key: "/state/health/patient-3".to_string(),
+            payload_bytes: NonZeroU64::new(2_048).expect("nonzero"),
+            commitment: sample_hash(123),
+        });
+        let canonical = job.deterministic_output_commitment();
+
+        job.inputs.swap(0, 2);
+        let reordered = job.deterministic_output_commitment();
+
+        assert_ne!(
+            canonical, reordered,
+            "multi-input FHE output commitments must bind input order"
         );
     }
 

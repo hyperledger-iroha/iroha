@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias
 
@@ -120,6 +121,7 @@ __all__ = [
     "verify_sm2",
     "derive_confidential_keyset",
     "derive_confidential_keyset_from_hex",
+    "zk_ace_build_transfer_authorization_v1",
     "sm2_fixture_from_seed",
 ]
 
@@ -812,3 +814,42 @@ def hash_blake2b_32(data: bytes) -> bytes:
     """Compute the canonical Iroha Blake2b-256 hash for ``data``."""
 
     return _crypto.hash_blake2b_32(data)
+
+
+def zk_ace_build_transfer_authorization_v1(
+    *,
+    from_account_id: str,
+    to_account_id: str,
+    asset_definition_id: str,
+    amount: int | str,
+    chain_id: str,
+    identity_root: bytes | bytearray | memoryview | str,
+    identity_blinding: bytes | bytearray | memoryview | str,
+    replay_secret: bytes | bytearray | memoryview | str,
+    policy_hash: bytes | bytearray | memoryview | str,
+    verifier_key_id: str | Mapping[str, Any] | None = None,
+    vk_commitment: bytes | bytearray | memoryview | str | None = None,
+) -> Dict[str, Any]:
+    """Build a STARK/FRI-backed ZK-ACE transparent-transfer authorization."""
+
+    if not hasattr(_crypto, "zk_ace_build_transfer_authorization_v1"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing ZK-ACE prover support; rebuild the extension"
+        )
+    result = _crypto.zk_ace_build_transfer_authorization_v1(
+        str(from_account_id),
+        str(to_account_id),
+        str(asset_definition_id),
+        str(amount),
+        str(chain_id),
+        identity_root,
+        identity_blinding,
+        replay_secret,
+        policy_hash,
+        verifier_key_id,
+        vk_commitment,
+    )
+    parsed = json.loads(result)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("ZK-ACE prover returned a non-object payload")
+    return parsed

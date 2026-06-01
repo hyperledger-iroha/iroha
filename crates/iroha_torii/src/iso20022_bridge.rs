@@ -8,6 +8,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::DashMap;
 use eyre::WrapErr as _;
 use iroha_config::parameters::actual;
@@ -34,7 +35,11 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage, parse_message};
 use norito::json::Value as JsonValue;
+use p256::ecdsa::{
+    Signature as P256Signature, VerifyingKey as P256VerifyingKey, signature::Verifier as _,
+};
 use sha2::{Digest, Sha256};
+use x509_parser::prelude::{FromDer as _, X509Certificate};
 
 use crate::routing::{self, MaybeTelemetry};
 
@@ -68,6 +73,15 @@ pub struct IsoMessageContext {
     target_account_address: Option<String>,
     asset_definition_id: Option<String>,
     asset_id: Option<String>,
+    settlement_amount: Option<String>,
+    settlement_currency: Option<String>,
+    settlement_date: Option<String>,
+    settlement_quantity: Option<String>,
+    settlement_movement_type: Option<String>,
+    settlement_payment_type: Option<String>,
+    security_instrument_id: Option<String>,
+    plan_execution_order: Option<String>,
+    plan_atomicity: Option<String>,
     source_address_observation: AddressParseObservation,
     target_address_observation: AddressParseObservation,
 }
@@ -106,6 +120,51 @@ impl IsoMessageContext {
     /// Specific asset instance referenced by the message.
     pub fn asset_id(&self) -> Option<&str> {
         self.asset_id.as_deref()
+    }
+
+    /// Settlement amount carried by the ISO payment or securities instruction.
+    pub fn settlement_amount(&self) -> Option<&str> {
+        self.settlement_amount.as_deref()
+    }
+
+    /// Settlement currency carried by the ISO payment or securities instruction.
+    pub fn settlement_currency(&self) -> Option<&str> {
+        self.settlement_currency.as_deref()
+    }
+
+    /// Requested or confirmed settlement date.
+    pub fn settlement_date(&self) -> Option<&str> {
+        self.settlement_date.as_deref()
+    }
+
+    /// Securities quantity carried by a securities settlement instruction.
+    pub fn settlement_quantity(&self) -> Option<&str> {
+        self.settlement_quantity.as_deref()
+    }
+
+    /// Securities movement type carried by a securities settlement instruction.
+    pub fn settlement_movement_type(&self) -> Option<&str> {
+        self.settlement_movement_type.as_deref()
+    }
+
+    /// Payment type carried by a securities settlement instruction.
+    pub fn settlement_payment_type(&self) -> Option<&str> {
+        self.settlement_payment_type.as_deref()
+    }
+
+    /// Financial instrument identifier carried by a securities settlement instruction.
+    pub fn security_instrument_id(&self) -> Option<&str> {
+        self.security_instrument_id.as_deref()
+    }
+
+    /// Durable execution-order plan captured from supplementary settlement data.
+    pub fn plan_execution_order(&self) -> Option<&str> {
+        self.plan_execution_order.as_deref()
+    }
+
+    /// Durable atomicity plan captured from supplementary settlement data.
+    pub fn plan_atomicity(&self) -> Option<&str> {
+        self.plan_atomicity.as_deref()
     }
 
     /// Parsed metadata captured when handling `SourceAccountAddress`.
@@ -320,6 +379,7 @@ pub struct IsoMessageStatus {
     transaction_hash: Option<String>,
     detail: Option<String>,
     updated_at: SystemTime,
+    settled_at: Option<SystemTime>,
     context: IsoMessageContext,
     metadata: IsoMessageMetadata,
     derived_status: Pacs002Status,
@@ -354,6 +414,10 @@ impl IsoMessageStatus {
         self.updated_at
     }
 
+    pub fn settled_at(&self) -> Option<SystemTime> {
+        self.settled_at
+    }
+
     pub fn ledger_id(&self) -> Option<&str> {
         self.context.ledger_id.as_deref()
     }
@@ -382,6 +446,42 @@ impl IsoMessageStatus {
         self.context.asset_id.as_deref()
     }
 
+    pub fn settlement_amount(&self) -> Option<&str> {
+        self.context.settlement_amount.as_deref()
+    }
+
+    pub fn settlement_currency(&self) -> Option<&str> {
+        self.context.settlement_currency.as_deref()
+    }
+
+    pub fn settlement_date(&self) -> Option<&str> {
+        self.context.settlement_date.as_deref()
+    }
+
+    pub fn settlement_quantity(&self) -> Option<&str> {
+        self.context.settlement_quantity.as_deref()
+    }
+
+    pub fn settlement_movement_type(&self) -> Option<&str> {
+        self.context.settlement_movement_type.as_deref()
+    }
+
+    pub fn settlement_payment_type(&self) -> Option<&str> {
+        self.context.settlement_payment_type.as_deref()
+    }
+
+    pub fn security_instrument_id(&self) -> Option<&str> {
+        self.context.security_instrument_id.as_deref()
+    }
+
+    pub fn plan_execution_order(&self) -> Option<&str> {
+        self.context.plan_execution_order.as_deref()
+    }
+
+    pub fn plan_atomicity(&self) -> Option<&str> {
+        self.context.plan_atomicity.as_deref()
+    }
+
     pub fn derived_status(&self) -> Pacs002Status {
         self.derived_status
     }
@@ -406,6 +506,37 @@ impl IsoMessageStatus {
     /// Status transition history for the message.
     pub fn status_history(&self) -> &[IsoStatusHistoryEntry] {
         &self.status_history
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IsoLifecycleOutcome {
+    referenced_message_id: Option<String>,
+    referenced_message_known: bool,
+    lifecycle_status_code: Option<String>,
+    lifecycle_reason_code: Option<String>,
+    action: &'static str,
+}
+
+impl IsoLifecycleOutcome {
+    pub(crate) fn referenced_message_id(&self) -> Option<&str> {
+        self.referenced_message_id.as_deref()
+    }
+
+    pub(crate) fn referenced_message_known(&self) -> bool {
+        self.referenced_message_known
+    }
+
+    pub(crate) fn lifecycle_status_code(&self) -> Option<&str> {
+        self.lifecycle_status_code.as_deref()
+    }
+
+    pub(crate) fn lifecycle_reason_code(&self) -> Option<&str> {
+        self.lifecycle_reason_code.as_deref()
+    }
+
+    pub(crate) fn action(&self) -> &'static str {
+        self.action
     }
 }
 
@@ -914,12 +1045,16 @@ impl Iso20022BridgeRuntime {
         self.validate_amount_minor_units(message_profile, parsed)?;
         self.validate_supplementary_data_limit(message_profile, parsed)?;
         self.validate_structured_address_mode(message_profile, parsed)?;
-        let embedded_signature_detected = has_embedded_signature_marker(parsed);
-        if embedded_signature_detected {
-            match profile.embedded_signature_policy {
-                EmbeddedSignaturePolicy::RecordOnly => {}
-                EmbeddedSignaturePolicy::RejectUnsupported
-                | EmbeddedSignaturePolicy::RequireVerified => {
+        let embedded_signature_detected =
+            has_embedded_signature_marker(parsed) || payload_has_embedded_signature(payload);
+        match profile.embedded_signature_policy {
+            EmbeddedSignaturePolicy::RecordOnly => {}
+            EmbeddedSignaturePolicy::RejectUnsupported if embedded_signature_detected => {
+                return Err(MsgError::ValidationFailed);
+            }
+            EmbeddedSignaturePolicy::RejectUnsupported => {}
+            EmbeddedSignaturePolicy::RequireVerified => {
+                if !embedded_signature_detected || !verify_embedded_xml_signature(payload)? {
                     return Err(MsgError::ValidationFailed);
                 }
             }
@@ -1024,6 +1159,9 @@ impl Iso20022BridgeRuntime {
         if let Some(mut existing) = self.records.get_mut(message_id) {
             existing.last_seen = now;
             existing.updated_at = SystemTime::now();
+            existing.state = IsoMessageState::Pending;
+            existing.settled_at = None;
+            existing.rejection_reason_code = None;
             existing.set_hold_reason(reason_code.map(std::borrow::ToOwned::to_owned));
             existing.push_history();
         } else {
@@ -1239,6 +1377,34 @@ impl Iso20022BridgeRuntime {
         self.persist_message(message_id);
     }
 
+    /// Mark an inbound lifecycle message as durably accepted without creating a ledger transfer.
+    pub(crate) fn mark_lifecycle_accepted(&self, message_id: &str, detail: Option<String>) {
+        let now = Instant::now();
+        if let Some(mut existing) = self.records.get_mut(message_id) {
+            if let Some(old_hash) = existing.transaction_hash.take() {
+                self.tx_hash_index.remove(&old_hash);
+            }
+            existing.last_seen = now;
+            existing.updated_at = SystemTime::now();
+            existing.state = IsoMessageState::Accepted;
+            existing.detail = detail;
+            existing.ledger_tx_queued = false;
+            existing.settled_at = None;
+            existing.hold_reason_code = None;
+            existing.change_reason_codes.clear();
+            existing.rejection_reason_code = None;
+            existing.push_history();
+        } else {
+            let mut record = IsoMessageRecord::pending(now);
+            record.state = IsoMessageState::Accepted;
+            record.detail = detail;
+            record.status_history.clear();
+            record.push_history();
+            self.records.insert(message_id.to_owned(), record);
+        }
+        self.persist_message(message_id);
+    }
+
     /// Mark the provided message as rejected and record the reason.
     pub fn mark_rejected(
         &self,
@@ -1285,6 +1451,7 @@ impl Iso20022BridgeRuntime {
                 transaction_hash: record.transaction_hash.clone(),
                 detail: record.detail.clone(),
                 updated_at: record.updated_at,
+                settled_at: record.settled_at,
                 context,
                 metadata: record.metadata.clone(),
                 derived_status,
@@ -1293,6 +1460,85 @@ impl Iso20022BridgeRuntime {
                 rejection_reason_code: record.rejection_reason_code.clone(),
                 status_history: record.status_history.clone(),
             }
+        })
+    }
+
+    /// Determine the durable identifier for an inbound lifecycle message.
+    pub(crate) fn lifecycle_message_id(
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<String, MsgError> {
+        let id = business_message_id(parsed)
+            .or_else(|| parsed.field_text("Assgnmt/Id"))
+            .or_else(|| parsed.field_text("TxId"))
+            .or_else(|| lifecycle_referenced_message_id(message_type, parsed))
+            .ok_or(MsgError::MissingField("MsgId"))?;
+        let id = id.trim();
+        if id.is_empty() {
+            return Err(MsgError::MissingField("MsgId"));
+        }
+        if matches!(message_type, "sese.023" | "sese.024" | "sese.025")
+            && business_message_id(parsed).is_none()
+        {
+            Ok(format!("{message_type}:{id}"))
+        } else {
+            Ok(id.to_owned())
+        }
+    }
+
+    /// Apply an inbound lifecycle message to the referenced durable record when present.
+    pub(crate) fn apply_inbound_lifecycle_message(
+        &self,
+        message_id: &str,
+        message_type: &str,
+        parsed: &ParsedMessage,
+    ) -> Result<IsoLifecycleOutcome, MsgError> {
+        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)
+            .map(ToOwned::to_owned)
+            .map(|id| {
+                if matches!(message_type, "sese.024" | "sese.025") {
+                    format!("sese.023:{id}")
+                } else {
+                    id
+                }
+            });
+        let status_code = lifecycle_status_code(message_type, parsed).map(ToOwned::to_owned);
+        let reason_code = lifecycle_reason_code(parsed).map(ToOwned::to_owned);
+        let detail = lifecycle_detail(message_type, parsed, status_code.as_deref());
+        let referenced_message_known = referenced_message_id
+            .as_deref()
+            .is_some_and(|id| self.records.contains_key(id));
+        let mut action = "recorded";
+
+        if let Some(original_id) = referenced_message_id.as_deref()
+            && referenced_message_known
+        {
+            action = self.apply_lifecycle_update(
+                original_id,
+                message_type,
+                status_code.as_deref(),
+                reason_code.as_deref(),
+                detail.as_deref(),
+            );
+        }
+
+        if let Some(context) = lifecycle_context(message_type, parsed) {
+            self.update_message_context(message_id, context);
+        }
+
+        self.mark_lifecycle_accepted(
+            message_id,
+            Some(format!(
+                "recorded inbound ISO 20022 {message_type} lifecycle message"
+            )),
+        );
+
+        Ok(IsoLifecycleOutcome {
+            referenced_message_id,
+            referenced_message_known,
+            lifecycle_status_code: status_code,
+            lifecycle_reason_code: reason_code,
+            action,
         })
     }
 
@@ -1346,6 +1592,8 @@ impl Iso20022BridgeRuntime {
 
         let mut context = IsoMessageContext {
             ledger_id: Some(chain_id.as_str().to_owned()),
+            settlement_amount: Some(amount_raw.trim().to_owned()),
+            settlement_currency: Some(currency.clone()),
             ..IsoMessageContext::default()
         };
 
@@ -1454,6 +1702,14 @@ impl Iso20022BridgeRuntime {
                 context.asset_definition_id.as_deref(),
             ),
             ("iso20022_asset_id", context.asset_id.as_deref()),
+            (
+                "iso20022_settlement_amount",
+                context.settlement_amount.as_deref(),
+            ),
+            (
+                "iso20022_settlement_currency",
+                context.settlement_currency.as_deref(),
+            ),
         ] {
             if let Some(value) = value {
                 insert_metadata_value(&mut metadata, key, value)?;
@@ -1529,6 +1785,8 @@ impl Iso20022BridgeRuntime {
 
         let mut context = IsoMessageContext {
             ledger_id: Some(chain_id.as_str().to_owned()),
+            settlement_amount: Some(amount_raw.trim().to_owned()),
+            settlement_currency: Some(currency.clone()),
             ..IsoMessageContext::default()
         };
 
@@ -1638,6 +1896,14 @@ impl Iso20022BridgeRuntime {
             ),
             ("iso20022_asset_id", context.asset_id.as_deref()),
             (
+                "iso20022_settlement_amount",
+                context.settlement_amount.as_deref(),
+            ),
+            (
+                "iso20022_settlement_currency",
+                context.settlement_currency.as_deref(),
+            ),
+            (
                 "iso20022_business_message_id",
                 parsed.field_text("BizMsgIdr"),
             ),
@@ -1666,6 +1932,77 @@ impl Iso20022BridgeRuntime {
 }
 
 impl Iso20022BridgeRuntime {
+    fn apply_lifecycle_update(
+        &self,
+        original_id: &str,
+        message_type: &str,
+        status_code: Option<&str>,
+        reason_code: Option<&str>,
+        detail: Option<&str>,
+    ) -> &'static str {
+        if message_type == "pacs.004" {
+            self.mark_rejected(
+                original_id,
+                Some(
+                    detail
+                        .unwrap_or("payment returned by inbound pacs.004")
+                        .to_owned(),
+                ),
+                reason_code.or(Some("PRTRY:PAYMENT_RETURN")),
+            );
+            return "marked_returned";
+        }
+        if message_type == "camt.056" {
+            self.mark_hold(original_id, reason_code.or(Some("CANC")));
+            self.add_change_reason_code(original_id, "CANCELLATION_REQUESTED");
+            return "marked_cancellation_requested";
+        }
+
+        match status_code
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
+            .map(|code| code.to_ascii_uppercase())
+            .as_deref()
+        {
+            Some("ACSC" | "ACCP" | "SETT" | "SETTLED") => {
+                self.mark_settled(original_id, SystemTime::now());
+                "marked_settled"
+            }
+            Some("RJCT" | "REJT" | "CANC" | "CAND") => {
+                self.mark_rejected(
+                    original_id,
+                    Some(
+                        detail
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| "ISO 20022 lifecycle rejection".to_owned()),
+                    ),
+                    reason_code.or(Some("RJCT")),
+                );
+                "marked_rejected"
+            }
+            Some("PDNG" | "PEND" | "PENF") => {
+                self.mark_hold(original_id, reason_code.or(status_code));
+                "marked_pending"
+            }
+            Some("PART") => {
+                self.add_change_reason_code(original_id, "PARTIAL_SETTLEMENT");
+                "marked_partial"
+            }
+            Some("ACSP" | "ACTC") => {
+                self.mark_queued(original_id);
+                "marked_processing"
+            }
+            Some(other) => {
+                self.add_change_reason_code(original_id, other);
+                "recorded_status_code"
+            }
+            None => {
+                self.add_change_reason_code(original_id, message_type);
+                "recorded_lifecycle_reference"
+            }
+        }
+    }
+
     fn prune_expired(&self, now: Instant) {
         let ttl = self.dedupe_ttl;
         let expired = self
@@ -2038,6 +2375,42 @@ fn context_value(context: &IsoMessageContext) -> JsonValue {
         "asset_id".to_owned(),
         string_or_null(context.asset_id.as_deref()),
     );
+    map.insert(
+        "settlement_amount".to_owned(),
+        string_or_null(context.settlement_amount.as_deref()),
+    );
+    map.insert(
+        "settlement_currency".to_owned(),
+        string_or_null(context.settlement_currency.as_deref()),
+    );
+    map.insert(
+        "settlement_date".to_owned(),
+        string_or_null(context.settlement_date.as_deref()),
+    );
+    map.insert(
+        "settlement_quantity".to_owned(),
+        string_or_null(context.settlement_quantity.as_deref()),
+    );
+    map.insert(
+        "settlement_movement_type".to_owned(),
+        string_or_null(context.settlement_movement_type.as_deref()),
+    );
+    map.insert(
+        "settlement_payment_type".to_owned(),
+        string_or_null(context.settlement_payment_type.as_deref()),
+    );
+    map.insert(
+        "security_instrument_id".to_owned(),
+        string_or_null(context.security_instrument_id.as_deref()),
+    );
+    map.insert(
+        "plan_execution_order".to_owned(),
+        string_or_null(context.plan_execution_order.as_deref()),
+    );
+    map.insert(
+        "plan_atomicity".to_owned(),
+        string_or_null(context.plan_atomicity.as_deref()),
+    );
     JsonValue::Object(map)
 }
 
@@ -2051,6 +2424,15 @@ fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
         target_account_address: optional_string(obj, "target_account_address"),
         asset_definition_id: optional_string(obj, "asset_definition_id"),
         asset_id: optional_string(obj, "asset_id"),
+        settlement_amount: optional_string(obj, "settlement_amount"),
+        settlement_currency: optional_string(obj, "settlement_currency"),
+        settlement_date: optional_string(obj, "settlement_date"),
+        settlement_quantity: optional_string(obj, "settlement_quantity"),
+        settlement_movement_type: optional_string(obj, "settlement_movement_type"),
+        settlement_payment_type: optional_string(obj, "settlement_payment_type"),
+        security_instrument_id: optional_string(obj, "security_instrument_id"),
+        plan_execution_order: optional_string(obj, "plan_execution_order"),
+        plan_atomicity: optional_string(obj, "plan_atomicity"),
         source_address_observation: AddressParseObservation::default(),
         target_address_observation: AddressParseObservation::default(),
     })
@@ -2218,6 +2600,128 @@ fn uetr(parsed: &ParsedMessage) -> Option<&str> {
     field_text_by_suffix(parsed, &["UETR"]).filter(|value| !value.trim().is_empty())
 }
 
+fn lifecycle_referenced_message_id<'a>(
+    message_type: &str,
+    parsed: &'a ParsedMessage,
+) -> Option<&'a str> {
+    match message_type {
+        "pacs.002" => parsed.field_text("OrgnlMsgId"),
+        "pacs.004" => parsed.field_text("OrgnlGrpInf/OrgnlMsgId"),
+        "camt.056" => parsed.field_text("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId"),
+        "sese.024" | "sese.025" => parsed.field_text("TxId"),
+        "sese.023" => None,
+        _ => None,
+    }
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> Option<&'a str> {
+    match message_type {
+        "pacs.002" => parsed.field_text("TxSts"),
+        "pacs.004" => Some("RJCT"),
+        "camt.056" => Some("PDNG"),
+        "sese.024" => field_text_by_suffix(
+            parsed,
+            &[
+                "SttlmSts",
+                "TxSts",
+                "SttlmTxSts/Sts/Cd",
+                "SttlmTxSts/Sts/Prtry",
+            ],
+        ),
+        "sese.025" => parsed.field_text("ConfSts"),
+        "sese.023" => Some("ACTC"),
+        _ => None,
+    }
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn lifecycle_reason_code(parsed: &ParsedMessage) -> Option<&str> {
+    field_text_by_suffix(
+        parsed,
+        &[
+            "RsnCd",
+            "RtrdRsn/Cd",
+            "RtrdRsn/Prtry",
+            "CxlRsnInf/Rsn/Cd",
+            "CxlRsnInf/Rsn/Prtry",
+            "StsRsnInf/Rsn/Cd",
+            "StsRsnInf/Rsn/Prtry",
+        ],
+    )
+    .filter(|value| !value.trim().is_empty())
+}
+
+fn lifecycle_detail(
+    message_type: &str,
+    parsed: &ParsedMessage,
+    status_code: Option<&str>,
+) -> Option<String> {
+    field_text_by_suffix(parsed, &["AddtlInf", "AddtlInf[*]", "CxlRsnInf/AddtlInf"])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| match (message_type, status_code) {
+            ("pacs.004", _) => Some("payment returned by inbound pacs.004".to_owned()),
+            (_, Some(code)) => Some(format!("ISO 20022 lifecycle status {code}")),
+            _ => None,
+        })
+}
+
+fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMessageContext> {
+    let mut context = IsoMessageContext::default();
+    match message_type {
+        "sese.023" => {
+            context.settlement_date = parsed_text(parsed, "SttlmDt");
+            context.settlement_movement_type =
+                parsed_text(parsed, "SttlmTpAndAddtlParams/SctiesMvmntTp");
+            context.settlement_payment_type = parsed_text(parsed, "SttlmTpAndAddtlParams/Pmt");
+            context.settlement_quantity = parsed_text(parsed, "SctiesLeg/Qty");
+            context.security_instrument_id = parsed_text(parsed, "SctiesLeg/FinInstrmId");
+            context.settlement_amount = parsed_text(parsed, "CashLeg/Amt");
+            context.settlement_currency = parsed_text(parsed, "CashLeg/Ccy");
+            context.plan_execution_order = parsed_text(parsed, "Plan/ExecutionOrder");
+            context.plan_atomicity = parsed_text(parsed, "Plan/Atomicity");
+        }
+        "sese.025" => {
+            context.settlement_date = parsed_text(parsed, "SttlmDt");
+            context.settlement_movement_type =
+                parsed_text(parsed, "SttlmTpAndAddtlParams/SctiesMvmntTp");
+            context.settlement_payment_type = parsed_text(parsed, "SttlmTpAndAddtlParams/Pmt");
+            context.settlement_quantity = parsed_text(parsed, "SttlmQty");
+            context.security_instrument_id = parsed_text(parsed, "SctiesLeg/FinInstrmId");
+            context.settlement_amount = parsed_text(parsed, "SttlmAmt");
+            context.settlement_currency = parsed_text(parsed, "SttlmCcy");
+            context.plan_execution_order = parsed_text(parsed, "Plan/ExecutionOrder");
+            context.plan_atomicity = parsed_text(parsed, "Plan/Atomicity");
+        }
+        _ => return None,
+    }
+
+    [
+        context.settlement_date.as_deref(),
+        context.settlement_movement_type.as_deref(),
+        context.settlement_payment_type.as_deref(),
+        context.settlement_quantity.as_deref(),
+        context.security_instrument_id.as_deref(),
+        context.settlement_amount.as_deref(),
+        context.settlement_currency.as_deref(),
+        context.plan_execution_order.as_deref(),
+        context.plan_atomicity.as_deref(),
+    ]
+    .iter()
+    .any(|value| value.is_some())
+    .then_some(context)
+}
+
+fn parsed_text(parsed: &ParsedMessage, field: &str) -> Option<String> {
+    parsed
+        .field_text(field)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Option<&'a str> {
     suffixes.iter().find_map(|suffix| {
         parsed.field_text(suffix).or_else(|| {
@@ -2245,6 +2749,302 @@ fn has_embedded_signature_marker(parsed: &ParsedMessage) -> bool {
             || field.contains("SignedInfo")
             || field.contains("QualifyingProperties")
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct XmlElementSpan {
+    start: usize,
+    opening_end: usize,
+    content_start: usize,
+    content_end: usize,
+    end: usize,
+}
+
+const XMLDSIG_ECDSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
+const XMLDSIG_SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
+const XMLDSIG_ENVELOPED_SIGNATURE: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+const XML_C14N_1_0: &str = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
+const XML_C14N_1_1: &str = "http://www.w3.org/2006/12/xml-c14n11";
+const XML_EXCLUSIVE_C14N_1_0: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
+
+fn payload_has_embedded_signature(payload: &[u8]) -> bool {
+    std::str::from_utf8(payload).is_ok_and(|text| {
+        find_first_xml_element(text, "Signature").is_some()
+            || find_first_xml_element(text, "Sgntr").is_some()
+    })
+}
+
+fn verify_embedded_xml_signature(payload: &[u8]) -> Result<bool, MsgError> {
+    let text = std::str::from_utf8(payload).map_err(|_| MsgError::InvalidFormat)?;
+    let Some(signature_span) =
+        find_first_xml_element(text, "Signature").or_else(|| find_first_xml_element(text, "Sgntr"))
+    else {
+        return Ok(false);
+    };
+    if find_first_xml_element(&text[signature_span.end..], "Signature").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signature_xml = &text[signature_span.start..signature_span.end];
+    let signed_info_span =
+        find_first_xml_element(signature_xml, "SignedInfo").ok_or(MsgError::ValidationFailed)?;
+    let signed_info_xml = &signature_xml[signed_info_span.start..signed_info_span.end];
+    let c14n_algorithm = child_attr(signed_info_xml, "CanonicalizationMethod", "Algorithm")
+        .ok_or(MsgError::ValidationFailed)?;
+    if !matches!(
+        c14n_algorithm.as_str(),
+        XML_C14N_1_0 | XML_C14N_1_1 | XML_EXCLUSIVE_C14N_1_0
+    ) {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signature_algorithm = child_attr(signed_info_xml, "SignatureMethod", "Algorithm")
+        .ok_or(MsgError::ValidationFailed)?;
+    if signature_algorithm != XMLDSIG_ECDSA_SHA256 {
+        return Err(MsgError::ValidationFailed);
+    }
+    verify_xml_signature_references(text, signature_span, signed_info_xml)?;
+
+    let signature_value = decode_required_child_base64(signature_xml, "SignatureValue")?;
+    let public_key = xml_signature_public_key(signature_xml)?;
+    let verifying_key =
+        P256VerifyingKey::from_sec1_bytes(&public_key).map_err(|_| MsgError::ValidationFailed)?;
+    let signature =
+        P256Signature::from_der(&signature_value).map_err(|_| MsgError::ValidationFailed)?;
+    verifying_key
+        .verify(signed_info_xml.as_bytes(), &signature)
+        .map_err(|_| MsgError::ValidationFailed)?;
+    Ok(true)
+}
+
+fn verify_xml_signature_references(
+    full_xml: &str,
+    signature_span: XmlElementSpan,
+    signed_info_xml: &str,
+) -> Result<(), MsgError> {
+    let reference_span =
+        find_first_xml_element(signed_info_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(&signed_info_xml[reference_span.end..], "Reference").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let reference_xml = &signed_info_xml[reference_span.start..reference_span.end];
+    let uri = element_attr(signed_info_xml, reference_span, "URI").unwrap_or_default();
+    if !uri.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    if !contains_child_attr(
+        reference_xml,
+        "Transform",
+        "Algorithm",
+        XMLDSIG_ENVELOPED_SIGNATURE,
+    ) {
+        return Err(MsgError::ValidationFailed);
+    }
+    let digest_algorithm =
+        child_attr(reference_xml, "DigestMethod", "Algorithm").ok_or(MsgError::ValidationFailed)?;
+    if digest_algorithm != XMLDSIG_SHA256 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let expected_digest = decode_required_child_base64(reference_xml, "DigestValue")?;
+    let mut unsigned = String::with_capacity(full_xml.len());
+    unsigned.push_str(&full_xml[..signature_span.start]);
+    unsigned.push_str(&full_xml[signature_span.end..]);
+    let digest = Sha256::digest(unsigned.trim().as_bytes());
+    if expected_digest.as_slice() != &digest[..] {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn xml_signature_public_key(signature_xml: &str) -> Result<Vec<u8>, MsgError> {
+    if let Some(public_key) = child_text_compact(signature_xml, "PublicKey") {
+        return BASE64_STANDARD
+            .decode(public_key)
+            .map_err(|_| MsgError::ValidationFailed);
+    }
+    let certificate = decode_required_child_base64(signature_xml, "X509Certificate")?;
+    let (_, cert) =
+        X509Certificate::from_der(&certificate).map_err(|_| MsgError::ValidationFailed)?;
+    Ok(cert.public_key().subject_public_key.data.to_vec())
+}
+
+fn decode_required_child_base64(container: &str, child: &str) -> Result<Vec<u8>, MsgError> {
+    let value = child_text_compact(container, child).ok_or(MsgError::ValidationFailed)?;
+    BASE64_STANDARD
+        .decode(value)
+        .map_err(|_| MsgError::ValidationFailed)
+}
+
+fn child_attr(container: &str, child: &str, attr: &str) -> Option<String> {
+    let span = find_first_xml_element(container, child)?;
+    element_attr(container, span, attr)
+}
+
+fn contains_child_attr(container: &str, child: &str, attr: &str, expected: &str) -> bool {
+    let mut cursor = 0usize;
+    while cursor < container.len() {
+        let Some(span) = find_first_xml_element(&container[cursor..], child) else {
+            return false;
+        };
+        let absolute = XmlElementSpan {
+            start: cursor + span.start,
+            opening_end: cursor + span.opening_end,
+            content_start: cursor + span.content_start,
+            content_end: cursor + span.content_end,
+            end: cursor + span.end,
+        };
+        if element_attr(container, absolute, attr).as_deref() == Some(expected) {
+            return true;
+        }
+        cursor = absolute.end;
+    }
+    false
+}
+
+fn child_text_compact(container: &str, child: &str) -> Option<String> {
+    let span = find_first_xml_element(container, child)?;
+    Some(
+        container[span.content_start..span.content_end]
+            .chars()
+            .filter(|ch| !ch.is_whitespace())
+            .collect(),
+    )
+}
+
+fn element_attr(container: &str, span: XmlElementSpan, attr: &str) -> Option<String> {
+    let opening = &container[span.start + 1..span.opening_end];
+    attr_value(opening, attr)
+}
+
+fn attr_value(opening: &str, attr: &str) -> Option<String> {
+    let mut cursor = opening.trim();
+    if let Some((_, rest)) = cursor.split_once(char::is_whitespace) {
+        cursor = rest.trim();
+    } else {
+        return None;
+    }
+    if cursor.ends_with('/') {
+        cursor = cursor.trim_end_matches('/').trim_end();
+    }
+    while !cursor.is_empty() {
+        let eq_idx = cursor.find('=')?;
+        let name = cursor[..eq_idx].trim();
+        let mut remainder = cursor[eq_idx + 1..].trim_start();
+        if remainder.is_empty() {
+            return None;
+        }
+        let quote = remainder.as_bytes()[0];
+        if quote != b'"' && quote != b'\'' {
+            return None;
+        }
+        remainder = &remainder[1..];
+        let end_idx = remainder.find(quote as char)?;
+        if name == attr || xml_local_name(name) == attr {
+            return Some(remainder[..end_idx].to_owned());
+        }
+        remainder = remainder[end_idx + 1..].trim_start();
+        cursor = remainder;
+    }
+    None
+}
+
+fn find_first_xml_element(text: &str, local: &str) -> Option<XmlElementSpan> {
+    let mut cursor = 0usize;
+    while cursor < text.len() {
+        let start = cursor + text[cursor..].find('<')?;
+        let tag_start = start + 1;
+        let opening_end = find_xml_tag_end(text.as_bytes(), tag_start)?;
+        let raw_tag = text[tag_start..opening_end].trim();
+        if raw_tag.starts_with('/')
+            || raw_tag.starts_with('?')
+            || raw_tag.starts_with("!--")
+            || raw_tag.starts_with("![CDATA[")
+        {
+            cursor = opening_end + 1;
+            continue;
+        }
+        let self_closing = raw_tag.ends_with('/');
+        let tag_body = raw_tag.trim_end_matches('/').trim_end();
+        let (name, _) = tag_body
+            .split_once(char::is_whitespace)
+            .unwrap_or((tag_body, ""));
+        if xml_local_name(name) == local {
+            if self_closing {
+                return Some(XmlElementSpan {
+                    start,
+                    opening_end,
+                    content_start: opening_end + 1,
+                    content_end: opening_end + 1,
+                    end: opening_end + 1,
+                });
+            }
+            let (content_end, end) = find_xml_element_end(text, opening_end + 1, local)?;
+            return Some(XmlElementSpan {
+                start,
+                opening_end,
+                content_start: opening_end + 1,
+                content_end,
+                end,
+            });
+        }
+        cursor = opening_end + 1;
+    }
+    None
+}
+
+fn find_xml_element_end(text: &str, mut cursor: usize, local: &str) -> Option<(usize, usize)> {
+    let mut depth = 1usize;
+    while cursor < text.len() {
+        let start = cursor + text[cursor..].find('<')?;
+        let tag_start = start + 1;
+        let tag_end = find_xml_tag_end(text.as_bytes(), tag_start)?;
+        let raw_tag = text[tag_start..tag_end].trim();
+        if raw_tag.starts_with('?') || raw_tag.starts_with("!--") || raw_tag.starts_with("![CDATA[")
+        {
+            cursor = tag_end + 1;
+            continue;
+        }
+        let closing = raw_tag.starts_with('/');
+        let tag_body = if closing {
+            raw_tag.trim_start_matches('/').trim()
+        } else {
+            raw_tag
+        };
+        let self_closing = !closing && tag_body.ends_with('/');
+        let tag_body = tag_body.trim_end_matches('/').trim_end();
+        let (name, _) = tag_body
+            .split_once(char::is_whitespace)
+            .unwrap_or((tag_body, ""));
+        if xml_local_name(name) == local {
+            if closing {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((start, tag_end + 1));
+                }
+            } else if !self_closing {
+                depth += 1;
+            }
+        }
+        cursor = tag_end + 1;
+    }
+    None
+}
+
+fn find_xml_tag_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start;
+    let mut quote = None;
+    while i < bytes.len() {
+        match quote {
+            Some(q) if bytes[i] == q => quote = None,
+            None if bytes[i] == b'"' || bytes[i] == b'\'' => quote = Some(bytes[i]),
+            None if bytes[i] == b'>' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn xml_local_name(name: &str) -> &str {
+    name.rsplit_once(':').map_or(name, |(_, local)| local)
 }
 
 fn amount_fraction_digits(amount: &str) -> usize {
@@ -2371,12 +3171,25 @@ mod tests {
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
+    use p256::ecdsa::{SigningKey as P256SigningKey, signature::Signer as _};
     use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
 
     const LEGACY_PUBLIC_KEY_LITERAL: &str =
         "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@test";
+
+    fn assert_outbox_error_contains(err: crate::Error, expected: &str) {
+        match err {
+            crate::Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => assert!(
+                message.contains(expected),
+                "expected `{message}` to contain `{expected}`"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
 
     fn sample_account_bundle() -> (AccountId, String, iroha_crypto::PrivateKey) {
         let key_pair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
@@ -2447,6 +3260,83 @@ mod tests {
                 amount_minor_units: Vec::new(),
             }],
         }
+    }
+
+    fn signed_message_profile(policy: &str) -> actual::IsoBridgeProfile {
+        actual::IsoBridgeProfile {
+            id: "signed-pacs008-test".to_owned(),
+            rail: "generic-iso20022".to_owned(),
+            embedded_signature_policy: Some(policy.to_owned()),
+            required_reference_datasets: Vec::new(),
+            message_profiles: vec![actual::IsoMessageProfile {
+                message_type: "pacs.008".to_owned(),
+                direction: "inbound".to_owned(),
+                versions: vec!["pacs.008".to_owned(), "pacs.008.001.08".to_owned()],
+                business_services: Vec::new(),
+                require_app_header: false,
+                require_business_service: false,
+                require_uetr: false,
+                structured_address_mode: "permissive".to_owned(),
+                supplementary_data_max_bytes: 4096,
+                amount_minor_units: Vec::new(),
+            }],
+        }
+    }
+
+    fn unsigned_pacs008_xml() -> String {
+        concat!(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            "<FIToFICstmrCdtTrf><GrpHdr><MsgId>sig-001</MsgId></GrpHdr>",
+            r#"<CdtTrfTxInf><IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>"#,
+            "<IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>",
+            "<DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>",
+            "<CdtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></CdtrAcct>",
+            "<DbtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></DbtrAgt>",
+            "<CdtrAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></CdtrAgt>",
+            "</CdtTrfTxInf></FIToFICstmrCdtTrf></Document>",
+        )
+        .to_owned()
+    }
+
+    fn signed_pacs008_xml() -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
+        let signed_info = format!(
+            r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/></Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+        );
+        let signing_key =
+            P256SigningKey::from_bytes(&[0x31; 32].into()).expect("deterministic P-256 key");
+        let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        let signature_xml = format!(
+            concat!(
+                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>",
+                r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+                "</Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            public_key = public_key
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
     }
 
     fn sample_world(asset_alias: Option<&str>) -> World {
@@ -2643,6 +3533,139 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_valid_p256_xmldsig_xades() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("valid XMLDSig/XAdES payload should pass require-verified profile");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_missing_signature() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = unsigned_pacs008_xml();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse unsigned XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("require-verified must fail closed when the signature is absent");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_unsupported_signature_method() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload =
+            signed_pacs008_xml().replace(XMLDSIG_ECDSA_SHA256, "urn:unsupported:rsa-sha1");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("unsupported signature methods must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_payload_digest_tampering() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replace(">10.00<", ">10.01<");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("reference digest mismatch must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_signature_value_tampering() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("require-verified"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml().replacen("<SignatureValue>", "<SignatureValue>A", 1);
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("invalid signature bytes must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn reject_unsupported_profile_still_rejects_valid_embedded_signature() {
+        let mut config = sample_config();
+        config
+            .profiles
+            .push(signed_message_profile("reject-unsupported"));
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("reject-unsupported live profiles must keep rejecting signatures");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn live_profile_requires_reference_datasets() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -2768,6 +3791,14 @@ mod tests {
                 .expect("cfg")
                 .expect("enabled");
             assert!(runtime.check_and_record_message("persisted-msg"));
+            runtime.update_message_context(
+                "persisted-msg",
+                IsoMessageContext {
+                    settlement_amount: Some("99.50".to_owned()),
+                    settlement_currency: Some("USD".to_owned()),
+                    ..IsoMessageContext::default()
+                },
+            );
             runtime.mark_accepted("persisted-msg", "tx-persisted");
         }
         let reloaded = Iso20022BridgeRuntime::from_config(&config)
@@ -2778,6 +3809,8 @@ mod tests {
             .expect("reloaded status");
         assert_eq!(status.status_label(), "Accepted");
         assert_eq!(status.transaction_hash(), Some("tx-persisted"));
+        assert_eq!(status.settlement_amount(), Some("99.50"));
+        assert_eq!(status.settlement_currency(), Some("USD"));
         assert!(!status.status_history().is_empty());
     }
 
@@ -3272,6 +4305,178 @@ mod tests {
     }
 
     #[test]
+    fn payment_outbox_xml_uses_durable_amount_currency_and_escapes_reasons() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let msg = parse_message(
+            "pacs.008",
+            b"MsgId=m-outbox\nIntrBkSttlmAmt=10.25\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let (_tx, context) = runtime
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .expect("build");
+        assert_eq!(context.settlement_amount(), Some("10.25"));
+        assert_eq!(context.settlement_currency(), Some("USD"));
+
+        assert!(runtime.check_and_record_message("m-outbox"));
+        runtime.update_message_context("m-outbox", context);
+        runtime.mark_rejected(
+            "m-outbox",
+            Some("return <detail> & audit".to_owned()),
+            Some("PRTRY:RETURN<&>"),
+        );
+        let status = runtime.message_status("m-outbox").expect("status");
+
+        let pacs004 = crate::iso_pacs004_xml(&status).expect("pacs.004 xml");
+        assert!(pacs004.contains("<RtrdIntrBkSttlmAmt Ccy=\"USD\">10.25</RtrdIntrBkSttlmAmt>"));
+        assert!(pacs004.contains("return &lt;detail&gt; &amp; audit"));
+        assert!(!pacs004.contains("return <detail> & audit"));
+        parse_message("pacs.004", pacs004.as_bytes()).expect("generated pacs.004 parses");
+
+        let camt029 = crate::iso_camt029_xml(&status);
+        assert!(camt029.contains("<Conf>CNCL</Conf>"));
+        assert!(camt029.contains("RETURN&lt;&amp;&gt;"));
+        parse_message("camt.029", camt029.as_bytes()).expect("generated camt.029 parses");
+    }
+
+    #[test]
+    fn pacs004_outbox_refuses_missing_settlement_amount_or_currency() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("m-missing-amount"));
+        runtime.update_message_context(
+            "m-missing-amount",
+            IsoMessageContext {
+                settlement_currency: Some("USD".to_owned()),
+                ..IsoMessageContext::default()
+            },
+        );
+        runtime.mark_rejected("m-missing-amount", Some("return".to_owned()), Some("BE01"));
+        let status = runtime.message_status("m-missing-amount").expect("status");
+        let err = crate::iso_pacs004_xml(&status).expect_err("missing amount must fail");
+        assert_outbox_error_contains(err, "settlement_amount");
+
+        assert!(runtime.check_and_record_message("m-missing-currency"));
+        runtime.update_message_context(
+            "m-missing-currency",
+            IsoMessageContext {
+                settlement_amount: Some("10".to_owned()),
+                ..IsoMessageContext::default()
+            },
+        );
+        runtime.mark_rejected(
+            "m-missing-currency",
+            Some("return".to_owned()),
+            Some("BE01"),
+        );
+        let status = runtime
+            .message_status("m-missing-currency")
+            .expect("status");
+        let err = crate::iso_pacs004_xml(&status).expect_err("missing currency must fail");
+        assert_outbox_error_contains(err, "settlement_currency");
+    }
+
+    #[test]
+    fn securities_outbox_xml_uses_sese023_context_and_settlement_state() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "sese.023",
+            b"TxId=SETT-123\nSttlmDt=2025-11-12\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nSctiesLeg/FinInstrmId=US0378331005\nSctiesLeg/Qty=42\nCashLeg/Amt=1234.56\nCashLeg/Ccy=USD\nDlvrgSttlmPties/Pty/Bic=DEUTDEFF\nDlvrgSttlmPties/Acct=DELIVER-1\nRcvgSttlmPties/Pty/Bic=MARKDEFF\nRcvgSttlmPties/Acct=RECEIVE-1\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING",
+        )
+        .expect("parsed sese.023");
+        let message_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.023", &parsed).expect("message id");
+        assert_eq!(message_id, "sese.023:SETT-123");
+        assert!(runtime.check_and_record_message(&message_id));
+        runtime
+            .apply_inbound_lifecycle_message(&message_id, "sese.023", &parsed)
+            .expect("record sese.023");
+
+        let accepted = runtime
+            .message_status(&message_id)
+            .expect("accepted status");
+        assert_eq!(accepted.settlement_amount(), Some("1234.56"));
+        assert_eq!(accepted.settlement_quantity(), Some("42"));
+        let accepted_status = crate::iso_sese024_xml(&accepted);
+        assert!(accepted_status.contains("<TxId>SETT-123</TxId>"));
+        assert!(accepted_status.contains("<Sts><Cd>ACCP</Cd></Sts>"));
+        parse_message("sese.024", accepted_status.as_bytes())
+            .expect("generated accepted sese.024 parses");
+
+        runtime.mark_hold(&message_id, Some("NORE"));
+        let pending = runtime.message_status(&message_id).expect("pending status");
+        let pending_status = crate::iso_sese024_xml(&pending);
+        assert!(pending_status.contains("<Sts><Cd>PEND</Cd></Sts>"));
+        assert!(pending_status.contains("<Rsn><Cd>NORE</Cd></Rsn>"));
+        parse_message("sese.024", pending_status.as_bytes())
+            .expect("generated pending sese.024 parses");
+
+        runtime.mark_settled(&message_id, SystemTime::now());
+        let settled = runtime.message_status(&message_id).expect("settled status");
+        let confirmation = crate::iso_sese025_xml(&settled).expect("sese.025 xml");
+        assert!(confirmation.contains("<TxId>SETT-123</TxId>"));
+        assert!(confirmation.contains("<SttlmAmt Ccy=\"USD\">1234.56</SttlmAmt>"));
+        assert!(confirmation.contains("<Unit>42</Unit>"));
+        assert!(confirmation.contains("<ExecutionOrder>DELIVERY_THEN_PAYMENT</ExecutionOrder>"));
+        parse_message("sese.025", confirmation.as_bytes()).expect("generated sese.025 parses");
+    }
+
+    #[test]
+    fn sese025_outbox_refuses_unsettled_or_incomplete_records() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("sese.023:INCOMPLETE"));
+        runtime.update_message_context(
+            "sese.023:INCOMPLETE",
+            IsoMessageContext {
+                settlement_amount: Some("15".to_owned()),
+                settlement_currency: Some("USD".to_owned()),
+                settlement_quantity: Some("1".to_owned()),
+                settlement_movement_type: Some("DELI".to_owned()),
+                settlement_payment_type: Some("APMT".to_owned()),
+                plan_execution_order: Some("DELIVERY_THEN_PAYMENT".to_owned()),
+                plan_atomicity: Some("ALL_OR_NOTHING".to_owned()),
+                ..IsoMessageContext::default()
+            },
+        );
+        let pending = runtime
+            .message_status("sese.023:INCOMPLETE")
+            .expect("pending");
+        let err = crate::iso_sese025_xml(&pending).expect_err("unsettled must fail");
+        assert_outbox_error_contains(err, "requires a settled");
+
+        runtime.mark_settled("sese.023:INCOMPLETE", SystemTime::now());
+        runtime.update_message_context(
+            "sese.023:INCOMPLETE",
+            IsoMessageContext {
+                settlement_amount: Some("15".to_owned()),
+                settlement_currency: Some("USD".to_owned()),
+                settlement_quantity: Some("1".to_owned()),
+                settlement_movement_type: Some("DELI".to_owned()),
+                settlement_payment_type: Some("APMT".to_owned()),
+                plan_execution_order: Some("DELIVERY_THEN_PAYMENT".to_owned()),
+                ..IsoMessageContext::default()
+            },
+        );
+        runtime.mark_settled("sese.023:INCOMPLETE", SystemTime::now());
+        let incomplete = runtime
+            .message_status("sese.023:INCOMPLETE")
+            .expect("settled");
+        let err = crate::iso_sese025_xml(&incomplete).expect_err("missing atomicity must fail");
+        assert_outbox_error_contains(err, "plan_atomicity");
+    }
+
+    #[test]
     fn queued_message_reports_acsp() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -3392,5 +4597,175 @@ mod tests {
             status.detail(),
             Some("transaction expired before admission")
         );
+    }
+
+    #[test]
+    fn lifecycle_rejects_replayed_payload_hash() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let first = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.002",
+            None,
+            Some("status-1".to_owned()),
+            None,
+            "same-payload-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+        let replay = IsoMessageMetadata::inbound(
+            "generic-iso20022",
+            "pacs.002",
+            None,
+            Some("status-2".to_owned()),
+            None,
+            "same-payload-hash".to_owned(),
+            "snapshot".to_owned(),
+            false,
+        );
+
+        assert!(runtime.check_and_record_inbound("status-1", first));
+        assert!(!runtime.check_and_record_inbound("status-2", replay));
+    }
+
+    #[test]
+    fn lifecycle_pacs002_settles_known_original() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("orig-1"));
+        runtime.mark_accepted("orig-1", "tx-orig-1");
+        let parsed = parse_message("pacs.002", b"MsgId=status-1\nOrgnlMsgId=orig-1\nTxSts=ACSC")
+            .expect("pacs.002 parsed");
+        let metadata = runtime
+            .validate_profile_submission(runtime.default_profile(), "pacs.002", &parsed, b"pacs2")
+            .expect("profile accepts pacs.002");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.002", &parsed).expect("lifecycle id");
+
+        assert_eq!(lifecycle_id, "status-1");
+        assert!(runtime.check_and_record_inbound(&lifecycle_id, metadata));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.002", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("orig-1"));
+        assert!(outcome.referenced_message_known());
+        assert_eq!(outcome.lifecycle_status_code(), Some("ACSC"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("status-1")
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+        assert_eq!(
+            runtime
+                .message_status("orig-1")
+                .expect("original status")
+                .pacs002_code(),
+            "ACSC"
+        );
+    }
+
+    #[test]
+    fn lifecycle_pacs004_marks_original_returned() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("orig-return"));
+        runtime.mark_accepted("orig-return", "tx-return");
+        let parsed = parse_message(
+            "pacs.004",
+            b"MsgId=return-1\nCreDtTm=2025-01-01T00:00:00Z\nOrgnlGrpInf/OrgnlMsgId=orig-return\nTxInf[0]/OrgnlInstrId=instr-1\nTxInf[0]/RtrdInstdAmt=10.00\nTxInf[0]/RtrdInstdAmtCcy=USD\nTxInf[0]/RtrdRsn/Cd=AC01",
+        )
+        .expect("pacs.004 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed).expect("lifecycle id");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "pacs.004", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("orig-return"));
+        assert_eq!(outcome.lifecycle_reason_code(), Some("AC01"));
+        assert_eq!(outcome.action(), "marked_returned");
+        let original = runtime
+            .message_status("orig-return")
+            .expect("original status");
+        assert_eq!(original.status_label(), "Rejected");
+        assert_eq!(original.rejection_reason_code(), Some("AC01"));
+    }
+
+    #[test]
+    fn lifecycle_camt056_records_unknown_original_without_creating_it() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message(
+            "camt.056",
+            b"Assgnmt/Id=cancel-1\nAssgnmt/CreDtTm=2025-01-01T00:00:00Z\nUndrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId=missing-original\nUndrlyg/TxInf/CxlRsnInf/Rsn/Cd=CUST",
+        )
+        .expect("camt.056 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed).expect("lifecycle id");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "camt.056", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("missing-original"));
+        assert!(!outcome.referenced_message_known());
+        assert_eq!(outcome.action(), "recorded");
+        assert!(runtime.message_status("missing-original").is_none());
+        assert_eq!(
+            runtime
+                .message_status("cancel-1")
+                .expect("lifecycle status")
+                .status_label(),
+            "Accepted"
+        );
+    }
+
+    #[test]
+    fn lifecycle_sese025_confirms_prefixed_settlement_instruction() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_message("sese.023:settle-1"));
+        let parsed = parse_message(
+            "sese.025",
+            b"TxId=settle-1\nSttlmDt=2025-01-02\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nConfSts=ACCP\nSttlmQty=100\nSttlmAmt=25.00\nSttlmCcy=USD\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING",
+        )
+        .expect("sese.025 parsed");
+        let lifecycle_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &parsed).expect("lifecycle id");
+        assert_eq!(lifecycle_id, "sese.025:settle-1");
+        assert!(runtime.check_and_record_message(&lifecycle_id));
+        let outcome = runtime
+            .apply_inbound_lifecycle_message(&lifecycle_id, "sese.025", &parsed)
+            .expect("lifecycle applied");
+
+        assert_eq!(outcome.referenced_message_id(), Some("sese.023:settle-1"));
+        assert_eq!(outcome.action(), "marked_settled");
+        assert_eq!(
+            runtime
+                .message_status("sese.023:settle-1")
+                .expect("settlement instruction status")
+                .pacs002_code(),
+            "ACSC"
+        );
+    }
+
+    #[test]
+    fn lifecycle_wrong_message_family_fails_parser_validation() {
+        let err = parse_message(
+            "pacs.004",
+            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
+        )
+        .expect_err("pacs.008 fields must not satisfy pacs.004 endpoint");
+        assert!(matches!(err, MsgError::MissingField(_)));
     }
 }

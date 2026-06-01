@@ -405,10 +405,7 @@ object OfflineNote {
         private val _assertionPublicKey = assertionPublicKey.copyOf()
 
         init {
-            requireCertificateCore(version, accountId, _publicKey, oneUse)
-            require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
-                "assertion usage count limit must be non-negative"
-            }
+            requireCertificateCore(version, accountId, _publicKey, assertionUsageCountLimit, oneUse)
         }
 
         fun publicKey(): ByteArray = _publicKey.copyOf()
@@ -436,11 +433,8 @@ object OfflineNote {
         private val _issuerSignature = issuerSignature.copyOf()
 
         init {
-            requireCertificateCore(version, accountId, _publicKey, oneUse)
+            requireCertificateCore(version, accountId, _publicKey, assertionUsageCountLimit, oneUse)
             require(_issuerSignature.size == 64) { "issuer signature must be 64 bytes" }
-            require(assertionUsageCountLimit == null || assertionUsageCountLimit >= 0) {
-                "assertion usage count limit must be non-negative"
-            }
         }
 
         fun publicKey(): ByteArray = _publicKey.copyOf()
@@ -1861,9 +1855,17 @@ object OfflineNote {
         return limbs
     }
 
-    private fun requireCertificateCore(version: Int, accountId: String, publicKey: ByteArray, oneUse: Boolean) {
+    private fun requireCertificateCore(
+        version: Int,
+        accountId: String,
+        publicKey: ByteArray,
+        assertionUsageCountLimit: Int?,
+        oneUse: Boolean,
+    ) {
         require(version == KEY_CERTIFICATE_VERSION) { "Offline Note key certificate format is unsupported" }
-        require(oneUse) { "Offline Note key certificate must be one-use" }
+        require(oneUse && (assertionUsageCountLimit == null || assertionUsageCountLimit == 1)) {
+            "Offline Note key certificate must be one-use with usage limit 1 when present"
+        }
         require(publicKey.size == 32) { "Offline Note note public key must be 32 bytes" }
         encodeAccountIdPayload(accountId)
     }

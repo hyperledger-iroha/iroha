@@ -270,12 +270,14 @@ fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {
         "camt.052" => Some(&CAMT052_SCHEMA),
         "camt.053" => Some(&CAMT053_SCHEMA),
         "camt.054" => Some(&CAMT054_SCHEMA),
+        "camt.029" => Some(&CAMT029_SCHEMA),
         "camt.056" => Some(&CAMT056_SCHEMA),
         "pain.001" => Some(&PAIN001_SCHEMA),
         "pain.002" => Some(&PAIN002_SCHEMA),
         "pacs.007" => Some(&PACS007_SCHEMA),
         "pacs.009" => Some(&PACS009_SCHEMA),
         "sese.023" => Some(&SESE023_SCHEMA),
+        "sese.024" => Some(&SESE024_SCHEMA),
         "sese.025" => Some(&SESE025_SCHEMA),
         _ => None,
     }
@@ -449,6 +451,7 @@ const PACS008_SCHEMA: MessageSchema = MessageSchema {
 };
 
 const PACS002_FIELDS: &[FieldSpec] = &[
+    FieldSpec::optional("MsgId", FieldKind::Text),
     FieldSpec::required("OrgnlMsgId", FieldKind::Text),
     FieldSpec::optional(
         "TxSts",
@@ -459,6 +462,14 @@ const PACS002_FIELDS: &[FieldSpec] = &[
 ];
 
 const PACS002_ALIASES: &[AliasSpec] = &[
+    AliasSpec {
+        alias: "Document/FIToFIPmtStsRpt/GrpHdr/MsgId",
+        canonical: "MsgId",
+    },
+    AliasSpec {
+        alias: "Document/FIToFIPmtStsRpt/TxInfAndSts/StsId",
+        canonical: "MsgId",
+    },
     AliasSpec {
         alias: "Document/FIToFIPmtStsRpt/OrgnlGrpInfAndSts/OrgnlMsgId",
         canonical: "OrgnlMsgId",
@@ -703,6 +714,76 @@ const CAMT054_FIELDS: &[FieldSpec] = &[
 const CAMT054_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT054_FIELDS,
     aliases: &[],
+};
+
+const CAMT029_FIELDS: &[FieldSpec] = &[
+    FieldSpec::required("Assgnmt/Id", FieldKind::Text),
+    FieldSpec::required("Assgnmt/CreDtTm", FieldKind::DateTime),
+    FieldSpec::required("Sts", FieldKind::Enum(&["CNCL", "PDCR", "RJCR"])),
+    FieldSpec::required("CxlDtls/OrgnlGrpInf/OrgnlMsgId", FieldKind::Text),
+    FieldSpec::optional("CxlDtls/OrgnlGrpInf/OrgnlMsgNmId", FieldKind::Text),
+    FieldSpec::optional("CxlDtls/OrgnlGrpInf/OrgnlCreDtTm", FieldKind::DateTime),
+    FieldSpec::optional("CxlDtls/TxInfAndSts/OrgnlInstrId", FieldKind::Text),
+    FieldSpec::optional(
+        "CxlDtls/TxInfAndSts/TxCxlSts",
+        FieldKind::Enum(&["CNCL", "PDCR", "RJCR"]),
+    ),
+    FieldSpec::optional("CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Cd", FieldKind::Text),
+    FieldSpec::optional(
+        "CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Prtry",
+        FieldKind::Text,
+    ),
+    FieldSpec::optional("CxlDtls/TxInfAndSts/CxlStsRsnInf/AddtlInf", FieldKind::Text),
+];
+
+const CAMT029_SCHEMA: MessageSchema = MessageSchema {
+    fields: CAMT029_FIELDS,
+    aliases: &[
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/Assgnmt/Id",
+            canonical: "Assgnmt/Id",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/Assgnmt/CreDtTm",
+            canonical: "Assgnmt/CreDtTm",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/Sts/Conf",
+            canonical: "Sts",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/OrgnlGrpInf/OrgnlMsgId",
+            canonical: "CxlDtls/OrgnlGrpInf/OrgnlMsgId",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/OrgnlGrpInf/OrgnlMsgNmId",
+            canonical: "CxlDtls/OrgnlGrpInf/OrgnlMsgNmId",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/OrgnlGrpInf/OrgnlCreDtTm",
+            canonical: "CxlDtls/OrgnlGrpInf/OrgnlCreDtTm",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/TxInfAndSts/OrgnlInstrId",
+            canonical: "CxlDtls/TxInfAndSts/OrgnlInstrId",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/TxInfAndSts/TxCxlSts",
+            canonical: "CxlDtls/TxInfAndSts/TxCxlSts",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Cd",
+            canonical: "CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Cd",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Prtry",
+            canonical: "CxlDtls/TxInfAndSts/CxlStsRsnInf/Rsn/Prtry",
+        },
+        AliasSpec {
+            alias: "Document/RsltnOfInvstgtn/CxlDtls/TxInfAndSts/CxlStsRsnInf/AddtlInf",
+            canonical: "CxlDtls/TxInfAndSts/CxlStsRsnInf/AddtlInf",
+        },
+    ],
 };
 
 const CAMT056_FIELDS: &[FieldSpec] = &[
@@ -1226,6 +1307,67 @@ const SESE025_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("RsnCd", FieldKind::Text),
     FieldSpec::optional("AddtlInf", FieldKind::Text),
 ];
+
+const SESE024_FIELDS: &[FieldSpec] = &[
+    FieldSpec::required("TxId", FieldKind::Text),
+    FieldSpec::required(
+        "SttlmSts",
+        FieldKind::Enum(&[
+            "ACCP", "CAND", "CANC", "PART", "PEND", "PENF", "REJT", "RJCT", "SETT",
+        ]),
+    ),
+    FieldSpec::optional("SttlmDt", FieldKind::Date),
+    FieldSpec::optional("RsnCd", FieldKind::Text),
+    FieldSpec::optional("AddtlInf", FieldKind::Text),
+];
+
+const SESE024_ALIASES: &[AliasSpec] = &[
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/TxId",
+        canonical: "TxId",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxId",
+        canonical: "TxId",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmDt",
+        canonical: "SttlmDt",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxSts/Sts/Cd",
+        canonical: "SttlmSts",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxSts/Sts/Prtry",
+        canonical: "SttlmSts",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/TxSts/Sts/Cd",
+        canonical: "SttlmSts",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/TxSts/Sts/Prtry",
+        canonical: "SttlmSts",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxSts/Rsn/Cd",
+        canonical: "RsnCd",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxSts/Rsn/Prtry",
+        canonical: "RsnCd",
+    },
+    AliasSpec {
+        alias: "Document/SctiesSttlmTxStsAdvc/SttlmTxSts/AddtlInf",
+        canonical: "AddtlInf",
+    },
+];
+
+const SESE024_SCHEMA: MessageSchema = MessageSchema {
+    fields: SESE024_FIELDS,
+    aliases: SESE024_ALIASES,
+};
 
 const SESE025_ALIASES: &[AliasSpec] = &[
     AliasSpec {
@@ -5325,9 +5467,33 @@ mod tests {
     fn parse_sample_pacs002_auth_allows_missing_txsts() {
         assert_validated("pacs.002.001.10", SAMPLE_PACS002_AUTH_XML);
         assert_eq!(
+            msg_get("MsgId").as_deref(),
+            Some(b"ISO-PACS002-AUTH".as_ref())
+        );
+        assert_eq!(
             msg_get("OrgnlMsgId").as_deref(),
             Some(b"ISO-SAMPLE-008".as_ref())
         );
+    }
+
+    #[test]
+    fn parse_sese024_status_advice_lifecycle_fields() {
+        let xml = r#"
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10">
+  <SctiesSttlmTxStsAdvc>
+    <TxId>SETTLEMENT-123</TxId>
+    <SttlmTxSts>
+      <Sts><Cd>SETT</Cd></Sts>
+      <Rsn><Cd>NARR</Cd></Rsn>
+      <AddtlInf>settled in CSD</AddtlInf>
+    </SttlmTxSts>
+  </SctiesSttlmTxStsAdvc>
+</Document>
+"#;
+        assert_validated("sese.024.001.10", xml);
+        assert_eq!(msg_get("TxId").as_deref(), Some(b"SETTLEMENT-123".as_ref()));
+        assert_eq!(msg_get("SttlmSts").as_deref(), Some(b"SETT".as_ref()));
+        assert_eq!(msg_get("RsnCd").as_deref(), Some(b"NARR".as_ref()));
     }
 
     #[test]
@@ -5349,6 +5515,47 @@ mod tests {
         assert_eq!(
             msg_get("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId").as_deref(),
             Some(b"ISO-SAMPLE-008".as_ref())
+        );
+    }
+
+    #[test]
+    fn parse_camt029_resolution_of_investigation() {
+        let xml = r#"
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">
+  <RsltnOfInvstgtn>
+    <Assgnmt>
+      <Id>IROHA-CAMT029-ORIGINAL-1</Id>
+      <CreDtTm>2025-11-12T09:34:09Z</CreDtTm>
+    </Assgnmt>
+    <Sts>
+      <Conf>CNCL</Conf>
+    </Sts>
+    <CxlDtls>
+      <OrgnlGrpInf>
+        <OrgnlMsgId>ORIGINAL-1</OrgnlMsgId>
+        <OrgnlMsgNmId>pacs.009</OrgnlMsgNmId>
+      </OrgnlGrpInf>
+      <TxInfAndSts>
+        <OrgnlInstrId>tx-hash-1</OrgnlInstrId>
+        <TxCxlSts>CNCL</TxCxlSts>
+        <CxlStsRsnInf>
+          <Rsn><Prtry>CANCELLED_BY_LEDGER</Prtry></Rsn>
+          <AddtlInf>cancelled by participant request</AddtlInf>
+        </CxlStsRsnInf>
+      </TxInfAndSts>
+    </CxlDtls>
+  </RsltnOfInvstgtn>
+</Document>
+"#;
+        assert_validated("camt.029.001.09", xml);
+        assert_eq!(
+            msg_get("Assgnmt/Id").as_deref(),
+            Some(b"IROHA-CAMT029-ORIGINAL-1".as_ref())
+        );
+        assert_eq!(msg_get("Sts").as_deref(), Some(b"CNCL".as_ref()));
+        assert_eq!(
+            msg_get("CxlDtls/OrgnlGrpInf/OrgnlMsgId").as_deref(),
+            Some(b"ORIGINAL-1".as_ref())
         );
     }
 

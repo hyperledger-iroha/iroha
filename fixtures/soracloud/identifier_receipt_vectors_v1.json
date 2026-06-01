@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "vector_set": "identifier-receipt-attestation-v1",
+  "signing_seed_hex": "1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F1F",
+  "resolver_public_key": "ed25519:ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+  "canonical_payload_sha256": "262C0CBF7193F04BB8C8BD8C818C7D8E4577DB10FB3D07F7EDDF05F673820799",
+  "iroha_prehash_hex": "A92D6E7B2FE892FBE1256851150D405ADE27121151216009550ECF72E0AB7C51",
+  "policy": {
+    "policy_id": "phone#retail",
+    "owner": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+    "active": true,
+    "normalization": "phone_e164",
+    "resolver_public_key": "ed25519:ed012043046BFE4092B3E94994EADA15DCC20D8AAA07B658FD3954EB8E0EFB8BDCA5DE",
+    "backend": "bfv-programmed-sha3-256-v1",
+    "input_encryption": "bfv-v1"
+  },
+  "receipt": {
+    "payload": {
+      "policy_id": "phone#retail",
+      "execution": {
+        "program_id": "identifier_lookup_retail",
+        "program_digest": "4444444444444444444444444444444444444444444444444444444444444445",
+        "backend": "bfv-programmed-sha3-256-v1",
+        "verification_mode": "signed",
+        "input_ciphertext_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+        "output_ciphertext_hash": "6666666666666666666666666666666666666666666666666666666666666667",
+        "parameter_digest": "7777777777777777777777777777777777777777777777777777777777777777",
+        "evaluation_key_digest": "8888888888888888888888888888888888888888888888888888888888888889",
+        "output_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+        "associated_data_hash": "b5e053abf9fe571d681936c04dec71b2b833194e4ea4dde4331b765c3090ce2f",
+        "executed_at_ms": 42,
+        "expires_at_ms": 142
+      },
+      "opening": {
+        "payload": {
+          "program_id": "identifier_lookup_retail",
+          "input_ciphertext_hash": "5555555555555555555555555555555555555555555555555555555555555555",
+          "output_ciphertext_hash": "6666666666666666666666666666666666666666666666666666666666666667",
+          "parameter_digest": "7777777777777777777777777777777777777777777777777777777777777777",
+          "evaluation_key_digest": "8888888888888888888888888888888888888888888888888888888888888889",
+          "opened_output_hash": "9999999999999999999999999999999999999999999999999999999999999999",
+          "opened_at_ms": 42,
+          "expires_at_ms": 142
+        },
+        "signature": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "opaque_id": "opaque:1111111111111111111111111111111111111111111111111111111111111111",
+      "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222223",
+      "uaid": "uaid:3333333333333333333333333333333333333333333333333333333333333335",
+      "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+    },
+    "attestation": {
+      "kind": "signed",
+      "signature": "69CD4F6F5E1C0D80A6C4C40E9579D30320E5F1370B91A15292DF62E361EE820A2FEE189B63EA4E3CA827B900EE03B62673E27E10A4EF4BE82998042D54233600"
+    }
+  },
+  "attestation_vectors": [
+    {
+      "name": "signed-resolver-attestation",
+      "attestation": {
+        "kind": "signed",
+        "signature": "69CD4F6F5E1C0D80A6C4C40E9579D30320E5F1370B91A15292DF62E361EE820A2FEE189B63EA4E3CA827B900EE03B62673E27E10A4EF4BE82998042D54233600"
+      },
+      "expected_attestation_bytes": 142,
+      "expected_attestation_sha256": "20081CECD8FC9DCFE4A68F71C57534F67CCD6C2FAC5B54E456DC743AF759D279"
+    },
+    {
+      "name": "proof-box-attestation",
+      "attestation": {
+        "kind": "proof",
+        "proof_backend": "halo2/ipa",
+        "proof_b64": "AQIDBAUGBwg="
+      },
+      "expected_attestation_bytes": 33,
+      "expected_attestation_sha256": "30FF24E521FA613E8DE8D88646772288584B1CC305498E08D5F0E67B610BA83B"
+    }
+  ],
+  "negative_cases": [
+    {
+      "name": "tampered-output-ciphertext-hash",
+      "mutation": "receipt.payload.execution.output_ciphertext_hash",
+      "value": "6767676767676767676767676767676767676767676767676767676767676767",
+      "expected_result": false
+    },
+    {
+      "name": "wrong-resolver-key",
+      "mutation": "policy.resolver_public_key",
+      "value": "ed25519:ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
+      "expected_result": false
+    },
+    {
+      "name": "wrong-policy-id",
+      "mutation": "policy.policy_id",
+      "value": "email#retail",
+      "expected_error_contains": "policy"
+    },
+    {
+      "name": "malformed-signature-hex",
+      "mutation": "receipt.attestation.signature",
+      "value": "abc",
+      "expected_error_contains": "hex"
+    },
+    {
+      "name": "proof-attestation-no-signature-verifier",
+      "mutation": "receipt.attestation",
+      "value": {
+        "kind": "proof",
+        "proof_backend": "halo2/ipa",
+        "proof_b64": "AQID"
+      },
+      "expected_error_contains": "proof"
+    }
+  ]
+}

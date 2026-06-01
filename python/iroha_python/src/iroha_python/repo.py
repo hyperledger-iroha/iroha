@@ -23,6 +23,69 @@ def _normalize_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Mappi
 
     return _tx_normalize_metadata(metadata)
 
+
+def _page_metadata(payload: Mapping[str, Any], item_count: int) -> Dict[str, Any]:
+    total_literal = payload.get("total")
+    if total_literal is None:
+        total = None
+    else:
+        try:
+            total = int(total_literal)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("repo agreement page `total` must be numeric") from exc
+        if total < 0:
+            raise ValueError("repo agreement page `total` must be non-negative")
+
+    has_metadata = (
+        "has_more" in payload
+        or "count_mode" in payload
+        or "indexed_height" in payload
+        or "indexed_block_hash" in payload
+        or "query_source" in payload
+    )
+    has_more_literal = payload.get("has_more", False)
+    if not isinstance(has_more_literal, bool):
+        raise TypeError("repo agreement page `has_more` must be a boolean")
+
+    count_mode_literal = payload.get("count_mode")
+    if count_mode_literal is None:
+        count_mode = "exact" if total is not None and not has_metadata else "bounded"
+    elif isinstance(count_mode_literal, str) and count_mode_literal in {"bounded", "exact"}:
+        count_mode = count_mode_literal
+    else:
+        raise TypeError("repo agreement page `count_mode` must be 'bounded' or 'exact'")
+
+    if total is None and count_mode == "exact":
+        total = item_count
+
+    indexed_height_literal = payload.get("indexed_height")
+    if indexed_height_literal is None:
+        indexed_height = None
+    else:
+        try:
+            indexed_height = int(indexed_height_literal)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("repo agreement page `indexed_height` must be numeric") from exc
+        if indexed_height < 0:
+            raise ValueError("repo agreement page `indexed_height` must be non-negative")
+
+    indexed_block_hash = payload.get("indexed_block_hash")
+    if indexed_block_hash is not None and not isinstance(indexed_block_hash, str):
+        raise TypeError("repo agreement page `indexed_block_hash` must be a string when provided")
+
+    query_source = payload.get("query_source")
+    if query_source is not None and not isinstance(query_source, str):
+        raise TypeError("repo agreement page `query_source` must be a string when provided")
+
+    return {
+        "total": total,
+        "has_more": has_more_literal,
+        "count_mode": count_mode,
+        "indexed_height": indexed_height,
+        "indexed_block_hash": indexed_block_hash,
+        "query_source": query_source,
+    }
+
 __all__ = [
     "RepoCashLeg",
     "RepoCollateralLeg",
@@ -223,17 +286,17 @@ class RepoAgreementListPage:
     """Paginated repo agreement listing."""
 
     items: list[RepoAgreementRecord]
-    total: int
+    total: Optional[int]
+    has_more: bool = False
+    count_mode: str = "exact"
+    indexed_height: Optional[int] = None
+    indexed_block_hash: Optional[str] = None
+    query_source: Optional[str] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "RepoAgreementListPage":
         if not isinstance(payload, Mapping):
             raise TypeError("repo agreement page payload must be an object")
-        total_literal = payload.get("total")
-        try:
-            total = int(total_literal) if total_literal is not None else 0
-        except (TypeError, ValueError) as exc:
-            raise TypeError("repo agreement page `total` must be numeric") from exc
         items_literal = payload.get("items", [])
         if not isinstance(items_literal, list):
             raise TypeError("repo agreement page `items` must be a list")
@@ -242,7 +305,7 @@ class RepoAgreementListPage:
         ]
         if len(items) != len(items_literal):
             raise TypeError("repo agreement page `items` entries must be objects")
-        return cls(items=items, total=total)
+        return cls(items=items, **_page_metadata(payload, len(items)))
 
 
 def _require_non_empty_string(value: Any, context: str) -> str:

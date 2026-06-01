@@ -327,6 +327,21 @@ pub mod asset {
     }
 }
 
+/// Permission tokens covering ZK-ACE identity management.
+pub mod zk_ace {
+    use super::*;
+
+    permission! {
+        /// Permission to manage ZK-ACE identity commitments for one source account and asset.
+        pub struct CanManageZkAceIdentityForAccount {
+            /// Source account whose ZK-ACE identity binding may be managed.
+            pub account: AccountId,
+            /// Asset definition governed by the identity binding.
+            pub asset: AssetDefinitionId,
+        }
+    }
+}
+
 /// Permission tokens covering native asset escrow operations.
 pub mod escrow {
     use super::*;

@@ -70,6 +70,58 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun keyCertificatesRequireOneUseHardwareLimitWhenPresent() {
+        val fixture = loadFixture()
+        val sender = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.KeyCertificatePayload(
+                version = sender.version,
+                platform = sender.platform,
+                keyId = sender.keyId,
+                deviceId = sender.deviceId,
+                accountId = sender.accountId,
+                publicKey = sender.publicKey(),
+                assertionScheme = sender.assertionScheme,
+                assertionKeyAlgorithm = sender.assertionKeyAlgorithm,
+                assertionPublicKey = sender.assertionPublicKey(),
+                assertionUsageCountLimit = 2,
+                oneUse = true,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNote.KeyCertificate(
+                version = sender.version,
+                platform = sender.platform,
+                keyId = sender.keyId,
+                deviceId = sender.deviceId,
+                accountId = sender.accountId,
+                publicKey = sender.publicKey(),
+                assertionScheme = sender.assertionScheme,
+                assertionKeyAlgorithm = sender.assertionKeyAlgorithm,
+                assertionPublicKey = sender.assertionPublicKey(),
+                assertionUsageCountLimit = 0,
+                oneUse = true,
+                issuerSignature = sender.issuerSignature(),
+            )
+        }
+        OfflineNote.KeyCertificate(
+            version = sender.version,
+            platform = sender.platform,
+            keyId = sender.keyId,
+            deviceId = sender.deviceId,
+            accountId = sender.accountId,
+            publicKey = sender.publicKey(),
+            assertionScheme = sender.assertionScheme,
+            assertionKeyAlgorithm = sender.assertionKeyAlgorithm,
+            assertionPublicKey = sender.assertionPublicKey(),
+            assertionUsageCountLimit = 1,
+            oneUse = true,
+            issuerSignature = sender.issuerSignature(),
+        )
+    }
+
+    @Test
     fun offlineNoteModelsMatchRustNoritoVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -117,6 +169,66 @@ class OfflineNoteTest {
                     )
             }
         }
+    }
+
+    @Test
+    fun kagemushaRecursiveSpendNativeProverValidatesInput() {
+        assertEquals(
+            "recursive_spend_v1",
+            KagemushaRecursiveSpendProver.preferredMode(true).wireName,
+        )
+        assertEquals(
+            "checked_prefold_v1",
+            KagemushaRecursiveSpendProver.preferredMode(false).wireName,
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.initSpend(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.appendSpend(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.verifySpend(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.redeemSpend(ByteArray(0))
+        }
+        if (KagemushaRecursiveSpendProver.isNativeAvailable()) {
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.initSpend(byteArrayOf(0x01, 0x02))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.appendSpend(byteArrayOf(0x01, 0x02))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.verifySpend(byteArrayOf(0x01, 0x02))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.redeemSpend(byteArrayOf(0x01, 0x02))
+            }
+        }
+    }
+
+    @Test
+    fun kagemushaNativeProversRejectMissingAndEmptyNativeOutputs() {
+        val missing = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(null, "native test")
+        }
+        assertTrue(missing.message!!.contains("returned no output"))
+
+        val empty = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(ByteArray(0), "native test")
+        }
+        assertTrue(empty.message!!.contains("returned empty output"))
+
+        assertContentEquals(
+            byteArrayOf(0x01, 0x02),
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                byteArrayOf(0x01, 0x02),
+                "native test",
+            ),
+        )
     }
 
     @Test
@@ -2088,6 +2200,69 @@ class OfflineNoteTest {
         assertEquals("0", string(issueBody, "local_balance"))
         assertEquals("auth-issue-1", string(issueBody, "nonce"))
         assertNotNull(obj(issueBody, "lineage_state"))
+    }
+
+    @Test
+    fun toriiIssuerClientRejectsMalformedCertificateUsageLimits() {
+        val fixture = loadFixture()
+        val baseCertificateJson = obj(obj(fixture, "payment_token"), "sender_key_certificate")
+        val accountId = string(baseCertificateJson, "account_id")
+        val assetDefinitionId = assetDefinitionFromAssetId(string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"))
+        val offlinePublicKey = "a5".repeat(32)
+        val deviceBinding = OfflineNoteIssuerDeviceBinding(
+            deviceId = "device-1",
+            offlinePublicKey = offlinePublicKey,
+            deviceBinding = linkedMapOf(
+                "device_id" to "device-1",
+                "attestation_key_id" to "attestation-key-1",
+                "offline_public_key" to offlinePublicKey,
+            ),
+        )
+
+        fun assertRejected(certificateJson: Map<String, Any?>) {
+            val client = ToriiOfflineNoteIssuerClient(
+                canonicalAuth = ToriiCanonicalRequestAuth(
+                    accountId,
+                    KeyPairGenerator.getInstance("Ed25519").generateKeyPair().private,
+                ),
+                deviceBindingProvider = object : OfflineNoteIssuerDeviceBindingProvider {
+                    override fun currentDeviceBinding(
+                        chainId: String,
+                        accountId: String,
+                        assetDefinitionId: String,
+                    ): OfflineNoteIssuerDeviceBinding = deviceBinding
+                },
+                executor = OfflineIssuerExecutor(certificateJson),
+                baseUri = URI.create("https://torii.example"),
+                clock = LongSupplier { 1_700_000_000_000L },
+                nonceGenerator = SequenceIdGenerator("operation-refill-malformed", "auth-refill-malformed"),
+            )
+
+            val failure = assertFailsWith<ExecutionException> {
+                client.prepareLoad("chain-1", accountId, assetDefinitionId, "5").get(5, TimeUnit.SECONDS)
+            }
+            var root = failure.cause
+            while (root is CompletionException && root.cause != null) {
+                root = root.cause
+            }
+            assertTrue(
+                root is OfflineToriiException ||
+                    root is IllegalStateException ||
+                    root is IllegalArgumentException,
+                "unexpected failure ${root?.javaClass?.name}: ${root?.message}",
+            )
+        }
+
+        for (invalidLimit in listOf<Any?>(0L, 2L, 4_294_967_297L, "1")) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson["assertion_usage_count_limit"] = invalidLimit
+            assertRejected(certificateJson)
+        }
+        for (invalidVersion in listOf<Any?>(0L, 2L, 4_294_967_297L, "1")) {
+            val certificateJson = LinkedHashMap(baseCertificateJson)
+            certificateJson["version"] = invalidVersion
+            assertRejected(certificateJson)
+        }
     }
 
     @Test

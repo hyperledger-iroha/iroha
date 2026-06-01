@@ -4607,6 +4607,61 @@ pub struct ZkAssetVerifierBinding {
     pub commitment: [u8; 32],
 }
 
+/// Lifecycle status of a ZK-ACE identity commitment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum ZkAceIdentityStatus {
+    /// Identity commitment may authorize protected actions.
+    Active,
+    /// Identity commitment was superseded by a replacement commitment.
+    Rotated,
+    /// Identity commitment was explicitly revoked.
+    Revoked,
+}
+
+impl json::FastJsonWrite for ZkAceIdentityStatus {
+    fn write_json(&self, out: &mut String) {
+        let label = match self {
+            ZkAceIdentityStatus::Active => "Active",
+            ZkAceIdentityStatus::Rotated => "Rotated",
+            ZkAceIdentityStatus::Revoked => "Revoked",
+        };
+        json::write_json_string(label, out);
+    }
+}
+
+impl json::JsonDeserialize for ZkAceIdentityStatus {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        let value = parser.parse_string()?;
+        match value.as_str() {
+            "Active" => Ok(ZkAceIdentityStatus::Active),
+            "Rotated" => Ok(ZkAceIdentityStatus::Rotated),
+            "Revoked" => Ok(ZkAceIdentityStatus::Revoked),
+            other => Err(json::Error::UnknownField {
+                field: other.to_owned(),
+            }),
+        }
+    }
+}
+
+/// On-chain ZK-ACE identity commitment record.
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
+pub struct ZkAceIdentityRecord {
+    /// Policy hash bound by the authorization proof.
+    pub policy_hash: [u8; 32],
+    /// Canonical sorted source-account allowlist authorized by this commitment.
+    pub allowed_accounts: Vec<iroha_data_model::account::AccountId>,
+    /// Action class authorized by this record.
+    pub action_class: String,
+    /// Domain separation tag used by the prover.
+    pub domain_tag: String,
+    /// Verifier binding required for authorization proofs.
+    pub verifier: ZkAssetVerifierBinding,
+    /// Current lifecycle status.
+    pub status: ZkAceIdentityStatus,
+    /// Replacement commitment when this record has been rotated.
+    pub successor: Option<[u8; 32]>,
+}
+
 /// Policy and state for a shielded asset.
 #[derive(
     Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
@@ -4656,6 +4711,12 @@ pub struct ZkAssetState {
     /// Optional asset-set root that the asset-hidden pool verifier is bound to.
     #[norito(default)]
     pub asset_hidden_asset_set_root: Option<[u8; 32]>,
+    /// ZK-ACE identity records keyed by identity commitment.
+    #[norito(default)]
+    pub zk_ace_identities: std::collections::BTreeMap<[u8; 32], ZkAceIdentityRecord>,
+    /// Consumed ZK-ACE replay nullifiers for protected transparent transfers.
+    #[norito(default)]
+    pub zk_ace_replay_nullifiers: std::collections::BTreeSet<[u8; 32]>,
     /// Rolling set of frontier checkpoints (height, commitment count, root).
     pub frontier_checkpoints: Vec<FrontierCheckpoint>,
     #[norito(skip)]
@@ -4676,6 +4737,8 @@ impl Default for ZkAssetState {
             vk_shield: None,
             asset_hidden_pool_id: None,
             asset_hidden_asset_set_root: None,
+            zk_ace_identities: std::collections::BTreeMap::new(),
+            zk_ace_replay_nullifiers: std::collections::BTreeSet::new(),
             frontier_checkpoints: Vec::new(),
             tree: CanonMerkleTree::default(),
         }
@@ -4882,6 +4945,8 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut vk_shield = None;
         let mut asset_hidden_pool_id = None;
         let mut asset_hidden_asset_set_root = None;
+        let mut zk_ace_identities = None;
+        let mut zk_ace_replay_nullifiers = None;
         let mut frontier_checkpoints = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -4898,6 +4963,10 @@ impl json::JsonDeserialize for ZkAssetState {
                 "asset_hidden_pool_id" => asset_hidden_pool_id = Some(visitor.parse_value()?),
                 "asset_hidden_asset_set_root" => {
                     asset_hidden_asset_set_root = Some(visitor.parse_value()?);
+                }
+                "zk_ace_identities" => zk_ace_identities = Some(visitor.parse_value()?),
+                "zk_ace_replay_nullifiers" => {
+                    zk_ace_replay_nullifiers = Some(visitor.parse_value()?);
                 }
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => {
@@ -4931,6 +5000,8 @@ impl json::JsonDeserialize for ZkAssetState {
             vk_shield: vk_shield.unwrap_or(None),
             asset_hidden_pool_id: asset_hidden_pool_id.unwrap_or(None),
             asset_hidden_asset_set_root: asset_hidden_asset_set_root.unwrap_or(None),
+            zk_ace_identities: zk_ace_identities.unwrap_or_default(),
+            zk_ace_replay_nullifiers: zk_ace_replay_nullifiers.unwrap_or_default(),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
             tree,
         })
@@ -17069,6 +17140,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::proof::VerifyingKeyId,
     > {
         &mut self.verifying_keys_by_circuit
+    }
+
+    /// Test helper: get mutable access to shielded asset state for direct seeding.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn zk_assets_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState> {
+        &mut self.zk_assets
     }
 
     /// Apply transaction's changes

@@ -275,8 +275,8 @@ pub(crate) async fn handle_notes_issue(
         &post_balance.to_string(),
         local_revision,
     )?;
-    let certificate = build_key_certificate(&issuer, &parsed, &attestation, now_ms)?;
-    let chain_certificate = build_chain_certificate(&issuer, &parsed, &attestation)?;
+    let (certificate, chain_certificate) =
+        build_key_certificate_bundle(&issuer, &parsed, &attestation, now_ms)?;
     let issue = IssueOfflineNote::new(OfflineNoteIssue {
         note_commitment: note_commitment.clone(),
         key_certificate: chain_certificate,
@@ -1464,6 +1464,16 @@ fn build_key_certificate(
     attestation: &VerifiedDeviceAttestation,
     now_ms: u64,
 ) -> Result<Value, Error> {
+    build_key_certificate_bundle(issuer, request, attestation, now_ms)
+        .map(|(certificate, _chain_certificate)| certificate)
+}
+
+fn build_key_certificate_bundle(
+    issuer: &OfflineIssuerRuntime,
+    request: &ParsedOfflineRequest,
+    attestation: &VerifiedDeviceAttestation,
+    now_ms: u64,
+) -> Result<(Value, OfflineNoteKeyCertificate), Error> {
     let chain = build_chain_certificate(issuer, request, attestation)?;
     let signing_bytes = chain
         .signing_bytes()
@@ -1473,8 +1483,7 @@ fn build_key_certificate(
         })?;
     let signature = chain.issuer_signature.payload();
     let expires_at = now_ms.saturating_add(duration_ms(issuer.certificate_ttl));
-    let usage_limit = assertion_usage_limit(request)?;
-    Ok(json_object(vec![
+    let certificate = json_object(vec![
         (
             "version",
             number_value(u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION)),
@@ -1498,7 +1507,8 @@ fn build_key_certificate(
         ),
         (
             "assertion_usage_count_limit",
-            usage_limit
+            chain
+                .assertion_usage_count_limit
                 .map(|value| number_value(u64::from(value)))
                 .unwrap_or(Value::Null),
         ),
@@ -1535,7 +1545,8 @@ fn build_key_certificate(
             "issuer_signature_payload_base64",
             string_value(BASE64_STANDARD.encode(signing_bytes)),
         ),
-    ]))
+    ]);
+    Ok((certificate, chain))
 }
 
 fn build_chain_certificate(
@@ -1838,12 +1849,19 @@ fn assertion_usage_limit(request: &ParsedOfflineRequest) -> Result<Option<u32>, 
             "assertion_usage_count_limit must be an unsigned integer.",
         )
     })?;
-    u32::try_from(raw).map(Some).map_err(|_| {
+    let limit = u32::try_from(raw).map_err(|_| {
         validation(
             "OFFLINE_INVALID_ASSERTION_USAGE_LIMIT",
             "assertion_usage_count_limit exceeds u32.",
         )
-    })
+    })?;
+    if limit != 1 {
+        return Err(validation(
+            "OFFLINE_INVALID_ASSERTION_USAGE_LIMIT",
+            "assertion_usage_count_limit must be exactly 1 for one-use Offline Notes keys.",
+        ));
+    }
+    Ok(Some(limit))
 }
 
 fn decode_note_public_key(raw: &str) -> Result<Vec<u8>, Error> {
@@ -2730,8 +2748,9 @@ mod tests {
             BASE64_STANDARD.encode(&assertion_key)
         );
 
-        let certificate =
-            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
+        let (certificate, chain_certificate) =
+            build_key_certificate_bundle(&issuer, &request, &attestation, NOW_MS)
+                .expect("certificate");
         assert_eq!(
             optional_string(&certificate, "public_key"),
             Some(BASE64_STANDARD.encode(note_key).as_str())
@@ -2744,6 +2763,75 @@ mod tests {
             certificate.get("one_use").and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            optional_string(&certificate, "issuer_signature_base64"),
+            Some(
+                BASE64_STANDARD
+                    .encode(chain_certificate.issuer_signature.payload())
+                    .as_str()
+            )
+        );
+        let chain_signing_bytes = chain_certificate
+            .signing_bytes()
+            .expect("chain certificate signing bytes");
+        assert_eq!(
+            optional_string(&certificate, "issuer_signature_payload_base64"),
+            Some(BASE64_STANDARD.encode(chain_signing_bytes).as_str())
+        );
+    }
+
+    #[test]
+    fn one_use_certificate_usage_limit_must_be_one_when_present() {
+        let (issuer, verifier) = sample_issuer();
+        let mut request = sample_request(&verifier, [0xA5; 32], vec![0xB6; 65]);
+        let attestation =
+            verify_device_attestation(&issuer, &request, NOW_MS).expect("valid attestation");
+
+        let certificate =
+            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
+        assert_eq!(
+            certificate
+                .get("assertion_usage_count_limit")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        for invalid in [
+            number_value(0),
+            number_value(2),
+            number_value(u64::from(u32::MAX) + 1),
+            string_value("1"),
+            Value::Bool(true),
+        ] {
+            insert_field(
+                &mut request.device_binding,
+                "assertion_usage_count_limit",
+                invalid,
+            );
+            assert_eq!(
+                validation_code(build_key_certificate(
+                    &issuer,
+                    &request,
+                    &attestation,
+                    NOW_MS
+                )),
+                "OFFLINE_INVALID_ASSERTION_USAGE_LIMIT"
+            );
+        }
+
+        let Value::Object(binding) = &mut request.device_binding else {
+            panic!("expected binding object");
+        };
+        binding.remove("assertion_usage_count_limit");
+        let certificate =
+            build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
+        assert_eq!(
+            certificate.get("assertion_usage_count_limit"),
+            Some(&Value::Null)
+        );
+        let chain_certificate =
+            build_chain_certificate(&issuer, &request, &attestation).expect("chain certificate");
+        assert_eq!(chain_certificate.assertion_usage_count_limit, None);
     }
 
     #[test]

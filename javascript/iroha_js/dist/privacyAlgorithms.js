@@ -13,6 +13,7 @@ const PQ_LAYER_NONE = Object.freeze({
 });
 
 const RESEARCH_STAGE_MAY_2026 = "research-target-as-of-2026-05";
+const CATALOG_STAGE_MAY_2026 = "catalog-as-of-2026-05";
 
 const PRIVACY_ALGORITHMS = Object.freeze([
   Object.freeze({
@@ -124,6 +125,658 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "zk::AssetHiddenZkTransfer",
       "asset-hidden pool verifier registry state",
       "pool note witness store",
+    ]),
+  }),
+  Object.freeze({
+    id: "zk-ace-pq-authorization-v0",
+    name: "ZK-ACE post-quantum authorization v0",
+    shortName: "ZK-ACE PQ auth",
+    summary:
+      "STARK/FRI-backed source-account authorization for transparent asset transfers.",
+    category: "authorization",
+    maturity: "arxiv_preprint",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "stark/fri/sha256-goldilocks",
+    publicInputsSchema:
+      "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
+    verifierKeyId: "zk_ace_pq_authorization_v0",
+    pqLayers: Object.freeze({
+      proof: true,
+      authorization: true,
+      noteEncryption: false,
+    }),
+    implementationStage: "chain-executable",
+    recommendedFor: Object.freeze([
+      "post-quantum transaction authorization migration",
+      "identity-private source-account authorization",
+      "authorization envelopes for transparent asset transfers",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "ZK-ACE: Practical Post-Quantum Authorization for Blockchain",
+        url: "https://arxiv.org/abs/2603.07974",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.",
+      "Replay nullifiers must be chain-domain separated and irreversible after acceptance.",
+      "A dev verifier must never be accepted under a production verifier key id.",
+    ]),
+    requiredState: Object.freeze([
+      "active identity commitment registry",
+      "replay nullifier set",
+      "authorization verifier registry",
+      "wallet identity witness and replay-secret store",
+    ]),
+    failureModes: Object.freeze([
+      "transaction digest substitution",
+      "chain-id or domain-separator mismatch",
+      "replayed nullifier",
+      "revoked identity commitment",
+      "policy hash mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register a ZK-ACE identity commitment, source-account allowlist, and verifier key.",
+      "Initialize replay-state tracking for the authorizing wallet.",
+      "Bind authorization policy hash to the allowed transaction action classes.",
+    ]),
+    executionSteps: Object.freeze([
+      "Hash the transaction payload and chain/domain context.",
+      "Derive a fresh replay nullifier.",
+      "Generate a ZK-ACE authorization proof and submit a protected transparent transfer.",
+    ]),
+    sdkEntrypoints: Object.freeze([
+      "buildRegisterZkAceIdentityCommitmentInstruction",
+      "buildRotateZkAceIdentityCommitmentInstruction",
+      "buildRevokeZkAceIdentityCommitmentInstruction",
+      "buildZkAceAuthorizedTransferInstruction",
+      "buildZkAceAuthorizationProofV1",
+    ]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildShieldedZkAceAuthorizedTransferInstruction",
+    ]),
+    chainRequirements: Object.freeze([
+      "zk::RegisterZkAceIdentityCommitment",
+      "zk::RotateZkAceIdentityCommitment",
+      "zk::RevokeZkAceIdentityCommitment",
+      "zk::SubmitZkAceAuthorizedTransfer",
+      "active stark/fri/sha256-goldilocks ZK-ACE verifier key",
+      "ZK-ACE identity source-account allowlist",
+    ]),
+  }),
+  Object.freeze({
+    id: "anonymous-pgc-k-out-of-n-v1",
+    name: "Anonymous PGC k-out-of-n payments v1",
+    shortName: "Anonymous PGC",
+    summary:
+      "Account-based anonymous confidential payment target with hidden sender, hidden amount, receiver privacy, and k-out-of-n receiver-set proofs.",
+    category: "payment",
+    maturity: "accepted_conference",
+    coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
+    proofFamily: "anonymous-pgc-k-out-of-n",
+    publicInputsSchema:
+      "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,link_tag,range_commitments,chain_id,domain_separator",
+    verifierKeyId: "anonymous_pgc_k_out_of_n_v1",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "account-based private payments",
+      "multi-receiver confidential transfers",
+      "payment privacy without a note-based shielded pool UX",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Anonymous PGC with k-out-of-n Proofs",
+        url: "https://eprint.iacr.org/2025/884",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Requires fresh anonymity-set roots and replay/link-tag state.",
+      "Amount privacy depends on the range-proof component and commitment binding.",
+      "Receiver ciphertext commitments must bind to the same transaction digest as the proof.",
+    ]),
+    requiredState: Object.freeze([
+      "anonymous account commitment set",
+      "recent anonymity-set roots",
+      "spent link-tag set",
+      "range-proof verifier parameters",
+      "wallet account blinding and receiver recovery metadata",
+    ]),
+    failureModes: Object.freeze([
+      "stale or unknown anonymity-set root",
+      "duplicate link tag",
+      "receiver-set substitution",
+      "range commitment mismatch",
+      "authorization envelope mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register anonymous account commitments and anonymity-set accumulator state.",
+      "Register the k-out-of-n payment verifier key and range-proof parameters.",
+      "Persist wallet blinding, balance-opening, and receiver recovery witnesses.",
+    ]),
+    executionSteps: Object.freeze([
+      "Select an anonymity-set root and receiver set.",
+      "Create balance commitments, receiver ciphertext commitments, and link tag.",
+      "Generate the Anonymous PGC proof and submit the transfer instruction.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildAnonymousPgcAccountCommitmentInstruction",
+      "buildAnonymousPgcReceiverSet",
+      "buildAnonymousPgcKOutOfNProofV1",
+      "buildAnonymousPgcTransferInstruction",
+    ]),
+    chainRequirements: Object.freeze([
+      "anonymous account commitment accumulator",
+      "spent link-tag set",
+      "Anonymous PGC verifier",
+      "range-proof component verifier",
+    ]),
+  }),
+  Object.freeze({
+    id: "verange-transparent-range-v1",
+    name: "VeRange transparent range proofs v1",
+    shortName: "VeRange",
+    summary:
+      "Verification-efficient transparent range-proof component for confidential amounts, solvency proofs, and numeric credential predicates.",
+    category: "proof_backend",
+    maturity: "accepted_conference",
+    coveredCriteria: Object.freeze(["hide_amount"]),
+    proofFamily: "verange-transparent-range",
+    publicInputsSchema:
+      "commitment,range_parameters,aggregation_count,domain_separator,payload_digest",
+    verifierKeyId: "verange_transparent_range_v1",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "confidential amount range proofs",
+      "reserve or solvency proofs",
+      "numeric credential predicates",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "VeRange: Verification-efficient Zero-knowledge Range Arguments",
+        url: "https://eprint.iacr.org/2025/528",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "This is a component, not a complete payment protocol.",
+      "Range parameters must be bound to the transaction payload and verifier key.",
+      "Aggregated proof limits must be enforced by validators.",
+    ]),
+    requiredState: Object.freeze([
+      "range-proof verifier parameters",
+      "range commitment domain separators",
+      "maximum aggregation policy",
+    ]),
+    failureModes: Object.freeze([
+      "wrong bit length",
+      "commitment substitution",
+      "verifier-parameter mismatch",
+      "oversized aggregation",
+    ]),
+    setupSteps: Object.freeze([
+      "Register VeRange verifier parameters and allowed bit lengths.",
+      "Define the commitment scheme and domain separators used by dependent algorithms.",
+    ]),
+    executionSteps: Object.freeze([
+      "Build amount commitments.",
+      "Generate a range proof bound to the transaction payload.",
+      "Attach the range-proof envelope to the dependent confidential algorithm.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildRangeCommitment",
+      "buildVeRangeProofEnvelope",
+      "buildVeRangeProofV1",
+      "verifyVeRangeProofLocally",
+    ]),
+    chainRequirements: Object.freeze([
+      "VeRange verifier registry entry",
+      "range commitment binding rules",
+      "dependent payment or credential verifier",
+    ]),
+  }),
+  Object.freeze({
+    id: "zkat-policy-private-auth-v1",
+    name: "zkAt policy-private authorization v1",
+    shortName: "zkAt policy auth",
+    summary:
+      "Policy-private blockchain authenticator that hides threshold rules, signer sets, and account authorization logic.",
+    category: "authorization",
+    maturity: "accepted_conference",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "zkat-policy-private-authenticator",
+    publicInputsSchema:
+      "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
+    verifierKeyId: "zkat_policy_private_auth_v1",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "institutional wallet policy privacy",
+      "hidden threshold authorization",
+      "authorization-policy migration without revealing signer topology",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "zkAt: Zero-Knowledge Authenticator for Blockchain",
+        url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Hides authorization policy, not payment fields.",
+      "Policy commitments require explicit epoch and rotation semantics.",
+      "Combining with ZK-ACE requires both proofs to bind the same transaction digest.",
+    ]),
+    requiredState: Object.freeze([
+      "policy commitment registry",
+      "policy epoch state",
+      "authorization verifier registry",
+    ]),
+    failureModes: Object.freeze([
+      "policy-root substitution",
+      "stale policy epoch",
+      "unauthorized signer witness",
+      "transaction digest mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register a hidden policy commitment and verifier key.",
+      "Bind the policy to account action classes and epoch rules.",
+    ]),
+    executionSteps: Object.freeze([
+      "Generate a policy-private authenticator proof.",
+      "Attach the authenticator envelope to the transaction authorization path.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildZkAtPolicyCommitmentInstruction",
+      "buildZkAtPolicyProofV1",
+      "buildZkAtAuthenticatorEnvelope",
+      "buildZkAtAuthorizedTransaction",
+    ]),
+    chainRequirements: Object.freeze([
+      "zkAt policy commitment registry",
+      "zkAt verifier",
+      "account policy epoch state",
+    ]),
+  }),
+  Object.freeze({
+    id: "zk-ams-recursive-admission-v0",
+    name: "ZK-AMS recursive anonymous admission v0",
+    shortName: "ZK-AMS admission",
+    summary:
+      "Research target for recursively aggregated anonymous admission from real-world personhood or eligibility credentials into anonymous on-chain accounts.",
+    category: "admission",
+    maturity: "arxiv_preprint",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "recursive-anonymous-admission",
+    publicInputsSchema:
+      "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest",
+    verifierKeyId: "zk_ams_recursive_admission_v0",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "anonymous onboarding",
+      "Sybil-resistant wallet issuance",
+      "credential-gated CBDC pilots",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "ZK-AMS recursive anonymous admission",
+        url: "https://arxiv.org/abs/2602.16130",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Admission privacy is separate from later payment privacy.",
+      "Duplicate admission prevention depends on issuer-scoped nullifiers.",
+      "Recursive batching must bind every admitted account commitment.",
+    ]),
+    requiredState: Object.freeze([
+      "issuer root registry",
+      "admission nullifier set",
+      "anonymous account commitment registry",
+      "recursive verifier parameters",
+    ]),
+    failureModes: Object.freeze([
+      "duplicate credential admission",
+      "wrong issuer root",
+      "batch omission or account commitment substitution",
+      "recursive proof parameter mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register credential issuer roots and recursive verifier parameters.",
+      "Define anonymous account commitment format and admission-nullifier derivation.",
+    ]),
+    executionSteps: Object.freeze([
+      "Collect admitted account commitments into a batch.",
+      "Generate or import a recursive admission proof.",
+      "Submit the batch proof and admission nullifiers.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildZkAmsAdmissionBatchProofV0",
+      "buildSubmitZkAmsAdmissionBatchInstruction",
+    ]),
+    chainRequirements: Object.freeze([
+      "issuer root registry",
+      "admission nullifier set",
+      "recursive admission verifier",
+    ]),
+  }),
+  Object.freeze({
+    id: "vega-existing-credential-zk-v0",
+    name: "Vega existing-credential ZK proofs v0",
+    shortName: "Vega credentials",
+    summary:
+      "Low-latency zero-knowledge proof target for proving predicates over existing credentials without revealing the full credential.",
+    category: "credential",
+    maturity: "technical_report",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "existing-credential-zk",
+    publicInputsSchema:
+      "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
+    verifierKeyId: "vega_existing_credential_zk_v0",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "legacy credential bridges",
+      "private eligibility checks",
+      "attribute predicates for wallet enrollment",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Vega: Low-Latency Zero-Knowledge Proofs over Existing Credentials",
+        url: "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Credential schema parsing must be deterministic and versioned.",
+      "Proofs must bind to wallet or identity commitments to prevent credential replay.",
+      "Issuer trust and revocation semantics remain external policy inputs.",
+    ]),
+    requiredState: Object.freeze([
+      "credential issuer registry",
+      "supported credential schema registry",
+      "predicate registry",
+      "revocation or expiration policy",
+    ]),
+    failureModes: Object.freeze([
+      "expired credential",
+      "wrong issuer",
+      "predicate mismatch",
+      "wallet-binding replay",
+    ]),
+    setupSteps: Object.freeze([
+      "Register supported credential schemas, issuers, and predicates.",
+      "Bind credential proof subjects to wallet or ZK-ACE identity commitments.",
+    ]),
+    executionSteps: Object.freeze([
+      "Parse the credential under a registered schema.",
+      "Generate a predicate proof and bind it to the wallet context.",
+      "Submit the proof envelope to the admission or authorization flow.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildVegaCredentialPredicateProofV0",
+      "buildVegaCredentialProofEnvelope",
+    ]),
+    chainRequirements: Object.freeze([
+      "credential schema registry",
+      "issuer registry",
+      "credential predicate verifier",
+    ]),
+  }),
+  Object.freeze({
+    id: "silent-threshold-anoncred-v0",
+    name: "Silent threshold anonymous credentials v0",
+    shortName: "Silent threshold cred",
+    summary:
+      "Research target for threshold-issued anonymous credentials with silent setup, issuer hiding, constant-size showings, and dynamic verifier policies.",
+    category: "credential",
+    maturity: "technical_report",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "threshold-anonymous-credentials",
+    publicInputsSchema:
+      "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,verifier_policy_hash,domain_separator",
+    verifierKeyId: "silent_threshold_anoncred_v0",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "multi-authority regulated credentials",
+      "issuer-hiding eligibility proofs",
+      "central-bank or supervisor issued wallet credentials",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Anonymous Credentials with Issuer-Hiding, Threshold Issuance, and Silent Setup",
+        url: "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2026/EECS-2026-124.html",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Credential issuance and revocation governance are as important as proof verification.",
+      "Issuer-set commitments need rotation and downgrade protections.",
+      "This is a credential layer, not a private payment protocol.",
+    ]),
+    requiredState: Object.freeze([
+      "threshold issuer registry",
+      "credential parameter registry",
+      "verifier policy registry",
+      "credential showing nullifier policy",
+    ]),
+    failureModes: Object.freeze([
+      "insufficient issuer threshold",
+      "issuer-set substitution",
+      "credential showing replay",
+      "verifier-policy mismatch",
+    ]),
+    setupSteps: Object.freeze([
+      "Register issuer sets, threshold policies, and credential parameters.",
+      "Define showing-nullifier and verifier-policy binding rules.",
+    ]),
+    executionSteps: Object.freeze([
+      "Generate a credential showing proof under the verifier policy.",
+      "Submit the proof as an admission or authorization component.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildSilentThresholdCredentialShowingProofV0",
+      "buildSilentThresholdCredentialEnvelope",
+    ]),
+    chainRequirements: Object.freeze([
+      "threshold issuer registry",
+      "anonymous credential verifier",
+      "credential showing replay policy",
+    ]),
+  }),
+  Object.freeze({
+    id: "zk-x509-onchain-identity-v0",
+    name: "ZK-X.509 on-chain identity v0",
+    shortName: "ZK-X.509 identity",
+    summary:
+      "ZK proof target for X.509 certificate validity, ownership, revocation status, and wallet-address binding.",
+    category: "identity",
+    maturity: "arxiv_preprint",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "zkvm-x509-identity",
+    publicInputsSchema:
+      "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+    verifierKeyId: "zk_x509_onchain_identity_v0",
+    pqLayers: PQ_LAYER_NONE,
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "institutional wallet identity",
+      "legal-entity account binding",
+      "private PKI-based eligibility checks",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "ZK-X.509 on-chain identity",
+        url: "https://arxiv.org/abs/2603.25190",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "Legacy X.509 trust roots are usually not post-quantum.",
+      "Revocation root freshness must be explicit in the public inputs.",
+      "Address binding must prevent proof replay across wallets and chains.",
+    ]),
+    requiredState: Object.freeze([
+      "trusted CA root registry",
+      "certificate policy registry",
+      "revocation root registry",
+      "identity proof verifier",
+    ]),
+    failureModes: Object.freeze([
+      "expired certificate",
+      "revoked certificate",
+      "unknown CA root",
+      "wrong wallet address binding",
+      "stale revocation root",
+    ]),
+    setupSteps: Object.freeze([
+      "Register trusted CA roots, certificate policies, and revocation-root feeds.",
+      "Define wallet address binding and domain-separation rules.",
+    ]),
+    executionSteps: Object.freeze([
+      "Generate a proof of certificate validity, ownership, and revocation status.",
+      "Bind the proof to an institution wallet or ZK-ACE identity commitment.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildZkX509IdentityProofV0",
+      "buildZkX509IdentityEnvelope",
+    ]),
+    chainRequirements: Object.freeze([
+      "trusted CA root registry",
+      "revocation root registry",
+      "ZK-X.509 verifier",
+    ]),
+  }),
+  Object.freeze({
+    id: "jindo-lattice-pcs-zk-v0",
+    name: "Jindo lattice polynomial commitment ZK v0",
+    shortName: "Jindo lattice PCS",
+    summary:
+      "2026 lattice-based polynomial commitment candidate for post-quantum zero-knowledge proof systems.",
+    category: "proof_backend",
+    maturity: "technical_report",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "lattice-polynomial-commitment",
+    publicInputsSchema:
+      "commitment,opening_claim,query_set,parameter_hash,domain_separator",
+    verifierKeyId: "jindo_lattice_pcs_zk_v0",
+    pqLayers: Object.freeze({
+      proof: true,
+      authorization: false,
+      noteEncryption: false,
+    }),
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "post-quantum proof-system research",
+      "future PQ verifier backend evaluation",
+      "lattice PCS benchmarking",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Jindo lattice-based polynomial commitment",
+        url: "https://eprint.iacr.org.cn/2026/044",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "This is a proof backend candidate, not a transaction algorithm.",
+      "PQ proof coverage alone does not imply PQ authorization or note encryption.",
+      "Parameter selection and implementation security require independent review.",
+    ]),
+    requiredState: Object.freeze([
+      "lattice PCS parameter registry",
+      "backend verifier implementation",
+      "benchmark fixtures",
+    ]),
+    failureModes: Object.freeze([
+      "parameter mismatch",
+      "opening claim substitution",
+      "unsupported query set",
+      "backend misclassified as production-ready",
+    ]),
+    setupSteps: Object.freeze([
+      "Track lattice PCS parameter sets and verifier API shape.",
+      "Benchmark prover, verifier, and proof-size behavior before integration.",
+    ]),
+    executionSteps: Object.freeze([
+      "Use as a candidate backend for future PQ circuits only after concrete circuit integration.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildJindoLatticeProofV0",
+      "verifyJindoPolynomialCommitmentV0",
+    ]),
+    chainRequirements: Object.freeze([
+      "Jindo verifier backend",
+      "lattice PCS parameter registry",
+      "dependent circuit integration",
+    ]),
+  }),
+  Object.freeze({
+    id: "sis-hints-anoncred-pq-v0",
+    name: "SIS-with-hints PQ anonymous credentials v0",
+    shortName: "SIS hints anoncred",
+    summary:
+      "PKC 2026 research foundation for lattice/SIS-with-hints anonymous credentials and post-quantum credential proofs.",
+    category: "credential",
+    maturity: "accepted_conference",
+    coveredCriteria: Object.freeze([]),
+    proofFamily: "lattice-anonymous-credentials",
+    publicInputsSchema:
+      "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+    verifierKeyId: "sis_hints_anoncred_pq_v0",
+    pqLayers: Object.freeze({
+      proof: true,
+      authorization: false,
+      noteEncryption: false,
+    }),
+    implementationStage: CATALOG_STAGE_MAY_2026,
+    recommendedFor: Object.freeze([
+      "post-quantum anonymous credential research",
+      "future PQ KYC or eligibility proofs",
+      "assumption tracking for lattice credential designs",
+    ]),
+    sourceReferences: Object.freeze([
+      Object.freeze({
+        label: "Tight Reductions for SIS-with-Hints Assumptions with Applications",
+        url: "https://kclpure.kcl.ac.uk/portal/en/publications/tight-reductions-for-sis-with-hints-assumptions-with-applications/",
+      }),
+    ]),
+    securityNotes: Object.freeze([
+      "This is a credential foundation, not an immediately deployable wallet protocol.",
+      "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.",
+      "Parameter choices and reduction assumptions need explicit governance.",
+    ]),
+    requiredState: Object.freeze([
+      "lattice credential parameter registry",
+      "issuer parameter registry",
+      "credential showing verifier",
+    ]),
+    failureModes: Object.freeze([
+      "wrong parameter set",
+      "issuer parameter substitution",
+      "credential showing replay",
+      "overclaiming production readiness from assumption research",
+    ]),
+    setupSteps: Object.freeze([
+      "Track supported SIS-with-hints parameter sets and issuer parameters.",
+      "Define how future PQ credential showings bind to wallet or authorization contexts.",
+    ]),
+    executionSteps: Object.freeze([
+      "Use as a future PQ credential backend after a concrete credential protocol is selected.",
+    ]),
+    sdkEntrypoints: Object.freeze([]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildSisHintsAnonymousCredentialProofV0",
+      "buildSisHintsCredentialEnvelope",
+    ]),
+    chainRequirements: Object.freeze([
+      "lattice anonymous credential verifier",
+      "credential parameter registry",
+      "issuer parameter registry",
     ]),
   }),
   Object.freeze({
@@ -459,6 +1112,8 @@ function cloneDescriptor(descriptor) {
     name: descriptor.name,
     shortName: descriptor.shortName,
     summary: descriptor.summary,
+    category: descriptor.category ?? "payment",
+    maturity: descriptor.maturity ?? "specification",
     coveredCriteria: [...descriptor.coveredCriteria],
     proofFamily: descriptor.proofFamily,
     publicInputsSchema: descriptor.publicInputsSchema,
@@ -470,6 +1125,9 @@ function cloneDescriptor(descriptor) {
       label: reference.label,
       url: reference.url,
     })),
+    securityNotes: [...(descriptor.securityNotes ?? [])],
+    requiredState: [...(descriptor.requiredState ?? [])],
+    failureModes: [...(descriptor.failureModes ?? [])],
     setupSteps: [...(descriptor.setupSteps ?? [])],
     executionSteps: [...(descriptor.executionSteps ?? [])],
     sdkEntrypoints: [...descriptor.sdkEntrypoints],

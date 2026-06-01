@@ -14,10 +14,10 @@ class KagemushaCompactPaymentTokenProver private constructor() {
             require(recordBundleArchive.isNotEmpty()) { "recordBundleArchive must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val tokenArchive = nativeProveVerifiedCompactPaymentTokenWithRecords(recordBundleArchive)
-            check(tokenArchive != null && tokenArchive.isNotEmpty()) {
-                "nativeProveVerifiedCompactPaymentTokenWithRecords returned empty output"
-            }
-            return tokenArchive
+            return requireNativeOutput(
+                tokenArchive,
+                "nativeProveVerifiedCompactPaymentTokenWithRecords",
+            )
         }
 
         private fun loadLibrary(): Boolean =
@@ -38,6 +38,12 @@ class KagemushaCompactPaymentTokenProver private constructor() {
             } catch (_: SecurityException) {
                 false
             }
+
+        internal fun requireNativeOutput(output: ByteArray?, label: String): ByteArray {
+            check(output != null) { "$label returned no output" }
+            check(output.isNotEmpty()) { "$label returned empty output" }
+            return output
+        }
 
         @JvmStatic
         private external fun nativeProveVerifiedCompactPaymentTokenWithRecords(

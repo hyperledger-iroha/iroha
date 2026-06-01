@@ -31,29 +31,48 @@ public enum KagemushaRecursiveAggregationProofBundleProver {
         recordBundleArchive: Data,
         pallasOpenEnvelopesArchive: Data
     ) throws -> Data {
+        try proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+            recordBundleArchive: recordBundleArchive,
+            pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveAggregationProofBundleProverAvailable
+        ) {
+            try NoritoNativeBridge.shared
+                .proveKagemushaVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: recordBundleArchive,
+                    pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive
+                )
+        }
+    }
+
+    static func proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        recordBundleArchive: Data,
+        pallasOpenEnvelopesArchive: Data,
+        bridgeAvailable: Bool,
+        body: () throws -> Data?
+    ) throws -> Data {
         guard !recordBundleArchive.isEmpty else {
             throw KagemushaRecursiveAggregationProofBundleProverError.emptyRecordBundleArchive
         }
         guard !pallasOpenEnvelopesArchive.isEmpty else {
             throw KagemushaRecursiveAggregationProofBundleProverError.emptyPallasOpenEnvelopesArchive
         }
-        guard NoritoNativeBridge.shared.isKagemushaRecursiveAggregationProofBundleProverAvailable else {
+        guard bridgeAvailable else {
             throw KagemushaRecursiveAggregationProofBundleProverError.bridgeUnavailable
         }
+        let proofBundle: Data?
         do {
-            guard let proofBundle = try NoritoNativeBridge.shared
-                .proveKagemushaVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive: recordBundleArchive,
-                    pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive
-                )
-            else {
-                throw KagemushaRecursiveAggregationProofBundleProverError.bridgeUnavailable
-            }
-            return proofBundle
+            proofBundle = try body()
         } catch NativeBridgeError.kagemushaProve {
             throw KagemushaRecursiveAggregationProofBundleProverError.proofRejected
         } catch {
             throw KagemushaRecursiveAggregationProofBundleProverError.proofRejected
         }
+        guard let proofBundle else {
+            throw KagemushaRecursiveAggregationProofBundleProverError.bridgeUnavailable
+        }
+        guard !proofBundle.isEmpty else {
+            throw KagemushaRecursiveAggregationProofBundleProverError.proofRejected
+        }
+        return proofBundle
     }
 }

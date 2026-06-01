@@ -114,6 +114,42 @@ int32_t connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bund
     uint8_t** out_proof_bundle_ptr,
     unsigned long* out_proof_bundle_len);
 
+// Initialize production recursive Kagemusha spendable offline cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+int32_t connect_norito_kagemusha_recursive_spend_init(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_bundle_ptr,
+    unsigned long* out_bundle_len);
+
+// Append one offline hop to production recursive Kagemusha spendable cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendAppendRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+int32_t connect_norito_kagemusha_recursive_spend_append(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_bundle_ptr,
+    unsigned long* out_bundle_len);
+
+// Verify production recursive Kagemusha spendable offline cash.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendVerifyRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.
+int32_t connect_norito_kagemusha_recursive_spend_verify(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
+// Prepare an online recursive Kagemusha redeem instruction.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendRedeemRequestV1`.
+// Output: Norito-archive bytes of `RedeemKagemushaRecursive`.
+int32_t connect_norito_kagemusha_recursive_spend_redeem(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_instruction_ptr,
+    unsigned long* out_instruction_len);
+
 void connect_norito_free(uint8_t* ptr);
 
 // ---------------- Envelope helpers ----------------

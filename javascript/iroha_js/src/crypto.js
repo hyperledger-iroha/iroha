@@ -484,6 +484,50 @@ export function buildKaigiRosterJoinProof(options) {
 }
 
 /**
+ * Build a native STARK/FRI-backed ZK-ACE transparent-transfer authorization.
+ * @param {{fromAccountId?: string, from?: string, toAccountId?: string, to?: string, assetDefinitionId?: string, asset?: string, amount: string | number | bigint, chainId?: string, chain_id?: string, identityRoot?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_root?: ArrayBufferView | ArrayBuffer | Buffer | string, identityBlinding?: ArrayBufferView | ArrayBuffer | Buffer | string, identity_blinding?: ArrayBufferView | ArrayBuffer | Buffer | string, replaySecret?: ArrayBufferView | ArrayBuffer | Buffer | string, replay_secret?: ArrayBufferView | ArrayBuffer | Buffer | string, policyHash?: ArrayBufferView | ArrayBuffer | Buffer | string, policy_hash?: ArrayBufferView | ArrayBuffer | Buffer | string, verifierKeyId?: string, verifier_key_id?: string, verifyingKeyCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string, vkCommitment?: ArrayBufferView | ArrayBuffer | Buffer | string}} options
+ * @returns {object}
+ */
+export function buildZkAceTransferAuthorizationV1(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("buildZkAceTransferAuthorizationV1 options must be an object");
+  }
+  const native = ensureGenericCryptoNative(
+    resolveNativeBinding(),
+    "zkAceBuildTransferAuthorizationV1",
+  );
+  const resultJson = native.zkAceBuildTransferAuthorizationV1(
+    requiredString(options.fromAccountId ?? options.from, "fromAccountId"),
+    requiredString(options.toAccountId ?? options.to, "toAccountId"),
+    requiredString(
+      options.assetDefinitionId ?? options.asset_definition_id ?? options.asset,
+      "assetDefinitionId",
+    ),
+    requiredString(String(options.amount ?? ""), "amount"),
+    requiredString(options.chainId ?? options.chain_id, "chainId"),
+    fixed32Buffer(options.identityRoot ?? options.identity_root, "identityRoot"),
+    fixed32Buffer(options.identityBlinding ?? options.identity_blinding, "identityBlinding"),
+    fixed32Buffer(options.replaySecret ?? options.replay_secret, "replaySecret"),
+    fixed32Buffer(options.policyHash ?? options.policy_hash, "policyHash"),
+    options.verifierKeyId ?? options.verifier_key_id ?? null,
+    optionalFixed32Buffer(
+      options.verifyingKeyCommitment ??
+        options.verifying_key_commitment ??
+        options.vkCommitment ??
+        options.vk_commitment,
+      "verifyingKeyCommitment",
+    ),
+  );
+  let result;
+  try {
+    result = JSON.parse(resultJson);
+  } catch (error) {
+    throw new Error(`native ZK-ACE prover returned invalid JSON: ${error.message}`);
+  }
+  return normalizeZkAceAuthorizationResult(result);
+}
+
+/**
  * Derive the confidential key hierarchy from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
  * @returns {{skSpend: Buffer, nk: Buffer, ivk: Buffer, ovk: Buffer, fvk: Buffer, skSpendHex: string, nkHex: string, ivkHex: string, ovkHex: string, fvkHex: string, asHex(): Record<string, string>}}
@@ -676,6 +720,89 @@ export function deriveConfidentialNullifierV2(input) {
   };
 }
 
+function hasKagemushaRecursiveSpendNative(native) {
+  return (
+    native &&
+    typeof native.kagemushaRecursiveSpendInit === "function" &&
+    typeof native.kagemushaRecursiveSpendAppend === "function" &&
+    typeof native.kagemushaRecursiveSpendVerify === "function" &&
+    typeof native.kagemushaRecursiveSpendRedeem === "function"
+  );
+}
+
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
+
+export function preferredKagemushaOfflineSpendMode(
+  recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
+) {
+  return recursiveSpendAvailable
+    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+}
+
+function ensureKagemushaRecursiveSpendNative(native, operation) {
+  if (!hasKagemushaRecursiveSpendNative(native)) {
+    throw new Error(
+      `Kagemusha recursive spend helper '${operation}' is unavailable; build iroha_js_host with recursive Kagemusha support`,
+    );
+  }
+  return native;
+}
+
+function callKagemushaRecursiveSpendNative(operation, requestArchive) {
+  const request = toBuffer(requestArchive, "requestArchive");
+  if (request.length === 0) {
+    throw new Error("requestArchive must not be empty");
+  }
+  const native = ensureKagemushaRecursiveSpendNative(resolveNativeBinding(), operation);
+  const result = native[operation](request);
+  if (result === undefined || result === null) {
+    throw new Error(`native ${operation} returned no output`);
+  }
+  const output = Buffer.from(result);
+  if (output.length === 0) {
+    throw new Error(`native ${operation} returned empty output`);
+  }
+  return output;
+}
+
+export function isKagemushaRecursiveSpendNativeAvailable() {
+  try {
+    return hasKagemushaRecursiveSpendNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function kagemushaRecursiveSpendInit(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendInit",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendAppend(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendAppend",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendVerify(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendVerify",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendRedeem(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendRedeem",
+    requestArchive,
+  );
+}
+
 /**
  * Return the canonical SM2 signing fixture values for the given seed and message.
  * @param {string} distid
@@ -774,6 +901,85 @@ function toBuffer(value, name) {
     return Buffer.from(value);
   }
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
+}
+
+function requiredString(value, name) {
+  const text = typeof value === "string" ? value.trim() : String(value ?? "").trim();
+  if (!text) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+  return text;
+}
+
+function fixed32Buffer(value, name) {
+  const hexValue = normalizeFixed32HexInput(value, name);
+  return Buffer.from(hexValue, "hex");
+}
+
+function optionalFixed32Buffer(value, name) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return fixed32Buffer(value, name);
+}
+
+function normalizeProofAttachmentFromNative(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("native ZK-ACE prover returned invalid proof attachment");
+  }
+  const proof = { ...value };
+  if (typeof proof.proof_b64 !== "string" || proof.proof_b64.length === 0) {
+    throw new Error("native ZK-ACE prover returned missing proof_b64");
+  }
+  if (typeof proof.backend !== "string" || proof.backend.length === 0) {
+    throw new Error("native ZK-ACE prover returned missing proof backend");
+  }
+  const verifyingKeyRef = proof.vk_ref ?? proof.verifying_key_ref ?? proof.verifyingKeyRef;
+  if (!verifyingKeyRef || typeof verifyingKeyRef !== "object" || Array.isArray(verifyingKeyRef)) {
+    throw new Error("native ZK-ACE prover returned missing verifying key reference");
+  }
+  const normalized = {
+    backend: proof.backend,
+    proof_b64: proof.proof_b64,
+    vk_ref: verifyingKeyRef,
+  };
+  const commitment =
+    proof.vk_commitment ?? proof.verifying_key_commitment ?? proof.verifyingKeyCommitment;
+  if (commitment !== undefined && commitment !== null) {
+    normalized.vk_commitment = commitment;
+  }
+  const envelopeHash = proof.envelope_hash ?? proof.envelopeHash;
+  if (envelopeHash !== undefined && envelopeHash !== null) {
+    normalized.envelope_hash = envelopeHash;
+  }
+  return normalized;
+}
+
+function normalizeZkAceAuthorizationResult(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("native ZK-ACE prover returned invalid authorization payload");
+  }
+  return {
+    publicInputs: result.public_inputs ?? result.publicInputs,
+    public_inputs: result.public_inputs ?? result.publicInputs,
+    proof: normalizeProofAttachmentFromNative(result.proof),
+    identityCommitment: result.identity_commitment,
+    identity_commitment: result.identity_commitment,
+    txDigest: result.tx_digest,
+    tx_digest: result.tx_digest,
+    replayNullifier: result.replay_nullifier,
+    replay_nullifier: result.replay_nullifier,
+    policyHash: result.policy_hash,
+    policy_hash: result.policy_hash,
+    verifierKeyId: result.verifier_key_id,
+    verifier_key_id: result.verifier_key_id,
+    authorizationProofBytes: Number(result.authorization_proof_bytes ?? 0),
+    authorization_proof_bytes: Number(result.authorization_proof_bytes ?? 0),
+    authorizationPublicInputBytes: Number(result.authorization_public_input_bytes ?? 0),
+    authorization_public_input_bytes: Number(result.authorization_public_input_bytes ?? 0),
+    replayNullifierBytes: Number(result.replay_nullifier_bytes ?? 32),
+    replay_nullifier_bytes: Number(result.replay_nullifier_bytes ?? 32),
+  };
 }
 
 function normalizeFixed32HexInput(value, name) {

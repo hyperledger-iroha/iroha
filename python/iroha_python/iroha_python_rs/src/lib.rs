@@ -54,7 +54,11 @@ use iroha_data_model::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
             SettlementLeg, SettlementPlan,
         },
-        zk::{RegisterZkAsset, Shield, Unshield, ZkAssetMode, ZkTransfer},
+        zk::{
+            RegisterZkAceIdentityCommitment, RegisterZkAsset, RevokeZkAceIdentityCommitment,
+            RotateZkAceIdentityCommitment, Shield, SubmitZkAceAuthorizedTransfer, Unshield,
+            ZkAssetMode, ZkTransfer,
+        },
     },
     metadata::Metadata,
     name::Name,
@@ -74,6 +78,10 @@ use iroha_data_model::{
         Trigger, TriggerId,
         action::{Action as TriggerAction, Repeats},
     },
+    zk::{
+        ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+        ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, ZkAcePublicInputsV1, ZkAceWitnessV1,
+    },
 };
 use iroha_primitives::{
     json::Json,
@@ -92,7 +100,7 @@ use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use norito::{codec, codec::DecodeAll, decode_from_bytes, json, json::JsonSerialize};
 use pyo3::{
     Bound, FromPyObject, create_exception,
-    exceptions::{PyException, PyTypeError, PyValueError},
+    exceptions::{PyException, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{
         PyAny, PyBytes, PyDict, PyDictMethods, PyList, PyModule, PyStringMethods, PyTuple, PyType,
@@ -447,6 +455,45 @@ fn py_text(value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
     Ok(trimmed.to_owned())
 }
 
+fn py_account_id_list(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<AccountId>> {
+    let items = if let Ok(items) = value.cast::<PyList>() {
+        items.iter().collect::<Vec<_>>()
+    } else if let Ok(items) = value.cast::<PyTuple>() {
+        items.iter().collect::<Vec<_>>()
+    } else {
+        return Err(PyTypeError::new_err(format!(
+            "{context} must be a list or tuple"
+        )));
+    };
+    if items.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be non-empty"
+        )));
+    }
+    if items.len() > iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS {
+        return Err(PyValueError::new_err(format!(
+            "{context} must contain at most {} accounts",
+            iroha_data_model::zk::ZK_ACE_MAX_ALLOWED_ACCOUNTS
+        )));
+    }
+    let mut accounts = Vec::with_capacity(items.len());
+    let mut seen = HashSet::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let text = py_text(item, &format!("{context}[{index}]"))?;
+        let account = parse_account_id(&text).map_err(|err| {
+            PyValueError::new_err(format!("invalid {context}[{index}] `{text}`: {err}"))
+        })?;
+        if !seen.insert(account.clone()) {
+            return Err(PyValueError::new_err(format!(
+                "{context}[{index}] duplicates an earlier account"
+            )));
+        }
+        accounts.push(account);
+    }
+    accounts.sort();
+    Ok(accounts)
+}
+
 fn py_bytes_or_hex(value: &Bound<'_, PyAny>, context: &str) -> PyResult<Vec<u8>> {
     if let Ok(text) = value.extract::<String>() {
         return parse_hex_bytes_py(&text, context);
@@ -510,6 +557,34 @@ fn ensure_unique_fixed_arrays(items: &[[u8; 32]], context: &str) -> PyResult<()>
     Ok(())
 }
 
+fn ensure_non_zero_fixed_array<const N: usize>(item: [u8; N], context: &str) -> PyResult<[u8; N]> {
+    if item.iter().all(|byte| *byte == 0) {
+        return Err(PyValueError::new_err(format!("{context} must be non-zero")));
+    }
+    Ok(item)
+}
+
+fn py_non_zero_fixed_array<const N: usize>(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<[u8; N]> {
+    let item = py_fixed_array::<N>(value, context)?;
+    ensure_non_zero_fixed_array(item, context)
+}
+
+fn parse_optional_fixed_array_py<const N: usize>(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<Option<[u8; N]>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_none() {
+        return Ok(None);
+    }
+    py_fixed_array::<N>(value, context).map(Some)
+}
+
 fn dict_get_alias<'py>(
     dict: &Bound<'py, PyDict>,
     aliases: &[&str],
@@ -532,6 +607,168 @@ fn parse_zk_asset_mode(value: Option<&str>) -> PyResult<ZkAssetMode> {
             "invalid ZK asset mode `{other}`"
         ))),
     }
+}
+
+fn parse_zk_ace_action(value: Option<&str>, context: &str) -> PyResult<String> {
+    let action = value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER);
+    if action != ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be {ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER}"
+        )));
+    }
+    Ok(action.to_owned())
+}
+
+fn parse_zk_ace_domain_tag(value: Option<&str>, context: &str) -> PyResult<String> {
+    let domain_tag = value
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or(ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG);
+    if domain_tag != ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be {ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG}"
+        )));
+    }
+    Ok(domain_tag.to_owned())
+}
+
+fn parse_zk_ace_verifying_key_id_py(
+    value: &Bound<'_, PyAny>,
+    context: &str,
+) -> PyResult<VerifyingKeyId> {
+    let vk = parse_required_verifying_key_id_py(Some(value), context)?;
+    if vk.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+        return Err(PyValueError::new_err(format!(
+            "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
+        )));
+    }
+    Ok(vk)
+}
+
+fn parse_optional_zk_ace_verifying_key_id_py(
+    value: Option<&Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<VerifyingKeyId> {
+    match value {
+        Some(value) if !value.is_none() => parse_zk_ace_verifying_key_id_py(value, context),
+        _ => Ok(zk_ace_prover::zk_ace_verifier_key_id(
+            iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        )),
+    }
+}
+
+fn ensure_zk_ace_proof_attachment(
+    proof: ProofAttachment,
+    context: &str,
+) -> PyResult<ProofAttachment> {
+    if proof.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+        return Err(PyValueError::new_err(format!(
+            "{context}.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
+        )));
+    }
+    if proof.vk_ref.backend.to_string() != ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND {
+        return Err(PyValueError::new_err(format!(
+            "{context}.vk_ref.backend must be {ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND}"
+        )));
+    }
+    Ok(proof)
+}
+
+fn zk_ace_proof_attachment_json_value(attachment: &ProofAttachment) -> PyResult<json::Value> {
+    let mut vk_ref = json::Map::new();
+    vk_ref.insert(
+        "backend".to_owned(),
+        json::Value::String(attachment.vk_ref.backend.as_str().to_owned()),
+    );
+    vk_ref.insert(
+        "name".to_owned(),
+        json::Value::String(attachment.vk_ref.name.clone()),
+    );
+
+    let mut proof = json::Map::new();
+    proof.insert(
+        "backend".to_owned(),
+        json::Value::String(attachment.backend.as_str().to_owned()),
+    );
+    proof.insert("verifying_key_ref".to_owned(), json::Value::Object(vk_ref));
+    proof.insert(
+        "proof_b64".to_owned(),
+        json::Value::String(BASE64.encode(&attachment.proof.bytes)),
+    );
+    if let Some(commitment) = attachment.vk_commitment {
+        proof.insert(
+            "verifying_key_commitment".to_owned(),
+            json::Value::String(hex_encode(commitment)),
+        );
+    }
+    if let Some(envelope_hash) = attachment.envelope_hash {
+        proof.insert(
+            "envelope_hash".to_owned(),
+            json::Value::String(hex_encode(envelope_hash)),
+        );
+    }
+    Ok(json::Value::Object(proof))
+}
+
+fn zk_ace_authorization_json(
+    public_inputs: &ZkAcePublicInputsV1,
+    proof: &ProofAttachment,
+    public_inputs_bytes: &[u8],
+) -> PyResult<String> {
+    let mut root = json::Map::new();
+    root.insert(
+        "public_inputs".to_owned(),
+        json::to_value(public_inputs)
+            .map_err(|err| PyValueError::new_err(format!("serialize public inputs: {err}")))?,
+    );
+    root.insert(
+        "proof".to_owned(),
+        zk_ace_proof_attachment_json_value(proof)?,
+    );
+    root.insert(
+        "identity_commitment".to_owned(),
+        json::Value::String(hex_encode(public_inputs.identity_commitment)),
+    );
+    root.insert(
+        "tx_digest".to_owned(),
+        json::Value::String(hex_encode(public_inputs.tx_digest)),
+    );
+    root.insert(
+        "replay_nullifier".to_owned(),
+        json::Value::String(hex_encode(public_inputs.replay_nullifier)),
+    );
+    root.insert(
+        "policy_hash".to_owned(),
+        json::Value::String(hex_encode(public_inputs.policy_hash)),
+    );
+    root.insert(
+        "verifier_key_id".to_owned(),
+        json::Value::String(format!(
+            "{}:{}",
+            public_inputs.verifier_key_id.backend.as_str(),
+            public_inputs.verifier_key_id.name
+        )),
+    );
+    root.insert(
+        "authorization_proof_bytes".to_owned(),
+        json::to_value(&proof.proof.bytes.len())
+            .map_err(|err| PyValueError::new_err(format!("serialize proof bytes: {err}")))?,
+    );
+    root.insert(
+        "authorization_public_input_bytes".to_owned(),
+        json::to_value(&public_inputs_bytes.len())
+            .map_err(|err| PyValueError::new_err(format!("serialize public input bytes: {err}")))?,
+    );
+    root.insert(
+        "replay_nullifier_bytes".to_owned(),
+        json::to_value(&32usize)
+            .map_err(|err| PyValueError::new_err(format!("serialize nullifier bytes: {err}")))?,
+    );
+    json::to_string(&json::Value::Object(root))
+        .map_err(|err| PyValueError::new_err(format!("serialize ZK-ACE authorization: {err}")))
 }
 
 fn parse_u128_text(value: &str, context: &str) -> PyResult<u128> {
@@ -3714,6 +3951,302 @@ fn decode_transaction_receipt_json_py(receipt_bytes: &[u8]) -> PyResult<String> 
 }
 
 #[pyfunction]
+#[pyo3(name = "zk_ace_build_transfer_authorization_v1", signature = (
+    from_account_id,
+    to_account_id,
+    asset_definition_id,
+    amount,
+    chain_id,
+    identity_root,
+    identity_blinding,
+    replay_secret,
+    policy_hash,
+    verifier_key_id = None,
+    vk_commitment = None
+))]
+#[allow(clippy::too_many_arguments)]
+fn zk_ace_build_transfer_authorization_v1_py(
+    from_account_id: &str,
+    to_account_id: &str,
+    asset_definition_id: &str,
+    amount: &str,
+    chain_id: &str,
+    identity_root: &Bound<'_, PyAny>,
+    identity_blinding: &Bound<'_, PyAny>,
+    replay_secret: &Bound<'_, PyAny>,
+    policy_hash: &Bound<'_, PyAny>,
+    verifier_key_id: Option<&Bound<'_, PyAny>>,
+    vk_commitment: Option<&Bound<'_, PyAny>>,
+) -> PyResult<String> {
+    let from = parse_account_id(from_account_id)?;
+    let to = parse_account_id(to_account_id)?;
+    let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        PyValueError::new_err(format!(
+            "invalid asset definition id `{asset_definition_id}`: {err}"
+        ))
+    })?;
+    let amount = parse_u128_text(amount, "amount")?;
+    let chain_id = parse_chain_id(chain_id)?;
+    let witness = ZkAceWitnessV1 {
+        identity_root: py_non_zero_fixed_array::<32>(identity_root, "identity_root")?,
+        identity_blinding: py_non_zero_fixed_array::<32>(identity_blinding, "identity_blinding")?,
+        replay_secret: py_non_zero_fixed_array::<32>(replay_secret, "replay_secret")?,
+    };
+    let policy_hash = py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?;
+    let verifier_key_id =
+        parse_optional_zk_ace_verifying_key_id_py(verifier_key_id, "verifier_key_id")?;
+    let vk_commitment = match vk_commitment {
+        Some(value) if !value.is_none() => py_fixed_array::<32>(value, "vk_commitment")?,
+        _ => zk_ace_prover::zk_ace_verifying_key_commitment_v1().map_err(|err| {
+            PyValueError::new_err(format!("failed to build ZK-ACE verifier commitment: {err}"))
+        })?,
+    };
+    let authorization = zk_ace_prover::build_zk_ace_transfer_authorization_v1(
+        from,
+        to,
+        asset,
+        amount,
+        chain_id,
+        witness,
+        policy_hash,
+        verifier_key_id,
+        vk_commitment,
+    )
+    .map_err(|err| PyValueError::new_err(format!("failed to build ZK-ACE proof: {err}")))?;
+    zk_ace_authorization_json(
+        &authorization.public_inputs,
+        &authorization.proof,
+        &authorization.public_inputs_bytes,
+    )
+}
+
+fn decode_kagemusha_recursive_archive<T>(archive: &[u8], context: &str) -> PyResult<T>
+where
+    T: for<'de> norito::core::NoritoDeserialize<'de>,
+{
+    if archive.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} archive must not be empty"
+        )));
+    }
+    decode_from_bytes(archive)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context} archive: {err}")))
+}
+
+fn encode_kagemusha_recursive_archive<T>(
+    py: Python<'_>,
+    value: &T,
+    context: &str,
+) -> PyResult<Py<PyBytes>>
+where
+    T: norito::core::NoritoSerialize,
+{
+    let bytes = norito::to_bytes(value)
+        .map_err(|err| PyRuntimeError::new_err(format!("{context}: {err}")))?;
+    Ok(Py::from(PyBytes::new(py, &bytes)))
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_prove_verified_compact_payment_token_with_records")]
+fn kagemusha_prove_verified_compact_payment_token_with_records_py(
+    py: Python<'_>,
+    record_bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        decode_kagemusha_recursive_archive(
+            record_bundle_archive,
+            "Kagemusha verified compact-token record bundle",
+        )?;
+    let vk_box = iroha_core::zk::kagemusha_folded_vk_box().map_err(PyRuntimeError::new_err)?;
+    let token = iroha_core::zk::prove_verified_kagemusha_compact_payment_token_from_record_bundle(
+        &record_bundle,
+        iroha_core::zk::KAGEMUSHA_FOLDED_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(PyRuntimeError::new_err)?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &token,
+        "failed to encode Kagemusha compact payment token",
+    )
+}
+
+#[pyfunction]
+#[pyo3(
+    name = "kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes"
+)]
+fn kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py(
+    py: Python<'_>,
+    record_bundle_archive: &[u8],
+    pallas_open_envelopes_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
+        decode_kagemusha_recursive_archive(
+            record_bundle_archive,
+            "Kagemusha recursive aggregation record bundle",
+        )?;
+    if pallas_open_envelopes_archive.is_empty() {
+        return Err(PyValueError::new_err(
+            "Kagemusha recursive aggregation Pallas open-envelope archive must not be empty",
+        ));
+    }
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(PyRuntimeError::new_err)?;
+    let bundle =
+        iroha_core::zk::prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundle_and_pallas_open_envelope_archive(
+            &record_bundle,
+            pallas_open_envelopes_archive,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+            &vk_box,
+            None,
+        )
+        .map_err(PyRuntimeError::new_err)?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &bundle,
+        "failed to encode Kagemusha recursive aggregation proof bundle",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_init")]
+fn kagemusha_recursive_spend_init_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend init")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(PyRuntimeError::new_err)?;
+    let bundle =
+        iroha_core::zk::prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+            &request.record_bundle,
+            &request.pallas_open_envelopes_archive,
+            request.current_note,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            &vk_box,
+            None,
+        )
+        .map_err(PyRuntimeError::new_err)?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &bundle,
+        "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_append")]
+fn kagemusha_recursive_spend_append_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend append")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(PyRuntimeError::new_err)?;
+    let bundle =
+        iroha_core::zk::prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+            &request.previous_bundle,
+            &request.record_bundle,
+            &request.pallas_open_envelopes_archive,
+            request.current_note,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            &vk_box,
+            None,
+        )
+        .map_err(PyRuntimeError::new_err)?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &bundle,
+        "failed to encode Kagemusha recursive spend append bundle",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_verify")]
+fn kagemusha_recursive_spend_verify_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend verify")?;
+    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+        .map_err(PyRuntimeError::new_err)?;
+    let result = match iroha_core::zk::preverify_kagemusha_recursive_spend_bundle(
+        &request.bundle,
+        &vk_box,
+    ) {
+        Ok(()) => {
+            let valid =
+                iroha_core::zk::verify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box);
+            iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
+                valid,
+                hop_count: request.bundle.accumulator.hop_count,
+                encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
+                    .unwrap_or(u32::MAX),
+                reason: if valid {
+                    String::new()
+                } else {
+                    "proof verification failed".to_owned()
+                },
+            }
+        }
+        Err(reason) => iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
+            valid: false,
+            hop_count: request.bundle.accumulator.hop_count,
+            encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
+                .unwrap_or(u32::MAX),
+            reason,
+        },
+    };
+    encode_kagemusha_recursive_archive(
+        py,
+        &result,
+        "failed to encode Kagemusha recursive spend verify result",
+    )
+}
+
+fn kagemusha_recursive_spend_redeem_instruction_from_request(
+    request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+) -> Result<
+    iroha_data_model::isi::offline::RedeemKagemushaRecursive,
+    iroha_data_model::offline::KagemushaFoldError,
+> {
+    request.validate_public_binding()?;
+    Ok(
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
+            request.bundle,
+            request.recipient,
+            request.public_amount,
+            request.redeem_proof,
+        ),
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_redeem")]
+fn kagemusha_recursive_spend_redeem_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend redeem")?;
+    let instruction =
+        kagemusha_recursive_spend_redeem_instruction_from_request(request).map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid Kagemusha recursive spend redeem request: {err}"
+            ))
+        })?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &instruction,
+        "failed to encode Kagemusha recursive spend redeem instruction",
+    )
+}
+
+#[pyfunction]
 #[pyo3(name = "generate_connect_keypair")]
 /// Generate an X25519 keypair for Connect.
 fn generate_connect_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
@@ -3826,6 +4359,15 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use http::StatusCode;
     use httpmock::{MockServer, prelude::*};
+    use iroha_core::zk::ZK_BACKEND_HALO2_IPA;
+    use iroha_data_model::offline::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN, KagemushaRecursiveAggregationProof,
+        KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
+        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendVerifyRequestV1,
+        KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
+        kagemusha_recursive_spend_public_inputs_from_accumulator,
+    };
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
     use once_cell::sync::OnceCell;
@@ -3856,6 +4398,106 @@ mod tests {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
             .expect("canonical I105")
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn fixed_bytes(label: &[u8]) -> [u8; Hash::LENGTH] {
+        Hash::new(label).into()
+    }
+
+    fn sample_kagemusha_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
+        let chain_id: ChainId = "kagemusha-recursive-spend-python"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgmpy".parse().expect("asset definition name"),
+        );
+        let current_note = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: fixed_bytes(b"python-recursive-current-note"),
+            spend_nullifier: fixed_bytes(b"python-recursive-current-nullifier"),
+            amount: Numeric::new(42, 0),
+        };
+        let mut topup_anchor_nullifiers = vec![
+            fixed_bytes(b"python-recursive-topup-anchor-0"),
+            fixed_bytes(b"python-recursive-topup-anchor-1"),
+        ];
+        topup_anchor_nullifiers.sort_unstable();
+        let accumulator = KagemushaRecursiveSpendAccumulatorV1 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.to_owned(),
+            chain_id,
+            asset,
+            initial_root: fixed_bytes(b"python-recursive-initial-root"),
+            final_root: fixed_bytes(b"python-recursive-final-root"),
+            topup_anchor_nullifiers,
+            hop_count: 2,
+            lineage_digest: fixed_bytes(b"python-recursive-lineage"),
+            aggregation_transcript_digest: fixed_bytes(b"python-recursive-lineage"),
+            nullifier_digest: Hash::new(b"python-recursive-nullifier-digest"),
+            output_commitment_digest: Hash::new(b"python-recursive-output-digest"),
+            fold_digest: Hash::new(b"python-recursive-fold-digest"),
+            recursive_proof_chain_digest: fixed_bytes(b"python-recursive-proof-chain"),
+            verifier_params_fingerprint: fixed_bytes(b"python-recursive-params"),
+            fixed_window_table_schedule_digest: fixed_bytes(b"python-recursive-schedule"),
+            fixed_window_shared_table_manifest_digest: fixed_bytes(b"python-recursive-manifest"),
+            fixed_window_table_base_digest: fixed_bytes(b"python-recursive-table-base"),
+            verifier_witness_batch_digest: fixed_bytes(b"python-recursive-witness-batch"),
+            verifier_opening_len: 4,
+            current_note,
+        };
+        let public_inputs = kagemusha_recursive_spend_public_inputs_from_accumulator(&accumulator)
+            .expect("recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive spend public-input hash");
+        KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof: KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA5; 64]),
+            },
+        }
+    }
+
+    fn sample_recursive_spend_redeem_request(
+        public_amount: u128,
+    ) -> KagemushaRecursiveSpendRedeemRequestV1 {
+        KagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: sample_kagemusha_recursive_spend_bundle(),
+            recipient: sample_account(0xB8),
+            public_amount,
+            redeem_proof: ProofAttachment::new_ref(
+                ZK_BACKEND_HALO2_IPA.to_owned(),
+                ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x5A; 64]),
+                VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "python-recursive-unshield"),
+            ),
+        }
+    }
+
+    fn empty_kagemusha_record_bundle_archive() -> Vec<u8> {
+        let record_bundle = iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+            bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                chain_id: "kagemusha-python-empty-record-bundle"
+                    .parse()
+                    .expect("chain id"),
+                asset: AssetDefinitionId::new(
+                    DomainId::try_new("offline", "universal").expect("domain id"),
+                    "kgmpy".parse().expect("asset definition name"),
+                ),
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        norito::to_bytes(&record_bundle).expect("encode empty Kagemusha record bundle")
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -3924,6 +4566,187 @@ mod tests {
         let decoded = decode_transaction_receipt_json_py(&bytes).expect("decode receipt json");
         let expected = json::to_json(&receipt).expect("serialize receipt");
         assert_eq!(decoded, expected);
+    }
+
+    #[test]
+    fn kagemusha_python_native_provers_reject_malformed_archives() {
+        ensure_python();
+        Python::attach(|py| {
+            let err =
+                kagemusha_prove_verified_compact_payment_token_with_records_py(py, &[0x01, 0x02])
+                    .expect_err("compact-token prover must reject malformed record bundle archives")
+                    .to_string();
+            assert!(err.contains("invalid Kagemusha verified compact-token record bundle"));
+
+            let err =
+                kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py(
+                    py,
+                    &[0x01, 0x02],
+                    &[0x03, 0x04],
+                )
+                .expect_err("recursive aggregation prover must reject malformed record bundle archives")
+                .to_string();
+            assert!(err.contains("invalid Kagemusha recursive aggregation record bundle"));
+
+            let record_archive = empty_kagemusha_record_bundle_archive();
+            let err =
+                kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py(
+                    py,
+                    &record_archive,
+                    &[],
+                )
+                .expect_err("recursive aggregation prover must reject empty Pallas open-envelope archive")
+                .to_string();
+            assert!(
+                err.contains("Pallas open-envelope archive must not be empty"),
+                "unexpected error: {err}"
+            );
+
+            for (label, call) in [
+                (
+                    "init",
+                    kagemusha_recursive_spend_init_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+                (
+                    "append",
+                    kagemusha_recursive_spend_append_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+                (
+                    "verify",
+                    kagemusha_recursive_spend_verify_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+                (
+                    "redeem",
+                    kagemusha_recursive_spend_redeem_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+            ] {
+                let err = call(py, &[])
+                    .expect_err("recursive spend native helper must reject empty request archives")
+                    .to_string();
+                assert!(
+                    err.contains("archive must not be empty"),
+                    "{label} empty-archive error lost context: {err}"
+                );
+
+                let err = call(py, &[0x01, 0x02])
+                    .expect_err(
+                        "recursive spend native helper must reject malformed request archives",
+                    )
+                    .to_string();
+                assert!(
+                    err.contains("invalid Kagemusha recursive spend"),
+                    "{label} malformed-archive error lost context: {err}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_verify_python_function_reports_malformed_proof_material() {
+        fn verify_result(
+            py: Python<'_>,
+            request: &KagemushaRecursiveSpendVerifyRequestV1,
+        ) -> KagemushaRecursiveSpendVerifyResultV1 {
+            let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
+            let output = kagemusha_recursive_spend_verify_py(py, &archive)
+                .expect("verify function returns a diagnostic result archive");
+            decode_from_bytes(output.bind(py).as_bytes())
+                .expect("decode recursive spend verify result")
+        }
+
+        ensure_python();
+        Python::attach(|py| {
+            let request = KagemushaRecursiveSpendVerifyRequestV1 {
+                bundle: sample_kagemusha_recursive_spend_bundle(),
+            };
+
+            let mut trusted_setup_backend = request.clone();
+            trusted_setup_backend.bundle.recursive_proof.proof =
+                ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
+            let trusted_setup_result = verify_result(py, &trusted_setup_backend);
+            assert!(!trusted_setup_result.valid);
+            assert!(
+                trusted_setup_result.reason.contains("not supported"),
+                "trusted-setup recursive proof backend was not rejected clearly: {}",
+                trusted_setup_result.reason
+            );
+
+            let mut stark_recursive_bundle = request.clone();
+            stark_recursive_bundle.bundle.recursive_proof.proof =
+                ProofBox::new("stark/fri/transparent-v1".into(), vec![0xA5; 64]);
+            stark_recursive_bundle
+                .bundle
+                .recursive_proof
+                .verifier_key_id = VerifyingKeyId::new(
+                "stark/fri/transparent-v1",
+                KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            );
+            let stark_result = verify_result(py, &stark_recursive_bundle);
+            assert!(!stark_result.valid);
+            assert!(
+                stark_result.reason.contains("proof.backend"),
+                "transparent STARK substitution was not rejected at proof.backend: {}",
+                stark_result.reason
+            );
+
+            let mut empty_recursive_proof = request;
+            empty_recursive_proof.bundle.recursive_proof.proof =
+                ProofBox::new(ZK_BACKEND_HALO2_IPA.into(), Vec::new());
+            let empty_result = verify_result(py, &empty_recursive_proof);
+            assert!(!empty_result.valid);
+            assert!(
+                empty_result.reason.contains("proof.bytes"),
+                "empty recursive IPA proof was not rejected at proof.bytes: {}",
+                empty_result.reason
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor() {
+        let request = sample_recursive_spend_redeem_request(42);
+        let instruction =
+            kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
+                .expect("valid recursive spend redeem request");
+        assert_eq!(instruction.public_amount, 42);
+        assert_eq!(
+            instruction.bundle.accumulator.topup_anchor_nullifiers,
+            request.bundle.accumulator.topup_anchor_nullifiers
+        );
+
+        let wrong_amount = sample_recursive_spend_redeem_request(41);
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(wrong_amount)
+            .expect_err("Python native redeem builder must reject wrong public amount");
+        assert!(err.to_string().contains("public_amount"));
+
+        let mut missing_anchor = sample_recursive_spend_redeem_request(42);
+        missing_anchor
+            .bundle
+            .accumulator
+            .topup_anchor_nullifiers
+            .clear();
+        let err = kagemusha_recursive_spend_redeem_instruction_from_request(missing_anchor)
+            .expect_err("Python native redeem builder must reject missing top-up anchors");
+        assert!(err.to_string().contains("top-up anchor"));
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_python_function_rejects_amount_mismatch() {
+        ensure_python();
+        let request = sample_recursive_spend_redeem_request(41);
+        let archive =
+            norito::to_bytes(&request).expect("encode mismatched recursive spend request");
+        Python::attach(|py| {
+            let err = kagemusha_recursive_spend_redeem_py(py, &archive)
+                .expect_err("Python function must reject amount mismatch");
+            let message = err.to_string();
+            assert!(message.contains("invalid Kagemusha recursive spend redeem request"));
+            assert!(message.contains("public_amount"));
+        });
     }
 
     #[test]
@@ -4221,6 +5044,260 @@ mod tests {
                 parse_account_id(&account_id).expect("account parses")
             );
             assert_eq!(register.object.metadata, Metadata::default());
+        });
+    }
+
+    #[test]
+    fn zk_ace_instruction_classmethods_serialize_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let verifier = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}"#,),
+                )
+                .expect("verifier loads");
+            let proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"stark/fri/sha256-goldilocks","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}}"#,),
+                )
+                .expect("proof loads");
+            let identity = PyBytes::new(py, &[0x11; 32]);
+            let replacement = PyBytes::new(py, &[0x12; 32]);
+            let policy = PyBytes::new(py, &[0x22; 32]);
+            let tx_digest = PyBytes::new(py, &[0x33; 32]);
+            let replay = PyBytes::new(py, &[0x44; 32]);
+            let reason = PyBytes::new(py, &[0x55; 32]);
+            let source = canonical_i105_from_seed(0x34);
+            let destination = canonical_i105_from_seed(0x35);
+            let allowed_accounts = PyList::empty(py);
+            allowed_accounts
+                .append(source.clone())
+                .expect("allowed account append");
+
+            let register = Instruction::register_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(verifier.as_any()),
+                None,
+                None,
+            )
+            .expect("register ZK-ACE identity builds");
+            let decoded = json::from_str::<InstructionBox>(&register.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let register = instruction_ref
+                .as_any()
+                .downcast_ref::<RegisterZkAceIdentityCommitment>()
+                .expect("expected RegisterZkAceIdentityCommitment");
+            assert_eq!(register.identity_commitment, [0x11; 32]);
+            assert_eq!(register.policy_hash, [0x22; 32]);
+            assert_eq!(
+                register.action_class,
+                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER
+            );
+            assert_eq!(register.domain_tag, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG);
+            assert_eq!(
+                register.verifier_key.backend.to_string(),
+                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+            );
+
+            let rotate = Instruction::rotate_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                replacement.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(verifier.as_any()),
+                None,
+                None,
+            )
+            .expect("rotate ZK-ACE identity builds");
+            let decoded = json::from_str::<InstructionBox>(&rotate.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let rotate = instruction_ref
+                .as_any()
+                .downcast_ref::<RotateZkAceIdentityCommitment>()
+                .expect("expected RotateZkAceIdentityCommitment");
+            assert_eq!(rotate.old_identity_commitment, [0x11; 32]);
+            assert_eq!(rotate.new_identity_commitment, [0x12; 32]);
+
+            let revoke = Instruction::revoke_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                Some(reason.as_any()),
+            )
+            .expect("revoke ZK-ACE identity builds");
+            let decoded = json::from_str::<InstructionBox>(&revoke.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let revoke = instruction_ref
+                .as_any()
+                .downcast_ref::<RevokeZkAceIdentityCommitment>()
+                .expect("expected RevokeZkAceIdentityCommitment");
+            assert_eq!(revoke.identity_commitment, [0x11; 32]);
+            assert_eq!(revoke.reason_hash, Some([0x55; 32]));
+
+            let transfer = Instruction::zk_ace_authorized_transfer(
+                &instruction_type,
+                &source,
+                &destination,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "7",
+                identity.as_any(),
+                tx_digest.as_any(),
+                "chain",
+                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+                replay.as_any(),
+                policy.as_any(),
+                proof.as_any(),
+            )
+            .expect("ZK-ACE transfer builds");
+            let decoded = json::from_str::<InstructionBox>(&transfer.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let transfer = instruction_ref
+                .as_any()
+                .downcast_ref::<SubmitZkAceAuthorizedTransfer>()
+                .expect("expected SubmitZkAceAuthorizedTransfer");
+            assert_eq!(transfer.amount, 7);
+            assert_eq!(transfer.identity_commitment, [0x11; 32]);
+            assert_eq!(transfer.tx_digest, [0x33; 32]);
+            assert_eq!(transfer.replay_nullifier, [0x44; 32]);
+            assert_eq!(transfer.policy_hash, [0x22; 32]);
+            assert_eq!(
+                transfer.proof.backend.to_string(),
+                ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND
+            );
+        });
+    }
+
+    #[test]
+    fn zk_ace_instruction_classmethods_reject_adversarial_inputs() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let verifier = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"stark/fri/sha256-goldilocks","name":"zk_ace_pq_authorization_v0"}"#,),
+                )
+                .expect("verifier loads");
+            let wrong_verifier = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","name":"zk_ace_pq_authorization_v0"}"#,),
+                )
+                .expect("wrong verifier loads");
+            let wrong_proof = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{"backend":"halo2/ipa","proof_b64":"cHJvb2Y=","verifying_key_ref":{"backend":"halo2/ipa","name":"vk"}}"#,),
+                )
+                .expect("wrong proof loads");
+            let zero = PyBytes::new(py, &[0x00; 32]);
+            let identity = PyBytes::new(py, &[0x11; 32]);
+            let policy = PyBytes::new(py, &[0x22; 32]);
+            let digest = PyBytes::new(py, &[0x33; 32]);
+            let replay = PyBytes::new(py, &[0x44; 32]);
+            let source = canonical_i105_from_seed(0x36);
+            let destination = canonical_i105_from_seed(0x37);
+            let allowed_accounts = PyList::empty(py);
+            allowed_accounts
+                .append(source.clone())
+                .expect("allowed account append");
+
+            let err = match Instruction::register_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                zero.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(verifier.as_any()),
+                None,
+                None,
+            ) {
+                Ok(_) => panic!("zero identity commitment must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("identity_commitment"));
+
+            let err = match Instruction::register_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(wrong_verifier.as_any()),
+                None,
+                None,
+            ) {
+                Ok(_) => panic!("wrong verifier backend must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND));
+
+            let err = match Instruction::rotate_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                identity.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(verifier.as_any()),
+                None,
+                None,
+            ) {
+                Ok(_) => panic!("same replacement commitment must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains("must differ"));
+
+            let err = match Instruction::register_zk_ace_identity_commitment(
+                &instruction_type,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                identity.as_any(),
+                policy.as_any(),
+                allowed_accounts.as_any(),
+                Some(verifier.as_any()),
+                Some("wrong-action"),
+                None,
+            ) {
+                Ok(_) => panic!("wrong action must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER));
+
+            let err = match Instruction::zk_ace_authorized_transfer(
+                &instruction_type,
+                &source,
+                &destination,
+                "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "1",
+                identity.as_any(),
+                digest.as_any(),
+                "chain",
+                ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+                ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+                replay.as_any(),
+                policy.as_any(),
+                wrong_proof.as_any(),
+            ) {
+                Ok(_) => panic!("wrong proof backend must fail"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND));
         });
     }
 
@@ -6503,6 +7580,97 @@ impl Instruction {
     }
 
     #[classmethod]
+    #[pyo3(signature = (asset_definition_id, identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
+    fn register_zk_ace_identity_commitment<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        identity_commitment: &Bound<'py, PyAny>,
+        policy_hash: &Bound<'py, PyAny>,
+        allowed_accounts: &Bound<'py, PyAny>,
+        verifier_key: Option<&Bound<'py, PyAny>>,
+        action_class: Option<&str>,
+        domain_tag: Option<&str>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let instruction = RegisterZkAceIdentityCommitment::new(
+            asset,
+            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
+            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
+            py_account_id_list(allowed_accounts, "allowed_accounts")?,
+            parse_zk_ace_action(action_class, "action_class")?,
+            parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
+            parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, old_identity_commitment, new_identity_commitment, policy_hash, allowed_accounts, verifier_key=None, *, action_class=None, domain_tag=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn rotate_zk_ace_identity_commitment<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        old_identity_commitment: &Bound<'py, PyAny>,
+        new_identity_commitment: &Bound<'py, PyAny>,
+        policy_hash: &Bound<'py, PyAny>,
+        allowed_accounts: &Bound<'py, PyAny>,
+        verifier_key: Option<&Bound<'py, PyAny>>,
+        action_class: Option<&str>,
+        domain_tag: Option<&str>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let old_identity_commitment =
+            py_non_zero_fixed_array::<32>(old_identity_commitment, "old_identity_commitment")?;
+        let new_identity_commitment =
+            py_non_zero_fixed_array::<32>(new_identity_commitment, "new_identity_commitment")?;
+        if old_identity_commitment == new_identity_commitment {
+            return Err(PyValueError::new_err(
+                "new_identity_commitment must differ from old_identity_commitment",
+            ));
+        }
+        let instruction = RotateZkAceIdentityCommitment::new(
+            asset,
+            old_identity_commitment,
+            new_identity_commitment,
+            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
+            py_account_id_list(allowed_accounts, "allowed_accounts")?,
+            parse_zk_ace_action(action_class, "action_class")?,
+            parse_zk_ace_domain_tag(domain_tag, "domain_tag")?,
+            parse_optional_zk_ace_verifying_key_id_py(verifier_key, "verifier_key")?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (asset_definition_id, identity_commitment, *, reason_hash=None))]
+    fn revoke_zk_ace_identity_commitment<'py>(
+        _cls: &Bound<'py, PyType>,
+        asset_definition_id: &str,
+        identity_commitment: &Bound<'py, PyAny>,
+        reason_hash: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let instruction = RevokeZkAceIdentityCommitment::new(
+            asset,
+            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
+            parse_optional_fixed_array_py::<32>(reason_hash, "reason_hash")?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
     #[pyo3(signature = (asset_definition_id, from_account_id, amount, note_commitment, ephemeral_public_key, nonce, ciphertext))]
     #[allow(clippy::too_many_arguments)]
     fn shield_asset<'py>(
@@ -6609,6 +7777,59 @@ impl Instruction {
         let root_hint = parse_optional_root_hint(root_hint, "root_hint")?;
         let instruction =
             Unshield::new_with_outputs(asset, to, public_amount, inputs, outputs, proof, root_hint);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (from_account_id, to_account_id, asset_definition_id, amount, identity_commitment, tx_digest, chain_id, domain_tag, action_class, replay_nullifier, policy_hash, proof))]
+    #[allow(clippy::too_many_arguments)]
+    fn zk_ace_authorized_transfer<'py>(
+        _cls: &Bound<'py, PyType>,
+        from_account_id: &str,
+        to_account_id: &str,
+        asset_definition_id: &str,
+        amount: &str,
+        identity_commitment: &Bound<'py, PyAny>,
+        tx_digest: &Bound<'py, PyAny>,
+        chain_id: &str,
+        domain_tag: &str,
+        action_class: &str,
+        replay_nullifier: &Bound<'py, PyAny>,
+        policy_hash: &Bound<'py, PyAny>,
+        proof: &Bound<'py, PyAny>,
+    ) -> PyResult<Self> {
+        let from = parse_account_id(from_account_id)?;
+        ensure_ed25519_account(&from)?;
+        let to = parse_account_id(to_account_id)?;
+        ensure_ed25519_account(&to)?;
+        let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let amount = parse_u128_text(amount, "amount")?;
+        if amount == 0 {
+            return Err(PyValueError::new_err("amount must be positive"));
+        }
+        let chain_id: ChainId = chain_id.parse().map_err(|err| {
+            PyValueError::new_err(format!("invalid chain_id `{chain_id}`: {err}"))
+        })?;
+        let proof =
+            ensure_zk_ace_proof_attachment(parse_zk_proof_attachment(proof, "proof")?, "proof")?;
+        let instruction = SubmitZkAceAuthorizedTransfer::new(
+            from,
+            to,
+            asset,
+            amount,
+            py_non_zero_fixed_array::<32>(identity_commitment, "identity_commitment")?,
+            py_non_zero_fixed_array::<32>(tx_digest, "tx_digest")?,
+            chain_id,
+            parse_zk_ace_domain_tag(Some(domain_tag), "domain_tag")?,
+            parse_zk_ace_action(Some(action_class), "action_class")?,
+            py_non_zero_fixed_array::<32>(replay_nullifier, "replay_nullifier")?,
+            py_non_zero_fixed_array::<32>(policy_hash, "policy_hash")?,
+            proof,
+        );
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -8557,6 +9778,31 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         decode_transaction_receipt_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        zk_ace_build_transfer_authorization_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_prove_verified_compact_payment_token_with_records_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_append_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_verify_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_redeem_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(cuda_available_py, module)?)?;

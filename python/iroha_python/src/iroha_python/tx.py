@@ -6,7 +6,7 @@ import json
 import time
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from .crypto import (
     Ed25519KeyPair,
@@ -315,6 +315,78 @@ class TransactionDraft:
         )
         return self
 
+    def register_zk_ace_identity_commitment(
+        self,
+        asset_definition_id: str,
+        *,
+        identity_commitment: FixedBytesLike,
+        policy_hash: FixedBytesLike,
+        allowed_accounts: Sequence[str],
+        verifier_key: VerifyingKeyLike,
+        action_class: Optional[str] = None,
+        domain_tag: Optional[str] = None,
+    ) -> TransactionDraft:
+        """Append a `RegisterZkAceIdentityCommitment` instruction."""
+
+        self.add_instruction(
+            Instruction.register_zk_ace_identity_commitment(
+                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
+                identity_commitment,
+                policy_hash,
+                allowed_accounts,
+                verifier_key=verifier_key,
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+        )
+        return self
+
+    def rotate_zk_ace_identity_commitment(
+        self,
+        asset_definition_id: str,
+        *,
+        old_identity_commitment: FixedBytesLike,
+        new_identity_commitment: FixedBytesLike,
+        policy_hash: FixedBytesLike,
+        allowed_accounts: Sequence[str],
+        verifier_key: VerifyingKeyLike,
+        action_class: Optional[str] = None,
+        domain_tag: Optional[str] = None,
+    ) -> TransactionDraft:
+        """Append a `RotateZkAceIdentityCommitment` instruction."""
+
+        self.add_instruction(
+            Instruction.rotate_zk_ace_identity_commitment(
+                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
+                old_identity_commitment,
+                new_identity_commitment,
+                policy_hash,
+                allowed_accounts,
+                verifier_key=verifier_key,
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+        )
+        return self
+
+    def revoke_zk_ace_identity_commitment(
+        self,
+        asset_definition_id: str,
+        *,
+        identity_commitment: FixedBytesLike,
+        reason_hash: Optional[FixedBytesLike] = None,
+    ) -> TransactionDraft:
+        """Append a `RevokeZkAceIdentityCommitment` instruction."""
+
+        self.add_instruction(
+            Instruction.revoke_zk_ace_identity_commitment(
+                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
+                identity_commitment,
+                reason_hash=reason_hash,
+            )
+        )
+        return self
+
     def shield_asset(
         self,
         asset_definition_id: str,
@@ -404,6 +476,44 @@ class TransactionDraft:
                 dict(proof),
                 outputs=list(outputs or []),
                 root_hint=root_hint,
+            )
+        )
+        return self
+
+    def zk_ace_authorized_transfer(
+        self,
+        *,
+        from_account_id: str,
+        to_account_id: str,
+        asset_definition_id: str,
+        amount: NumericLike,
+        identity_commitment: FixedBytesLike,
+        tx_digest: FixedBytesLike,
+        chain_id: str,
+        domain_tag: str,
+        action_class: str,
+        replay_nullifier: FixedBytesLike,
+        policy_hash: FixedBytesLike,
+        proof: Mapping[str, Any],
+    ) -> TransactionDraft:
+        """Append a prepared `SubmitZkAceAuthorizedTransfer` instruction."""
+
+        if not isinstance(proof, Mapping):
+            raise TypeError("proof must be a mapping")
+        self.add_instruction(
+            Instruction.zk_ace_authorized_transfer(
+                _require_non_empty_string(from_account_id, "from_account_id"),
+                _require_non_empty_string(to_account_id, "to_account_id"),
+                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
+                _normalize_u128_quantity(amount, "amount"),
+                identity_commitment,
+                tx_digest,
+                _require_non_empty_string(chain_id, "chain_id"),
+                _require_non_empty_string(domain_tag, "domain_tag"),
+                _require_non_empty_string(action_class, "action_class"),
+                replay_nullifier,
+                policy_hash,
+                dict(proof),
             )
         )
         return self

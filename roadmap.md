@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -15,7 +15,19 @@ and completed history lives in [`status.md`](./status.md).
   release with clear release notes, SDK parity, and operator documentation.
 - Keep focused validation green for the core transaction pipeline, Torii query
   and control-plane APIs, Norito wire formats, and SDK fixtures before broader
-  workspace test runs.
+  workspace test runs. Torii app-query pages now expose concrete OpenAPI page
+  schemas and SDK parsers for bounded `has_more`/`count_mode` metadata across
+  the account, domain, asset, NFT, RWA, asset-holder, and repo-agreement
+  list/query surfaces, and `torii_hot_paths` now includes sustained concurrent
+  HTTP handler-path profiles for signed stored-cursor continuations, account
+  alias projections, account-asset predicates, asset holders, committed-history
+  contract activity, and generic aggregates, plus localhost socket profiles for
+  the same workload set.
+- Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
+  and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
+  `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
+  the engineering backlog for broader XMLDSig/XAdES trust-anchor and
+  canonicalization fixture coverage, plus official MDR/XSD fixtures.
 - Keep extending the Sumeragi formal corridor with independent TLC
   cross-checks; the current local TLC slice covers frontier recovery,
   validation redrive labels, raw QC signer-bitmap population counting, and
@@ -282,12 +294,18 @@ and completed history lives in [`status.md`](./status.md).
   claims, exact-claim mutations under an issued topup certificate, hidden output
   commitments, cross-asset audits, and public amount mismatches; audit output
   certificates are signature-checked against their declared output account
-  before lineage is issued. Audit output certificate replay keys are checked
-  against existing topup/audit lineage before recursive proof verification, so a
-  one-use certificate anchored by the online-to-offline topup cannot be recycled
-  as a new bearer output. Note commitments are also replay-checked across both
-  topup issue and audit-output domains, so commitments cannot move between
-  online-to-offline loading and P2P bearer outputs.
+  before lineage is issued. Audit inputs now require both the exact issued-claim
+  replay key and an issued note-commitment replay key from the online-to-offline
+  topup or a prior audited output before proof verification. `RedeemOfflineNote`
+  applies the same source-commitment anchor before final
+  redemption, so claim-only metadata cannot redeem a note whose commitment was
+  never issued by topup or prior audit lineage. Audit output
+  certificate replay keys are checked against existing topup/audit lineage before
+  recursive proof verification, so a one-use certificate anchored by the
+  online-to-offline topup cannot be recycled as a new bearer output. Note
+  commitments are also replay-checked across both topup issue and audit-output
+  domains, so commitments cannot move between online-to-offline loading and P2P
+  bearer outputs.
   Recursive proof envelopes now require exact active verifier-key commitment
   binding, inline verifier-key length consistency, the literal canonical
   `offline-note-recursive` circuit id with alias spellings rejected, canonical
@@ -386,8 +404,10 @@ and completed history lives in [`status.md`](./status.md).
   missing or empty instance columns, empty verifier-key bytes, and empty
   folded-hop verifier-key id names before they can become wildcard transcript
   material. The shared STARK/FRI
-  classifier also rejects the profile-less `stark/fri/` prefix,
-  trusted-setup STARK/FRI profiles such as KZG, BN254, and BLS12, and any
+  classifier also rejects the profile-less `stark/fri/` prefix, whitespace-only
+  STARK/FRI profile suffixes, padded or embedded-whitespace profile labels,
+  punctuation-bearing or nested suffixes, non-ASCII suffixes, trusted-setup
+  STARK/FRI profiles such as KZG, BN254, and BLS12, and any
   STARK/FRI profile containing developer-only `debug` or mock labels before
   verifier admission reaches proof decoding, and Torii proof/prover paths
   mirror that rule while fatal prover-worker attachment classification errors
@@ -396,12 +416,19 @@ and completed history lives in [`status.md`](./status.md).
   ASCII-case-insensitive matching, so registry admission, preverify, guardrails,
   and Torii's broad prover allowlists all fail closed on mixed-case forms such
   as `halo2/ipa:KZG` or `halo2/ipa:Mock-Proof`. It also tokenizes setup markers
-  across `/`, `:`, and ASCII whitespace, so padded setup labels such as
-  `halo2/ipa: KZG` fail closed at the same boundaries. Gas metering and generic
-  proof envelope metadata helpers now apply the same gate before decoding
-  pre-validation Halo2 metadata. Kotlin/JVM and Java Android Offline Note
-  recursive proof models now trim verifier/proof backend metadata and reject
-  malformed verifier-key separators before SDK proof-binding validation.
+  across every non-alphanumeric delimiter, so padded and punctuation-spliced
+  setup labels such as `halo2/ipa: KZG`, `stark/fri/prod;kzg`,
+  `stark/fri/prod+bn254`, and `stark/fri/prod-bls12-381` fail closed at the
+  same boundaries. The classifier also normalizes delimiter-inserted setup
+  spellings such as `stark/fri/prod-bn-254`,
+  `stark/fri/prod-groth-16`, and `stark/fri/prod-k-z-g` before broad
+  STARK/FRI profile admission. Developer-only markers are normalized the same
+  way, so delimiter-inserted `d-e-b-u-g` and `m-o-c-k` spellings cannot pass
+  production allowlists. Gas metering and generic proof envelope metadata helpers now
+  apply the same gate before decoding pre-validation Halo2 metadata. Kotlin/JVM
+  and Java Android Offline Note recursive proof models now trim verifier/proof
+  backend metadata and reject malformed verifier-key separators before SDK
+  proof-binding validation.
   Compact folded-token verification now also has
   explicit final-proof coverage rejecting trusted-setup and developer-only
   backend labels in both direct and record-backed verifier paths. Direct
@@ -560,10 +587,12 @@ and completed history lives in [`status.md`](./status.md).
   `pallas-ipa-transparent-v1/vesta-recursive-fixed-window-85x3` verifier-witness
   profile plus the declared verifier opening length to the same ordered hop
   transcript while keeping mode `2` rejected for compact-token admission, with
-  Norito roundtrip, decoded-profile/opening-length/schedule/base, and
-  truncated-archive negative coverage plus unsupported or non-power-of-two
-  opening length, zero table commitments, empty-transcript, over-cap,
-  duplicate-nullifier, and duplicate-commitment rejection. Core record-backed
+  a Poseidon2 aggregation transcript digest that accepts checked mode `1` and
+  reserved mode `2` but rejects unknown modes, plus Norito roundtrip,
+  decoded-profile/opening-length/schedule/base, and truncated-archive negative
+  coverage plus unsupported or non-power-of-two opening length, zero table
+  commitments, empty-transcript, over-cap, duplicate-nullifier, and
+  duplicate-commitment rejection. Core record-backed
   evidence builders now enforce active WSV-style confidential-transfer-v2
   verifier records, verify every private hop proof, reject mismatched witness
   counts, unsupported opening lengths, all-zero native batch metadata, or
@@ -627,13 +656,18 @@ and completed history lives in [`status.md`](./status.md).
   hop proof decoding. Native batch preflight also exposes that manifest digest,
   and hop-bound batch preflight binds it with the schedule digest and ordered
   checked-hop proof hashes. The data model now also has a proof-carrying
-  recursive aggregation public-input bundle whose 35 public instance columns
+  recursive aggregation public-input bundle whose 43 public instance columns
   bind transparent no-trusted-setup proof metadata to the recursive evidence
   digest, aggregation transcript digest, verifier-parameter fingerprint,
   fixed-window schedule digest, shared-table manifest digest, table-base digest,
-  native witness-batch digest, opening length, witness count, and hop count
-  while rejecting backend, circuit-id, public-input-hash, and evidence-field
-  substitution. Core now also pins the schedule and shared-table manifest
+  native witness-batch digest, recursive spend proof-chain digest, reserved
+  recursive verifier scalar-projection digest, opening length, witness count,
+  and hop count while rejecting backend, circuit-id, public-input-hash, empty
+  proof payloads, and evidence-field substitution. The proof-bundle guard is
+  pinned to the
+  canonical transparent Halo2 IPA/Pasta recursive aggregation circuit; supported
+  STARK/FRI labels remain hop-transcript material only and cannot stand in for
+  this in-tree recursive proof. Core now also pins the schedule and shared-table manifest
   digests to the declared opening width during recursive proof generation,
   preverification, and the transparent semantic circuit, so a self-consistent
   forged envelope cannot swap those verifier-layout commitments. Recursive
@@ -643,7 +677,7 @@ and completed history lives in [`status.md`](./status.md).
   circuit-id TLVs, and backend verification rejects structurally matching raw
   verifier-key payloads whose `CID1` names another circuit family. Core now
   prevalidates that bundle against active Kagemusha verifier records by checking
-  the transparent Halo2 IPA envelope, canonical circuit id, verifier-key hash,
+  the non-empty transparent Halo2 IPA envelope, canonical circuit id, verifier-key hash,
   public-input schema,
   empty auxiliary bytes, Pasta instance columns, proof-size cap, inline key
   length, and verifier-key commitment, and it exposes a canonical verifier-record
@@ -651,10 +685,32 @@ and completed history lives in [`status.md`](./status.md).
   The detached-evidence prover and raw metadata evidence builder are
   crate-private implementation helpers, leaving the public proof-bundle API on
   the record-backed native Pallas preflight/open-envelope paths. The
-  ZK1 public-instance parser remains bounded but now admits this 35-column
+  ZK1 public-instance parser remains bounded but now admits this 43-column
   recursive aggregation envelope through core and the native bridge. This
   remains a reserved evidence surface until the recursive verifier proof
-  itself is complete. The first shared-table
+  itself is complete. Recursive spendable offline cash now uses a separate
+  production accumulator and Norito bundle, `KagemushaRecursiveSpendBundleV1`.
+  It carries the public accumulator state, current spendable note descriptor,
+  chain/asset/final-root/final-commitment binding, verifier references, hop
+  count, and one recursive proof instead of prior hop bundles. Recursive spend
+  redemption now binds a compact
+  chain-visible top-up anchor set into the accumulator: the first-hop input
+  nullifiers from the online-to-offline top-up lineage are sorted, included in
+  the accumulator digest and recursive proof public inputs, and consumed
+  alongside the final spendable note nullifier at redemption. This prevents two
+  hidden recursive branches from redeeming from the same top-up anchor while
+  preserving hop-count-independent payload size. Append hops are restricted to
+  consuming the previous spendable note nullifier only, so they cannot merge
+  fresh external inputs whose nullifiers are not part of the original top-up
+  anchor set or create a current note that reuses the consumed append nullifier.
+  Accumulator context validation also rejects forged top-up-anchor/current-note
+  commitment collisions and current note spend nullifiers that collide with any
+  output commitment in the hop that created the note.
+  Recursive spend nullifier, output, and fold-transcript streams now use
+  accumulator-only domain tags instead of the checked folded-token
+  list/transcript digest tags; the C bridge and Python native redeem helpers
+  also reject zero or mismatched public amounts before instruction emission. The
+  first shared-table
   circuit primitive is now in
   place as well: fixed-window selection can reference an already-derived Vesta
   table directly instead of assigning a duplicate private selection-table copy,
@@ -682,19 +738,53 @@ and completed history lives in [`status.md`](./status.md).
   with the shared-table `LEN = 2` IPA verifier, including transcript-binding
   accumulator checks, and links the public opening length, witness count, and
   hop count to the single-hop profile. Its active coverage checks builder
-  acceptance, profile and metadata-witness mismatch rejection, native Pallas
+  acceptance, profile and metadata-witness mismatch rejection, stale semantic
+  non-zero inverse rejection, zero public digest-group rejection, native Pallas
   preflight metadata binding, preflight digest/fingerprint substitution
-  rejection, rejection when a valid Pallas preflight is paired with an invalid
-  verifier witness, and rejection when a production Pallas preflight is paired
-  with a non-production fixed-window profile. The composed circuit now also
-  exposes a public verifier transcript-binding digest instance and links it to
-  the embedded verifier's transcript-binding accumulator. It also exposes a
+  rejection, zeroed preflight digest rejection, rejection when a valid Pallas
+  preflight is paired with an invalid verifier witness, and rejection when a
+  production Pallas preflight is paired with a non-production fixed-window
+  profile. The shared-table host-link guard also enforces the expected IPA round
+  count and per-round `b`-reduction and generator-fold layer widths, so a
+  composed recursive verifier witness cannot omit an initial `b` layer or
+  generator-fold layer and rely only on the final MSM relation. The native and
+  shared-table verifier `synthesize` paths now repeat those witness/config
+  shape checks before assignment, so malformed direct circuit witnesses fail
+  closed instead of silently skipping omitted `b`-reduction or generator-fold
+  regions. The composed circuit now also exposes a public verifier
+  transcript-binding digest instance and links it to the embedded verifier's
+  transcript-binding accumulator. It also exposes a
   public scalar-projection digest over that digest, the public `b`-reduction
   input scalars, challenge, inverse, and final folded `b` scalar, and
   constrains that projection with the same field-friendly Pow5 compressor.
-  Digest-splice, scalar-projection-digest splice, production fixed-window
-  Pallas verifier materialization, and composed MockProver
-  acceptance/public-count-splice tests remain ignored heavyweight coverage.
+  One-hop constructors now recompute the scalar projection from the host
+  verifier witness and reject semantic public-input limb splices before circuit
+  assignment.
+  The shared-table verifier host-link guard also mirrors the final IPA MSM
+  product relation, rejecting `a_final * b_final` product splices before a
+  composed one-hop recursive verifier witness can be accepted.
+  The production one-hop host API can now re-derive the Pallas preflight from
+  the supplied witness and require an exact digest/fingerprint match before
+  materializing the recursive Vesta verifier, so metadata from one valid
+  witness cannot be paired with another self-consistent verifier witness. It
+  can also re-derive the reserved hop-proof-hash-bound preflight from the
+  supplied witness plus the expected hop proof hash, so one-hop mode-2 evidence
+  cannot accidentally validate against the detached native batch digest. The
+  hop-bound path now has a dedicated constructor separate from the detached
+  native-batch constructor, so reserved evidence callers cannot materialize a
+  one-hop verifier slice through the wrong preflight shape. The hop-bound guard
+  now derives the native preflight through the verifier slice's declared opening
+  length before binding the hop proof hash, so a LEN=4 witness cannot validate
+  through a LEN=2 one-hop slice. The constructor also revalidates recursive
+  semantic non-zero inverse witnesses and rejects all-zero preflight
+  fingerprint, table-schedule, shared-table-manifest, table-base, or
+  verifier-batch digests before accepting a composed witness.
+  Digest-splice, scalar-projection side-instance splice, scalar-projection
+  semantic public-input splice, and direct verifier synthesis-shape MockProver
+  cases for omitted `b`-reduction and
+  generator-fold layers, production fixed-window Pallas verifier
+  materialization, and composed MockProver acceptance/public-count-splice tests
+  remain ignored heavyweight coverage.
   This is still not mode-2 admission because the private-hop verifier batch and
   complete Poseidon2 witness-batch digest relation are not yet proved inside the
   compact-token circuit.
@@ -704,7 +794,9 @@ and completed history lives in [`status.md`](./status.md).
   consistency, and the public Kagemusha Pallas batch-preflight path now
   dispatches through the shared-table verifier entry point while exposing the
   same ordered schedule, shared-table manifest, table-base, and aggregate digest
-  metadata used by reserved recursive aggregation evidence. Production-width
+  metadata used by reserved recursive aggregation evidence. Recursive preflight
+  Poseidon2 transcripts now field-label length encodings, closing same-length
+  cross-field replay before mode-2 evidence becomes admissible. Production-width
   coverage now binds the shared-table verifier shape to the `n = 128` manifest
   without materializing every recursive witness object in routine tests.
   Alias
@@ -727,11 +819,36 @@ and completed history lives in [`status.md`](./status.md).
   symbol and Rust compact-token proving entry points remain present for ABI
   compatibility but reject even valid `KagemushaVerifiedFoldBundle` input
   without returning a token.
-  Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
+  Bridge ABI 6 adds recursive spend `init`, `append`, `verify`, and `redeem`
+  entry points over raw Norito archives, and the C header plus Swift,
+  Kotlin/JVM, Java Android/JNI, JavaScript/Node NAPI, Python/PyO3, and C#
+  surfaces mirror them with empty-input and malformed-archive rejection. The
+  SDK/native-output guard now also distinguishes missing native proof archives
+  from zero-length archives across Python, Swift, JavaScript/Node, Kotlin/JVM,
+  and Java Android, keeping native prover boundaries fail-closed without
+  disabling recursive Kagemusha by default. The
+  shared redeem-request validator now also rejects final redeem proof
+  attachments that leave the current transparent `halo2/ipa` production
+  corridor, carry inconsistent attachment/proof/verifier-key backends, have
+  empty proof bytes, omit or publish a zero verifier-key commitment, or carry a
+  mismatched envelope hash before native/bridge instruction construction. It
+  also rejects recursive spend bundle proofs that are not `halo2/ipa` or carry
+  empty proof bytes, keeping native/bridge redeem construction inside the same
+  production corridor as ledger-side verifier-record admission. The
+  SDK surfaces also expose a common preferred offline spend-mode selector:
+  `recursive_spend_v1` when the ABI-6 recursive spend surface is available and
+  `checked_prefold_v1` as the compatibility fallback. The
+  recursive D2D payload benchmark records 1,454-byte fixture archives for hop
+  counts 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 with a fixed 256-byte proof
+  payload and asserts that archive length remains hop-count-independent. The
+  recursive spend accumulator now validates that its aggregation transcript
+  digest equals its lineage digest, keeping the recursive proof public input
+  attached to the spend-lineage accumulator rather than a detached digest.
+  Python, Swift, Kotlin/JVM, and Java Android now expose record-backed compact-token
   prover wrappers over that ABI, so mobile wallets can pass
   `KagemushaVerifiedFoldRecordBundle` Norito bytes through the native bridge
   instead of constructing preverified folded public inputs themselves. The same
-  SDK surfaces now expose the ABI-5 recursive aggregation proof-bundle prover,
+  SDK surfaces now expose the ABI-6 recursive aggregation proof-bundle prover,
   which accepts record-backed bundle bytes plus proof-derived Pallas
   open-envelope archive bytes and returns an admission-neutral
   `KagemushaRecursiveAggregationProofBundle` for future mode-2 work.
@@ -742,12 +859,35 @@ and completed history lives in [`status.md`](./status.md).
   redeem-planner bundles now carry the explicit unsupported
   `offline-note/draft-placeholder` backend until a real proof provider replaces
   them.
+  Offline note key certificates now fail closed when an exposed hardware
+  usage-count limit is anything other than exactly `1`, so a certificate cannot
+  claim one-use semantics while carrying a multi-use or zero-use platform
+  counter. The Torii offline issuer enforces that rule while minting the
+  online-to-offline topup certificate, and Swift, Kotlin/JVM, and Java Android
+  constructors mirror it before wallet-side serialization. Their Torii
+  issuer-response parsers also reject malformed, overflowed, or non-numeric
+  certificate versions and counter values before narrowing JSON into SDK
+  certificate models. Torii topup issuance also derives the wallet JSON
+  certificate and `IssueOfflineNote` chain certificate from the same signed
+  object, so the wallet's offline trust anchor is the exact certificate payload
+  recorded by the online-to-offline transaction. Legacy Offline audit metadata now mirrors the Kagemusha
+  nullifier/commitment separation rule by rejecting any byte-identical overlap
+  between consumed input nullifiers and new output commitments before recursive
+  proof decoding.
+  Chain-side Kagemusha transfer admission also rejects any byte-identical
+  overlap between consumed input nullifiers and newly created output commitments
+  before proof decoding, keeping ledger admission aligned with the proof
+  system's nullifier/commitment domain separation. The shared folded-public-input
+  and Poseidon aggregation-transcript validators mirror that rule for same-hop
+  and cross-hop overlap before compact-token or reserved recursive evidence is
+  built.
   Current release evidence covers physical iOS App Attest/HCE/CardSession
   availability and Android StrongBox/KeyMint one-use-key validation. The open
   physical gap is the end-to-end cross-platform NFC/HCE payment
   exchange with both devices unlocked and ready; recursive aggregation of the
-  private per-hop proofs into the compact no-trusted-setup Kagemusha proof
-  remains follow-up work for a later version. Native Pasta/Fp scalar
+  private per-hop proofs into the compact folded-token mode-2 proof remains
+  follow-up work for a later version, while spend-again-offline cash uses the
+  recursive spend bundle and ABI-6 append path now. Native Pasta/Fp scalar
   decomposition, fixed-window scalar decomposition, fixed-window Vesta point
   selection, table derivation, and scalar-multiplication composition, and
   fixed-window multi-term MSM plus bounded native-scalar MSM, fixed-window IPA
@@ -760,9 +900,8 @@ and completed history lives in [`status.md`](./status.md).
   present. Record-backed combined proof-bundle builders now derive evidence from
   active hop verifier records and Pallas witness/open-envelope material before
   proving it, but private-hop Pallas IPA witness verification inside the
-  recursive circuit and compact-token admission are still not complete, so
-  aggregation mode `2` stays a reserved, explicitly rejected wire value until
-  that verifier evidence exists.
+  compact-token recursive circuit and mode-2 compact-token admission remain
+  reserved, explicitly rejected wire values until that verifier evidence exists.
 - Continue dependency, documentation, and release hygiene work required by LF
   Decentralized Trust project expectations.
 
@@ -4199,8 +4338,10 @@ from wallet and service integrations.
 - Make `iroha contract dev` the default first-release contract workflow,
   including manifest-sourced builds, generated interfaces, schema docs,
   profile-aware doctor/smoke commands, and Kotodama test/debug loops.
-- Finish compiler-derived access descriptors for remaining opaque host helper
-  syscalls.
+- Static compiler-derived access descriptors now cover the formerly opaque
+  peer, subscription, VRF epoch seed, AXT, and Soracloud host helper syscalls;
+  dynamic, malformed, and test-mode-only helper payloads intentionally remain
+  fail-closed instead of reintroducing wildcard production manifests.
 - Preserve canonical Norito headers and wire layouts for blocks, transactions,
   SDK fixtures, and cross-library compatibility tests. The JavaScript pure
   Norito fallback now covers asset-definition registration frames, and
@@ -4220,12 +4361,56 @@ or ABI behavior.
   BFV-RNS implementation planned for release.
 - Broaden cross-SDK deterministic vectors for encrypted payloads, receipts, and
   opening verification.
+- Keep Soracloud FHE multi-input behavior covered at the source level while the
+  BFV-RNS implementation is still pending. The current Rust corridor covers
+  deterministic Add/Multiply folds, malformed late-operand rejection,
+  multi-input admission/output projection, output commitment order binding, and
+  shared Add/Multiply/RotateLeft/Bootstrap operation-output vectors with
+  pinned public-key and evaluation-key bundle metadata, per-entry
+  relinearization component digests, rotation/bootstrap refresh `c0`/`c1`
+  component digests, and adversarial refresh-material rejection for the public
+  rotation/bootstrap keys.
+- Keep BFV encrypted-input SDK vectors shared instead of local-only. The current
+  fixture set covers the baseline identifier envelope plus Soracloud three-input
+  Add and Multiply operand envelopes in JavaScript, Swift, Kotlin/JVM, and Java
+  Android test surfaces. Those SDK lanes now also validate the shared
+  operation fixture's component-level evaluation-key metadata so missing,
+  zeroed, duplicate, or count-drifted key-component vectors are caught outside
+  Rust, while the Rust executor consumes the same fixture for operation-output
+  digests and plaintext-slot checks.
+- Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
+  descriptor-only. The canonical parameter-set, execution-policy, governance
+  bundle, and job-spec fixtures now target the registered `bfv-default`
+  RAM-LFE BFV profile; core admission consumes the shared bundle and rejects
+  backend, polynomial-degree, slot-count, plaintext-width, ciphertext-chain, and
+  parameter digest drift. Execution policies now also pin the
+  domain-separated BFV evaluation-key bundle digest, and `RunSoracloudFheJob`
+  rejects structurally valid but ungoverned key bundles before output state is
+  emitted.
+- Keep signed and proof-attestation identifier receipt compatibility
+  fixture-backed instead of local-only. The current shared fixture pins
+  canonical payload bytes, Iroha prehash, resolver signature, signed/proof
+  attestation bytes, and adversarial receipt/policy mutations across
+  the Rust data model, Torii runtime claim-receipt signing path, JavaScript,
+  Swift, Kotlin/JVM, and Java Android.
+- Keep ZK-ACE authorization SDK surfaces aligned with executable chain
+  support. Python now exposes identity commitment lifecycle instructions,
+  authorized-transfer submission, and fail-closed capability metadata so BOI
+  Privacy Lab and other catalog consumers do not advertise ZK-ACE execution
+  when the native instruction surface is stale. JavaScript prepared-proof
+  builders now also enforce ZK-ACE public-input version `1` and reject
+  authorization proofs whose public inputs do not match the requested
+  transparent transfer fields before an instruction is emitted. Core
+  chain-admission tests now cover rotated and revoked identity commitments,
+  unsupported action classes, transaction digest/account substitution, and
+  mutated ZK-ACE/STARK public inputs.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
   corridor.
 
-**Next checkpoints:** complete BFV-RNS parameter/key fixtures, Soracloud
-multi-input evaluation coverage, and proof/receipt compatibility across Rust,
-Kotlin, Java, Swift, and JavaScript.
+**Next checkpoints:** extend the component-level BFV key-bundle vectors into
+full BFV-RNS modulus-chain, packed Galois-switching, and bootstrapping key
+vectors, and fold the focused ZK/FHE fixture corridor into broader release
+validation.
 
 ## Consensus, Performance, and Operations
 

@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "job_id": "job-add-001",
-  "policy_name": "fhe_policy_med",
-  "param_set": "fhe_bfv_med",
-  "param_set_version": 2,
+  "policy_name": "analytics",
+  "param_set": "bfv-default",
+  "param_set_version": 1,
   "operation": {
     "operation": "Add",
     "value": null

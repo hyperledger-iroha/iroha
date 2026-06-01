@@ -18,6 +18,8 @@ norito = { path = "../../../crates/norito" }
 ivm = { path = "../../../crates/ivm" }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest" }
 iroha_config = { path = "../../../crates/iroha_config" }
+iroha_core = { path = "../../../crates/iroha_core", features = ["zk-halo2-ipa"] }
+zk_ace_prover = { path = "../../../crates/zk_ace_prover" }
 sorafs_car = { path = "../../../crates/sorafs_car" }
 sorafs_chunker = { path = "../../../crates/sorafs_chunker" }
 sorafs_orchestrator = { path = "../../../crates/sorafs_orchestrator" }

@@ -2126,6 +2126,88 @@ final class OfflineNoteTests: XCTestCase {
         _ = try Self.object(issueBody, "lineage_state")
     }
 
+    func testToriiIssuerClientRejectsMalformedCertificateUsageLimits() async throws {
+        let fixture = try Self.loadFixture()
+        let certificate = fixture.paymentToken.senderKeyCertificate
+        let accountId = certificate.accountId
+        let assetDefinitionId = Self.assetDefinition(fromAssetId: fixture.chainVectors.issue.assetId)
+        let offlinePublicKey = String(repeating: "a5", count: 32)
+        let deviceBinding = try OfflineNoteIssuerDeviceBinding(
+            deviceId: "device-1",
+            offlinePublicKey: offlinePublicKey,
+            deviceBinding: [
+                "device_id": "device-1",
+                "attestation_key_id": "attestation-key-1",
+                "offline_public_key": offlinePublicKey,
+            ]
+        )
+
+        var malformedCertificates: [[String: Any]] = []
+        for invalidLimit in [
+            NSNumber(value: 0),
+            NSNumber(value: 2),
+            NSNumber(value: UInt64(4_294_967_297)),
+            "1",
+        ] as [Any] {
+            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["assertion_usage_count_limit"] = invalidLimit
+            malformedCertificates.append(certificateJSON)
+        }
+        for invalidVersion in [
+            NSNumber(value: 0),
+            NSNumber(value: 2),
+            NSNumber(value: UInt64(4_294_967_297)),
+            "1",
+        ] as [Any] {
+            var certificateJSON = Self.certificateJSON(certificate, expiresAtMs: 1_700_000_060_000)
+            certificateJSON["version"] = invalidVersion
+            malformedCertificates.append(certificateJSON)
+        }
+
+        for certificateJSON in malformedCertificates {
+            OfflineIssuerURLProtocol.reset()
+            OfflineIssuerURLProtocol.handler = { request in
+                let body = try Self.requestBody(request)
+                let response: [String: Any] = [
+                    "operation_id": try Self.string(body, "operation_id"),
+                    "lineage_state": Self.lineageState(revision: 0, balance: "0"),
+                    "key_certificate": certificateJSON,
+                    "key_certificates": [certificateJSON],
+                ]
+                return (200, try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]))
+            }
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.protocolClasses = [OfflineIssuerURLProtocol.self]
+            let session = URLSession(configuration: configuration)
+            let client = ToriiOfflineNoteIssuerClient(
+                baseURL: URL(string: "https://torii.example")!,
+                session: session,
+                canonicalAuth: ToriiCanonicalRequestAuth(
+                    accountId: accountId,
+                    privateKey: Data(0..<32)
+                ),
+                deviceBindingProvider: StaticIssuerDeviceBindingProvider(binding: deviceBinding),
+                clock: { 1_700_000_000_000 },
+                nonceGenerator: SequenceIdGenerator(ids: [
+                    "operation-refill-malformed",
+                    "auth-refill-malformed",
+                ])
+            )
+
+            do {
+                _ = try await client.prepareLoad(
+                    chainId: "chain-1",
+                    accountId: accountId,
+                    assetDefinitionId: assetDefinitionId,
+                    amount: "5"
+                )
+                XCTFail("malformed certificate metadata must reject")
+            } catch {
+                continue
+            }
+        }
+    }
+
     /// Regression: the canonical body sent to Torii must NOT escape `/` as
     /// `\/`. The server reconstructs the signing bytes via `norito::json::to_vec`
     /// which never escapes slashes; if Swift's `JSONSerialization` does, the
@@ -3716,12 +3798,43 @@ final class OfflineNoteTests: XCTestCase {
             assertionScheme: certificate.assertionScheme,
             assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
             assertionPublicKey: certificate.assertionPublicKey,
-            assertionUsageCountLimit: 7,
+            assertionUsageCountLimit: 1,
             oneUse: true
         )
         XCTAssertNil(noLimitPayload.assertionUsageCountLimit)
-        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 7)
+        XCTAssertEqual(limitedPayload.assertionUsageCountLimit, 1)
         XCTAssertNotEqual(try noLimitPayload.noritoEncoded(), try limitedPayload.noritoEncoded())
+        XCTAssertThrowsError(try OfflineNoteKeyCertificatePayload(
+            version: 1,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: 2,
+            oneUse: true
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .certificateMustBeOneUse)
+        }
+        XCTAssertThrowsError(try OfflineNoteKeyCertificate(
+            version: certificate.version,
+            platform: certificate.platform,
+            keyId: certificate.keyId,
+            deviceId: certificate.deviceId,
+            accountId: certificate.accountId,
+            publicKey: certificate.publicKey,
+            assertionScheme: certificate.assertionScheme,
+            assertionKeyAlgorithm: certificate.assertionKeyAlgorithm,
+            assertionPublicKey: certificate.assertionPublicKey,
+            assertionUsageCountLimit: 0,
+            oneUse: true,
+            issuerSignature: certificate.issuerSignature
+        )) { error in
+            XCTAssertEqual(error as? OfflineNoteError, .certificateMustBeOneUse)
+        }
 
         XCTAssertThrowsError(try OfflineNoteKeyCertificatePayload(
             version: 1,

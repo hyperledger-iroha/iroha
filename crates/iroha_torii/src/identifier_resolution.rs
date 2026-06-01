@@ -506,16 +506,23 @@ pub(crate) fn program_id_bytes(program_id: &RamLfeProgramId) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use iroha_crypto::{
-        BfvEvaluationKeyBundle, Hash, RamLfeBackend, RamLfeVerificationMode, SignatureOf,
+        Algorithm, BfvEvaluationKeyBundle, Hash, PolicyCommitment, RamLfeBackend,
+        RamLfeVerificationMode, Signature, SignatureOf,
         bfv_programmed_policy_commitment_with_program,
         bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
         derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
         ram_lfe_bfv_parameters_v1, ram_lfe_output_hash,
     };
+    use sha2::{Digest as _, Sha256};
+
     use iroha_data_model::ram_lfe::{
         RamLfeOutputOpening, RamLfeOutputOpeningPayload, RamLfeProgramId, RamLfeProgramPolicy,
+        RamLfeReceiptAttestation,
     };
+    use norito::codec::Encode as _;
 
     use super::*;
 
@@ -631,6 +638,316 @@ mod tests {
             signature: SignatureOf::new(signer.private_key(), &payload).into(),
             payload,
         }
+    }
+
+    fn shared_identifier_receipt_fixture() -> norito::json::Value {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/soracloud/identifier_receipt_vectors_v1.json");
+        let fixture = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture_path.display()));
+        norito::json::from_str(&fixture)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
+    }
+
+    fn fixture_get<'a>(value: &'a norito::json::Value, field: &str) -> &'a norito::json::Value {
+        value
+            .get(field)
+            .unwrap_or_else(|| panic!("fixture field `{field}` is missing"))
+    }
+
+    fn fixture_object<'a>(value: &'a norito::json::Value, field: &str) -> &'a norito::json::Value {
+        let item = fixture_get(value, field);
+        item.as_object()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be an object"));
+        item
+    }
+
+    fn fixture_array<'a>(value: &'a norito::json::Value, field: &str) -> &'a [norito::json::Value] {
+        fixture_get(value, field)
+            .as_array()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be an array"))
+    }
+
+    fn fixture_str<'a>(value: &'a norito::json::Value, field: &str) -> &'a str {
+        fixture_get(value, field)
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be a string"))
+    }
+
+    fn fixture_u64(value: &norito::json::Value, field: &str) -> u64 {
+        fixture_get(value, field)
+            .as_u64()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be an unsigned integer"))
+    }
+
+    fn fixture_optional_u64(value: &norito::json::Value, field: &str) -> Option<u64> {
+        fixture_get(value, field).as_u64()
+    }
+
+    fn receipt_from_fixture(receipt: &norito::json::Value) -> IdentifierResolutionReceipt {
+        IdentifierResolutionReceipt {
+            payload: payload_from_fixture(fixture_object(receipt, "payload")),
+            attestation: attestation_from_fixture(fixture_object(receipt, "attestation")),
+        }
+    }
+
+    fn payload_from_fixture(payload: &norito::json::Value) -> IdentifierResolutionReceiptPayload {
+        let opening = fixture_object(payload, "opening");
+        IdentifierResolutionReceiptPayload {
+            policy_id: IdentifierPolicyId::from_str(fixture_str(payload, "policy_id"))
+                .expect("valid policy id"),
+            execution: RamLfeExecutionReceiptPayload {
+                program_id: RamLfeProgramId::from_str(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "program_id",
+                ))
+                .expect("valid program id"),
+                program_digest: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "program_digest",
+                )),
+                backend: ram_lfe_backend(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "backend",
+                )),
+                verification_mode: verification_mode(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "verification_mode",
+                )),
+                input_ciphertext_hash: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "input_ciphertext_hash",
+                )),
+                output_ciphertext_hash: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "output_ciphertext_hash",
+                )),
+                parameter_digest: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "parameter_digest",
+                )),
+                evaluation_key_digest: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "evaluation_key_digest",
+                )),
+                output_hash: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "output_hash",
+                )),
+                associated_data_hash: hash_hex(fixture_str(
+                    fixture_object(payload, "execution"),
+                    "associated_data_hash",
+                )),
+                executed_at_ms: fixture_u64(fixture_object(payload, "execution"), "executed_at_ms"),
+                expires_at_ms: fixture_optional_u64(
+                    fixture_object(payload, "execution"),
+                    "expires_at_ms",
+                ),
+            },
+            opening: RamLfeOutputOpening {
+                payload: opening_payload_from_fixture(fixture_object(opening, "payload")),
+                signature: Signature::from_hex(fixture_str(opening, "signature"))
+                    .expect("valid opening signature hex"),
+            },
+            opaque_id: OpaqueAccountId::from_str(fixture_str(payload, "opaque_id"))
+                .expect("valid opaque id"),
+            receipt_hash: hash_hex(fixture_str(payload, "receipt_hash")),
+            uaid: UniversalAccountId::from_str(fixture_str(payload, "uaid")).expect("valid uaid"),
+            account_id: AccountId::parse_encoded(fixture_str(payload, "account_id"))
+                .expect("valid account id")
+                .into_account_id(),
+        }
+    }
+
+    fn opening_payload_from_fixture(payload: &norito::json::Value) -> RamLfeOutputOpeningPayload {
+        RamLfeOutputOpeningPayload {
+            program_id: RamLfeProgramId::from_str(fixture_str(payload, "program_id"))
+                .expect("valid program id"),
+            input_ciphertext_hash: hash_hex(fixture_str(payload, "input_ciphertext_hash")),
+            output_ciphertext_hash: hash_hex(fixture_str(payload, "output_ciphertext_hash")),
+            parameter_digest: hash_hex(fixture_str(payload, "parameter_digest")),
+            evaluation_key_digest: hash_hex(fixture_str(payload, "evaluation_key_digest")),
+            opened_output_hash: hash_hex(fixture_str(payload, "opened_output_hash")),
+            opened_at_ms: fixture_u64(payload, "opened_at_ms"),
+            expires_at_ms: fixture_optional_u64(payload, "expires_at_ms"),
+        }
+    }
+
+    fn attestation_from_fixture(attestation: &norito::json::Value) -> RamLfeReceiptAttestation {
+        match fixture_str(attestation, "kind") {
+            "signed" => RamLfeReceiptAttestation::Signed(
+                Signature::from_hex(fixture_str(attestation, "signature"))
+                    .expect("valid receipt signature hex"),
+            ),
+            other => panic!("unsupported fixture attestation kind `{other}`"),
+        }
+    }
+
+    fn shared_fixture_program_policy(
+        payload: &IdentifierResolutionReceiptPayload,
+        signer: &KeyPair,
+    ) -> RamLfeProgramPolicy {
+        RamLfeProgramPolicy::new(
+            payload.execution.program_id.clone(),
+            payload.account_id.clone(),
+            payload.execution.backend,
+            payload.execution.verification_mode,
+            PolicyCommitment {
+                backend: payload.execution.backend,
+                policy_hash: Hash::new(b"shared-identifier-receipt-fixture-policy"),
+                public_parameters: Vec::new(),
+            },
+            signer.public_key().clone(),
+        )
+    }
+
+    fn ram_lfe_backend(raw: &str) -> RamLfeBackend {
+        match raw {
+            "hkdf-sha3-512-prf-v1" => RamLfeBackend::HkdfSha3_512PrfV1,
+            "bfv-affine-sha3-256-v1" => RamLfeBackend::BfvAffineSha3_256V1,
+            "bfv-programmed-sha3-256-v1" => RamLfeBackend::BfvProgrammedSha3_256V1,
+            other => panic!("unsupported RAM-LFE backend `{other}`"),
+        }
+    }
+
+    fn verification_mode(raw: &str) -> RamLfeVerificationMode {
+        match raw {
+            "signed" => RamLfeVerificationMode::Signed,
+            "proof" => RamLfeVerificationMode::Proof,
+            other => panic!("unsupported verification mode `{other}`"),
+        }
+    }
+
+    fn public_key_literal(raw: &str) -> PublicKey {
+        let literal = raw
+            .trim()
+            .strip_prefix("ed25519:")
+            .unwrap_or_else(|| raw.trim());
+        PublicKey::from_str(literal).expect("valid public key literal")
+    }
+
+    fn hash_hex(value: &str) -> Hash {
+        Hash::from_str(value).expect("valid hash")
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        hex::encode_upper(Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn torii_issue_claim_receipt_matches_shared_identifier_fixture() {
+        let fixture = shared_identifier_receipt_fixture();
+        assert_eq!(
+            fixture_str(&fixture, "vector_set"),
+            "identifier-receipt-attestation-v1"
+        );
+        let fixture_receipt = receipt_from_fixture(fixture_object(&fixture, "receipt"));
+        let fixture_payload = &fixture_receipt.payload;
+        let policy = IdentifierPolicy::new(
+            fixture_payload.policy_id.clone(),
+            fixture_payload.account_id.clone(),
+            IdentifierNormalization::PhoneE164,
+            fixture_payload.execution.program_id.clone(),
+        );
+        let signing_seed = hex::decode(fixture_str(&fixture, "signing_seed_hex"))
+            .expect("fixture signing seed must be hex");
+        let signer = KeyPair::from_seed(signing_seed, Algorithm::Ed25519);
+        let mut program_policy = shared_fixture_program_policy(&fixture_payload, &signer);
+        let service = IdentifierResolutionService::new();
+        service.register_program_runtime(
+            program_policy.program_id.clone(),
+            b"shared-identifier-receipt-fixture".to_vec(),
+            default_bfv_programmed_hidden_program(),
+            signer.clone(),
+            None,
+        );
+        let draft = IdentifierResolutionDraft {
+            opaque_id: fixture_payload.opaque_id,
+            receipt_hash: fixture_payload.receipt_hash,
+            resolved_at_ms: fixture_payload.execution.executed_at_ms,
+            expires_at_ms: fixture_payload.execution.expires_at_ms,
+            backend: fixture_payload.execution.backend,
+            output_hash: fixture_payload.execution.output_hash,
+            input_ciphertext_hash: fixture_payload.execution.input_ciphertext_hash,
+            output_ciphertext_hash: fixture_payload.execution.output_ciphertext_hash,
+            program_digest: fixture_payload.execution.program_digest,
+            parameter_digest: fixture_payload.execution.parameter_digest,
+            evaluation_key_digest: fixture_payload.execution.evaluation_key_digest,
+            verification_mode: fixture_payload.execution.verification_mode,
+            opening: fixture_payload.opening.clone(),
+        };
+
+        let issued = service
+            .issue_claim_receipt(
+                &policy,
+                &program_policy,
+                &draft,
+                fixture_payload.uaid,
+                fixture_payload.account_id.clone(),
+            )
+            .expect("Torii must issue fixture receipt");
+        assert_eq!(fixture_payload, &issued.payload);
+        assert_eq!(
+            fixture_str(&fixture, "canonical_payload_sha256"),
+            sha256_hex(&issued.payload.encode())
+        );
+        let RamLfeReceiptAttestation::Signed(signature) = &issued.attestation else {
+            panic!("issued fixture receipt must be signed");
+        };
+        assert_eq!(
+            fixture_str(
+                fixture_object(fixture_object(&fixture, "receipt"), "attestation"),
+                "signature"
+            ),
+            hex::encode_upper(signature.payload()),
+        );
+        let signed_attestation_vector = fixture_array(&fixture, "attestation_vectors")
+            .iter()
+            .find(|vector| fixture_str(vector, "name") == "signed-resolver-attestation")
+            .expect("fixture signed attestation vector");
+        assert_eq!(
+            fixture_str(signed_attestation_vector, "expected_attestation_sha256"),
+            sha256_hex(&issued.attestation.encode()),
+        );
+        issued
+            .verify(&program_policy.resolver_public_key)
+            .expect("issued fixture signature must verify");
+
+        let mut wrong_resolver_policy = program_policy.clone();
+        wrong_resolver_policy.resolver_public_key = public_key_literal(fixture_str(
+            fixture_array(&fixture, "negative_cases")
+                .iter()
+                .find(|case| fixture_str(case, "name") == "wrong-resolver-key")
+                .expect("fixture wrong-resolver-key case"),
+            "value",
+        ));
+        let err = service
+            .issue_claim_receipt(
+                &policy,
+                &wrong_resolver_policy,
+                &draft,
+                fixture_payload.uaid,
+                fixture_payload.account_id.clone(),
+            )
+            .expect_err("mismatched fixture resolver key must reject at Torii signing");
+        assert!(matches!(err, IdentifierResolutionError::SignerMismatch));
+
+        let mut proof_draft = draft;
+        proof_draft.verification_mode = RamLfeVerificationMode::Proof;
+        program_policy.verification_mode = RamLfeVerificationMode::Proof;
+        let err = service
+            .issue_claim_receipt(
+                &policy,
+                &program_policy,
+                &proof_draft,
+                fixture_payload.uaid,
+                fixture_payload.account_id.clone(),
+            )
+            .expect_err("Torii cannot issue proof-mode receipts without prover support");
+        assert!(matches!(
+            err,
+            IdentifierResolutionError::ProofModeUnsupported
+        ));
     }
 
     #[test]

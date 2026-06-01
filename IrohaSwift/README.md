@@ -627,11 +627,20 @@ loads, and a direct `IrohaSDK` audit/redeem/defund submitter.
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the bridge verifies each private hop proof
 against its verifier record and returns a Norito-encoded
-`KagemushaCompactPaymentToken` when an ABI 5 `NoritoBridge` is available.
+`KagemushaCompactPaymentToken` when an ABI 6 `NoritoBridge` is available.
 `KagemushaRecursiveAggregationProofBundleProver` exposes the matching
 admission-neutral recursive proof-bundle path. Pass the same record-bundle
 archive plus a Norito-encoded Pallas open-envelope archive to receive a
 Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
+`KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
+surface. Pass raw Norito archives to initialize the first recursive spend
+bundle, append each offline hop, verify a received bundle, and build the online
+redeem archive without reimplementing the accumulator or proof internals in
+Swift. `KagemushaRecursiveSpendProver.preferredMode` selects
+`recursive_spend_v1` when ABI 6 recursive spend support is available and falls
+back to `checked_prefold_v1` for legacy checked pre-fold runtimes.
+All three native Kagemusha prover wrappers reject empty native result archives
+instead of treating them as successful proof material.
 
 `OfflineBearerCashWallet` is the app-facing Offline Bearer Cash surface. It is
 the Offline Note wallet under the cash naming layer, so value is represented by

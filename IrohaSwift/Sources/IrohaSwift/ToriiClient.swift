@@ -1143,6 +1143,39 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
         return payloadWriter.data
     }
 
+    static func encodeAttestation(_ attestation: ToriiIdentifierReceiptAttestation) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        switch attestation.kind {
+        case "signed":
+            guard let signature = attestation.signature else {
+                throw ToriiClientError.invalidPayload("signed attestation requires signature.")
+            }
+            writer.writeUInt32LE(0)
+            writer.writeField(
+                encodeConstVec(
+                    try decodeHex(signature, field: "attestation.signature")
+                )
+            )
+        case "proof":
+            guard let proofBackend = attestation.proofBackend,
+                  !proofBackend.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let proofB64 = attestation.proofB64,
+                  let proofBytes = Data(base64Encoded: proofB64) else {
+                throw ToriiClientError.invalidPayload(
+                    "proof attestation requires proof_backend and proof_b64."
+                )
+            }
+            var proofBox = OfflineCompactNoritoWriter()
+            proofBox.writeField(OfflineCompactNorito.encodeString(proofBackend))
+            proofBox.writeField(encodeRawByteVec(proofBytes))
+            writer.writeUInt32LE(1)
+            writer.writeField(proofBox.data)
+        default:
+            throw ToriiClientError.invalidPayload("attestation.kind must be signed or proof.")
+        }
+        return writer.data
+    }
+
     private static func parsePolicyId(_ raw: String) throws -> (String, String) {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(
@@ -1220,11 +1253,18 @@ enum ToriiIdentifierReceiptCanonicalEncoder {
 
     private static func encodeConstVec(_ bytes: Data) -> Data {
         var writer = OfflineCompactNoritoWriter()
-        writer.writeLength(UInt64(bytes.count))
+        writer.writeUInt64LE(UInt64(bytes.count))
         for byte in bytes {
             writer.writeLength(1)
             writer.writeUInt8(byte)
         }
+        return writer.data
+    }
+
+    private static func encodeRawByteVec(_ bytes: Data) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(UInt64(bytes.count))
+        writer.writeBytes(bytes)
         return writer.data
     }
 

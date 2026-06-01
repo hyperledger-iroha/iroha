@@ -9,12 +9,14 @@ import requests
 
 from iroha_python import (
     AccountAddress,
+    AccountAssetsPage,
     Ed25519KeyPair,
     Instruction,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
 )
+from iroha_python.repo import RepoAgreementListPage
 
 
 class FakeSession:
@@ -147,6 +149,175 @@ def test_get_asset_definition_returns_none_for_missing_definition() -> None:
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     assert client.get_asset_definition("ds#wonderland.is") is None
+
+
+def test_data_model_validation_uses_typed_node_capabilities() -> None:
+    session = FakeSession([response(200, {"abi_version": 1, "data_model_version": 1})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    client._ensure_data_model_validation()
+
+    assert client._data_model_validation == "matched"
+    assert session.calls == [
+        {
+            "method": "GET",
+            "path": "/v1/node/capabilities",
+            "params": None,
+            "data": None,
+        }
+    ]
+
+
+def test_query_accounts_typed_preserves_bounded_page_metadata() -> None:
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [{"id": "adult@is"}],
+                    "has_more": True,
+                    "count_mode": "bounded",
+                    "indexed_height": 7,
+                    "indexed_block_hash": "ab" * 32,
+                    "query_source": "live",
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.query_accounts_typed(limit=1, count_mode="bounded")
+
+    assert page.total is None
+    assert page.has_more is True
+    assert page.count_mode == "bounded"
+    assert page.indexed_height == 7
+    assert page.indexed_block_hash == "ab" * 32
+    assert page.query_source == "live"
+    assert json.loads(session.calls[0]["data"])["count_mode"] == "bounded"
+
+
+def test_query_accounts_rejects_invalid_count_mode_without_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match="count_mode"):
+        client.query_accounts(count_mode="full")
+    assert session.calls == []
+
+
+def test_account_assets_page_rejects_malformed_page_metadata() -> None:
+    with pytest.raises(TypeError, match="has_more"):
+        AccountAssetsPage.from_payload(
+            {
+                "items": [{"asset": "rose#wonderland", "quantity": "1"}],
+                "has_more": "false",
+                "count_mode": "bounded",
+            }
+        )
+
+
+def test_list_domains_typed_passes_count_mode_and_preserves_bounded_metadata() -> None:
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [{"id": "wonderland"}],
+                    "has_more": False,
+                    "count_mode": "bounded",
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.list_domains_typed(limit=1, count_mode="bounded")
+
+    assert page.total is None
+    assert page.has_more is False
+    assert page.count_mode == "bounded"
+    assert session.calls[0]["params"] == {"limit": 1, "count_mode": "bounded"}
+
+
+def test_query_rwas_typed_preserves_bounded_metadata_and_validates_count_mode() -> None:
+    session = FakeSession(
+        [
+            response(
+                200,
+                {
+                    "items": [{"id": "rwa$bond"}],
+                    "has_more": True,
+                    "count_mode": "bounded",
+                },
+            )
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.query_rwas_typed(limit=1, count_mode="bounded")
+
+    assert page.total is None
+    assert page.has_more is True
+    assert page.count_mode == "bounded"
+    assert json.loads(session.calls[0]["data"])["count_mode"] == "bounded"
+
+    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    with pytest.raises(ValueError, match="count_mode"):
+        rejecting.list_rwas(count_mode="full")
+
+
+def test_repo_agreement_page_preserves_bounded_metadata_and_rejects_bad_flags() -> None:
+    payload = {
+        "items": [
+            {
+                "id": "repo-1",
+                "initiator": "alice@is",
+                "counterparty": "bob@is",
+                "custodian": None,
+                "cash_leg": {"asset_definition_id": "cash#is", "quantity": "100"},
+                "collateral_leg": {"asset_definition_id": "bond#is", "quantity": "120"},
+                "rate_bps": 250,
+                "maturity_timestamp_ms": 2_000,
+                "initiated_timestamp_ms": 1_000,
+                "last_margin_check_timestamp_ms": 1_000,
+                "governance": {"haircut_bps": 500, "margin_frequency_secs": 3600},
+            }
+        ],
+        "has_more": True,
+        "count_mode": "bounded",
+        "indexed_height": 11,
+        "indexed_block_hash": "cd" * 32,
+        "query_source": "live",
+    }
+
+    page = RepoAgreementListPage.from_payload(payload)
+
+    assert page.total is None
+    assert page.has_more is True
+    assert page.count_mode == "bounded"
+    assert page.indexed_height == 11
+    assert page.indexed_block_hash == "cd" * 32
+    assert page.query_source == "live"
+
+    bad = dict(payload)
+    bad["has_more"] = "true"
+    with pytest.raises(TypeError, match="has_more"):
+        RepoAgreementListPage.from_payload(bad)
+
+
+def test_repo_agreement_client_normalizes_count_mode_before_request() -> None:
+    session = FakeSession([response(200, {"items": [], "has_more": False, "count_mode": "bounded"})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    page = client.list_repo_agreements(limit=1, count_mode="bounded")
+
+    assert page.count_mode == "bounded"
+    assert session.calls[0]["params"] == {"limit": 1, "count_mode": "bounded"}
+
+    rejecting = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    with pytest.raises(ValueError, match="count_mode"):
+        rejecting.query_repo_agreements({"count_mode": "full"})
 
 
 def test_solve_account_faucet_pow_accepts_zero_difficulty_puzzle() -> None:
@@ -810,6 +981,78 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             "duplicates",
             id="unshield-duplicate-output",
         ),
+        pytest.param(
+            lambda asset, source, destination, _proof: Instruction.zk_ace_authorized_transfer(
+                source,
+                destination,
+                asset,
+                "1",
+                "11" * 32,
+                "22" * 32,
+                "chain",
+                "iroha:zk-ace:pq-authorization:v0",
+                "transparent_asset_transfer",
+                "33" * 32,
+                "44" * 32,
+                {
+                    "backend": "halo2/ipa",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "halo2/ipa:vk_wrong",
+                },
+            ),
+            ValueError,
+            "stark/fri/sha256-goldilocks",
+            id="zk-ace-transfer-wrong-proof-backend",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "00" * 32,
+                "22" * 32,
+                [source],
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "identity_commitment",
+            id="zk-ace-register-zero-identity",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.rotate_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "11" * 32,
+                "22" * 32,
+                [source],
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "must differ",
+            id="zk-ace-rotate-same-identity",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "22" * 32,
+                [source],
+                "halo2/ipa:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "stark/fri/sha256-goldilocks",
+            id="zk-ace-register-wrong-verifier-backend",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "22" * 32,
+                [],
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "allowed_accounts.*non-empty",
+            id="zk-ace-register-empty-allowlist",
+        ),
     ],
 )
 def test_zk_instruction_helpers_reject_adversarial_inputs(
@@ -898,6 +1141,41 @@ def test_zk_instruction_helpers_reject_adversarial_inputs(
             "public_amount",
             id="unshield-negative-public-amount",
         ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.register_zk_ace_identity_commitment(
+                asset,
+                identity_commitment="00" * 32,
+                policy_hash="22" * 32,
+                allowed_accounts=[account],
+                verifier_key="stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "identity_commitment",
+            id="zk-ace-register-zero-identity",
+        ),
+        pytest.param(
+            lambda draft, asset, account, proof: draft.zk_ace_authorized_transfer(
+                from_account_id=account,
+                to_account_id=account_address(0x6C),
+                asset_definition_id=asset,
+                amount=1,
+                identity_commitment="11" * 32,
+                tx_digest="22" * 32,
+                chain_id="chain",
+                domain_tag="iroha:zk-ace:pq-authorization:v0",
+                action_class="wrong-action",
+                replay_nullifier="33" * 32,
+                policy_hash="44" * 32,
+                proof={
+                    "backend": "stark/fri/sha256-goldilocks",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+                },
+            ),
+            ValueError,
+            "transparent_asset_transfer",
+            id="zk-ace-transfer-wrong-action",
+        ),
     ],
 )
 def test_zk_transaction_draft_rejects_invalid_inputs(
@@ -928,6 +1206,12 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         "proof_bytes": b"proof-bytes",
         "verifying_key_ref": "halo2/ipa:vk_transfer",
     }
+    zk_ace_proof = {
+        "backend": "stark/fri/sha256-goldilocks",
+        "proof_bytes": b"zk-ace-proof",
+        "verifying_key_ref": "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    }
+    zk_ace_verifier = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured.append((draft, kwargs))
@@ -979,8 +1263,57 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         proof=proof,
         root_hint="ff" * 32,
     ) == {"hash": "zk-4"}
+    assert client.register_zk_ace_identity_commitment_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="55" * 32,
+        asset_definition_id=asset_definition_id,
+        identity_commitment="11" * 32,
+        policy_hash="22" * 32,
+        allowed_accounts=[source],
+        verifier_key=zk_ace_verifier,
+        wait=False,
+    ) == {"hash": "zk-5"}
+    assert client.rotate_zk_ace_identity_commitment_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="66" * 32,
+        asset_definition_id=asset_definition_id,
+        old_identity_commitment="11" * 32,
+        new_identity_commitment="12" * 32,
+        policy_hash="22" * 32,
+        allowed_accounts=[source],
+        verifier_key=zk_ace_verifier,
+        wait=False,
+    ) == {"hash": "zk-6"}
+    assert client.revoke_zk_ace_identity_commitment_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="77" * 32,
+        asset_definition_id=asset_definition_id,
+        identity_commitment="12" * 32,
+        reason_hash="55" * 32,
+        wait=False,
+    ) == {"hash": "zk-7"}
+    assert client.zk_ace_authorized_transfer_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="88" * 32,
+        from_account_id=source,
+        to_account_id=destination,
+        asset_definition_id=asset_definition_id,
+        amount="7",
+        identity_commitment="11" * 32,
+        tx_digest="22" * 32,
+        domain_tag="iroha:zk-ace:pq-authorization:v0",
+        action_class="transparent_asset_transfer",
+        replay_nullifier="33" * 32,
+        policy_hash="44" * 32,
+        proof=zk_ace_proof,
+        wait=False,
+    ) == {"hash": "zk-8"}
 
-    assert [len(draft) for draft, _kwargs in captured] == [1, 1, 1, 1]
+    assert [len(draft) for draft, _kwargs in captured] == [1, 1, 1, 1, 1, 1, 1, 1]
     assert captured[0][0].config.metadata == {"purpose": "zk-register"}
     assert captured[0][1]["wait"] is False
     assert captured[1][1]["private_key_hex"] == "22" * 32
@@ -1046,6 +1379,42 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
             ValueError,
             "backend",
             id="unshield-missing-proof-backend",
+        ),
+        pytest.param(
+            "register_zk_ace_identity_commitment_and_wait",
+            {
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "identity_commitment": "11" * 32,
+                "policy_hash": "22" * 32,
+                "allowed_accounts": [account_address(0x6D)],
+                "verifier_key": "halo2/ipa:zk_ace_pq_authorization_v0",
+            },
+            ValueError,
+            "stark/fri/sha256-goldilocks",
+            id="zk-ace-register-wrong-verifier-backend",
+        ),
+        pytest.param(
+            "zk_ace_authorized_transfer_and_wait",
+            {
+                "from_account_id": account_address(0x6D),
+                "to_account_id": account_address(0x6E),
+                "asset_definition_id": "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+                "amount": 1,
+                "identity_commitment": "11" * 32,
+                "tx_digest": "22" * 32,
+                "domain_tag": "iroha:zk-ace:pq-authorization:v0",
+                "action_class": "transparent_asset_transfer",
+                "replay_nullifier": "33" * 32,
+                "policy_hash": "44" * 32,
+                "proof": {
+                    "backend": "halo2/ipa",
+                    "proof_bytes": b"proof-bytes",
+                    "verifying_key_ref": "halo2/ipa:vk_wrong",
+                },
+            },
+            ValueError,
+            "stark/fri/sha256-goldilocks",
+            id="zk-ace-transfer-wrong-proof-backend",
         ),
     ],
 )

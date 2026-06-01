@@ -499,10 +499,7 @@ public final class OfflineNote {
       this.assertionPublicKey = copy(assertionPublicKey, "assertionPublicKey");
       this.assertionUsageCountLimit = assertionUsageCountLimit;
       this.oneUse = oneUse;
-      requireCertificateCore(version, accountId, this.publicKey, oneUse);
-      if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
-        throw new IllegalArgumentException("assertion usage count limit must be non-negative");
-      }
+      requireCertificateCore(version, accountId, this.publicKey, assertionUsageCountLimit, oneUse);
     }
 
     public String domain() {
@@ -602,12 +599,9 @@ public final class OfflineNote {
       this.assertionUsageCountLimit = assertionUsageCountLimit;
       this.oneUse = oneUse;
       this.issuerSignature = copy(issuerSignature, "issuerSignature");
-      requireCertificateCore(version, accountId, this.publicKey, oneUse);
+      requireCertificateCore(version, accountId, this.publicKey, assertionUsageCountLimit, oneUse);
       if (this.issuerSignature.length != 64) {
         throw new IllegalArgumentException("issuer signature must be 64 bytes");
-      }
-      if (assertionUsageCountLimit != null && assertionUsageCountLimit < 0) {
-        throw new IllegalArgumentException("assertion usage count limit must be non-negative");
       }
     }
 
@@ -2836,12 +2830,17 @@ public final class OfflineNote {
   }
 
   private static void requireCertificateCore(
-      final int version, final String accountId, final byte[] publicKey, final boolean oneUse) {
+      final int version,
+      final String accountId,
+      final byte[] publicKey,
+      final Integer assertionUsageCountLimit,
+      final boolean oneUse) {
     if (version != KEY_CERTIFICATE_VERSION) {
       throw new IllegalArgumentException("Offline Note key certificate format is unsupported");
     }
-    if (!oneUse) {
-      throw new IllegalArgumentException("Offline Note key certificate must be one-use");
+    if (!oneUse || (assertionUsageCountLimit != null && assertionUsageCountLimit.intValue() != 1)) {
+      throw new IllegalArgumentException(
+          "Offline Note key certificate must be one-use with usage limit 1 when present");
     }
     if (publicKey.length != 32) {
       throw new IllegalArgumentException("Offline Note note public key must be 32 bytes");

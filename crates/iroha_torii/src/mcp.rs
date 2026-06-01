@@ -427,6 +427,12 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_rwas_query_tool());
     tools.push(iroha_iso20022_pacs008_submit_tool());
     tools.push(iroha_iso20022_pacs009_submit_tool());
+    tools.push(iroha_iso20022_pacs002_submit_tool());
+    tools.push(iroha_iso20022_pacs004_submit_tool());
+    tools.push(iroha_iso20022_camt056_submit_tool());
+    tools.push(iroha_iso20022_sese023_submit_tool());
+    tools.push(iroha_iso20022_sese024_submit_tool());
+    tools.push(iroha_iso20022_sese025_submit_tool());
     tools.push(iroha_iso20022_status_get_tool());
     tools.push(iroha_queries_submit_tool());
     tools.push(iroha_transactions_list_tool());
@@ -1887,6 +1893,84 @@ async fn handle_tools_call(
         }
         "iroha.iso20022.pacs009.submit" => {
             match dispatch_iroha_iso20022_pacs009_submit(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.pacs002.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/pacs002",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.pacs004.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/pacs004",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.camt056.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/camt056",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.sese023.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/sese023",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.sese024.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/sese024",
+            )
+            .await
+            {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.iso20022.sese025.submit" => {
+            match dispatch_iroha_iso20022_lifecycle_submit(
+                &app,
+                inbound_headers,
+                &arguments,
+                "/v1/iso20022/sese025",
+            )
+            .await
+            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -6888,6 +6972,30 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
         inbound_headers,
         Method::POST,
         "/v1/iso20022/pacs009",
+        headers.as_ref(),
+        body,
+        content_type,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_iso20022_lifecycle_submit(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+    route: &str,
+) -> Result<Value, String> {
+    let (body, content_type) = build_iso20022_payload_body(arguments)?;
+    let headers = iso20022_profile_headers_argument(arguments)?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        route,
         headers.as_ref(),
         body,
         content_type,
@@ -13580,6 +13688,112 @@ fn iroha_iso20022_pacs009_submit_tool() -> ToolSpec {
     }
 }
 
+fn iroha_iso20022_lifecycle_submit_tool(
+    name: &str,
+    message_type: &str,
+    path_template: &str,
+    description: &str,
+) -> ToolSpec {
+    let body_description = format!("Base64/base64url encoded {message_type} XML payload bytes.");
+    let xml_description =
+        format!("Raw {message_type} XML payload shortcut (encoded to bytes internally).");
+    ToolSpec {
+        name: name.to_owned(),
+        effect: manual_tool_effect_from_name(name),
+        description: description.to_owned(),
+        method: Method::POST,
+        path_template: path_template.to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body_base64": {
+                    "type": "string",
+                    "description": body_description
+                },
+                "message_xml": {
+                    "type": "string",
+                    "description": xml_description
+                },
+                "xml": {
+                    "type": "string",
+                    "description": "Alias for `message_xml`."
+                },
+                "body": {
+                    "description": "Optional raw request body payload."
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "Optional content type override (defaults to application/xml when `message_xml`/`xml` is used)."
+                },
+                "profile": {
+                    "type": "string",
+                    "description": "Optional ISO bridge rail profile; sent as `X-Iroha-Iso-Profile`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_iso20022_pacs002_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.pacs002.submit",
+        "pacs.002",
+        "/v1/iso20022/pacs002",
+        "Submit an ISO 20022 pacs.002 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
+fn iroha_iso20022_pacs004_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.pacs004.submit",
+        "pacs.004",
+        "/v1/iso20022/pacs004",
+        "Submit an ISO 20022 pacs.004 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
+fn iroha_iso20022_camt056_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.camt056.submit",
+        "camt.056",
+        "/v1/iso20022/camt056",
+        "Submit an ISO 20022 camt.056 lifecycle payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
+fn iroha_iso20022_sese023_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.sese023.submit",
+        "sese.023",
+        "/v1/iso20022/sese023",
+        "Submit an ISO 20022 sese.023 settlement instruction payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
+fn iroha_iso20022_sese024_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.sese024.submit",
+        "sese.024",
+        "/v1/iso20022/sese024",
+        "Submit an ISO 20022 sese.024 settlement status payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
+fn iroha_iso20022_sese025_submit_tool() -> ToolSpec {
+    iroha_iso20022_lifecycle_submit_tool(
+        "iroha.iso20022.sese025.submit",
+        "sese.025",
+        "/v1/iso20022/sese025",
+        "Submit an ISO 20022 sese.025 settlement confirmation payload (`message_xml`/`xml` shortcuts supported).",
+    )
+}
+
 fn iroha_iso20022_status_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.iso20022.status.get".to_owned(),
@@ -15473,6 +15687,36 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.iso20022.pacs009.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.pacs002.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.pacs004.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.camt056.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.sese023.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.sese024.submit")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.iso20022.sese025.submit")
         );
         assert!(
             tools

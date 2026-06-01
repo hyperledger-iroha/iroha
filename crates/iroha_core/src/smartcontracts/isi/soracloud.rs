@@ -4756,9 +4756,73 @@ fn binding_state_totals(
     (total_bytes, key_count)
 }
 
+const REGISTERED_SORACLOUD_BFV_BACKEND: &str = "fhe/bfv-rns/v1";
+
+fn u64_bit_width(value: u64) -> u16 {
+    u16::try_from(u64::BITS - value.leading_zeros()).expect("u64 bit width fits in u16")
+}
+
+fn validate_registered_soracloud_bfv_descriptor(
+    param_set: &FheParamSetV1,
+    params: &BfvParameters,
+) -> Result<(), InstructionExecutionError> {
+    if param_set.backend != REGISTERED_SORACLOUD_BFV_BACKEND {
+        return Err(invalid_parameter(
+            "fhe parameter-set backend does not match the registered BFV profile",
+        ));
+    }
+
+    let expected_degree = u32::from(params.polynomial_degree);
+    if param_set.polynomial_modulus_degree.get() != expected_degree {
+        return Err(invalid_parameter(
+            "fhe parameter-set polynomial degree does not match the registered BFV profile",
+        ));
+    }
+
+    if param_set.slot_count.get() != expected_degree {
+        return Err(invalid_parameter(
+            "fhe parameter-set slot count does not match the registered BFV profile",
+        ));
+    }
+
+    let plaintext_bits = u64_bit_width(params.plaintext_modulus);
+    if param_set.plaintext_modulus_bits.get() != plaintext_bits {
+        return Err(invalid_parameter(
+            "fhe parameter-set plaintext modulus bits do not match the registered BFV profile",
+        ));
+    }
+
+    let ciphertext_bits = u64_bit_width(params.ciphertext_modulus);
+    let largest_declared_limb = param_set
+        .ciphertext_modulus_bits
+        .first()
+        .expect("parameter-set validation requires a non-empty modulus chain")
+        .get();
+    if largest_declared_limb > ciphertext_bits {
+        return Err(invalid_parameter(
+            "fhe parameter-set ciphertext modulus bits exceed the registered BFV profile",
+        ));
+    }
+    let declared_chain_bits = param_set
+        .ciphertext_modulus_bits
+        .iter()
+        .map(|bits| u32::from(bits.get()))
+        .sum::<u32>();
+    if declared_chain_bits < u32::from(ciphertext_bits) {
+        return Err(invalid_parameter(
+            "fhe parameter-set ciphertext modulus chain under-declares the registered BFV profile",
+        ));
+    }
+
+    Ok(())
+}
+
 fn registered_soracloud_bfv_parameters(
     param_set: &FheParamSetV1,
 ) -> Result<BfvParameters, InstructionExecutionError> {
+    param_set
+        .validate()
+        .map_err(|err| invalid_parameter(format!("invalid FHE parameter set: {err}")))?;
     if param_set.scheme != FheSchemeV1::Bfv {
         return Err(invalid_parameter(
             "Soracloud FHE jobs currently require the registered BFV parameter profile",
@@ -4774,6 +4838,7 @@ fn registered_soracloud_bfv_parameters(
             "fhe parameter-set digest does not match the registered BFV profile",
         ));
     }
+    validate_registered_soracloud_bfv_descriptor(param_set, &params)?;
     Ok(params)
 }
 
@@ -4934,6 +4999,22 @@ fn execute_soracloud_fhe_job(
             Ok(BfvIdentifierCiphertext { slots })
         }
     }
+}
+
+fn verify_soracloud_fhe_evaluation_key_digest(
+    params: &BfvParameters,
+    policy: &FheExecutionPolicyV1,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+) -> Result<(), InstructionExecutionError> {
+    let actual = evaluation_keys
+        .digest(params)
+        .map_err(|err| invalid_parameter(format!("invalid BFV evaluation keys: {err}")))?;
+    if actual != policy.evaluation_key_digest {
+        return Err(invalid_parameter(
+            "fhe evaluation-key digest does not match the execution policy",
+        ));
+    }
+    Ok(())
 }
 
 fn insert_admitted_bundle(
@@ -5813,6 +5894,11 @@ impl Execute for isi::RunSoracloudFheJob {
         self.evaluation_keys
             .validate(&bfv_params)
             .map_err(|err| invalid_parameter(format!("invalid BFV evaluation keys: {err}")))?;
+        verify_soracloud_fhe_evaluation_key_digest(
+            &bfv_params,
+            &self.policy,
+            &self.evaluation_keys,
+        )?;
         let input_envelopes = load_soracloud_fhe_inputs(
             state_transaction,
             &self.service_name,
@@ -10510,9 +10596,9 @@ mod tests {
     use iroha_crypto::{
         Hash, KeyPair,
         fhe_bfv::{
-            BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
-            bootstrap_key_from_seed, decrypt, decrypt_identifier, encrypt_identifier_from_seed,
-            keygen_from_seed, rotation_key_from_seed,
+            BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext,
+            BfvIdentifierPublicParameters, bootstrap_key_from_seed, decrypt, decrypt_identifier,
+            encrypt_identifier_from_seed, keygen_from_seed, rotation_key_from_seed,
         },
     };
     use iroha_data_model::{
@@ -10528,9 +10614,9 @@ mod tests {
         soracloud::{
             AgentApartmentManifestV1, DecryptionAuthorityModeV1, DecryptionAuthorityPolicyV1,
             DecryptionRequestV1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
-            FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1, FheParamLifecycleV1, FheParamSetV1,
-            FheSchemeV1, SECRET_ENVELOPE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
-            SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
+            FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
+            FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
             SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SecretEnvelopeEncryptionV1,
             SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCapabilityPolicyV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
@@ -10554,6 +10640,7 @@ mod tests {
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID,
     };
+    use sha2::{Digest, Sha256};
 
     use crate::{
         block::ValidBlock,
@@ -11149,6 +11236,13 @@ mod tests {
         }
     }
 
+    fn sample_bfv_evaluation_key_digest() -> Hash {
+        let params = ram_lfe_bfv_parameters_v1();
+        sample_bfv_evaluation_key_bundle()
+            .digest(&params)
+            .expect("sample evaluation-key digest")
+    }
+
     fn sample_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
         let params = ram_lfe_bfv_parameters_v1();
         let (_secret_key, public_key, _relinearization_key) =
@@ -11195,6 +11289,7 @@ mod tests {
             policy_name: "analytics".parse().expect("valid name"),
             param_set: "bfv-default".parse().expect("valid name"),
             param_set_version: NonZeroU32::new(1).expect("nonzero"),
+            evaluation_key_digest: sample_bfv_evaluation_key_digest(),
             max_ciphertext_bytes: NonZeroU64::new(131_072).expect("nonzero"),
             max_plaintext_bytes: NonZeroU64::new(512).expect("nonzero"),
             max_input_ciphertexts: NonZeroU16::new(4).expect("nonzero"),
@@ -11220,6 +11315,1135 @@ mod tests {
             rotation_steps: 0,
             bootstrap_count: 0,
         }
+    }
+
+    const SORACLOUD_BFV_OPERATION_VECTOR_SET: &str = "soracloud-bfv-operation-v1";
+
+    fn shared_bfv_fixture() -> norito::json::Value {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/soracloud/bfv_identifier_vectors_v1.json");
+        let fixture = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture_path.display()));
+        norito::json::from_str(&fixture)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
+    }
+
+    fn shared_fhe_governance_bundle_fixture() -> FheGovernanceBundleV1 {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/soracloud/fhe_governance_bundle_v1.json");
+        let fixture = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", fixture_path.display()));
+        norito::json::from_str(&fixture)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", fixture_path.display()))
+    }
+
+    fn fixture_get<'a>(value: &'a norito::json::Value, field: &str) -> &'a norito::json::Value {
+        value
+            .get(field)
+            .unwrap_or_else(|| panic!("fixture field `{field}` is missing"))
+    }
+
+    fn fixture_str<'a>(value: &'a norito::json::Value, field: &str) -> &'a str {
+        fixture_get(value, field)
+            .as_str()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be a string"))
+    }
+
+    fn fixture_u64_value(value: &norito::json::Value, field: &str) -> u64 {
+        if let Some(value) = value.as_u64() {
+            return value;
+        }
+        value
+            .as_str()
+            .unwrap_or_else(|| {
+                panic!("fixture field `{field}` must be an unsigned integer or decimal string")
+            })
+            .parse::<u64>()
+            .unwrap_or_else(|err| panic!("fixture field `{field}` must fit u64: {err}"))
+    }
+
+    fn fixture_u64(value: &norito::json::Value, field: &str) -> u64 {
+        fixture_u64_value(fixture_get(value, field), field)
+    }
+
+    fn fixture_u64_array(value: &norito::json::Value, field: &str) -> Vec<u64> {
+        fixture_array(value, field)
+            .iter()
+            .enumerate()
+            .map(|(index, value)| fixture_u64_value(value, &format!("{field}[{index}]")))
+            .collect()
+    }
+
+    fn fixture_array<'a>(value: &'a norito::json::Value, field: &str) -> &'a [norito::json::Value] {
+        fixture_get(value, field)
+            .as_array()
+            .unwrap_or_else(|| panic!("fixture field `{field}` must be an array"))
+    }
+
+    fn fixture_operation_vectors(root: &norito::json::Value) -> &norito::json::Value {
+        let operation_vectors = fixture_get(root, "operation_vectors");
+        assert_eq!(
+            fixture_str(operation_vectors, "vector_set"),
+            SORACLOUD_BFV_OPERATION_VECTOR_SET
+        );
+        operation_vectors
+    }
+
+    fn assert_bfv_public_parameters_fixture(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        public_parameters: &BfvIdentifierPublicParameters,
+    ) {
+        let public_key_fixture = fixture_get(operation_vectors, "public_key");
+        let encoded_public_key =
+            norito::to_bytes(&public_parameters.public_key).expect("encode public key");
+        assert_eq!(
+            fixture_u64(public_key_fixture, "expected_norito_bytes"),
+            u64::try_from(encoded_public_key.len()).expect("public-key length fits u64"),
+            "public-key Norito byte length"
+        );
+        assert_eq!(
+            fixture_str(public_key_fixture, "expected_sha256"),
+            sha256_hex(&encoded_public_key),
+            "public-key SHA-256"
+        );
+
+        let public_parameters_fixture = fixture_get(operation_vectors, "public_parameters");
+        let encoded_public_parameters =
+            norito::to_bytes(public_parameters).expect("encode public parameters");
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "expected_norito_bytes"),
+            u64::try_from(encoded_public_parameters.len())
+                .expect("public-parameter length fits u64"),
+            "public-parameter Norito byte length"
+        );
+        assert_eq!(
+            fixture_str(public_parameters_fixture, "expected_sha256"),
+            sha256_hex(&encoded_public_parameters),
+            "public-parameter SHA-256"
+        );
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "polynomial_degree"),
+            u64::from(params.polynomial_degree),
+            "public-parameter polynomial degree"
+        );
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "plaintext_modulus"),
+            params.plaintext_modulus,
+            "public-parameter plaintext modulus"
+        );
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "ciphertext_modulus"),
+            params.ciphertext_modulus,
+            "public-parameter ciphertext modulus"
+        );
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "decomposition_base_log"),
+            u64::from(params.decomposition_base_log),
+            "public-parameter decomposition base log"
+        );
+        assert_eq!(
+            fixture_u64(public_parameters_fixture, "max_input_bytes"),
+            u64::from(public_parameters.max_input_bytes),
+            "public-parameter max input bytes"
+        );
+
+        let decoded_fixture = fixture_get(operation_vectors, "public_parameters_decoded");
+        let decoded_parameters = fixture_get(decoded_fixture, "parameters");
+        assert_eq!(
+            fixture_u64(decoded_parameters, "polynomial_degree"),
+            u64::from(params.polynomial_degree),
+            "decoded public-parameter polynomial degree"
+        );
+        assert_eq!(
+            fixture_u64(decoded_parameters, "plaintext_modulus"),
+            params.plaintext_modulus,
+            "decoded public-parameter plaintext modulus"
+        );
+        assert_eq!(
+            fixture_u64(decoded_parameters, "ciphertext_modulus"),
+            params.ciphertext_modulus,
+            "decoded public-parameter ciphertext modulus"
+        );
+        assert_eq!(
+            fixture_u64(decoded_parameters, "decomposition_base_log"),
+            u64::from(params.decomposition_base_log),
+            "decoded public-parameter decomposition base log"
+        );
+        let decoded_public_key = fixture_get(decoded_fixture, "public_key");
+        assert_eq!(
+            fixture_u64_array(decoded_public_key, "b"),
+            public_parameters.public_key.b,
+            "decoded public-key b polynomial"
+        );
+        assert_eq!(
+            fixture_u64_array(decoded_public_key, "a"),
+            public_parameters.public_key.a,
+            "decoded public-key a polynomial"
+        );
+        assert_eq!(
+            fixture_u64(decoded_fixture, "max_input_bytes"),
+            u64::from(public_parameters.max_input_bytes),
+            "decoded public-parameter max input bytes"
+        );
+        assert_eq!(
+            fixture_str(decoded_fixture, "norito_length_encoding"),
+            "compact-v1",
+            "decoded public-parameter Norito length encoding"
+        );
+    }
+
+    fn assert_bfv_evaluation_key_fixture(
+        operation_vectors: &norito::json::Value,
+        params: &BfvParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+    ) {
+        let key_fixture = fixture_get(operation_vectors, "evaluation_key_bundle");
+        let encoded_keys = norito::to_bytes(evaluation_keys).expect("encode evaluation keys");
+        assert_eq!(
+            fixture_u64(key_fixture, "expected_norito_bytes"),
+            u64::try_from(encoded_keys.len()).expect("evaluation-key length fits u64"),
+            "evaluation-key Norito byte length"
+        );
+        assert_eq!(
+            fixture_str(key_fixture, "expected_sha256"),
+            sha256_hex(&encoded_keys),
+            "evaluation-key Norito SHA-256"
+        );
+        assert_eq!(
+            fixture_str(key_fixture, "expected_digest_hex"),
+            evaluation_keys
+                .digest(params)
+                .expect("evaluation-key digest")
+                .to_string(),
+            "evaluation-key domain-separated digest"
+        );
+        assert_eq!(
+            fixture_u64(key_fixture, "decomposition_base_log"),
+            u64::from(params.decomposition_base_log),
+            "evaluation-key decomposition base log"
+        );
+        assert_eq!(
+            fixture_u64(key_fixture, "decomposition_digit_count"),
+            u64::try_from(evaluation_keys.relinearization_key.entries.len())
+                .expect("entry count fits u64"),
+            "evaluation-key decomposition digit count"
+        );
+        assert_eq!(
+            fixture_u64(key_fixture, "relinearization_entry_count"),
+            u64::try_from(evaluation_keys.relinearization_key.entries.len())
+                .expect("entry count fits u64"),
+            "relinearization entry count"
+        );
+        assert_eq!(
+            fixture_u64(key_fixture, "rotation_key_count"),
+            u64::try_from(evaluation_keys.rotation_keys.len()).expect("rotation count fits u64"),
+            "rotation key count"
+        );
+        assert_eq!(
+            fixture_str(key_fixture, "bootstrap_key_id"),
+            evaluation_keys
+                .bootstrap_key
+                .as_ref()
+                .expect("fixture bootstrap key")
+                .key_id,
+            "bootstrap key id"
+        );
+
+        let relinearization_fixtures = fixture_array(key_fixture, "relinearization_entries");
+        assert_eq!(
+            relinearization_fixtures.len(),
+            evaluation_keys.relinearization_key.entries.len(),
+            "relinearization entry fixture count"
+        );
+        for (index, (fixture, entry)) in relinearization_fixtures
+            .iter()
+            .zip(&evaluation_keys.relinearization_key.entries)
+            .enumerate()
+        {
+            assert_eq!(
+                fixture_u64(fixture, "index"),
+                u64::try_from(index).expect("entry index fits u64"),
+                "relinearization entry index"
+            );
+            assert_eq!(
+                fixture_u64(fixture, "coefficient_count"),
+                u64::from(params.polynomial_degree),
+                "relinearization entry coefficient count"
+            );
+            assert_eq!(
+                fixture_str(fixture, "b_sha256"),
+                coefficient_vector_sha256_hex(&entry.b),
+                "relinearization entry b SHA-256"
+            );
+            assert_eq!(
+                fixture_str(fixture, "a_sha256"),
+                coefficient_vector_sha256_hex(&entry.a),
+                "relinearization entry a SHA-256"
+            );
+        }
+
+        let rotation_fixtures = fixture_array(operation_vectors, "rotation_keys");
+        assert_eq!(
+            rotation_fixtures.len(),
+            evaluation_keys.rotation_keys.len(),
+            "rotation key fixture count"
+        );
+        for (fixture, key) in rotation_fixtures.iter().zip(&evaluation_keys.rotation_keys) {
+            assert_eq!(
+                fixture_u64(fixture, "rotation_steps"),
+                u64::from(key.rotation_steps),
+                "rotation steps"
+            );
+            let encoded_refresh =
+                norito::to_bytes(&key.zero_refresh).expect("encode rotation refresh");
+            assert_eq!(
+                fixture_u64(fixture, "expected_zero_refresh_bytes"),
+                u64::try_from(encoded_refresh.len()).expect("refresh length fits u64"),
+                "rotation zero-refresh byte length"
+            );
+            assert_eq!(
+                fixture_str(fixture, "expected_zero_refresh_sha256"),
+                sha256_hex(&encoded_refresh),
+                "rotation zero-refresh SHA-256"
+            );
+            assert_ciphertext_component_fixture(
+                fixture_get(fixture, "zero_refresh_components"),
+                "rotation zero-refresh",
+                params,
+                &key.zero_refresh,
+            );
+        }
+
+        let bootstrap_fixture = fixture_get(operation_vectors, "bootstrap_key");
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("fixture bootstrap key");
+        assert_eq!(
+            fixture_str(bootstrap_fixture, "key_id"),
+            bootstrap_key.key_id,
+            "bootstrap key id"
+        );
+        let encoded_refresh =
+            norito::to_bytes(&bootstrap_key.zero_refresh).expect("encode bootstrap refresh");
+        assert_eq!(
+            fixture_u64(bootstrap_fixture, "expected_zero_refresh_bytes"),
+            u64::try_from(encoded_refresh.len()).expect("refresh length fits u64"),
+            "bootstrap zero-refresh byte length"
+        );
+        assert_eq!(
+            fixture_str(bootstrap_fixture, "expected_zero_refresh_sha256"),
+            sha256_hex(&encoded_refresh),
+            "bootstrap zero-refresh SHA-256"
+        );
+        assert_ciphertext_component_fixture(
+            fixture_get(bootstrap_fixture, "zero_refresh_components"),
+            "bootstrap zero-refresh",
+            params,
+            &bootstrap_key.zero_refresh,
+        );
+    }
+
+    fn bfv_operation_material(
+        operation_vectors: &norito::json::Value,
+    ) -> (
+        BfvParameters,
+        BfvIdentifierPublicParameters,
+        iroha_crypto::fhe_bfv::BfvSecretKey,
+        BfvEvaluationKeyBundle,
+    ) {
+        let params = ram_lfe_bfv_parameters_v1();
+        let max_input_bytes = u16::try_from(fixture_u64(operation_vectors, "max_input_bytes"))
+            .expect("fixture max_input_bytes must fit u16");
+        let (secret_key, public_key, relinearization_key) = keygen_from_seed(
+            &params,
+            fixture_str(operation_vectors, "keygen_seed_utf8").as_bytes(),
+        )
+        .expect("fixture keygen seed must produce BFV keys");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes,
+        };
+        public_parameters
+            .validate()
+            .expect("fixture public parameters must validate");
+        assert_bfv_public_parameters_fixture(operation_vectors, &params, &public_parameters);
+
+        let rotation_keys = fixture_array(operation_vectors, "rotation_keys")
+            .iter()
+            .map(|key| {
+                let steps = u32::try_from(fixture_u64(key, "rotation_steps"))
+                    .expect("fixture rotation steps must fit u32");
+                rotation_key_from_seed(
+                    &params,
+                    &public_key,
+                    steps,
+                    fixture_str(key, "seed_utf8").as_bytes(),
+                )
+                .expect("fixture rotation key must derive")
+            })
+            .collect();
+        let bootstrap = fixture_get(operation_vectors, "bootstrap_key");
+        let bootstrap_key = Some(
+            bootstrap_key_from_seed(
+                &params,
+                &public_key,
+                fixture_str(bootstrap, "key_id"),
+                fixture_str(bootstrap, "seed_utf8").as_bytes(),
+            )
+            .expect("fixture bootstrap key must derive"),
+        );
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys,
+            bootstrap_key,
+        };
+        evaluation_keys
+            .validate(&params)
+            .expect("fixture evaluation keys must validate");
+        assert_bfv_evaluation_key_fixture(operation_vectors, &params, &evaluation_keys);
+
+        (params, public_parameters, secret_key, evaluation_keys)
+    }
+
+    fn operation_vector_inputs(
+        public_parameters: &BfvIdentifierPublicParameters,
+        vector: &norito::json::Value,
+    ) -> Vec<BfvIdentifierCiphertext> {
+        fixture_array(vector, "inputs")
+            .iter()
+            .map(|input| {
+                let input_bytes =
+                    hex::decode(fixture_str(input, "input_hex")).expect("fixture input_hex");
+                let ciphertext = encrypt_identifier_from_seed(
+                    public_parameters,
+                    &input_bytes,
+                    fixture_str(input, "seed_utf8").as_bytes(),
+                )
+                .expect("fixture input must encrypt");
+                let encoded = norito::to_bytes(&ciphertext).expect("encode fixture input");
+                assert_eq!(
+                    fixture_u64(input, "expected_ciphertext_bytes"),
+                    u64::try_from(encoded.len()).expect("encoded input length fits u64"),
+                    "{} input {} byte length",
+                    fixture_str(vector, "name"),
+                    fixture_str(input, "seed_utf8")
+                );
+                assert_eq!(
+                    fixture_str(input, "expected_ciphertext_sha256"),
+                    sha256_hex(&encoded),
+                    "{} input {} digest",
+                    fixture_str(vector, "name"),
+                    fixture_str(input, "seed_utf8")
+                );
+                ciphertext
+            })
+            .collect()
+    }
+
+    fn operation_vector_job(vector: &norito::json::Value) -> FheJobSpecV1 {
+        let mut job = sample_fhe_job(Vec::new());
+        match fixture_str(vector, "operation") {
+            "Add" => {
+                job.operation = FheJobOperationV1::Add;
+            }
+            "Multiply" => {
+                job.operation = FheJobOperationV1::Multiply;
+                job.requested_multiplication_depth = 1;
+            }
+            "RotateLeft" => {
+                job.operation = FheJobOperationV1::RotateLeft;
+                job.rotation_steps = u32::try_from(fixture_u64(vector, "rotation_steps"))
+                    .expect("fixture rotation_steps must fit u32");
+            }
+            "Bootstrap" => {
+                job.operation = FheJobOperationV1::Bootstrap;
+                job.bootstrap_count = u16::try_from(fixture_u64(vector, "bootstrap_count"))
+                    .expect("fixture bootstrap_count must fit u16");
+            }
+            operation => panic!("unsupported fixture operation `{operation}`"),
+        }
+        job
+    }
+
+    fn output_plaintext_slots(
+        params: &BfvParameters,
+        secret_key: &iroha_crypto::fhe_bfv::BfvSecretKey,
+        output: &BfvIdentifierCiphertext,
+    ) -> Vec<u64> {
+        output
+            .slots
+            .iter()
+            .map(|slot| decrypt(params, secret_key, slot).expect("decrypt output slot")[0])
+            .collect()
+    }
+
+    fn expected_plaintext_slots(vector: &norito::json::Value) -> Vec<u64> {
+        fixture_array(vector, "expected_plaintext_slots")
+            .iter()
+            .map(|slot| slot.as_u64().expect("expected plaintext slot must be u64"))
+            .collect()
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        hex::encode_upper(Sha256::digest(bytes))
+    }
+
+    fn coefficient_vector_sha256_hex(values: &[u64]) -> String {
+        let encoded = norito::to_bytes(&values.to_vec()).expect("encode coefficient vector");
+        sha256_hex(&encoded)
+    }
+
+    fn assert_ciphertext_component_fixture(
+        fixture: &norito::json::Value,
+        label: &str,
+        params: &BfvParameters,
+        ciphertext: &BfvCiphertext,
+    ) {
+        assert_eq!(
+            fixture_u64(fixture, "coefficient_count"),
+            u64::from(params.polynomial_degree),
+            "{label} coefficient count"
+        );
+        assert_eq!(
+            fixture_str(fixture, "c0_sha256"),
+            coefficient_vector_sha256_hex(&ciphertext.c0),
+            "{label} c0 SHA-256"
+        );
+        assert_eq!(
+            fixture_str(fixture, "c1_sha256"),
+            coefficient_vector_sha256_hex(&ciphertext.c1),
+            "{label} c1 SHA-256"
+        );
+    }
+
+    fn decimal_json_array(values: &[u64]) -> String {
+        values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn execute_operation_vector(
+        params: &BfvParameters,
+        public_parameters: &BfvIdentifierPublicParameters,
+        evaluation_keys: &BfvEvaluationKeyBundle,
+        vector: &norito::json::Value,
+    ) -> BfvIdentifierCiphertext {
+        let inputs = operation_vector_inputs(public_parameters, vector);
+        let job = operation_vector_job(vector);
+        execute_soracloud_fhe_job(params, evaluation_keys, &job, &inputs)
+            .expect("fixture FHE operation must execute")
+    }
+
+    #[test]
+    fn soracloud_bfv_operation_vectors_match_shared_fixture() {
+        let root = shared_bfv_fixture();
+        let operation_vectors = fixture_operation_vectors(&root);
+        let (params, public_parameters, secret_key, evaluation_keys) =
+            bfv_operation_material(operation_vectors);
+        let mut seen_digests = BTreeSet::new();
+
+        for vector in fixture_array(operation_vectors, "vectors") {
+            let output =
+                execute_operation_vector(&params, &public_parameters, &evaluation_keys, vector);
+            let encoded_output = norito::to_bytes(&output).expect("encode fixture output");
+            assert_eq!(
+                fixture_u64(vector, "expected_output_ciphertext_bytes"),
+                u64::try_from(encoded_output.len()).expect("encoded output length fits u64"),
+                "{} output byte length",
+                fixture_str(vector, "name")
+            );
+            let digest = sha256_hex(&encoded_output);
+            assert_eq!(
+                fixture_str(vector, "expected_output_ciphertext_sha256"),
+                digest,
+                "{} output digest",
+                fixture_str(vector, "name")
+            );
+            assert!(
+                seen_digests.insert(digest.clone()),
+                "operation fixture output digests must be unique: {digest}"
+            );
+            assert_eq!(
+                expected_plaintext_slots(vector),
+                output_plaintext_slots(&params, &secret_key, &output),
+                "{} plaintext slots",
+                fixture_str(vector, "name")
+            );
+            if let Some(expected_utf8) = vector
+                .get("expected_output_utf8")
+                .and_then(norito::json::Value::as_str)
+            {
+                let plaintext = decrypt_identifier(&public_parameters, &secret_key, &output)
+                    .expect("fixture output must decrypt as identifier");
+                assert_eq!(expected_utf8.as_bytes(), plaintext);
+            }
+        }
+    }
+
+    #[test]
+    fn soracloud_bfv_key_fixture_rejects_valid_wrong_key_material() {
+        let root = shared_bfv_fixture();
+        let operation_vectors = fixture_operation_vectors(&root);
+        let params = ram_lfe_bfv_parameters_v1();
+        let (_secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-wrong-keygen").expect("wrong keygen");
+        let wrong_public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes: u16::try_from(fixture_u64(operation_vectors, "max_input_bytes"))
+                .expect("fixture max_input_bytes must fit u16"),
+        };
+        wrong_public_parameters
+            .validate()
+            .expect("wrong but well-formed public parameters must validate structurally");
+        let wrong_rotation_key = rotation_key_from_seed(
+            &params,
+            &public_key,
+            1,
+            fixture_str(
+                &fixture_array(operation_vectors, "rotation_keys")[0],
+                "seed_utf8",
+            )
+            .as_bytes(),
+        )
+        .expect("wrong rotation key");
+        let wrong_bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            fixture_str(fixture_get(operation_vectors, "bootstrap_key"), "key_id"),
+            fixture_str(fixture_get(operation_vectors, "bootstrap_key"), "seed_utf8").as_bytes(),
+        )
+        .expect("wrong bootstrap key");
+        let wrong_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![wrong_rotation_key],
+            bootstrap_key: Some(wrong_bootstrap_key),
+        };
+        wrong_keys
+            .validate(&params)
+            .expect("wrong but well-formed key material must validate structurally");
+
+        let public_key_fixture = fixture_get(operation_vectors, "public_key");
+        let encoded_public_key =
+            norito::to_bytes(&wrong_public_parameters.public_key).expect("encode wrong public key");
+        assert_ne!(
+            fixture_str(public_key_fixture, "expected_sha256"),
+            sha256_hex(&encoded_public_key),
+            "fixture must reject a structurally valid but different public key"
+        );
+        let public_parameters_fixture = fixture_get(operation_vectors, "public_parameters");
+        let encoded_public_parameters =
+            norito::to_bytes(&wrong_public_parameters).expect("encode wrong public parameters");
+        assert_ne!(
+            fixture_str(public_parameters_fixture, "expected_sha256"),
+            sha256_hex(&encoded_public_parameters),
+            "fixture must reject structurally valid public parameters with a different key"
+        );
+
+        let key_fixture = fixture_get(operation_vectors, "evaluation_key_bundle");
+        let encoded_keys = norito::to_bytes(&wrong_keys).expect("encode wrong keys");
+        assert_ne!(
+            fixture_str(key_fixture, "expected_sha256"),
+            sha256_hex(&encoded_keys),
+            "fixture must reject a structurally valid but different evaluation-key bundle"
+        );
+        assert_ne!(
+            fixture_str(key_fixture, "expected_digest_hex"),
+            wrong_keys
+                .digest(&params)
+                .expect("wrong key digest")
+                .to_string(),
+            "fixture must reject a different domain-separated evaluation-key digest"
+        );
+        let wrong_relinearization_entry = &wrong_keys.relinearization_key.entries[0];
+        let relinearization_fixture = &fixture_array(key_fixture, "relinearization_entries")[0];
+        assert_ne!(
+            fixture_str(relinearization_fixture, "b_sha256"),
+            coefficient_vector_sha256_hex(&wrong_relinearization_entry.b),
+            "fixture must reject wrong relinearization b component material"
+        );
+        assert_ne!(
+            fixture_str(relinearization_fixture, "a_sha256"),
+            coefficient_vector_sha256_hex(&wrong_relinearization_entry.a),
+            "fixture must reject wrong relinearization a component material"
+        );
+
+        let rotation_fixture = &fixture_array(operation_vectors, "rotation_keys")[0];
+        let encoded_rotation_refresh = norito::to_bytes(&wrong_keys.rotation_keys[0].zero_refresh)
+            .expect("encode wrong rotation refresh");
+        assert_ne!(
+            fixture_str(rotation_fixture, "expected_zero_refresh_sha256"),
+            sha256_hex(&encoded_rotation_refresh),
+            "fixture must reject wrong rotation refresh material"
+        );
+        let rotation_components = fixture_get(rotation_fixture, "zero_refresh_components");
+        assert_ne!(
+            fixture_str(rotation_components, "c0_sha256"),
+            coefficient_vector_sha256_hex(&wrong_keys.rotation_keys[0].zero_refresh.c0),
+            "fixture must reject wrong rotation refresh c0 component material"
+        );
+        assert_ne!(
+            fixture_str(rotation_components, "c1_sha256"),
+            coefficient_vector_sha256_hex(&wrong_keys.rotation_keys[0].zero_refresh.c1),
+            "fixture must reject wrong rotation refresh c1 component material"
+        );
+        let bootstrap_fixture = fixture_get(operation_vectors, "bootstrap_key");
+        let encoded_bootstrap_refresh = norito::to_bytes(
+            &wrong_keys
+                .bootstrap_key
+                .as_ref()
+                .expect("wrong bootstrap key")
+                .zero_refresh,
+        )
+        .expect("encode wrong bootstrap refresh");
+        assert_ne!(
+            fixture_str(bootstrap_fixture, "expected_zero_refresh_sha256"),
+            sha256_hex(&encoded_bootstrap_refresh),
+            "fixture must reject wrong bootstrap refresh material"
+        );
+        let wrong_bootstrap_refresh = &wrong_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("wrong bootstrap key")
+            .zero_refresh;
+        let bootstrap_components = fixture_get(bootstrap_fixture, "zero_refresh_components");
+        assert_ne!(
+            fixture_str(bootstrap_components, "c0_sha256"),
+            coefficient_vector_sha256_hex(&wrong_bootstrap_refresh.c0),
+            "fixture must reject wrong bootstrap refresh c0 component material"
+        );
+        assert_ne!(
+            fixture_str(bootstrap_components, "c1_sha256"),
+            coefficient_vector_sha256_hex(&wrong_bootstrap_refresh.c1),
+            "fixture must reject wrong bootstrap refresh c1 component material"
+        );
+    }
+
+    #[test]
+    fn soracloud_fhe_policy_rejects_wrong_evaluation_key_digest() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let policy = sample_fhe_policy();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        verify_soracloud_fhe_evaluation_key_digest(&params, &policy, &evaluation_keys)
+            .expect("sample policy must pin the sample evaluation-key bundle");
+
+        let mut wrong_but_well_formed_keys = evaluation_keys;
+        wrong_but_well_formed_keys.relinearization_key.entries[0].a[0] ^= 0x01;
+        wrong_but_well_formed_keys
+            .validate(&params)
+            .expect("tampered key material remains structurally valid");
+        let err = verify_soracloud_fhe_evaluation_key_digest(
+            &params,
+            &policy,
+            &wrong_but_well_formed_keys,
+        )
+        .expect_err("wrong key material must not satisfy the policy digest");
+        assert_invalid_parameter_contains(err, "evaluation-key digest");
+
+        let mut wrong_policy = policy;
+        wrong_policy.evaluation_key_digest = Hash::new(b"wrong-soracloud-fhe-evaluation-keys");
+        let err = verify_soracloud_fhe_evaluation_key_digest(
+            &params,
+            &wrong_policy,
+            &sample_bfv_evaluation_key_bundle(),
+        )
+        .expect_err("wrong policy digest must reject the correct key material");
+        assert_invalid_parameter_contains(err, "evaluation-key digest");
+    }
+
+    #[test]
+    fn soracloud_bfv_operation_vectors_reject_tampered_refresh_material() {
+        let root = shared_bfv_fixture();
+        let operation_vectors = fixture_operation_vectors(&root);
+        let (params, public_parameters, _secret_key, evaluation_keys) =
+            bfv_operation_material(operation_vectors);
+
+        let rotate = fixture_array(operation_vectors, "vectors")
+            .iter()
+            .find(|vector| fixture_str(vector, "operation") == "RotateLeft")
+            .expect("fixture must include RotateLeft");
+        let rotate_inputs = operation_vector_inputs(&public_parameters, rotate);
+        let rotate_job = operation_vector_job(rotate);
+        let mut tampered_rotation_keys = evaluation_keys.clone();
+        tampered_rotation_keys.rotation_keys[0].zero_refresh.c0[0] = params.ciphertext_modulus;
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &tampered_rotation_keys,
+            &rotate_job,
+            &rotate_inputs,
+        )
+        .expect_err("tampered rotation refresh material must reject");
+        assert_invalid_parameter_contains(err, "FHE rotate failed");
+
+        let bootstrap = fixture_array(operation_vectors, "vectors")
+            .iter()
+            .find(|vector| fixture_str(vector, "operation") == "Bootstrap")
+            .expect("fixture must include Bootstrap");
+        let bootstrap_inputs = operation_vector_inputs(&public_parameters, bootstrap);
+        let bootstrap_job = operation_vector_job(bootstrap);
+        let mut tampered_bootstrap_keys = evaluation_keys;
+        tampered_bootstrap_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("fixture bootstrap key")
+            .zero_refresh
+            .c1
+            .pop();
+        let err = execute_soracloud_fhe_job(
+            &params,
+            &tampered_bootstrap_keys,
+            &bootstrap_job,
+            &bootstrap_inputs,
+        )
+        .expect_err("tampered bootstrap refresh material must reject");
+        assert_invalid_parameter_contains(err, "FHE bootstrap failed");
+    }
+
+    #[test]
+    #[ignore = "prints refreshed Soracloud BFV operation-vector fixture rows"]
+    fn print_soracloud_bfv_operation_vectors() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key: public_key.clone(),
+            max_input_bytes: 8,
+        };
+        let encoded_public_key = norito::to_bytes(&public_key).expect("encode public key");
+        let encoded_public_parameters =
+            norito::to_bytes(&public_parameters).expect("encode public parameters");
+        println!(
+            "public-key: bytes={} sha256={} polynomial_degree={} plaintext_modulus={} ciphertext_modulus={} decomposition_base_log={}",
+            encoded_public_key.len(),
+            sha256_hex(&encoded_public_key),
+            params.polynomial_degree,
+            params.plaintext_modulus,
+            params.ciphertext_modulus,
+            params.decomposition_base_log
+        );
+        println!(
+            "public-parameters: bytes={} sha256={} max_input_bytes={}",
+            encoded_public_parameters.len(),
+            sha256_hex(&encoded_public_parameters),
+            public_parameters.max_input_bytes
+        );
+        println!(
+            "public-parameters-decoded: {{\"parameters\":{{\"polynomial_degree\":{},\"plaintext_modulus\":{},\"ciphertext_modulus\":\"{}\",\"decomposition_base_log\":{}}},\"public_key\":{{\"b\":[{}],\"a\":[{}]}},\"max_input_bytes\":{},\"norito_length_encoding\":\"compact-v1\"}}",
+            params.polynomial_degree,
+            params.plaintext_modulus,
+            params.ciphertext_modulus,
+            params.decomposition_base_log,
+            decimal_json_array(&public_key.b),
+            decimal_json_array(&public_key.a),
+            public_parameters.max_input_bytes
+        );
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: vec![
+                rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
+                    .expect("rotation key"),
+            ],
+            bootstrap_key: Some(
+                bootstrap_key_from_seed(
+                    &params,
+                    &public_key,
+                    "bootstrap-test-key",
+                    b"soracloud-fhe-bootstrap-key",
+                )
+                .expect("bootstrap key"),
+            ),
+        };
+        let encoded_evaluation_keys =
+            norito::to_bytes(&evaluation_keys).expect("encode evaluation keys");
+        println!(
+            "evaluation-key-bundle: bytes={} sha256={} digest={} relinearization_entries={} rotation_key_count={} bootstrap_key_id={}",
+            encoded_evaluation_keys.len(),
+            sha256_hex(&encoded_evaluation_keys),
+            evaluation_keys
+                .digest(&params)
+                .expect("evaluation-key digest"),
+            evaluation_keys.relinearization_key.entries.len(),
+            evaluation_keys.rotation_keys.len(),
+            evaluation_keys
+                .bootstrap_key
+                .as_ref()
+                .expect("bootstrap key")
+                .key_id
+        );
+        for (index, entry) in evaluation_keys
+            .relinearization_key
+            .entries
+            .iter()
+            .enumerate()
+        {
+            println!(
+                "relinearization-entry: index={} coeffs={} b_sha256={} a_sha256={}",
+                index,
+                entry.b.len(),
+                coefficient_vector_sha256_hex(&entry.b),
+                coefficient_vector_sha256_hex(&entry.a)
+            );
+        }
+        for key in &evaluation_keys.rotation_keys {
+            let encoded_refresh =
+                norito::to_bytes(&key.zero_refresh).expect("encode rotation refresh");
+            println!(
+                "rotation-key: steps={} zero_refresh_bytes={} zero_refresh_sha256={}",
+                key.rotation_steps,
+                encoded_refresh.len(),
+                sha256_hex(&encoded_refresh)
+            );
+            println!(
+                "rotation-key-components: steps={} coeffs={} c0_sha256={} c1_sha256={}",
+                key.rotation_steps,
+                key.zero_refresh.c0.len(),
+                coefficient_vector_sha256_hex(&key.zero_refresh.c0),
+                coefficient_vector_sha256_hex(&key.zero_refresh.c1)
+            );
+        }
+        let bootstrap_key = evaluation_keys
+            .bootstrap_key
+            .as_ref()
+            .expect("bootstrap key");
+        let encoded_bootstrap_refresh =
+            norito::to_bytes(&bootstrap_key.zero_refresh).expect("encode bootstrap refresh");
+        println!(
+            "bootstrap-key: key_id={} zero_refresh_bytes={} zero_refresh_sha256={}",
+            bootstrap_key.key_id,
+            encoded_bootstrap_refresh.len(),
+            sha256_hex(&encoded_bootstrap_refresh)
+        );
+        println!(
+            "bootstrap-key-components: key_id={} coeffs={} c0_sha256={} c1_sha256={}",
+            bootstrap_key.key_id,
+            bootstrap_key.zero_refresh.c0.len(),
+            coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c0),
+            coefficient_vector_sha256_hex(&bootstrap_key.zero_refresh.c1)
+        );
+        let specs = [
+            (
+                "soracloud-add-output",
+                "Add",
+                vec![
+                    ("0102", "soracloud-fhe-add-input-1"),
+                    ("0304", "soracloud-fhe-add-input-2"),
+                    ("0506", "soracloud-fhe-add-input-3"),
+                ],
+                0,
+                0,
+                None,
+            ),
+            (
+                "soracloud-multiply-output",
+                "Multiply",
+                vec![
+                    ("0203", "soracloud-fhe-mul-input-1"),
+                    ("0405", "soracloud-fhe-mul-input-2"),
+                    ("0607", "soracloud-fhe-mul-input-3"),
+                ],
+                0,
+                0,
+                None,
+            ),
+            (
+                "soracloud-rotate-left-output",
+                "RotateLeft",
+                vec![("6162", "soracloud-rotate-input")],
+                1,
+                0,
+                None,
+            ),
+            (
+                "soracloud-bootstrap-output",
+                "Bootstrap",
+                vec![("616263", "soracloud-bootstrap-input")],
+                0,
+                1,
+                Some("abc"),
+            ),
+        ];
+        for (name, operation, inputs, rotation_steps, bootstrap_count, expected_utf8) in specs {
+            let encrypted_inputs = inputs
+                .iter()
+                .map(|(input_hex, seed_utf8)| {
+                    let input_bytes = hex::decode(input_hex).expect("fixture input hex");
+                    let ciphertext = encrypt_identifier_from_seed(
+                        &public_parameters,
+                        &input_bytes,
+                        seed_utf8.as_bytes(),
+                    )
+                    .expect("encrypt fixture input");
+                    let encoded_input =
+                        norito::to_bytes(&ciphertext).expect("encode fixture input");
+                    println!(
+                        "{name} input {seed_utf8}: bytes={} sha256={}",
+                        encoded_input.len(),
+                        sha256_hex(&encoded_input)
+                    );
+                    ciphertext
+                })
+                .collect::<Vec<_>>();
+            let input_values = inputs
+                .iter()
+                .map(|(input_hex, seed_utf8)| {
+                    let mut input = norito::json::Map::new();
+                    input.insert(
+                        "input_hex".to_string(),
+                        norito::json::Value::from(*input_hex),
+                    );
+                    input.insert(
+                        "seed_utf8".to_string(),
+                        norito::json::Value::from(*seed_utf8),
+                    );
+                    norito::json::Value::Object(input)
+                })
+                .collect::<Vec<_>>();
+            let mut vector = norito::json::Map::new();
+            vector.insert("name".to_string(), norito::json::Value::from(name));
+            vector.insert(
+                "operation".to_string(),
+                norito::json::Value::from(operation),
+            );
+            vector.insert(
+                "inputs".to_string(),
+                norito::json::Value::Array(input_values),
+            );
+            vector.insert(
+                "rotation_steps".to_string(),
+                norito::json::Value::from(rotation_steps),
+            );
+            vector.insert(
+                "bootstrap_count".to_string(),
+                norito::json::Value::from(bootstrap_count),
+            );
+            let vector = norito::json::Value::Object(vector);
+            let job = operation_vector_job(&vector);
+            let output =
+                execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &encrypted_inputs)
+                    .expect("fixture FHE operation must execute");
+            let encoded_output = norito::to_bytes(&output).expect("encode fixture output");
+            let expected_slots = output_plaintext_slots(&params, &secret_key, &output);
+            println!(
+                "{name}: bytes={} sha256={} slots={expected_slots:?} expected_utf8={expected_utf8:?}",
+                encoded_output.len(),
+                sha256_hex(&encoded_output)
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_multi_input_add_matches_plaintext_slots() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 8,
+        };
+        let inputs = [
+            encrypt_identifier_from_seed(&public_parameters, &[1, 2], b"soracloud-fhe-add-input-1")
+                .expect("encrypt input 1"),
+            encrypt_identifier_from_seed(&public_parameters, &[3, 4], b"soracloud-fhe-add-input-2")
+                .expect("encrypt input 2"),
+            encrypt_identifier_from_seed(&public_parameters, &[5, 6], b"soracloud-fhe-add-input-3")
+                .expect("encrypt input 3"),
+        ];
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let job = sample_fhe_job(Vec::new());
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
+            .expect("execute three-input FHE add job");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt slot")[0])
+            .collect::<Vec<_>>();
+
+        assert_eq!(plaintext_slots[0], 6, "length slots add homomorphically");
+        assert_eq!(
+            plaintext_slots[1], 9,
+            "first byte slots add homomorphically"
+        );
+        assert_eq!(
+            plaintext_slots[2], 12,
+            "second byte slots add homomorphically"
+        );
+        assert!(
+            plaintext_slots[3..].iter().all(|slot| *slot == 0),
+            "unused slots remain zero after three-input add: {plaintext_slots:?}"
+        );
+    }
+
+    #[test]
+    fn soracloud_multi_input_multiply_matches_plaintext_slots() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 8,
+        };
+        let inputs = [
+            encrypt_identifier_from_seed(&public_parameters, &[2, 3], b"soracloud-fhe-mul-input-1")
+                .expect("encrypt input 1"),
+            encrypt_identifier_from_seed(&public_parameters, &[4, 5], b"soracloud-fhe-mul-input-2")
+                .expect("encrypt input 2"),
+            encrypt_identifier_from_seed(&public_parameters, &[6, 7], b"soracloud-fhe-mul-input-3")
+                .expect("encrypt input 3"),
+        ];
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Multiply;
+        job.requested_multiplication_depth = 1;
+
+        let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
+            .expect("execute three-input FHE multiply job");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt slot")[0])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            plaintext_slots[0], 8,
+            "length slots multiply through the relinerized fold"
+        );
+        assert_eq!(
+            plaintext_slots[1], 48,
+            "first byte slots multiply through the relinerized fold"
+        );
+        assert_eq!(
+            plaintext_slots[2], 105,
+            "second byte slots multiply through the relinerized fold"
+        );
+        assert!(
+            plaintext_slots[3..].iter().all(|slot| *slot == 0),
+            "unused slots remain zero after three-input multiply: {plaintext_slots:?}"
+        );
+    }
+
+    #[test]
+    fn soracloud_multi_input_fold_rejects_malformed_late_operand() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let evaluation_keys = sample_bfv_evaluation_key_bundle();
+        let lhs = sample_fhe_envelope(&[1, 2], b"soracloud-fhe-late-bad-left");
+        let rhs = sample_fhe_envelope(&[3, 4], b"soracloud-fhe-late-bad-middle");
+        let mut malicious = sample_fhe_envelope(&[5, 6], b"soracloud-fhe-late-bad-right");
+        malicious.slots[1].c1[0] = params.ciphertext_modulus;
+        let job = sample_fhe_job(Vec::new());
+
+        let err =
+            execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &[lhs, rhs, malicious])
+                .expect_err("malformed late operands must reject before output emission");
+        assert_invalid_parameter_contains(err, "FHE add failed");
     }
 
     #[test]
@@ -11468,6 +12692,60 @@ mod tests {
         let err = registered_soracloud_bfv_parameters(&param_set)
             .expect_err("tampered parameter-set digest must be rejected");
         assert_invalid_parameter_contains(err, "registered BFV profile");
+    }
+
+    #[test]
+    fn soracloud_registered_bfv_parameters_accept_shared_governance_fixture() {
+        let bundle = shared_fhe_governance_bundle_fixture();
+        bundle
+            .validate_for_admission()
+            .expect("shared FHE governance fixture must validate");
+
+        let params = registered_soracloud_bfv_parameters(&bundle.param_set)
+            .expect("shared FHE governance fixture must match the registered runtime profile");
+
+        assert_eq!(params, ram_lfe_bfv_parameters_v1());
+    }
+
+    #[test]
+    fn soracloud_registered_bfv_parameters_reject_descriptor_drift() {
+        let bundle = shared_fhe_governance_bundle_fixture();
+
+        let mut wrong_backend = bundle.param_set.clone();
+        wrong_backend.backend = "fhe/bfv-rns/v2".to_string();
+        let err = registered_soracloud_bfv_parameters(&wrong_backend)
+            .expect_err("wrong backend must be rejected");
+        assert_invalid_parameter_contains(err, "backend");
+
+        let mut wrong_degree = bundle.param_set.clone();
+        wrong_degree.polynomial_modulus_degree = NonZeroU32::new(8_192).expect("nonzero");
+        let err = registered_soracloud_bfv_parameters(&wrong_degree)
+            .expect_err("wrong polynomial degree must be rejected");
+        assert_invalid_parameter_contains(err, "polynomial degree");
+
+        let mut wrong_plaintext = bundle.param_set.clone();
+        wrong_plaintext.plaintext_modulus_bits = NonZeroU16::new(20).expect("nonzero");
+        let err = registered_soracloud_bfv_parameters(&wrong_plaintext)
+            .expect_err("wrong plaintext modulus width must be rejected");
+        assert_invalid_parameter_contains(err, "plaintext modulus bits");
+
+        let mut excessive_ciphertext_limb = bundle.param_set.clone();
+        excessive_ciphertext_limb.ciphertext_modulus_bits = vec![
+            NonZeroU16::new(60).expect("nonzero"),
+            NonZeroU16::new(50).expect("nonzero"),
+        ];
+        let err = registered_soracloud_bfv_parameters(&excessive_ciphertext_limb)
+            .expect_err("oversized ciphertext modulus limb must be rejected");
+        assert_invalid_parameter_contains(err, "ciphertext modulus bits");
+
+        let mut underdeclared_ciphertext_chain = bundle.param_set;
+        underdeclared_ciphertext_chain.ciphertext_modulus_bits = vec![
+            NonZeroU16::new(30).expect("nonzero"),
+            NonZeroU16::new(26).expect("nonzero"),
+        ];
+        let err = registered_soracloud_bfv_parameters(&underdeclared_ciphertext_chain)
+            .expect_err("under-declared ciphertext modulus chain must be rejected");
+        assert_invalid_parameter_contains(err, "under-declares");
     }
 
     fn fhe_job_provenance(

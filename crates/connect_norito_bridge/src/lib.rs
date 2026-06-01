@@ -73,7 +73,7 @@ use sorafs_car::{
     },
 };
 
-const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 5;
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 6;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -4061,6 +4061,224 @@ fn prove_verified_kagemusha_recursive_aggregation_proof_bundle_from_record_bundl
     .map_err(|_| BridgeError::KagemushaProve)
 }
 
+/// Initialize production recursive Kagemusha spendable offline cash.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1`.
+/// Output is Norito archive bytes of `KagemushaRecursiveSpendBundleV1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_bundle_ptr: *mut *mut c_uchar,
+    out_bundle_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_norito_ptr.is_null() || out_bundle_ptr.is_null() || out_bundle_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes =
+            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+        let bundle = kagemusha_recursive_spend_init_from_request_archive(bytes)?;
+        let archive = norito::to_bytes(&bundle).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_bundle_ptr, out_bundle_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_init_from_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
+    use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
+        prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive,
+    };
+    use iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1;
+
+    let request: KagemushaRecursiveSpendInitRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    let vk_box =
+        kagemusha_recursive_aggregation_proof_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+        &request.record_bundle,
+        &request.pallas_open_envelopes_archive,
+        request.current_note,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
+/// Append one hop to production recursive Kagemusha spendable offline cash.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1`.
+/// Output is Norito archive bytes of `KagemushaRecursiveSpendBundleV1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_bundle_ptr: *mut *mut c_uchar,
+    out_bundle_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_norito_ptr.is_null() || out_bundle_ptr.is_null() || out_bundle_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes =
+            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+        let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)?;
+        let archive = norito::to_bytes(&bundle).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_bundle_ptr, out_bundle_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_append_from_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1> {
+    use iroha_core::zk::{
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID, kagemusha_recursive_aggregation_proof_vk_box,
+        prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive,
+    };
+    use iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1;
+
+    let request: KagemushaRecursiveSpendAppendRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    let vk_box =
+        kagemusha_recursive_aggregation_proof_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    prove_kagemusha_recursive_spend_append_from_record_bundle_and_pallas_open_envelope_archive(
+        &request.previous_bundle,
+        &request.record_bundle,
+        &request.pallas_open_envelopes_archive,
+        request.current_note,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
+        &vk_box,
+        None,
+    )
+    .map_err(|_| BridgeError::KagemushaProve)
+}
+
+/// Verify production recursive Kagemusha spendable offline cash.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1`.
+/// Output is Norito archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_result_ptr: *mut *mut c_uchar,
+    out_result_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_norito_ptr.is_null() || out_result_ptr.is_null() || out_result_len.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes =
+            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+        let result = kagemusha_recursive_spend_verify_from_request_archive(bytes)?;
+        let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_result_ptr, out_result_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_verify_from_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1> {
+    use iroha_core::zk::{
+        kagemusha_recursive_aggregation_proof_vk_box, preverify_kagemusha_recursive_spend_bundle,
+        verify_kagemusha_recursive_spend_bundle,
+    };
+    use iroha_data_model::offline::{
+        KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
+    };
+
+    let request: KagemushaRecursiveSpendVerifyRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    let encoded_bytes = norito::to_bytes(&request.bundle)
+        .map(|bytes| u32::try_from(bytes.len()).unwrap_or(u32::MAX))
+        .unwrap_or(u32::MAX);
+    let vk_box =
+        kagemusha_recursive_aggregation_proof_vk_box().map_err(|_| BridgeError::KagemushaProve)?;
+    match preverify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box) {
+        Ok(()) => {
+            let valid = verify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box);
+            Ok(KagemushaRecursiveSpendVerifyResultV1 {
+                valid,
+                hop_count: request.bundle.accumulator.hop_count,
+                encoded_bytes,
+                reason: if valid {
+                    String::new()
+                } else {
+                    "backend proof verification failed".to_owned()
+                },
+            })
+        }
+        Err(reason) => Ok(KagemushaRecursiveSpendVerifyResultV1 {
+            valid: false,
+            hop_count: request.bundle.accumulator.hop_count,
+            encoded_bytes,
+            reason,
+        }),
+    }
+}
+
+/// Prepare an online recursive Kagemusha redeem instruction.
+///
+/// Input is Norito archive bytes of
+/// `iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1`.
+/// Output is Norito archive bytes of
+/// `iroha_data_model::isi::offline::RedeemKagemushaRecursive`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem(
+    request_norito_ptr: *const c_uchar,
+    request_norito_len: c_ulong,
+    out_instruction_ptr: *mut *mut c_uchar,
+    out_instruction_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if request_norito_ptr.is_null()
+            || out_instruction_ptr.is_null()
+            || out_instruction_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes =
+            unsafe { slice::from_raw_parts(request_norito_ptr, request_norito_len as usize) };
+        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(bytes)?;
+        let archive = norito::to_bytes(&instruction).map_err(|_| BridgeError::KagemushaProve)?;
+        unsafe { write_bytes_bridge(out_instruction_ptr, out_instruction_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn kagemusha_recursive_spend_redeem_from_request_archive(
+    request_archive: &[u8],
+) -> BridgeResult<iroha_data_model::isi::offline::RedeemKagemushaRecursive> {
+    use iroha_data_model::{
+        isi::offline::RedeemKagemushaRecursive, offline::KagemushaRecursiveSpendRedeemRequestV1,
+    };
+
+    let request: KagemushaRecursiveSpendRedeemRequestV1 =
+        norito::decode_from_bytes(request_archive).map_err(|_| BridgeError::KagemushaProve)?;
+    request
+        .validate_public_binding()
+        .map_err(|_| BridgeError::KagemushaProve)?;
+    Ok(RedeemKagemushaRecursive::new(
+        request.bundle,
+        request.recipient,
+        request.public_amount,
+        request.redeem_proof,
+    ))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
@@ -4079,6 +4297,8 @@ mod offline_note_prover_tests {
         confidential_v2, hash_vk, kagemusha_folded_vk_box,
         kagemusha_pallas_open_envelope_metadata_for_verified_hop,
         kagemusha_recursive_aggregation_proof_vk_box,
+        kagemusha_recursive_fixed_window_shared_table_manifest_digest,
+        kagemusha_recursive_fixed_window_table_schedule_digest,
         kagemusha_verified_folded_public_inputs_from_record_bundle, offline_note_recursive_vk_box,
         verify_backend, verify_kagemusha_compact_payment_token,
         verify_kagemusha_recursive_aggregation_proof_bundle,
@@ -4086,11 +4306,17 @@ mod offline_note_prover_tests {
     use iroha_data_model::{
         confidential::ConfidentialStatus,
         offline::{
-            KagemushaCompactPaymentToken, KagemushaRecursiveAggregationProofBundle,
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN, KagemushaCompactPaymentToken,
+            KagemushaRecursiveAggregationProof, KagemushaRecursiveAggregationProofBundle,
+            KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendBundleV1,
+            KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendVerifyRequestV1,
+            KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
             KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle,
             KagemushaVerifiedFoldStep, KagemushaVerifiedFoldVerifierRecord, OfflineNoteAuditBundle,
             OfflineNoteAuditOutputClaim, OfflineNoteIssue, OfflineNoteIssuedClaim,
             OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
+            kagemusha_recursive_spend_public_inputs_from_accumulator,
         },
         proof::VerifyingKeyId,
     };
@@ -4116,6 +4342,92 @@ mod offline_note_prover_tests {
             "xor".parse().expect("asset definition name"),
         );
         AssetId::new(definition, account)
+    }
+
+    fn fixed_bytes(label: &[u8]) -> [u8; Hash::LENGTH] {
+        Hash::new(label).into()
+    }
+
+    fn sample_kagemusha_recursive_spend_bundle() -> KagemushaRecursiveSpendBundleV1 {
+        let chain_id: ChainId = "kagemusha-recursive-spend-bridge"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgmr".parse().expect("asset definition name"),
+        );
+        let current_note = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: fixed_bytes(b"bridge-recursive-current-note"),
+            spend_nullifier: fixed_bytes(b"bridge-recursive-current-nullifier"),
+            amount: Numeric::new(42, 0),
+        };
+        let mut topup_anchor_nullifiers = vec![
+            fixed_bytes(b"bridge-recursive-topup-anchor-0"),
+            fixed_bytes(b"bridge-recursive-topup-anchor-1"),
+        ];
+        topup_anchor_nullifiers.sort_unstable();
+        let verifier_opening_len = 4;
+        let accumulator = KagemushaRecursiveSpendAccumulatorV1 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN.to_owned(),
+            chain_id,
+            asset,
+            initial_root: fixed_bytes(b"bridge-recursive-initial-root"),
+            final_root: fixed_bytes(b"bridge-recursive-final-root"),
+            topup_anchor_nullifiers,
+            hop_count: 2,
+            lineage_digest: fixed_bytes(b"bridge-recursive-lineage"),
+            aggregation_transcript_digest: fixed_bytes(b"bridge-recursive-lineage"),
+            nullifier_digest: Hash::new(b"bridge-recursive-nullifier-digest"),
+            output_commitment_digest: Hash::new(b"bridge-recursive-output-digest"),
+            fold_digest: Hash::new(b"bridge-recursive-fold-digest"),
+            recursive_proof_chain_digest: fixed_bytes(b"bridge-recursive-proof-chain"),
+            verifier_params_fingerprint: fixed_bytes(b"bridge-recursive-params"),
+            fixed_window_table_schedule_digest:
+                kagemusha_recursive_fixed_window_table_schedule_digest(verifier_opening_len)
+                    .expect("canonical recursive schedule digest"),
+            fixed_window_shared_table_manifest_digest:
+                kagemusha_recursive_fixed_window_shared_table_manifest_digest(verifier_opening_len)
+                    .expect("canonical recursive shared-table manifest digest"),
+            fixed_window_table_base_digest: fixed_bytes(b"bridge-recursive-table-base"),
+            verifier_witness_batch_digest: fixed_bytes(b"bridge-recursive-witness-batch"),
+            verifier_opening_len: u32::try_from(verifier_opening_len)
+                .expect("verifier opening length fits u32"),
+            current_note,
+        };
+        let public_inputs = kagemusha_recursive_spend_public_inputs_from_accumulator(&accumulator)
+            .expect("recursive spend public inputs");
+        let public_inputs_hash = public_inputs
+            .public_inputs_hash()
+            .expect("recursive spend public-input hash");
+        KagemushaRecursiveSpendBundleV1 {
+            accumulator,
+            recursive_proof: KagemushaRecursiveAggregationProof {
+                verifier_key_id: VerifyingKeyId::new(
+                    ZK_BACKEND_HALO2_IPA,
+                    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                ),
+                public_inputs,
+                public_inputs_hash,
+                proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA5; 64]),
+            },
+        }
+    }
+
+    fn sample_recursive_spend_redeem_request(
+        public_amount: u128,
+    ) -> KagemushaRecursiveSpendRedeemRequestV1 {
+        let mut redeem_proof = ProofAttachment::new_ref(
+            ZK_BACKEND_HALO2_IPA.to_owned(),
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), vec![0x5A; 64]),
+            VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "bridge-recursive-unshield"),
+        );
+        redeem_proof.vk_commitment = Some(fixed_bytes(b"bridge-recursive-unshield-vk"));
+        KagemushaRecursiveSpendRedeemRequestV1 {
+            bundle: sample_kagemusha_recursive_spend_bundle(),
+            recipient: sample_account(0xB8),
+            public_amount,
+            redeem_proof,
+        }
     }
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
@@ -4383,7 +4695,7 @@ mod offline_note_prover_tests {
 
     #[test]
     fn bridge_abi_version_advertises_kagemusha_compact_prover() {
-        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 5);
+        assert_eq!(unsafe { connect_norito_bridge_abi_version() }, 6);
     }
 
     #[test]
@@ -4906,6 +5218,144 @@ mod offline_note_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_ffi_rejects_invalid_archives_without_output() {
+        type RecursiveSpendFfi =
+            unsafe extern "C" fn(*const c_uchar, c_ulong, *mut *mut c_uchar, *mut c_ulong) -> c_int;
+
+        let entries: [(&str, RecursiveSpendFfi); 4] = [
+            (
+                "init",
+                connect_norito_kagemusha_recursive_spend_init as RecursiveSpendFfi,
+            ),
+            (
+                "append",
+                connect_norito_kagemusha_recursive_spend_append as RecursiveSpendFfi,
+            ),
+            (
+                "verify",
+                connect_norito_kagemusha_recursive_spend_verify as RecursiveSpendFfi,
+            ),
+            (
+                "redeem",
+                connect_norito_kagemusha_recursive_spend_redeem as RecursiveSpendFfi,
+            ),
+        ];
+        let bad_archives: [(&str, &[u8]); 2] =
+            [("empty", &[]), ("malformed", b"not a norito archive")];
+
+        for (entry_name, entry) in entries {
+            for (case, archive) in bad_archives {
+                let mut out_ptr: *mut c_uchar = ptr::null_mut();
+                let mut out_len: c_ulong = 0;
+                let status = unsafe {
+                    entry(
+                        archive.as_ptr(),
+                        archive.len() as c_ulong,
+                        &mut out_ptr,
+                        &mut out_len,
+                    )
+                };
+                assert_eq!(status, ERR_KAGEMUSHA_PROVE, "{entry_name} {case}");
+                assert!(
+                    out_ptr.is_null(),
+                    "{entry_name} {case} must not return bytes"
+                );
+                assert_eq!(out_len, 0, "{entry_name} {case} must not set length");
+            }
+
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+            let status = unsafe { entry(ptr::null(), 0, &mut out_ptr, &mut out_len) };
+            assert_eq!(status, ERR_NULL_PTR, "{entry_name} null request");
+            assert!(out_ptr.is_null(), "{entry_name} null must not return bytes");
+            assert_eq!(out_len, 0, "{entry_name} null must not set length");
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_verify_ffi_returns_diagnostic_result_archive() {
+        fn verify_result(
+            request: &KagemushaRecursiveSpendVerifyRequestV1,
+        ) -> KagemushaRecursiveSpendVerifyResultV1 {
+            let archive = norito::to_bytes(request).expect("encode recursive spend verify request");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_verify(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            assert_eq!(status, 0);
+            assert!(
+                !out_ptr.is_null(),
+                "verify should return a diagnostic result archive"
+            );
+            assert!(out_len > 0, "verify result archive must not be empty");
+            let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+            connect_norito_free(out_ptr);
+            norito::decode_from_bytes(&out).expect("decode recursive spend verify result")
+        }
+
+        let request = KagemushaRecursiveSpendVerifyRequestV1 {
+            bundle: sample_kagemusha_recursive_spend_bundle(),
+        };
+        let result = verify_result(&request);
+        assert!(!result.valid);
+        assert_eq!(result.hop_count, request.bundle.accumulator.hop_count);
+        assert!(result.encoded_bytes > 0);
+        assert!(
+            result.reason.contains("recursive spend proof envelope"),
+            "unexpected verify rejection reason: {}",
+            result.reason
+        );
+
+        let mut trusted_setup_backend = request.clone();
+        trusted_setup_backend.bundle.recursive_proof.proof =
+            ProofBox::new("halo2/kzg".into(), vec![0xA5; 64]);
+        let trusted_setup_result = verify_result(&trusted_setup_backend);
+        assert!(!trusted_setup_result.valid);
+        assert!(
+            trusted_setup_result.reason.contains("not supported"),
+            "unexpected trusted-setup rejection reason: {}",
+            trusted_setup_result.reason
+        );
+
+        let mut stark_recursive_bundle = request.clone();
+        stark_recursive_bundle.bundle.recursive_proof.proof =
+            ProofBox::new("stark/fri/transparent-v1".into(), vec![0xA5; 64]);
+        stark_recursive_bundle
+            .bundle
+            .recursive_proof
+            .verifier_key_id = VerifyingKeyId::new(
+            "stark/fri/transparent-v1",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        );
+        let stark_result = verify_result(&stark_recursive_bundle);
+        assert!(!stark_result.valid);
+        assert!(
+            stark_result.reason.contains("proof.backend"),
+            "unexpected STARK/FRI rejection reason: {}",
+            stark_result.reason
+        );
+
+        let mut empty_recursive_proof = request;
+        empty_recursive_proof.bundle.recursive_proof.proof =
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        let empty_result = verify_result(&empty_recursive_proof);
+        assert!(!empty_result.valid);
+        assert!(
+            empty_result.reason.contains("proof.bytes"),
+            "unexpected empty-proof rejection reason: {}",
+            empty_result.reason
+        );
+    }
+
+    #[test]
     fn kagemusha_verified_compact_token_ffi_rejects_tampered_hop_proof() {
         let mut bundle = sample_kagemusha_verified_bundle();
         let last = bundle.steps[0]
@@ -5097,6 +5547,125 @@ mod offline_note_prover_tests {
         assert_eq!(status, ERR_KAGEMUSHA_PROVE);
         assert!(out_ptr.is_null());
         assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor() {
+        let request = sample_recursive_spend_redeem_request(42);
+        let archive = norito::to_bytes(&request).expect("encode recursive spend redeem request");
+        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(&archive)
+            .expect("valid recursive spend redeem request");
+        assert_eq!(instruction.public_amount, 42);
+        assert_eq!(
+            instruction.bundle.accumulator.topup_anchor_nullifiers,
+            request.bundle.accumulator.topup_anchor_nullifiers
+        );
+
+        let mut wrong_amount = sample_recursive_spend_redeem_request(41);
+        let wrong_amount_archive =
+            norito::to_bytes(&wrong_amount).expect("encode wrong-amount request");
+        assert!(
+            kagemusha_recursive_spend_redeem_from_request_archive(&wrong_amount_archive).is_err(),
+            "bridge must reject a public amount that is not the current spendable note amount"
+        );
+
+        wrong_amount.public_amount = 42;
+        wrong_amount
+            .bundle
+            .accumulator
+            .topup_anchor_nullifiers
+            .clear();
+        let missing_anchor_archive =
+            norito::to_bytes(&wrong_amount).expect("encode missing-anchor request");
+        assert!(
+            kagemusha_recursive_spend_redeem_from_request_archive(&missing_anchor_archive).is_err(),
+            "bridge must reject recursive redeem requests without top-up anchors"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_ffi_rejects_amount_mismatch_without_output() {
+        let request = sample_recursive_spend_redeem_request(41);
+        let archive = norito::to_bytes(&request).expect("encode wrong-amount request");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_kagemusha_recursive_spend_redeem(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_ffi_rejects_malformed_redeem_proof_without_output() {
+        fn assert_rejects_without_output(request: KagemushaRecursiveSpendRedeemRequestV1) {
+            let archive = norito::to_bytes(&request).expect("encode malformed redeem proof");
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let status = unsafe {
+                connect_norito_kagemusha_recursive_spend_redeem(
+                    archive.as_ptr(),
+                    archive.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+
+            assert_eq!(status, ERR_KAGEMUSHA_PROVE);
+            assert!(out_ptr.is_null());
+            assert_eq!(out_len, 0);
+        }
+
+        let mut trusted_setup_backend = sample_recursive_spend_redeem_request(42);
+        trusted_setup_backend.redeem_proof = ProofAttachment::new_ref(
+            "groth16".into(),
+            ProofBox::new("groth16".into(), vec![0x5A; 64]),
+            VerifyingKeyId::new("groth16", "bridge-recursive-unshield"),
+        );
+        assert_rejects_without_output(trusted_setup_backend);
+
+        let mut empty_proof = sample_recursive_spend_redeem_request(42);
+        empty_proof.redeem_proof.proof = ProofBox::new("halo2/ipa".into(), Vec::new());
+        assert_rejects_without_output(empty_proof);
+
+        let mut missing_vk_commitment = sample_recursive_spend_redeem_request(42);
+        missing_vk_commitment.redeem_proof.vk_commitment = None;
+        assert_rejects_without_output(missing_vk_commitment);
+
+        let mut zero_vk_commitment = sample_recursive_spend_redeem_request(42);
+        zero_vk_commitment.redeem_proof.vk_commitment = Some([0u8; Hash::LENGTH]);
+        assert_rejects_without_output(zero_vk_commitment);
+
+        let mut envelope_hash_mismatch = sample_recursive_spend_redeem_request(42);
+        envelope_hash_mismatch.redeem_proof.envelope_hash =
+            Some(fixed_bytes(b"bridge-recursive-bad-envelope-hash"));
+        assert_rejects_without_output(envelope_hash_mismatch);
+
+        let mut stark_recursive_bundle = sample_recursive_spend_redeem_request(42);
+        stark_recursive_bundle.bundle.recursive_proof.proof =
+            ProofBox::new("stark/fri/production".into(), vec![0xA5; 64]);
+        stark_recursive_bundle
+            .bundle
+            .recursive_proof
+            .verifier_key_id = VerifyingKeyId::new(
+            "stark/fri/production",
+            KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        );
+        assert_rejects_without_output(stark_recursive_bundle);
+
+        let mut empty_recursive_proof = sample_recursive_spend_redeem_request(42);
+        empty_recursive_proof.bundle.recursive_proof.proof =
+            ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new());
+        assert_rejects_without_output(empty_recursive_proof);
     }
 
     #[test]
@@ -11278,6 +11847,36 @@ fn java_native_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_native_kagemusha_recursive_spend_archive(
+    env: &mut jni::JNIEnv<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+    label: &str,
+    run: impl FnOnce(&[u8]) -> Result<Vec<u8>, String>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let request_bytes = read_java_byte_array(env, &request_archive, "requestArchive")
+            .ok_or_else(|| format!("invalid Kagemusha recursive spend {label} request bytes"))?;
+        let output_archive = run(&request_bytes)?;
+        let array = env
+            .byte_array_from_slice(&output_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
@@ -11462,6 +12061,87 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeInitSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "init", |bytes| {
+        let bundle = kagemusha_recursive_spend_init_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend init request".to_owned())?;
+        norito::to_bytes(&bundle).map_err(|err| format!("failed to encode init bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeAppendSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "append", |bytes| {
+        let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend append request".to_owned())?;
+        norito::to_bytes(&bundle).map_err(|err| format!("failed to encode append bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeVerifySpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "verify", |bytes| {
+        let result = kagemusha_recursive_spend_verify_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend verify request".to_owned())?;
+        norito::to_bytes(&result).map_err(|err| format!("failed to encode verify result: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeRedeemSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "redeem", |bytes| {
+        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend redeem request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode redeem instruction: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -11492,6 +12172,87 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Kagemus
         record_bundle_archive,
         pallas_open_envelopes_archive,
     )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeInitSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "init", |bytes| {
+        let bundle = kagemusha_recursive_spend_init_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend init request".to_owned())?;
+        norito::to_bytes(&bundle).map_err(|err| format!("failed to encode init bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeAppendSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "append", |bytes| {
+        let bundle = kagemusha_recursive_spend_append_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend append request".to_owned())?;
+        norito::to_bytes(&bundle).map_err(|err| format!("failed to encode append bundle: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeVerifySpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "verify", |bytes| {
+        let result = kagemusha_recursive_spend_verify_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend verify request".to_owned())?;
+        norito::to_bytes(&result).map_err(|err| format!("failed to encode verify result: {err}"))
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeRedeemSpend(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    request_archive: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_kagemusha_recursive_spend_archive(&mut env, request_archive, "redeem", |bytes| {
+        let instruction = kagemusha_recursive_spend_redeem_from_request_archive(bytes)
+            .map_err(|_| "invalid Kagemusha recursive spend redeem request".to_owned())?;
+        norito::to_bytes(&instruction)
+            .map_err(|err| format!("failed to encode redeem instruction: {err}"))
+    })
 }
 
 #[cfg(any(

@@ -1,6 +1,1330 @@
 # Status
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
+
+## 2026-06-01 ISO XMLDSig/XAdES require-verified gate
+
+- Added a fail-closed embedded-signature verifier for Torii ISO 20022 rail
+  profiles that opt into `require-verified`. The supported subset verifies an
+  enveloped XMLDSig/XAdES block with a single empty-URI reference, SHA-256
+  digest, enveloped-signature transform, P-256 ECDSA/SHA-256 signature, and a
+  public key supplied through `KeyInfo`.
+- Preserved the existing live-rail behavior for `reject-unsupported` profiles:
+  embedded signatures are still rejected even if structurally valid, while
+  `record-only` profiles continue to record only the ignored-signature marker.
+- Added focused positive and adversarial coverage for valid signed payloads,
+  missing signatures, unsupported signature methods, payload digest tampering,
+  signature-value tampering, and the live reject-unsupported fail-closed path.
+- Remaining ISO work stays open for profile-specific trust anchors,
+  certificate-chain fixtures, broader canonicalization edge cases, and official
+  MDR/XSD fixture coverage.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-xmldsig-target cargo test -p iroha_torii require_verified_profile --lib --features app_api -- --nocapture`
+    (5 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-xmldsig-target cargo test -p iroha_torii embedded_signature --lib --features app_api -- --nocapture`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-xmldsig-target cargo test -p iroha_core live_profiles_reject_unsupported_embedded_signatures --lib -- --nocapture`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-iso-xmldsig-target cargo test -p iroha_torii iso20022_bridge::tests --lib --features app_api -- --nocapture`
+    (57 passed)
+  - `cargo fmt --check --package iroha_torii`
+
+## 2026-06-01 Offline audit/redeem commitment lineage anchors
+
+- Tightened `AuditOfflineNote` so each input must have both the exact
+  issued-claim replay key and the input note commitment's issued replay key.
+  That commitment key must come from the online-to-offline top-up or from a
+  prior audited output before recursive proof verification can run.
+- Tightened `RedeemOfflineNote` so final redemption also requires the source
+  note commitment's issued replay key in addition to the exact issued-claim
+  replay key. Claim-only redeem metadata now fails before proof verification
+  because the source note commitment was never issued by top-up or prior audit
+  lineage.
+- Audit outputs now record the issued commitment replay key as well as the
+  audited-output replay key, issued-claim key, and output certificate key. This
+  keeps the positive multi-hop path anchored: top-up -> first audit output ->
+  second audit input.
+- Added adversarial coverage for claim-only lineage that seeds the sender
+  certificate and claim replay key but omits the top-up/audit commitment anchor,
+  plus focused redeem coverage proving that a valid top-up commitment anchor
+  reaches proof verification while claim-only redeem lineage does not. Existing
+  output duplicate tests were updated to seed the input commitment anchor
+  explicitly so they still test their intended duplicate-output branches.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/offline.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core audit_rejects_claim_anchor_without_topup_commitment_lineage --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core audit_accepts_independent_relayer_when_topup_claim_is_anchored --lib --features zk-halo2-ipa -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core redeem_rejects_claim_anchor_without_topup_commitment_lineage --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-offline-lineage-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core redeem_accepts_topup_commitment_anchor_until_proof_verification --lib -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 SDK Kagemusha native output guard parity
+
+- Hardened JavaScript/Node recursive-spend helpers so native `null`/`undefined`
+  results fail with an explicit "returned no output" diagnostic before
+  `Buffer.from` can produce a generic type error. Empty native archives remain
+  rejected separately.
+- Added shared Kotlin/JVM and Java Android native-output guards for Kagemusha
+  compact-token, recursive-aggregation, and recursive-spend wrappers. These
+  guards now distinguish missing native proof archives from zero-length proof
+  archives and return valid bytes unchanged.
+- Added focused negative tests for JavaScript missing native outputs and JVM /
+  Java Android missing-vs-empty native result archives, while preserving the
+  default `recursive_spend_v1` selection whenever recursive spend support is
+  available.
+- Validation:
+  - `node --test test/kagemushaRecursiveSpend.test.js`
+    (6 passed)
+  - `node --check src/crypto.js && node --check dist/crypto.js && node --check test/kagemushaRecursiveSpend.test.js`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaNativeProversRejectMissingAndEmptyNativeOutputs --console=plain`
+    (passed; existing unchecked-cast warnings in `OfflineNoteTest.kt`)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+    (passed; 91 tasks)
+
+## 2026-06-01 ISO 20022 lifecycle outbox helpers
+
+- Added Torii XML outbox routes for `/v1/iso20022/messages/{msg_id}/pacs004`,
+  `/camt029`, `/sese024`, and `/sese025`, with OpenAPI entries alongside the
+  existing `pacs.002` status-report helper.
+- Extended durable ISO bridge context to preserve settlement amount/currency for
+  `pacs.008`/`pacs.009` records and securities amount, currency, quantity,
+  movement, payment, instrument, date, and execution-plan fields from `sese.023`
+  lifecycle records.
+- Added a local `camt.029` parser schema and negative/adversarial coverage for
+  missing outbox context, XML escaping in return/cancellation reasons, pending
+  settlement status advice, and settled `sese.025` confirmation generation.
+- Validation:
+  - `cargo test -p ivm parse_camt029_resolution_of_investigation -- --nocapture`
+  - `cargo test -p iroha_torii outbox --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii iso20022_bridge::tests --lib --features app_api -- --nocapture`
+
+## 2026-06-01 Python/Swift Kagemusha native boundary fail-closed
+
+- Routed the Python Kagemusha compact-token, recursive-aggregation, and
+  recursive-spend archive helpers through one native-call path that rejects
+  missing or empty native outputs. This keeps the Python SDK aligned with the
+  C/JVM fail-closed behavior for proof-producing bridge calls.
+- Hardened the Swift Kagemusha compact-token, recursive-aggregation, and
+  recursive-spend wrappers so empty native `Data` outputs are rejected as proof
+  failures, while `nil` native output remains a bridge-unavailable condition.
+  The Swift README now documents that the native Kagemusha prover wrappers
+  fail closed on empty native result archives.
+- Corrected the core ZK1 public-instance parser comment to describe the current
+  43-column recursive aggregation envelope and cleared the nearby formatting
+  nits reported by `rustfmt --check`.
+- Replaced the Python native account-list parser's obsolete `AccountId`
+  `FromStr` call with the crate's encoded-account parser so the PyO3 crate
+  compiles against the universal domainless account model.
+- Added PyO3 adversarial coverage for recursive-spend verification diagnostics:
+  trusted-setup recursive proof backends, self-consistent STARK/FRI recursive
+  proof substitution, and empty Halo2/IPA recursive proof payloads now return
+  explicit invalid result archives at the Python native boundary.
+- Validation:
+  - `rustfmt --edition 2024 python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `python3 - <<'PY' ... PY`
+    (custom import-isolated smoke: all Python Kagemusha helpers rejected missing
+    and empty native outputs)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-python-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_verify_python_function_reports_malformed_proof_material --lib -- --test-threads=1`
+    (1 passed; 7.87s test time after rebuild)
+  - `swift test --filter 'Kagemusha(CompactPaymentTokenProver|RecursiveAggregationProofBundleProver|RecursiveSpendProver)Tests'`
+    (14 passed)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+  - `rg -n "39-column Kagemusha recursive aggregation|39 columns.*recursive aggregation|39-column schema" crates/iroha_core/src/zk.rs docs/source/offline_kagemusha.md roadmap.md`
+    (no matches)
+  - `python3 -m pytest python/iroha_python/tests/kagemusha_test.py`
+    (not run: active Python 3.14 environment has no `pytest` module)
+
+## 2026-06-01 Kagemusha recursive verifier scalar-projection public input
+
+- Added `recursive_verifier_scalar_projection_digest` to
+  `KagemushaRecursiveAggregationProofPublicInputs` and the canonical Norito
+  public-input schema, expanding the recursive aggregation public instance
+  layout from 39 to 43 columns.
+- The current standalone recursive aggregation and recursive spend proof
+  constructors keep that field zero, while the one-hop verifier-slice circuit
+  now constrains the semantic public-input limbs to the embedded IPA verifier's
+  scalar-projection digest.
+- Added adversarial coverage for refreshed-hash scalar-projection public-input
+  substitution in data-model bundles and an ignored heavyweight MockProver case
+  for semantic scalar-projection public-input splicing in the composed one-hop
+  verifier slice.
+- Added a constructor-level one-hop verifier-slice guard that recomputes the
+  scalar-projection digest from the host verifier witness and rejects semantic
+  public-input limb splices before circuit assignment.
+- Extended chain-level recursive Kagemusha redeem adversarial coverage so a
+  refreshed-hash scalar-projection public-input substitution is rejected under
+  `invalid_recursive_bundle` before anchor or final-note nullifier mutation.
+- Reordered recursive redeem request validation so wrong recursive proof
+  backends are rejected by the request-level production-corridor guard before
+  public-input parity checks, preserving the intended SDK/bridge error surface.
+- Updated Kagemusha docs and roadmap to describe the 43-column envelope and the
+  zero-vs-composed scalar-projection binding rule while compact-token mode `2`
+  remains reserved.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs --lib -- --test-threads=1`
+    (1 passed; 0.66s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_instance_values_expose_proof_chain_digest --lib -- --test-threads=1`
+    (1 passed; 0.80s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder --lib -- --test-threads=1`
+    (20 passed, 2 ignored; 187.98s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_scalar_projection_public_input_splice --lib -- --test-threads=1`
+    (compiled; 1 ignored heavyweight MockProver test)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_semantic_circuit --lib -- --test-threads=1`
+    (10 passed; 153.46s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive --lib -- --test-threads=1`
+    (11 passed; 7.61s test time after rebuilding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (5 passed; 9.63s test time after rebuilding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder --lib -- --test-threads=1`
+    (21 passed, 2 ignored; 223.72s test time after rebuilding in a fresh target)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_scalar_projection_public_input_mismatch --lib -- --test-threads=1`
+    (1 passed; 4.81s test time after post-format rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 1341.50s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 1.02s test time after rebuilding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-guard-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.50s test time after rebuilding)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (6 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendProverTests`
+    (5 passed)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --no-daemon`
+    (BUILD SUCCESSFUL)
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --no-daemon`
+    (BUILD SUCCESSFUL)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter KagemushaRecursiveSpendNativeTests`
+    (not run: `dotnet` is not installed in this environment)
+
+## 2026-06-01 Kagemusha recursive spend boundary proof-material negatives
+
+- Extended chain-side recursive Kagemusha redeem adversarial coverage so
+  trusted-setup recursive proof backends, self-consistent STARK/FRI recursive
+  proof bundles, and empty recursive proof payloads all fail under
+  `invalid_recursive_bundle` before ledger state mutation.
+- Extended the C bridge recursive-spend verify diagnostic test to return
+  explicit invalid results for the same malformed recursive proof material,
+  proving SDK/native callers do not treat these malformed bundles as
+  inconclusive transport errors.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/offline.rs crates/connect_norito_bridge/src/lib.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-core-preverify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_verify_ffi_returns_diagnostic_result_archive --lib -- --test-threads=1`
+    (1 passed; 8.23s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-core-preverify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 941.44s test time)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/offline.rs crates/connect_norito_bridge/src/lib.rs`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/offline.rs crates/connect_norito_bridge/src/lib.rs status.md`
+  - `git diff --name-only -- Cargo.lock`
+    (no output)
+
+## 2026-06-01 ISO 20022 inbound lifecycle bridge
+
+- Added Torii inbound lifecycle submission endpoints for `pacs.002`,
+  `pacs.004`, `camt.056`, `sese.023`, `sese.024`, and `sese.025`, with OpenAPI
+  paths and MCP tools alongside the existing `pacs.008`/`pacs.009` payment
+  ingestion.
+- Extended the default ISO bridge profile catalog so generic ISO, CBPR+,
+  Fedwire, SEPA SCT Inst, and securities CSD profiles advertise the lifecycle
+  messages they can validate; added `sese.024` parser coverage and `pacs.002`
+  own-message-id aliases.
+- Lifecycle submissions now use the durable ISO message record model, reject
+  payload-hash/UETR replays, record unknown-original lifecycle evidence without
+  fabricating an original record, and update known originals for settlement,
+  return, cancellation, pending, partial, and rejection outcomes.
+- Validation:
+  - `cargo test -p ivm parse_sese024_status_advice_lifecycle_fields -- --nocapture`
+  - `cargo test -p iroha_core default_catalog_exposes_inbound_lifecycle_messages --lib -- --nocapture`
+  - `cargo test -p iroha_torii iso20022_bridge::tests::lifecycle --lib --features app_api -- --nocapture`
+  - `cargo test -p iroha_torii tool_registry_skips_ws_and_sse_routes --lib --features app_api -- --nocapture`
+  - `cargo check -p iroha_torii --features app_api`
+
+## 2026-06-01 Kagemusha recursive proof backend/payload guard
+
+- Tightened `KagemushaRecursiveAggregationProof` validation so the
+  proof-carrying recursive aggregation bundle is pinned to the canonical
+  transparent Halo2 IPA/Pasta backend and rejects empty proof payloads before
+  backend verification.
+- Added adversarial data-model coverage showing that a self-consistent
+  STARK/FRI recursive proof substitution is rejected even though STARK/FRI
+  remains supported for ordinary hop transcript material.
+- Updated core recursive-aggregation envelope fixtures to the then-current 39-column
+  schema and extended core preverify coverage to reject STARK/FRI recursive
+  proof-bundle substitution before backend verification.
+- Updated the Kagemusha docs and roadmap to clarify that recursive aggregation
+  proof bundles are Halo2 IPA/Pasta only, no trusted setup, and still
+  admission-neutral while mode `2` remains reserved.
+- Reconfirmed that Kagemusha remains enabled by default while legacy fallback
+  remains opt-in.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/offline/mod.rs`
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_aggregation_proof_bundle_rejects_backend_and_circuit_substitution --lib -- --test-threads=1`
+    (1 passed; 0.63s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_aggregation_proof_bundle_binds_evidence_and_roundtrips --lib -- --test-threads=1`
+    (1 passed; 0.54s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-core-preverify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify_rejects_non_production_backend_labels --lib -- --test-threads=1`
+    (1 passed; 8.42s test time after rebuilding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-core-preverify-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib -- --test-threads=1`
+    (1 passed)
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/offline/mod.rs crates/iroha_core/src/zk.rs`
+  - `git diff --check -- crates/iroha_data_model/src/offline/mod.rs crates/iroha_core/src/zk.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock`
+    (no output)
+
+## 2026-06-01 Kagemusha recursive spend proof-chain public input
+
+- Promoted `recursive_proof_chain_digest` into
+  `KagemushaRecursiveAggregationProofPublicInputs` and the canonical Norito
+  schema so recursive spend proofs expose the proof-chain accumulator directly
+  as public input. Standalone reserved recursive aggregation proofs keep that
+  field zero; `KagemushaRecursiveSpendBundleV1` requires it to match the
+  accumulator's non-zero proof-chain digest.
+- Expanded the Halo2 IPA recursive aggregation public instance layout from 35
+  to 39 columns and added core instance-value coverage for both standalone
+  aggregation proofs and recursive spend bundles. Public-input parity checks now
+  reject refreshed-hash substitutions of the proof-chain digest before backend
+  verification.
+- Hardened recursive spend preverification with an adversarial real-proof case
+  that mutates the proof-chain public input, refreshes the public-input hash,
+  and still fails closed because the bundle no longer matches its accumulator.
+- Added chain-level redeem coverage for the same refreshed-hash proof-chain
+  public-input splice, ensuring online redemption rejects the bundle before
+  spending anchor or final-note nullifiers.
+- Updated the Offline Kagemusha docs to describe the 39-column schema and the
+  zero-vs-bound proof-chain rule, and reran the recursive spend bridge and SDK
+  wrapper smoke tests that consume ABI 6 Norito archives.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive --lib -- --test-threads=1`
+    (11 passed; 6.82s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_semantic_circuit --lib -- --test-threads=1`
+    (10 passed; 133.95s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_instance_values_expose_proof_chain_digest --lib -- --test-threads=1`
+    (1 passed; 0.85s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_proof_instance_values_bind_public_inputs --lib -- --test-threads=1`
+    (1 passed; 0.66s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_real_proof_rejects_adversarial_tampering --lib -- --test-threads=1`
+    (1 passed; 37.58s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (1 passed; 61.85s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 598.29s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (5 passed; 9.72s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.46s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.49s test time after rebuild)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (5 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+    (passed; `python3 -m pytest` was unavailable because this interpreter has
+    no `pytest` installed)
+  - `swift test --package-path IrohaSwift --filter KagemushaRecursiveSpendProverTests`
+    (3 passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --no-daemon`
+    (passed)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --no-daemon`
+    (passed; the unpinned JDK 25 run fails during Gradle/Kotlin DSL startup)
+  - `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --filter KagemushaRecursiveSpendNativeTests`
+    (not run: `dotnet` is not installed in this environment)
+
+## 2026-06-01 Kagemusha reserved transcript digest/admission split
+
+- Split Kagemusha aggregation transcript validation so the Poseidon2 transcript
+  digest accepts both checked pre-fold mode `1` and reserved recursive mode `2`
+  for recursive evidence binding, while still rejecting unknown aggregation
+  modes.
+- Compact-token admission remains checked-only: folded public inputs and compact
+  token proof binding still reject reserved mode `2` with the explicit
+  in-circuit-verifier-not-ready reason.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/offline/mod.rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_poseidon_aggregation_transcript_digest_binds_statement_fields --lib -- --test-threads=1`
+    (1 passed; 0.47s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_aggregation_evidence --lib -- --test-threads=1`
+    (2 passed; 0.58s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_compact_token_binds_folded_proof_public_inputs --lib -- --test-threads=1`
+    (1 passed; 0.45s test time)
+
+## 2026-06-01 Torii sustained query load profiles
+
+- Added validated Torii query-load profiles for signed iterable stored-cursor
+  continuations, account primary-alias projection queries, asset-holder scans,
+  account-asset predicate queries, committed-history contract-activity
+  predicates, and generic aggregate queries. The validator rejects zero,
+  oversized, malformed-name, shallow-dataset, unexpected-continuation,
+  unexpected committed-history rows, and page-limit benchmark shapes before
+  fixtures are built.
+- Extended `torii_hot_paths` with concurrent in-process HTTP workloads that
+  route through Axum services and the existing signed-query/app-query handlers,
+  including deep signed continuation chains over the Arc-backed snapshot replay
+  path and a `/v1/contracts/activity` GET profile backed by real committed
+  transactions carrying contract metadata.
+- Added a socket transport profile group for the same validated workload set.
+  It binds ephemeral localhost Axum listeners and uses pooled `reqwest` clients
+  so the in-process handler measurements can be compared with real HTTP
+  transport, connection-pool, and body IO overhead.
+- Documented the Torii handler-path benchmark methodology and entrypoints in
+  `docs/source/query_benchmarks.md`; the remaining query follow-up is the full
+  production-like socket profile pass for explicit indexes or materialized
+  views.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+  - `cargo test -p iroha_torii query_load_profiles --lib --features app_api -- --test-threads=1`
+    (6 passed; observed one unrelated existing `iroha_core` dead-code warning)
+  - `cargo check -p iroha_torii --bench torii_hot_paths --features app_api`
+    (passed; observed unrelated existing dead-code warnings in `iroha_data_model` and `iroha_core`)
+  - `cargo test -p iroha_torii handle_v1_contracts_activity_returns_contract_call_metadata --lib --features app_api -- --test-threads=1`
+    (1 passed; observed the same unrelated existing `iroha_core` dead-code warning)
+  - `cargo bench -p iroha_torii --bench torii_hot_paths --features app_api torii_query_http_socket_sustained/account_alias_projection -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.1`
+    (socket account-alias profile completed; 10 samples, median interval around 269 ms after release-profile compile)
+
+## 2026-06-01 Kagemusha recursive spend proof-chain accumulator binding
+
+- Added `recursive_proof_chain_digest` to
+  `KagemushaRecursiveSpendAccumulatorV1` so every append folds a
+  domain-separated digest of the previous recursive proof artifact into the
+  constant-size accumulator state.
+- The append accumulator builder now requires the previous recursive proof,
+  validates that its public inputs match the previous accumulator, and binds
+  proof-byte mutations into a different proof-chain digest instead of letting
+  the next accumulator detach from the consumed recursive proof.
+- Updated core append construction, bridge/JS/Python sample bundles, recursive
+  payload benchmarks, and recursive redeem fixtures for the new accumulator
+  field and proof-aware append API.
+- Added adversarial data-model coverage for previous recursive proof
+  public-input splices, previous proof byte splices, zero proof-chain digest
+  payloads, and retained the 64-hop constant-size payload assertion.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (6 passed; 5.82s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (1 passed; 58.63s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (5 passed; 8.68s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.47s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.47s test time)
+
+## 2026-06-01 Torii app query page schemas and SDK bounded metadata
+
+- Replaced remaining generic OpenAPI response refs for concrete app query pages
+  with endpoint-specific page schemas for domains, NFTs, RWAs, and repo
+  agreements, completing the existing account, account-asset, asset-definition,
+  and asset-holder coverage.
+- The shared app page metadata schema now covers all of those concrete list and
+  query responses with required `has_more`, required `count_mode`, and optional
+  `total`, plus indexed source metadata when present. Repo agreement query
+  request docs now include `select`, `aggregate`, `fetch_size`, and
+  `count_mode`.
+- Extended Python convenience parsers so RWA and repo agreement pages preserve
+  bounded metadata, reject malformed `has_more`/`count_mode`, and normalize
+  count-mode arguments before dispatch. Added JavaScript repo agreement tests
+  for bounded metadata preservation and malformed response rejection.
+- Validation:
+  - `cargo fmt --package iroha_torii`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/client.py python/iroha_python/src/iroha_python/repo.py python/iroha_python/tests/client_ledger_helpers_test.py`
+  - `node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern 'RepoAgreements|queryAccounts|queryRwas'`
+    (670 passed; Node ran the full file)
+  - `cargo test -p iroha_torii generated_spec_documents_app_query_page_metadata --lib --features app_api -- --test-threads=1`
+    (1 passed; rerun against the repo target after the first `/tmp` target run
+    exhausted disk space before executing tests)
+
+## 2026-06-01 Kagemusha recursive redeem request proof hardening
+
+- Tightened `KagemushaRecursiveSpendRedeemRequestV1` wallet/native validation
+  so both the carried recursive spend proof and the final redeem proof
+  attachment must stay in the current transparent `halo2/ipa` production
+  corridor before C bridge or PyO3 instruction builders emit
+  `RedeemKagemushaRecursive`.
+- The stateless request guard now rejects trusted-setup or otherwise
+  unsupported redeem-proof backends, attachment/proof/verifier-key backend
+  mismatches, whitespace-only verifier-key ids, empty proof bytes, missing or
+  zero verifier-key commitments, mismatched envelope hashes, recursive spend bundle
+  STARK backends, and empty recursive proof bytes before chain-side WSV
+  verifier-record checks run.
+- Validation:
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs`
+  - `git diff --check -- crates/iroha_data_model/src/offline/mod.rs crates/connect_norito_bridge/src/lib.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_redeem_request_binds_public_amount --lib -- --test-threads=1`
+    (1 passed; 0.57s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_ffi_rejects_malformed_redeem_proof_without_output --lib -- --test-threads=1`
+    (1 passed; 1.20s test time after rebuild)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.72s test time)
+
+## 2026-06-01 Kagemusha recursive verifier slice LEN=4 binding
+
+- Generalized the one-hop recursive aggregation verifier-slice circuit from the
+  old fixed `LEN = 2` IPA profile to a const-generic opening length, while
+  keeping the single-hop witness-count and hop-count constraints.
+- The slice now derives its opening-length selector, fixed-window schedule
+  digest, shared-table manifest digest, embedded verifier shape, and final
+  folded `b` scalar from the declared opening length, so the production-width
+  `LEN = 4` two-round Pallas verifier preflight path is no longer blocked by a
+  length-two-only circuit surface.
+- Added active adversarial coverage for LEN=4 metadata binding, selector
+  splices, preflight opening-length splices, detached-vs-hop-bound digest
+  separation, wrong hop-proof hash binding, and a two-round synthetic
+  shared-table verifier-slice witness.
+- The record-backed one-hop recursive evidence builders now run their returned
+  evidence through the same verifier-slice metadata guard before recursive
+  spend init/append can prove an accumulator. Focused real-hop tests splice
+  the verifier-witness batch digest, declared opening length, and fixed-window
+  table-base digest and require those production evidence/preflight bindings to
+  fail closed.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder --lib -- --test-threads=1`
+    (20 passed, 2 ignored; 179.99s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas --lib -- --test-threads=1`
+    (4 passed; 11.90s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (1 passed; 58.57s test time after the verifier-slice evidence hook)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (4 passed; 8.20s test time after recompiling the bridge)
+
+## 2026-06-01 Kotodama opaque host helper access descriptors
+
+- Replaced wildcard-only compiler access fallback for static peer
+  registration/unregistration, subscription billing/usage helpers, VRF epoch
+  seed requests, AXT begin/touch/proof/asset-handle helpers, and every
+  Soracloud host request operation.
+- Static manifests now emit exact contextual keys such as `peer:{id}`,
+  `subscription:trigger_context:*`, `vrf:epoch_seed:*`,
+  `axt:dataspace:*`, `axt:asset_handle:*`, and operation-specific
+  `soracloud:*` keys. Dynamic, malformed, or syscall/operation-mismatched
+  payloads remain incomplete in test mode and fail production compilation with
+  `E_ACCESS_INCOMPLETE`.
+- Added positive, negative, and adversarial Kotodama coverage for static peer,
+  subscription, VRF, AXT, all Soracloud operations, malformed dynamic AXT
+  payloads, invalid peer JSON, and mismatched Soracloud request/syscall pairs.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang manifest_access_set_hints_ --lib -- --test-threads=1`
+    (36 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang production_rejects_incomplete_access_hints --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang axt_builtins --lib -- --test-threads=1`
+    (2 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang soracloud_runtime_builtins --lib -- --test-threads=1`
+    (2 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang vendor_bridge_and_subscription_builtins_emit_syscalls --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-target cargo test -p kotodama_lang --lib -- --test-threads=1`
+    (432 passed)
+
+## 2026-06-01 Cross-SDK Soracloud BFV key-component fixture coverage
+
+- Extended the JavaScript, Kotlin/JVM, Java Android, and Swift BFV identifier
+  fixture tests so they validate the shared operation fixture's
+  component-level evaluation-key metadata, not only encrypted input vectors.
+- The SDK fixture checks now require deterministic decomposition metadata,
+  relinearization entry count/index/degree consistency, canonical nonzero
+  unique SHA-256 component digests, rotation-key refresh `c0`/`c1` component
+  digests, and bootstrap refresh `c0`/`c1` component digests.
+- Added JavaScript adversarial fixture mutations for missing
+  relinearization components, duplicate component digests, zero refresh
+  component digests, and coefficient-count drift so the shared fixture shape is
+  fail-closed in a lightweight SDK lane.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (18 passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.sharedSoracloudBfvKeyBundleComponentVectorsAreComplete --console=plain`
+    in `kotlin` (BUILD SUCCESSFUL)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    in `java/iroha_android` (BUILD SUCCESSFUL)
+  - `swift test --filter 'ToriiClientTests/test(IdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors|SharedSoracloudBfvKeyBundleComponentVectorsAreComplete)'`
+    in `IrohaSwift` (2 passed)
+
+## 2026-06-01 Kagemusha recursive spend accumulator append fix
+
+- Fixed the recursive spend accumulator so `fixed_window_table_base_digest`
+  streams across appends instead of being treated as stable verifier context.
+  The digest is proof-witness-specific, so legitimate second-hop Pallas
+  verifier witnesses can now append while opening length, verifier-parameter
+  fingerprint, fixed-window schedule digest, and shared-table manifest digest
+  remain invariant across hops.
+- Added real two-hop core coverage that builds two confidential-transfer-v2
+  hops with a real root transition, initializes recursive spendable cash from
+  the first record-backed hop, appends the second record-backed hop, verifies
+  constant D2D archive size, and rejects tampered previous recursive proofs,
+  spendable-note amount drift, and forged Pallas hop-domain metadata.
+- Added data-model coverage that a rotated per-hop table-base digest is folded
+  into a new accumulator value instead of being rejected as a verifier-context
+  mismatch.
+- Revalidated Bridge ABI 6 recursive-spend diagnostics and malformed archive
+  rejection after the accumulator change.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_rejects_malformed_notes_and_lineage --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_init_append_from_record_archives_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (1 passed; 56.94s test time after incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_payload_size_is_hop_count_independent --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+    (4 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_append_rejects_hop_count_above_cap --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (6 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend_real_halo2_ipa_proofs_verify_for_multiple_hops --lib -- --test-threads=1`
+    (1 passed; 67.57s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 283.11s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_executes_after_three_offline_hops --lib -- --test-threads=1`
+    (1 passed; 75.02s test time)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest`
+    in `kotlin` (BUILD SUCCESSFUL)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    in `java/iroha_android` (BUILD SUCCESSFUL)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew android:testDebugUnitTest --tests org.hyperledger.iroha.android.offline.OfflineNoteTest`
+    in `java/iroha_android` could not run because no Android SDK is
+    configured (`ANDROID_HOME`/`local.properties` missing)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (5 passed)
+  - `swift test --filter KagemushaRecursiveSpendProverTests`
+    in `IrohaSwift` (3 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - Direct Python package import checks are blocked in this shell by missing
+    optional test/runtime dependencies (`requests`; previously `norito` until
+    `python/norito_py/src` was added to `PYTHONPATH`). `pytest` is also not
+    installed in this environment.
+
+## 2026-06-01 Soracloud BFV key-bundle component vectors
+
+- Extended the shared Soracloud BFV identifier fixture with component-level
+  evaluation-key material: decomposition metadata, per-relinearization-entry
+  `b`/`a` coefficient-vector SHA-256 digests, and rotation/bootstrap
+  encrypted-zero refresh `c0`/`c1` coefficient-vector digests.
+- Tightened the Rust fixture consumer so the operation-vector test validates
+  those component fields in addition to whole-bundle byte length, SHA-256, and
+  domain-separated digest.
+- Strengthened the adversarial wrong-key fixture coverage so structurally valid
+  but different BFV key material is rejected at the public-key, public
+  parameter, whole evaluation-key bundle, relinearization component, and
+  rotation/bootstrap refresh-component levels.
+- Validation:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture --test-threads=1`
+    (1 passed; used to regenerate the canonical component digests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core soracloud_bfv_key_fixture_rejects_valid_wrong_key_material --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core soracloud_bfv_operation_vectors_reject_tampered_refresh_material --lib -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 Soracloud FHE evaluation-key policy binding
+
+- Added `evaluation_key_digest` to `FheExecutionPolicyV1` so governed
+  Soracloud FHE execution policies pin the domain-separated BFV evaluation-key
+  bundle digest instead of accepting any structurally valid key bundle.
+- Updated the shared FHE execution-policy and governance-bundle fixtures with
+  the canonical evaluation-key digest from the BFV operation-vector fixture,
+  and enforced that digest in `RunSoracloudFheJob` before loading inputs or
+  emitting output state.
+- Added adversarial core coverage for structurally valid but wrong
+  evaluation-key material and a wrong policy digest, while preserving the full
+  FHE job output path.
+- Validation:
+  - `cargo fmt --package iroha_data_model --package iroha_core --package iroha_torii`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy_fixture_is_canonical -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle_fixture_is_canonical -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core soracloud_fhe_policy_rejects_wrong_evaluation_key_digest --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_torii fhe_job_run_signature_payload_layout_is_canonical --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_data_model fhe_governance_bundle_validate_accepts_consistent_payload --lib -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 ZK-ACE core state-transition adversarial coverage
+
+- Added core ZK-ACE chain-admission coverage for identity lifecycle state:
+  rotated-out commitments reject otherwise valid transfer proofs, replacement
+  commitments can still execute, and revoked commitments reject fresh transfer
+  attempts.
+- Added adversarial transfer-binding coverage for unsupported action classes,
+  tampered transaction digests, recipient substitution, mutated canonical
+  ZK-ACE public inputs, and mutated STARK wrapper public-input words.
+- Validation:
+  - `cargo fmt --package iroha_core`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-zkace-target cargo test -p iroha_core zk_ace_ --lib -- --test-threads=1`
+    (5 passed; 6741 filtered out)
+
+## 2026-06-01 Kagemusha recursive spend SDK output hardening
+
+- Aligned JavaScript, Python, and the optional C# P/Invoke recursive-spend
+  helpers with the Swift and JVM/Android wrappers by rejecting empty native
+  outputs from init/append/verify/redeem. A native bridge failure can no longer
+  surface to those SDKs as an apparently valid empty archive.
+- Added JavaScript and Python wrapper coverage for empty native outputs while
+  preserving existing empty-input and native-availability fail-closed behavior.
+- Validation:
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (5 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - Direct Python import check for recursive spend empty-output rejection passed
+    after stubbing the optional package import path.
+  - `PYTHONPATH=python/iroha_python/src python3 -m pytest python/iroha_python/tests/kagemusha_test.py`
+    could not run because this environment does not have `pytest` installed.
+  - `dotnet --info` could not run because this environment does not have
+    `dotnet` installed, so the C# wrapper change was not compiled locally.
+
+## 2026-06-01 ZK-ACE SDK proof binding hardening
+
+- Tightened JavaScript ZK-ACE authorization builders so public inputs must use
+  schema version `1` instead of accepting future or malformed schema numbers
+  that chain admission would later reject.
+- `buildZkAceAuthorizedTransferInstruction` now validates a prepared
+  `authorizationProof` against the top-level transfer fields before returning
+  an instruction. The SDK rejects mismatched transaction digests, chain ids,
+  destinations, amounts, policy hashes, and verifier-key references instead of
+  emitting a transfer that can only fail at chain validation.
+- Rebuilt `javascript/iroha_js/dist/` from source so the package export surface
+  carries the same fail-closed behavior.
+- Validation:
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js`
+    (103 passed)
+  - Dist smoke import of `dist/instructionBuilders.js` verified v1-only
+    public inputs and amount-mismatch rejection for prepared ZK-ACE
+    authorization proofs.
+
+## 2026-06-01 Kagemusha recursive spend cap and redeem misconfiguration hardening
+
+- Added data-model coverage that builds a recursive spend accumulator to the
+  hard 64-hop cap, then verifies the 65th append fails with
+  `KagemushaFoldError::TooManyHops` before a forged spendable D2D payload can
+  advance.
+- Split expensive recursive redeem admission negatives so verifier/policy
+  misconfigurations run in a dedicated large-stack test: disabled unshielding,
+  missing recursive spend verifier records, missing asset-bound unshield
+  verifier bindings, missing final unshield verifier records, inactive
+  recursive verifier records, recursive verifier proof-size cap mismatches, and
+  inactive final unshield verifier records now reject through stable offline
+  rejection labels.
+- Revalidated the original recursive redeem rejection matrix after the split:
+  double spends, config-disabled Kagemusha, legacy-forced mode, stale roots,
+  and reused top-up anchors still fail through the expected chain admission
+  checks.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_append_rejects_hop_count_above_cap --lib -- --test-threads=1`
+    (1 passed; 1.31s test time after a 4m 55s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_verifier_and_policy_misconfigurations --lib -- --test-threads=1`
+    (1 passed; 840.16s test time after a 2m 18s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots --lib -- --test-threads=1`
+    (1 passed; 701.00s test time after a 2m 14s incremental compile)
+
+## 2026-06-01 One-hop recursive verifier constructor hardening
+
+- Tightened the Kagemusha recursive aggregation one-hop verifier-slice
+  constructor so it revalidates semantic non-zero public-field inverse
+  witnesses before accepting a composed circuit witness.
+- Tightened native Pallas preflight binding so forged all-zero verifier
+  parameter, fixed-window schedule, shared-table manifest, table-base, or
+  verifier-witness batch digests fail before public-limb comparison.
+- Tightened the shared-table recursive IPA verifier host-link guard so it
+  enforces the expected round count and per-round `b`-reduction and
+  generator-fold layer widths before a composed witness can be accepted.
+- Tightened native and shared-table recursive IPA verifier synthesis so
+  malformed direct witnesses with missing `b`-reduction or generator-fold
+  layers fail before assignment instead of relying on iterator truncation.
+- Added a one-hop host guard for reserved hop-proof-hash-bound Pallas preflight
+  binding, so recursive mode-2 metadata can be checked against the same digest
+  shape used by reserved evidence instead of the detached native batch digest.
+- Added a dedicated hop-bound one-hop verifier-slice constructor so reserved
+  evidence callers cannot accidentally materialize a recursive verifier witness
+  through the detached native-batch preflight path.
+- Tightened the hop-bound one-hop witness guard so it derives native Pallas
+  preflight through the verifier slice's declared opening length before mixing
+  in the hop proof hash; LEN=4 hop-bound witnesses now have active acceptance
+  and mismatch coverage, including rejection through a LEN=2 slice.
+- Expanded active adversarial coverage for stale semantic inverse witnesses,
+  zero public digest groups, zeroed preflight digest fields, and missing
+  `b`-reduction or generator-fold layers; added ignored heavyweight direct
+  MockProver coverage for native/shared-table verifier synthesis shape
+  rejection.
+- Updated recursive Kagemusha redeem adversarial fixtures to mutate shielded
+  asset and verifier-key state through the current transaction test accessors.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder --lib -- --test-threads=1`
+    (12 passed, 1 ignored heavyweight Pallas materialization case; 164.61s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core hop_bound_pallas_preflight --lib -- --test-threads=1`
+    (5 passed, 1 ignored heavyweight hop-bound constructor materialization case; 4.94s test time after a 2m 13s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core hop_bound_constructor --lib -- --test-threads=1`
+    (1 passed; 0.93s test time after a 2m 10s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core len4_pallas_preflight_binding --lib -- --test-threads=1`
+    (1 passed; 1.51s test time after waiting on the prior Cargo lock and a 4m 30s compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core synthesis_rejects_missing --lib -- --test-threads=1`
+    (0 passed, 4 ignored heavyweight direct verifier synthesis cases)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core synthesis_rejects_missing --lib -- --ignored --test-threads=1`
+    (4 passed; 1299.91s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 586.08s test time)
+
+## 2026-06-01 Backend label normalization hardening
+
+- Hardened the shared Kagemusha/data-model and core trusted-setup backend
+  classifiers to normalize delimiter-inserted setup spellings before broad
+  STARK/FRI profile admission. Profiles such as `stark/fri/prod-bn-254`,
+  `stark/fri/prod-groth-16`, `stark/fri/prod-k-z-g`, and
+  `stark/fri/prod-b.l.s.12.381` now fail closed before transcript digesting,
+  IVM backend allowlisting, or verifier dispatch.
+- Hardened developer-only backend classification the same way, so
+  delimiter-inserted `d-e-b-u-g` and `m-o-c-k` labels cannot pass broad
+  production allowlists or chain-side Offline/Kagemusha admission.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib -- --test-threads=1`
+    (1 passed, including delimiter-inserted KZG/Groth16/BN254/BN256/BLS12 and
+    debug/mock profile rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib -- --test-threads=1`
+    (4 passed, covering STARK/FRI profile admission, IVM backend allowlisting,
+    and trusted-setup/developer classifier rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_trusted_setup_backends_before_dispatch --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core guardrails_reject_developer_only_backends_before_dispatch --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core preverify_rejects_developer_only_backends_before_dedup --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core offline_note_rejects_non_production_backend_labels_before_registry_lookup --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_trusted_setup_backend_labels --lib -- --test-threads=1`
+    (1 passed)
+
+## 2026-06-01 Kagemusha recursive redeem admission hardening
+
+- Expanded chain-side recursive Kagemusha redeem adversarial coverage. The
+  focused test now rejects wrong public amounts, wrong chain ids, tampered final
+  note bindings, self-consistent final unshield proof public-instance
+  mutations with refreshed envelope hashes, and malformed final redeem proof
+  envelopes.
+- Fixed stale recursive-spend sample bundles in the C bridge and PyO3 native
+  test fixtures so their aggregation transcript digest equals the lineage
+  digest required by the hardened accumulator validator.
+- Revalidated ABI-layer negative paths: the C bridge rejects malformed recursive
+  spend init/append/verify/redeem archives without producing output buffers,
+  and both the C bridge and PyO3 native redeem helpers reject amount mismatches
+  or missing top-up anchors before emitting redeem instructions.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches --lib -- --test-threads=1`
+    (1 passed; 436.09s test time after a 2m 01s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem_bridge_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.48s test time after a 4m 46s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_invalid_archives_without_output --lib -- --test-threads=1`
+    (1 passed; 0.00s test time after a 4m 08s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem_python_native_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed; 0.49s test time after a 5.93s incremental compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend_payload_size_is_hop_count_independent --lib -- --test-threads=1`
+    (1 passed; 1.30s test time after a 4m 08s incremental compile)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (4 passed)
+  - An initial attempt to compile the bridge and PyO3 tests into separate fresh
+    target dirs failed before test execution because `/tmp` ran out of space;
+    stale throwaway target dirs were removed and the tests were rerun against
+    the shared `/tmp/iroha-kagemusha-target`.
+
+## 2026-06-01 Kagemusha recursive spend anchor collision hardening
+
+- Tightened recursive spend accumulator validation so forged D2D payloads cannot
+  reuse a top-up anchor nullifier as the current spendable note commitment.
+- Tightened recursive spend note construction so a current note spend nullifier
+  cannot collide with any output commitment in the hop that created the note,
+  including sibling outputs.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (5 passed, including forged top-up-anchor/current-note commitment collision
+    and sibling output/current-note nullifier collision rejection)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_spend --lib -- --test-threads=1`
+    (3 passed, including real multi-hop Halo2 IPA recursive spend proof
+    verification and adversarial proof tampering rejection)
+
+## 2026-06-01 Identifier receipt shared vectors
+
+- Added `fixtures/soracloud/identifier_receipt_vectors_v1.json`, a shared
+  signed/proof-attestation identifier receipt fixture that binds the canonical
+  payload SHA-256, Iroha prehash, deterministic Ed25519 resolver signature,
+  signed attestation bytes, proof `ProofBox` bytes, policy summary, account
+  binding, and negative mutations for tampered output hashes, wrong resolver
+  keys, wrong policy ids, malformed signatures, and proof-only attestations.
+- Aligned JavaScript receipt payload encoding with the canonical account
+  controller byte-vector layout used by the JVM, Android, and Swift SDKs, then
+  rebuilt `javascript/iroha_js/dist/toriiClient.js`.
+- Fixed Swift receipt-opening signature vector encoding to use the canonical
+  fixed `u64` vector count with compact per-byte elements.
+- Kept malformed resolver literals fail-closed while making wrong-but-decodable
+  Ed25519 resolver keys return verification failure in Kotlin/JVM and Java
+  Android instead of surfacing backend parser exceptions.
+- Added Rust data-model ingestion for the same shared fixture, including
+  payload SHA-256, signed/proof attestation byte hashes, signature verification,
+  wrong resolver key rejection, policy-id mutation rejection, malformed
+  signature rejection, and proof-only signature-verifier rejection. The wrong
+  resolver fixture now uses a valid Iroha Ed25519 key so every runtime exercises
+  verification failure instead of parser failure.
+- Added Torii runtime ingestion for the shared receipt vector. The fixture now
+  pins the runtime-derived identifier receipt associated-data hash, canonical
+  payload SHA-256, Iroha prehash, resolver signature, and signed-attestation
+  SHA-256 emitted by `issue_claim_receipt`, plus Torii-side rejection of
+  resolver-signer mismatch and proof-mode receipt issuance without a prover
+  runtime.
+- Validation:
+  - `python3 -m json.tool fixtures/soracloud/identifier_receipt_vectors_v1.json`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_data_model identifier_resolution_receipt_matches_shared_fixture_vectors --lib -- --test-threads=1`
+    (1 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_torii torii_issue_claim_receipt_matches_shared_identifier_fixture --lib -- --test-threads=1`
+    (1 passed)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (15 passed)
+  - `npm run build:dist` in `javascript/iroha_js`
+  - Dist smoke: importing `javascript/iroha_js/dist/toriiClient.js` and hashing
+    the shared fixture payload plus signed/proof attestation vectors reproduced
+    the expected fixture SHA-256 digests.
+  - `swift test --filter ToriiClientTests/testIdentifierReceiptVerifierMatchesSharedReceiptVectors`
+    (1 passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierReceiptVerifierMatchesSharedReceiptVectors --console=plain`
+    (1 passed)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (harness passed)
+  - `git diff --check`
+  - `git diff --no-index --check /dev/null fixtures/soracloud/identifier_receipt_vectors_v1.json; rc=$?; test "$rc" -eq 1`
+  - `git diff --no-index --check /dev/null fixtures/soracloud/bfv_identifier_vectors_v1.json; rc=$?; test "$rc" -eq 1`
+
+## 2026-06-01 Offline note one-use certificate counter hardening
+
+- Tightened offline note key-certificate validation so a certificate that
+  exposes a hardware usage-count limit must set it to exactly `1`. Certificates
+  with `one_use = true` but `assertion_usage_count_limit = Some(0)` or
+  `Some(2+)` now fail before issue, audit, or redemption proof verification.
+- Mirrored the same one-use counter rule in Swift, Kotlin/JVM, and Java Android
+  certificate constructors so SDKs reject malformed certificate metadata before
+  wallet-side Norito serialization.
+- Tightened the Torii offline issuer so online-to-offline topup certificate
+  minting also rejects any exposed hardware usage-count limit other than
+  exactly `1`, while still allowing the field to be absent for platforms that do
+  not expose a counter.
+- Changed Torii topup issuance to build the wallet JSON certificate and the
+  `IssueOfflineNote` chain certificate from the same signed certificate object,
+  ensuring the wallet trust anchor is byte-for-byte the certificate payload hash
+  that core records for the online-to-offline transaction.
+- Hardened Swift, Kotlin/JVM, and Java Android Torii issuer-response parsers so
+  malformed, overflowed, or non-numeric certificate versions and
+  `assertion_usage_count_limit` values are rejected before any SDK narrows the
+  JSON number into its certificate model.
+- Added a Kagemusha transfer admission guard that rejects byte-identical overlap
+  between consumed input nullifiers and new output commitments before proof
+  decoding, preserving the ledger-side nullifier/commitment domain separation.
+- Added the same disjointness guard to legacy Offline audit metadata, so bearer
+  audit outputs cannot reuse consumed audit nullifier bytes while the migration
+  fallback remains available.
+- Mirrored that disjointness in the shared folded-public-input and Poseidon
+  aggregation-transcript validators, including same-hop and cross-hop overlap
+  cases, so compact-token and reserved recursive evidence builders fail closed
+  before hashing malformed hop statements.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core key_certificate_requires_one_use_ed25519_key --lib -- --test-threads=1`
+    (1 passed, covering `one_use = false`, `Some(0)`, `Some(2)`,
+    `Some(1)`, and empty Ed25519 public-key rejection; 2m 08s compile plus
+    0.01s test time)
+  - `swift test --filter OfflineNoteTests/testOfflineNoteCertificatePayloadValidationAndEncodingBranches`
+    (1 selected XCTest passed, covering `nil`, `1`, rejected `2`
+    certificate payload limits, and rejected `0` certificate constructor limit)
+  - `swift test --filter OfflineNoteTests/testToriiIssuerClientRejectsMalformedCertificateUsageLimits`
+    (1 selected XCTest passed, covering Torii response rejection for zero,
+    non-v1, overflowed, and string certificate versions and usage-count limits)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_torii certificate --lib -- --test-threads=1`
+    (3 passed, covering the Torii issuer's accepted limit `1`, absent counter
+    compatibility, rejected zero, multi-use, overflow, and non-integer limits,
+    and the shared JSON/chain certificate signature binding)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.keyCertificatesRequireOneUseHardwareLimitWhenPresent --console=plain`
+    (Kotlin/JVM build successful; focused constructor test executed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.toriiIssuerClientRejectsMalformedCertificateUsageLimits --console=plain`
+    (Kotlin/JVM build successful; Torii response parser rejected zero, non-v1,
+    overflowed, and string certificate versions and usage-count limits)
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (Java Android core harness build successful for `OfflineNoteTest`,
+    including constructor and Torii response parser malformed version and
+    usage-limit cases)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_config offline_defaults_keep_kagemusha_enabled_without_legacy_fallback --lib -- --test-threads=1`
+    (1 passed, asserting Kagemusha is enabled and legacy fallback is not forced
+    by default; 3m 32s compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_transfer_rejects_nullifier_output_overlap_before_proof_decode --lib -- --test-threads=1`
+    (1 passed with malformed proof bytes, confirming the overlap guard fires
+    before proof decoding; 2m 16s compile plus 5.55s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core audit_rejects_nullifier_output_overlap_before_proof --lib -- --test-threads=1`
+    (1 passed with malformed proof bytes, confirming legacy audit overlap
+    rejection fires before recursive proof decoding; 4m 50s compile plus 0.73s
+    test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_folded_public_inputs_reject_malformed_witnesses --lib -- --test-threads=1`
+    (1 passed, covering malformed folded-public-input witnesses including
+    same-hop and cross-hop nullifier/commitment overlap; 4m 14s compile plus
+    0.55s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_poseidon_aggregation_transcript_digest_rejects_noncanonical_statement --lib -- --test-threads=1`
+    (1 passed, covering Poseidon aggregation-transcript rejection for the same
+    overlap classes; 4m 25s compile plus 0.44s test time)
+
+## 2026-06-01 Kagemusha trusted-setup punctuation-splice hardening
+
+- Hardened the shared Kagemusha/core trusted-setup backend classifiers to split
+  backend labels on every non-alphanumeric delimiter, not only `/`, `:`, and
+  whitespace. This closes punctuation-spliced allowlist bypasses such as
+  `stark/fri/prod;kzg`, `stark/fri/prod+bn254`,
+  `stark/fri/prod-bls12-381`, and `halo2/ipa;groth16` before STARK/FRI broad
+  profile admission, verifier guardrails, preverification, or chain-side
+  Kagemusha transfer checks can dispatch backend verification.
+- Tightened core STARK/FRI profile admission to reject whitespace-only suffixes
+  such as `stark/fri/ ` and `stark/fri/\t\n`, plus leading, trailing, or
+  embedded whitespace in otherwise production-looking profiles such as
+  `stark/fri/ sha256-goldilocks` or `stark/fri/sha256 goldilocks`, matching the
+  data-model transcript helper's no-wildcard backend rule.
+- Further constrained production STARK/FRI profile suffixes to ASCII
+  alphanumeric characters plus `-`, `_`, and `.`, so punctuation-only broad
+  profile spellings such as `stark/fri/prod;foo`, nested suffixes such as
+  `stark/fri/prod/foo`, and non-ASCII suffixes such as `stark/fri/Δ` fail
+  closed before broad family dispatch.
+- Added adversarial setup-label cases to the data-model Kagemusha verifier-key
+  Poseidon digest test and the core trusted-setup classifier, STARK/FRI
+  classifier, guardrail, and preverify tests. Mode `2` remains reserved; this
+  change hardens the production no-trusted-setup admission boundary while the
+  private-hop recursive verifier remains incomplete.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_verifier_key_poseidon_digest_binds_backend_and_bytes --lib -- --test-threads=1`
+    (1 passed with trusted-setup punctuation-splice and whitespace-only
+    STARK/FRI suffix rejection cases plus padded, embedded-whitespace,
+    punctuation, nested, and non-ASCII profile rejection; 10m 40s compile plus
+    0.44s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core stark_backend_tag_tests --lib -- --test-threads=1`
+    (4 passed, covering STARK/FRI base/variant admission, whitespace-only
+    suffix rejection, padded, embedded-whitespace, punctuation, nested, and
+    non-ASCII profile rejection, IVM execution allowlisting, and
+    trusted-setup/developer classifiers; 5m 30s
+    compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core trusted_setup --lib -- --test-threads=1`
+    (8 passed, covering Kagemusha transfer admission, verifier registration,
+    IVM host registration, verifier guardrails, preverify, and shared backend
+    classification; 4m 17s compile plus 2.08s test time)
+
+## 2026-06-01 Kagemusha recursive verifier host-link hardening
+
+- Hardened the shared-table non-native Vesta IPA verifier host-link guard to
+  mirror the final IPA MSM product relation: `a_final * b_final` must equal the
+  final `U`-term product scalar before a composed recursive verifier witness is
+  accepted.
+- Added an adversarial one-hop recursive verifier-slice builder test that
+  mutates only the final MSM product scalar and requires rejection with the
+  existing verifier host-link mismatch path.
+- Added a production one-hop host API that re-derives the native Pallas
+  preflight from the supplied witness and requires an exact match to the
+  preflight digest/fingerprint bound in recursive metadata before materializing
+  the recursive Vesta verifier. The new negative test pairs a valid preflight
+  from witness A with witness B and requires rejection.
+- Tightened recursive spend accumulator validation so
+  `aggregation_transcript_digest` must equal `lineage_digest`. This prevents a
+  forged accumulator from proving a detached aggregation transcript public input
+  that no longer names the spend-lineage accumulator.
+- Tightened recursive spendable note validation so offline receivers reject
+  negative, fractional, or too-wide note amounts during init/append instead of
+  accepting a D2D payload that can only fail later at redeem. The same
+  adversarial data-model test now also covers empty, zero, duplicate, unsorted,
+  and current-note-overlapping top-up anchor sets.
+- Tightened recursive spend append validation so the new public note amount
+  must match the previous spendable note amount, and note commitments may not
+  be reused as their own future spend nullifier.
+- Strengthened the host-side Pallas hop-bound batch preflight digest to bind
+  the public opening length, proof count, fixed-window table-base digest, native
+  batch digest, and ordered hop proof hashes under explicit labels. The new
+  adversarial core test mutates table-base digest, opening length, and proof
+  count independently.
+- Closed a Node NAPI host parity gap in recursive spend redeem: the Rust NAPI
+  host now runs `KagemushaRecursiveSpendRedeemRequestV1::validate_public_binding`
+  before emitting a `RedeemKagemushaRecursive`, matching the C bridge and Python
+  native helper. The new host test rejects wrong public amounts and missing
+  top-up anchors before instruction encoding.
+- Extended the C# optional P/Invoke wrapper tests so malformed recursive spend
+  archives are rejected across init/append/verify/redeem when ABI v6 native
+  bridge support is present, matching Swift, Kotlin/JVM, Java Android,
+  JavaScript, Python, and C bridge coverage. Local execution remains blocked on
+  this machine because `dotnet` is not installed.
+- Extended Python native SDK coverage so all four ABI-6 recursive spend entry
+  points reject empty and malformed Norito request archives at the PyO3 decode
+  boundary, matching the high-level Python wrapper's fail-closed behavior.
+- Added chain-admission coverage for recursive redemption with
+  `settlement.offline.kagemusha_force_legacy = true`; it now explicitly rejects
+  with `kagemusha_legacy_forced` alongside the existing disabled, stale-root,
+  top-up anchor replay, and double-spend checks.
+- This does not make compact-token aggregation mode `2` admissible; mode `2`
+  remains reserved until the private-hop verifier batch and complete
+  witness-batch digest relation are proved in-circuit.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder --lib -- --test-threads=1`
+    (10 passed, 0 failed, 1 ignored; the first attempt hit `/tmp` space
+    exhaustion, then passed after removing the temporary target directory)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1`
+    (5 passed, 0 failed; includes recursive note amount, append amount-drift,
+    duplicate note-field, and top-up anchor adversarial coverage; rerun passed
+    in 1.62s after compile)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs_binds_public_context --lib -- --test-threads=1`
+    (1 passed, 0 failed; first attempt caught a test-only missing `Hash`
+    qualifier, then passed in 1.13s after the fix)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas --lib -- --test-threads=1`
+    (4 passed, 0 failed; Pallas batch/open-envelope evidence builders and
+    negative metadata/decode paths still pass with the stronger hop-bound
+    digest)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_js_host kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor --lib -- --test-threads=1`
+    (1 passed, 0 failed; first attempt caught a test-fixture `ProofBox`
+    namespace error, then passed in 0.77s after the fix)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend --lib -- --test-threads=1`
+    (3 passed, 0 failed; rerun passed in 124.47s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_python_rs kagemusha_python_native_provers_reject_malformed_archives --lib -- --test-threads=1`
+    (1 passed, 0 failed)
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+    (4 passed, 0 failed; rerun passed after the Node NAPI host redeem
+    validation fix)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+    (passed)
+  - `python3 -m pytest -q python/iroha_python/tests/kagemusha_test.py`
+    (not run: active Python 3.14 does not have `pytest` installed)
+  - `swift test --filter KagemushaRecursiveSpendProverTests` from `IrohaSwift`
+    (3 passed, 0 failed; native malformed-archive path loaded bridge symbols
+    from `RTLD_DEFAULT`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ../gradlew test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest` from `kotlin/core-jvm`
+    (build successful in 1m 33s; the focused Kotlin/JVM OfflineNote test passed
+    with existing compiler warnings)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :android:testDebugUnitTest --tests org.hyperledger.iroha.android.offline.OfflineNoteTest` from `java/iroha_android`
+    (not run: Android SDK location is not configured via `ANDROID_HOME` or
+    `local.properties`; without JDK 21 the wrapper also fails earlier because
+    Java 25 is not parsed by the current Gradle/Kotlin stack)
+  - `dotnet --version`
+    (not run: `dotnet` is not installed in this environment)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots --lib -- --test-threads=1`
+    (1 passed, 0 failed; 554.82s)
+
+## 2026-06-01 Soracloud BFV public/evaluation-key fixture metadata
+
+- Extended `fixtures/soracloud/bfv_identifier_vectors_v1.json` so the shared
+  `soracloud-bfv-operation-v1` fixture now pins the deterministic public-key
+  and `BfvIdentifierPublicParameters` Norito byte lengths and SHA-256 digests,
+  plus the `BfvEvaluationKeyBundle` Norito byte length, SHA-256 digest,
+  domain-separated evaluation-key digest, relinearization entry count, rotation
+  key count, bootstrap key id, and rotation/bootstrap encrypted-zero refresh key
+  byte lengths and SHA-256 digests.
+- The Rust Soracloud executor fixture ingestion now validates those public-key
+  and evaluation-key metadata fields before accepting the operation vectors, so
+  Add/Multiply/RotateLeft/Bootstrap output checks are bound to the exact public
+  encryption key and evaluation keys derived from the fixture seeds.
+- Added adversarial coverage with a structurally valid but wrong keygen seed:
+  the alternate public parameters, relinearization, rotation-refresh, and
+  bootstrap-refresh material still validate as BFV key material, but fail the
+  shared fixture digests.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `python3 -m json.tool fixtures/soracloud/bfv_identifier_vectors_v1.json >/dev/null`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_core soracloud_bfv_ --lib -- --test-threads=1`
+    (3 passed, 1 ignored)
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs fixtures/soracloud/bfv_identifier_vectors_v1.json status.md roadmap.md docs/source/engineering_backlog.md`
+  - `git diff --no-index --check /dev/null fixtures/soracloud/bfv_identifier_vectors_v1.json; rc=$?; test "$rc" -eq 1`
+
+## 2026-06-01 Soracloud FHE governance parameter fixtures
+
+- Rebased the canonical Soracloud FHE governance fixtures onto the registered
+  `bfv-default` RAM-LFE BFV runtime profile instead of the loose
+  `fhe_bfv_med` descriptor. The shared parameter set, execution policy,
+  governance bundle, and job-spec fixtures now carry the runtime parameter
+  digest `hash:ECA18E4232F9BE0B5020B1B4E647826425EC6666F81F24C784CA5A380BAEF789#FB6E`.
+- Hardened Soracloud BFV job admission so copying a valid runtime digest is no
+  longer enough: the registered descriptor must also match the expected backend,
+  polynomial degree, slot count, plaintext modulus width, and ciphertext modulus
+  chain bounds.
+- Added fixture-backed negative coverage for governance-bundle schema drift,
+  policy/parameter version drift, ascending modulus chains, output-count
+  overflow, proposed parameter-set lifecycle admission, backend drift, degree
+  drift, plaintext-width drift, oversized ciphertext limbs, and under-declared
+  ciphertext chains.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_data_model --test soracloud_manifest_fixtures regenerate_soracloud_fixtures -- --ignored --exact --test-threads=1`
+    (1 passed)
+  - `cargo fmt -p iroha_core -p iroha_data_model`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_data_model --test soracloud_manifest_fixtures fhe_ -- --test-threads=1`
+    (5 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_core soracloud_registered_bfv_parameters --lib -- --test-threads=1`
+    (3 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_core run_soracloud_fhe_job_records_ciphertext_output_state --lib -- --test-threads=1`
+    (1 passed)
+  - `python3 -m json.tool fixtures/soracloud/fhe_param_set_v1.json >/dev/null && python3 -m json.tool fixtures/soracloud/fhe_execution_policy_v1.json >/dev/null && python3 -m json.tool fixtures/soracloud/fhe_governance_bundle_v1.json >/dev/null && python3 -m json.tool fixtures/soracloud/fhe_job_spec_v1.json >/dev/null`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs fixtures/soracloud/fhe_param_set_v1.json fixtures/soracloud/fhe_execution_policy_v1.json fixtures/soracloud/fhe_governance_bundle_v1.json fixtures/soracloud/fhe_job_spec_v1.json`
+
+## 2026-06-01 Soracloud BFV operation vectors
+
+- Extended `fixtures/soracloud/bfv_identifier_vectors_v1.json` with a shared
+  `soracloud-bfv-operation-v1` section for RAM-LFE BFV Add, Multiply,
+  RotateLeft, and Bootstrap outputs. The vectors pin operation inputs, public
+  rotation/bootstrap refresh-key seeds, output Norito byte lengths, SHA-256
+  digests, and decrypted plaintext slots.
+- Added Rust executor coverage that consumes those shared vectors directly and
+  adversarially rejects tampered RotateLeft and Bootstrap refresh material, so
+  the fixture pins both the positive output shape and the fail-closed key
+  validation path.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `python3 -m json.tool fixtures/soracloud/bfv_identifier_vectors_v1.json`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_core soracloud_bfv_operation_vectors --lib -- --test-threads=1`
+    (2 passed, 0 failed, 1 ignored)
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (14 passed)
+  - `swift test --filter ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors`
+    (1 passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors --console=plain`
+    (1 passed)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (harness passed)
+  - `git diff --check`
+  - `git diff --no-index --check /dev/null fixtures/soracloud/bfv_identifier_vectors_v1.json; rc=$?; test "$rc" -eq 1`
+
+## 2026-06-01 Kagemusha recursive spend SDK defaults
+
+- Added SDK-facing Kagemusha offline spend-mode selectors across Rust/data
+  model, Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#.
+  SDKs now prefer `recursive_spend_v1` when the ABI 6 recursive spend
+  init/append/verify/redeem surface is available, and fall back to
+  `checked_prefold_v1` for legacy checked pre-fold runtimes.
+- Added focused coverage for explicit true/false availability selection,
+  default availability probing, partial-native fail-closed behavior, empty input
+  rejection, and malformed archive rejection where the native bridge is
+  available. The compact-token aggregation mode `2` remains reserved; recursive
+  spendable cash uses `KagemushaRecursiveSpendBundleV1` plus ABI 6 rather than
+  enabling the older folded-token mode.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `PYTHONPATH=python/iroha_python/src /tmp/iroha-python-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+  - `swift test --filter KagemushaRecursiveSpendProverTests` in `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain` in `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` in `java/iroha_android`
+  - `cargo fmt --all`
+  - `git diff --check`
+  - C# tests were not run locally because `dotnet` is not installed on this
+    machine (`dotnet --info` failed with `command not found`).
+
+## 2026-06-01 Cross-SDK Soracloud BFV encrypted-input vectors
+
+- Added `fixtures/soracloud/bfv_identifier_vectors_v1.json`, a shared
+  deterministic BFV identifier-envelope vector set for seven encrypted inputs:
+  the existing `ab` identifier baseline plus three Soracloud Add operands and
+  three Soracloud Multiply operands. Each vector binds the policy/public
+  parameters, input bytes, seed, ciphertext byte length, and ciphertext SHA-256.
+- JavaScript, Swift, Kotlin/JVM, and Java Android client tests now consume the
+  same fixture instead of relying only on local inline literals. The tests
+  recompute ciphertexts with each SDK builder, check the vector byte length and
+  digest, and reject digest aliasing across the Soracloud operand set.
+- Validation:
+  - `node --test javascript/iroha_js/test/toriiClient.identifier.test.js`
+    (14 passed)
+  - `swift test --filter ToriiClientTests/testIdentifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors`
+    (1 passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest.identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors --console=plain`
+    (1 passed)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+    (harness passed)
+  - `python3 -m json.tool fixtures/soracloud/bfv_identifier_vectors_v1.json`
+  - `git diff --check`
+
+## 2026-06-01 Soracloud multi-input FHE coverage
+
+- Added deterministic Soracloud FHE executor coverage for three-input Add and
+  Multiply folds under the current RAM-LFE BFV profile. The tests decrypt the
+  result slots and assert that the length and byte slots fold homomorphically
+  while unused slots remain zero.
+- Added adversarial multi-input executor coverage that corrupts a late operand
+  after an honest left/middle fold and requires the job to reject before output
+  emission.
+- Added FHE job admission coverage for four-input Add and Multiply jobs,
+  including deterministic output-size projection and multi-input output
+  commitment order binding.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_core soracloud_multi_input --lib -- --test-threads=1`
+    (3 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-target cargo test -p iroha_data_model fhe_job_spec --lib`
+    (9 passed)
+  - `cargo fmt -p iroha_core -p iroha_data_model`
+  - `git diff --check`
+
+## 2026-05-31 Kagemusha recursive spend ABI v6 and SDK parity
+
+- Added the production recursive spendable-cash surface around
+  `KagemushaRecursiveSpendBundleV1`: first-hop initialization, offline append,
+  offline verification, and online redeem now use a constant-size public
+  accumulator plus the current spendable note descriptor instead of carrying the
+  prior hop bundle. Append validation rejects chain/asset/root/final-note
+  mismatches, missing previous nullifiers, fresh external append inputs,
+  malformed anchor sets, tampered recursive proofs, wrong verifier metadata, and
+  stale redeem roots before state mutation.
+- `connect_norito_bridge` is now ABI 6 and exports
+  `connect_norito_kagemusha_recursive_spend_init`,
+  `connect_norito_kagemusha_recursive_spend_append`,
+  `connect_norito_kagemusha_recursive_spend_verify`, and
+  `connect_norito_kagemusha_recursive_spend_redeem`. The C header, Android JNI,
+  Swift dynamic loader, JS NAPI host, Python PyO3 module, Kotlin/JVM, Java
+  Android, and C# DTO/PInvoke surfaces were updated to pass raw Norito archives
+  and reject empty or malformed inputs.
+- Added the recursive payload-size benchmark for hop counts 1, 2, 3, 5, 8, 13,
+  21, 34, 55, and 64. The short Criterion run recorded
+  `*_1454_bytes` for every hop target with a fixed 256-byte proof payload and
+  asserts that the D2D archive length stays hop-count-independent.
+- Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check -p iroha_data_model --benches`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check -p iroha_core -p connect_norito_bridge`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check -p iroha_js_host`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo check --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_data_model kagemusha_recursive_spend --lib`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_spend --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_recursive_redeem --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p connect_norito_bridge kagemusha_recursive_spend --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo bench -p iroha_data_model --bench kagemusha_recursive_spend_payload -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.2`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `PYTHONPATH=python/iroha_python/src /tmp/iroha-python-pytest-venv/bin/python -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+  - `swift test --filter KagemushaRecursiveSpendProverTests` in `IrohaSwift`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.OfflineNoteTest.kagemushaRecursiveSpendNativeProverValidatesInput --console=plain` in `kotlin`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineNoteTest JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` in `java/iroha_android`
+  - `make bridge-xcframework` rebuilt `dist/NoritoBridge.xcframework`,
+    `dist/NoritoBridge.xcframework.zip`, and
+    `dist/NoritoBridge.artifacts.json`; SwiftPM checksum
+    `dc0763fda135a7df894411d84e48d322b817efa136f916ef5ba14e280a6ca2af`
+
+## 2026-05-31 ZK-ACE Python SDK and BOI Privacy Lab parity
+
+- Added Python SDK instruction and client parity for the ZK-ACE transparent
+  authorization flow: identity commitment register/rotate/revoke helpers,
+  authorized-transfer draft/client submission, and capability catalog metadata
+  now require both native `Instruction` support and the high-level
+  `ToriiClient` entry point before advertising execution.
+- Hardened native/Python validation so ZK-ACE lifecycle and transfer helpers
+  reject zero commitments, same-commitment rotations, noncanonical action or
+  domain labels, wrong verifier backends, wrong proof backends, malformed proof
+  mappings, and stale SDK metadata that lacks the native transfer instruction.
+- BOI Privacy Lab capability gating now treats ZK-ACE execution as unavailable
+  unless the installed Python SDK exposes the native instruction and client
+  path, preventing the UI/catalog from advertising a target the backend cannot
+  execute.
+- Validation:
+  - `cargo test -p iroha_python_rs zk_ace_instruction_classmethods --lib`
+    (2 passed)
+  - `VIRTUAL_ENV=/Users/mtakemiya/dev/boi_poc_scenarios/.venv PATH=/Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin:$PATH /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/maturin develop --release`
+  - `VIRTUAL_ENV=/Users/mtakemiya/dev/boi_poc_scenarios/.venv PATH=/Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin:$PATH /Users/mtakemiya/dev/boi_poc_scenarios/.venv/bin/pytest -q`
+    from `python/iroha_python` (145 passed)
+  - BOI `./.venv/bin/pytest -q test_desktop_api.py -k 'privacy_lab'`
+    (16 passed)
+  - BOI `npm run verify` (typecheck plus 56 Vitest tests passed)
+  - `git diff --check` in both repositories
 
 ## 2026-05-31 Kagemusha final MSM and verifier-key coverage
 
@@ -73,8 +1397,38 @@ Last updated: 2026-05-31
   `b`-reduction input scalars, challenge, inverse, and final folded `b` scalar.
   The scalar projection is constrained with the same field-friendly Pow5
   compressor, with active order-sensitivity coverage and heavyweight
-  MockProver splice coverage kept ignored by default.
+  MockProver splice coverage kept ignored by default. A one-off run of the
+  scalar-projection-digest splice MockProver case passed, but took 12,274.01s
+  and climbed above 16 GiB RSS, confirming that it should remain ignored for
+  routine validation.
+- Recursive Kagemusha spend accumulators now carry sorted first-hop top-up
+  anchor nullifiers from the online-to-offline lineage. The anchor set is
+  included in the accumulator digest and recursive proof public inputs; final
+  redemption consumes those anchors plus the current spendable note nullifier.
+  This closes hidden-branch replay where two recursive bundles share the same
+  top-up input but end in different final notes. Append hops now consume only
+  the previous spendable note nullifier, rejecting fresh external inputs that
+  would not be covered by the original top-up anchor set and rejecting current
+  notes that reuse the consumed append nullifier. The accumulator now uses
+  recursive-spend-only nullifier, output, and fold-transcript digest domains
+  rather than the checked folded-token list/transcript domains, keeping the
+  constant-size spend state transcript distinct from mode-1 folded public
+  inputs. C bridge and Python native redeem request validation now reject
+  zero/mismatched public amounts before emitting a `RedeemKagemushaRecursive`
+  instruction.
+- Python SDK Kagemusha helpers now also expose the record-backed compact-token
+  prover and the proof-derived Pallas recursive aggregation proof-bundle prover
+  through the PyO3 native extension, with empty/malformed archive rejection at
+  the Python and native boundaries.
 - Validation:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_recursive_spend --lib -- --test-threads=1` (5 passed, including append current-note nullifier reuse rejection and recursive-spend nullifier/output/fold digest domain separation from checked folded-token list/transcript digests; latest rerun finished in 4m 33s compile plus 1.50s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_redeem --lib -- --test-threads=1` (3 passed; 821.27s)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_redeem --lib -- --test-threads=1` (2 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_python_rs kagemusha_recursive_spend_redeem --lib -- --test-threads=1` (2 passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_python_rs kagemusha --lib -- --test-threads=1` (3 passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - Python Kagemusha wrapper smoke via direct `importlib` module load (passed); `python3 -m pytest python/iroha_python/tests/kagemusha_test.py` could not run because `pytest` is not installed.
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_spend --lib -- --test-threads=1` (3 passed, including multi-hop real Halo2 IPA recursive spend proof verification after the accumulator digest-domain split; latest rerun finished in 6m 17s compile plus 111.46s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_proof_preverify --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation --lib -- --test-threads=1` (36 passed, 5 ignored heavyweight composed-circuit tests)
@@ -107,6 +1461,7 @@ Last updated: 2026-05-31
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_aggregation_mode_helpers_mark_recursive_mode_reserved --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core prove_kagemusha_compact_payment_token_rejects_reserved_recursive_mode --lib`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice --lib -- --test-threads=1` (9 passed, 5 ignored heavyweight production/materialized-circuit tests)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_circuit_rejects_scalar_projection_digest_splice --lib -- --ignored --test-threads=1` (1 passed; 12,274.01s; heavyweight one-off)
 
 ## 2026-05-31 Sumeragi missing commit-QC actionable TLC cross-check
 
@@ -34006,9 +35361,11 @@ Last updated: 2026-05-31
   profile for full 255-bit Pasta scalar coverage, and rejects native
   wrong-width witness/parameter pairings plus transcript/reduction/accumulator
   and final splices before hop proof decoding can start. Its aggregate digest
-  now uses the repository's streaming Poseidon2 byte sponge, keeping reserved
-  mode-2 evidence on the same field-friendly no-trusted-setup transcript family
-  as the Kagemusha data-model digests. The combined record-backed builders
+  now uses the repository's streaming Poseidon2 byte sponge with field-labelled
+  length encodings, keeping reserved mode-2 evidence on the same field-friendly
+  no-trusted-setup transcript family as the Kagemusha data-model digests while
+  preventing equal numeric lengths from being replayed under another transcript
+  field label. The combined record-backed builders
   re-derive the stored batch digest with the ordered checked-hop proof hashes,
   so valid detached native witness batches cannot be replayed against a
   different folded-hop proof transcript without changing reserved evidence.
@@ -34083,11 +35440,12 @@ Last updated: 2026-05-31
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_data_model kagemusha_poseidon_aggregation_transcript --lib` (2 tests covering existing checked aggregation transcript binding and noncanonical statement rejection after sharing transcript-shape validation with reserved recursive evidence; finished in 0.35s compile plus 0.46s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_native_pasta_fp_ipa_transcript_binding --lib` (11 tests covering transcript-binding circuit acceptance plus round-count, inverse, digest, public header/round/challenge/inverse/final/digest substitution, and intermediate-state tamper rejection; finished in 0.37s compile plus 0.02s test time on the post-composition rerun)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas --lib` (4 tests covering native Pallas witness translation acceptance plus length-mismatch, transcript-challenge splice, and accumulator-splice rejection; finished in 2m 11s compile plus 10.03s test time on the passing rerun)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight --lib` (8 tests covering ordered batch acceptance for multiple real Pallas openings, empty-batch and length-mismatch rejection, transcript and accumulator splice rejection, Poseidon2 aggregate digest sensitivity to witness order and witness contents, and feeding real Pallas batch preflight output into reserved recursive aggregation evidence; finished in 0.52s compile plus 0.78s test time after switching the batch aggregate digest to streaming Poseidon2)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight --lib -- --test-threads=1` (11 tests covering ordered batch acceptance for multiple real Pallas openings, empty-batch and length-mismatch rejection, transcript, binding-projection, accumulator, and malformed-table-profile splices, Poseidon2 aggregate digest sensitivity to witness order, witness contents, and table profile, and feeding real Pallas batch preflight output into reserved recursive aggregation evidence; finished in 0.34s compile plus 5.29s test time after field-labelling Poseidon2 length encodings)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier --lib` (33 tests covering the transcript-bound two-round four-point verifier builder, real Pallas opening preflight, ordered Pallas batch preflight, reserved recursive evidence population from Pallas batch output, native Pallas witness translation, final-`b`, transcript-digest, round-count, high-bit, challenge-splice, transcript-challenge-splice, accumulator-splice, generator-splice, Pallas batch empty/length/transcript/accumulator rejection and digest sensitivity, and Pallas length/transcript/round-index/invalid-L/challenge-inverse/`b`-layer/`b`-output/final-`b`/accumulator-square/accumulator-`Q`/generator-fold/final-generator/final-scalar/accumulator splice rejection; finished in 0.63s compile plus 11.86s test time after connecting batch preflight to reserved recursive evidence)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight --lib` (4 tests covering public Pallas batch preflight acceptance at the current production width `n = 128` with canonical verifier-witness profile binding, unsupported `n = 1` rejection, direct empty-batch rejection, and over-64-witness rejection before native witness validation; finished in 1m 56s compile plus 3.21s test time after the Poseidon2 batch-digest change)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core length_fields_are_label_domain_separated --lib -- --test-threads=1` (2 tests covering recursive Poseidon2 and Pallas batch length-field label domain separation plus empty-label rejection; finished in 5m 24s compile plus 0.43s test time)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_pallas_ipa_batch_verifier_preflight --lib -- --test-threads=1` (12 tests covering public Pallas batch preflight acceptance at the current production width `n = 128`, canonical verifier-witness profile binding, unsupported `n = 1`, direct empty-batch and over-64-witness rejection, open-envelope derivation, hop-proof hash binding, metadata/tamper/mixed-param rejection, and shared-table profile parity; finished in 0.57s compile plus 15.98s test time after field-labelling Poseidon2 length encodings)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas_batch_accepts_active_records --lib` (1 test covering record-backed reserved recursive evidence construction directly from native Pallas batch witnesses, hop-bound Poseidon2 batch digest derivation, digest inequality against the detached native batch digest, and digest sensitivity to ordered hop proof hashes; finished in 1m 58s compile plus 3.13s test time)
-  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence --lib` (5 tests covering record-backed reserved recursive evidence acceptance, serializable record-bundle parity, direct native-Pallas-batch evidence construction with the hop-bound Poseidon2 batch digest, pre-decode witness-count/zero-batch-metadata rejection, pre-decode missing/extraneous/duplicated/inactive/namespace verifier-record rejection, wrong-width Pallas witness/parameter and accumulator-splice rejection before hop proof decoding, and tampered-hop proof rejection; finished in 0.36s compile plus 3.26s test time after adding the hop-proof-hash binding)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence --lib -- --test-threads=1` (7 tests covering record-backed reserved recursive evidence acceptance, serializable record-bundle parity, direct native-Pallas-batch and proof-derived open-envelope evidence construction with the hop-bound Poseidon2 batch digest, pre-decode witness-count/zero-batch-metadata rejection, pre-decode missing/extraneous/duplicated/inactive/namespace verifier-record rejection, wrong-width Pallas witness/parameter and accumulator-splice rejection before hop proof decoding, metadata substitution, and tampered-hop proof rejection; finished in 0.42s compile plus 17.52s test time after field-labelling Poseidon2 length encodings)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_zkp_halo2 --lib` (81 tests; finished in 8.08s compile plus 2.83s test time)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_data_model` (finished in 1m 47s after adding reserved-mode recursive aggregation evidence)
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo check -p iroha_zkp_halo2` (finished in 1.18s on the post-witness-binding rerun)

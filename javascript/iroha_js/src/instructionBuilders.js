@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
-import { noritoEncodeInstruction } from "./norito.js";
+import {
+  noritoEncodeInstruction,
+  noritoEncodePrivacyProofEnvelope,
+} from "./norito.js";
 import {
   canonicalizeMultihashHex,
   ensureCanonicalAccountId,
@@ -16,11 +19,19 @@ import {
   createValidationError,
   ValidationErrorCode,
 } from "./validationError.js";
+import { getNativeBinding } from "./native.js";
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
+const UINT32_MAX = 0xffff_ffff;
+const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
+const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
+const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
+const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
+const ZK_ACE_DOMAIN_TAG = "iroha:zk-ace:pq-authorization:v0";
+const ZK_ACE_ACTION_TRANSFER = "transparent_asset_transfer";
 
 function crc16(tag, body) {
   let crc = 0xffff;
@@ -293,6 +304,18 @@ function assertPlainObject(value, name) {
     fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a plain object`, name);
   }
   return value;
+}
+
+function assertAllowedFields(source, allowed, name) {
+  for (const field of Object.keys(source)) {
+    if (!allowed.has(field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${field} is not supported`,
+        `${name}.${field}`,
+      );
+    }
+  }
 }
 
 function normalizeJsonValue(value, path) {
@@ -1150,15 +1173,23 @@ function normalizeProofAttachment(value, name) {
     "proof byte",
   );
   const rawProof = proofAlias.value;
-  const attachmentHasProofBytes =
-    proofAlias.key === "proof" ||
-    proofAlias.key === "proof_b64" ||
-    proofAlias.key === "proofB64";
-  const structuredProofBox =
-    !attachmentHasProofBytes &&
+  const rawProofIsStructuredObject =
     rawProof &&
     typeof rawProof === "object" &&
-    !Array.isArray(rawProof);
+    !Array.isArray(rawProof) &&
+    !Buffer.isBuffer(rawProof) &&
+    !ArrayBuffer.isView(rawProof) &&
+    !(rawProof instanceof ArrayBuffer);
+  const proofAliasMayCarryBytes =
+    proofAlias.key === "proofBytes" ||
+    proofAlias.key === "proof_bytes" ||
+    proofAlias.key === "proof" ||
+    proofAlias.key === "proof_b64" ||
+    proofAlias.key === "proofBase64" ||
+    proofAlias.key === "proofB64";
+  const attachmentHasProofBytes = proofAliasMayCarryBytes && !rawProofIsStructuredObject;
+  const structuredProofBox =
+    proofAliasMayCarryBytes && rawProofIsStructuredObject;
 
   const verifyRef = readSingleAlias(
     source,
@@ -1332,6 +1363,691 @@ function normalizeProofAttachment(value, name) {
     };
   }
   return payload;
+}
+
+function normalizeNonZeroFixedBytes(value, name, length = 32) {
+  const bytes = normalizeFixedBytes(value, name, length);
+  if (bytes.every((byte) => byte === 0)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be nonzero`,
+      name,
+    );
+  }
+  return bytes;
+}
+
+function normalizeU32(value, name) {
+  const numeric = asNonNegativeInteger(value, name);
+  if (numeric > UINT32_MAX) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must fit in an unsigned 32-bit integer`,
+      name,
+    );
+  }
+  return numeric;
+}
+
+function normalizePositiveU32(value, name) {
+  const numeric = asPositiveInteger(value, name);
+  if (numeric > UINT32_MAX) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must fit in an unsigned 32-bit integer`,
+      name,
+    );
+  }
+  return numeric;
+}
+
+function normalizeOptionalU64(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return asNonNegativeInteger(value, name);
+}
+
+function normalizeOptionalNonBlankString(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return assertNonBlankString(value, name);
+}
+
+function normalizePrivacyBackendTag(value, name) {
+  const raw = assertNonBlankString(value, name);
+  const normalized = raw.toLowerCase().replace(/[-_/]/g, "");
+  switch (normalized) {
+    case "halo2ipapasta":
+    case "halo2pasta":
+    case "halo2ipa":
+    case "pasta":
+      return "Halo2IpaPasta";
+    case "halo2bn254":
+      return "Halo2Bn254";
+    case "groth16":
+      return "Groth16";
+    case "stark":
+    case "starkfri":
+    case "starkfrisha256goldilocks":
+      return "Stark";
+    case "unsupported":
+      return "Unsupported";
+    default:
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} uses unsupported privacy verifier backend ${raw}`,
+        name,
+      );
+  }
+}
+
+function inferPrivacyBackendTagFromVerifierId(id, name) {
+  const backend = id?.backend;
+  if (!backend) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
+  }
+  return normalizePrivacyBackendTag(backend, name);
+}
+
+function defaultPrivacyCurveForBackendTag(tag, name) {
+  switch (tag) {
+    case "Halo2IpaPasta":
+      return "pallas";
+    case "Stark":
+      return "goldilocks";
+    default:
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be Halo2IpaPasta or Stark`,
+        name,
+      );
+  }
+}
+
+function assertRegisterablePrivacyBackendTag(tag, name) {
+  if (tag !== "Halo2IpaPasta" && tag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be Halo2IpaPasta or Stark`,
+      name,
+    );
+  }
+}
+
+function normalizePrivacyCurve(value, backendTag, name) {
+  const curve = assertNonBlankString(
+    value ?? defaultPrivacyCurveForBackendTag(backendTag, name),
+    name,
+  );
+  if (backendTag === "Halo2IpaPasta" && curve !== "pallas") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be "pallas" for Halo2IpaPasta verifier keys`,
+      name,
+    );
+  }
+  if (backendTag === "Stark" && curve !== "goldilocks") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be "goldilocks" for Stark verifier keys`,
+      name,
+    );
+  }
+  return curve;
+}
+
+function normalizeConfidentialStatus(value, name, defaultValue = "Proposed") {
+  const raw = assertNonBlankString(value ?? defaultValue, name);
+  const normalized = raw.toLowerCase();
+  switch (normalized) {
+    case "proposed":
+      return "Proposed";
+    case "active":
+      return "Active";
+    case "withdrawn":
+      return "Withdrawn";
+    default:
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be Proposed, Active, or Withdrawn`,
+        name,
+      );
+  }
+}
+
+function normalizeBoundedByteArray(
+  value,
+  name,
+  { maxBytes, allowEmpty = false } = {},
+) {
+  let bytes;
+  if (allowEmpty && (value === undefined || value === null)) {
+    bytes = [];
+  } else if (allowEmpty && Array.isArray(value) && value.length === 0) {
+    bytes = [];
+  } else if (allowEmpty && Buffer.isBuffer(value) && value.length === 0) {
+    bytes = [];
+  } else if (
+    allowEmpty &&
+    ArrayBuffer.isView(value) &&
+    value.byteLength === 0
+  ) {
+    bytes = [];
+  } else if (allowEmpty && value instanceof ArrayBuffer && value.byteLength === 0) {
+    bytes = [];
+  } else {
+    bytes = normalizeByteArray(value, name);
+  }
+  if (maxBytes !== undefined && bytes.length > maxBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be no larger than ${maxBytes} bytes`,
+      name,
+    );
+  }
+  return bytes;
+}
+
+function normalizePrivacyVerifierKeyIdFromOptions(source, name) {
+  const alias = readSingleAlias(
+    source,
+    [
+      "id",
+      "verifierKey",
+      "verifierKeyId",
+      "verifyingKeyId",
+      "keyId",
+      "vkRef",
+      "verifyingKeyRef",
+    ],
+    `${name}.id`,
+    "verifier key id",
+  );
+  const id = normalizeVerifyingKeyId(alias.value, `${name}.id`);
+  if (id === null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name}.id is required`, `${name}.id`);
+  }
+  return id;
+}
+
+function normalizePrivacyVerifyingKeyBox(value, id, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  let backend = id.backend;
+  let bytesValue = value;
+  if (value && typeof value === "object" && !Buffer.isBuffer(value) && !ArrayBuffer.isView(value) && !(value instanceof ArrayBuffer) && !Array.isArray(value)) {
+    const source = assertPlainObject(value, name);
+    assertAllowedFields(
+      source,
+      new Set(["backend", "backendId", "bytes", "keyBytes", "verifyingKeyBytes", "vkBytes"]),
+      name,
+    );
+    backend = assertNonBlankString(
+      source.backend ?? source.backendId ?? id.backend,
+      `${name}.backend`,
+    );
+    bytesValue =
+      source.bytes ?? source.keyBytes ?? source.verifyingKeyBytes ?? source.vkBytes;
+  }
+  if (backend !== id.backend) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.backend must match verifier key id backend`,
+      `${name}.backend`,
+    );
+  }
+  return {
+    backend,
+    bytes: normalizeBoundedByteArray(bytesValue, `${name}.bytes`, {
+      maxBytes: UINT32_MAX,
+    }),
+  };
+}
+
+function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {}) {
+  const source = assertPlainObject(sourceValue, context);
+  assertAllowedFields(
+    source,
+    new Set([
+      "id",
+      "verifierKey",
+      "verifierKeyId",
+      "verifyingKeyId",
+      "keyId",
+      "vkRef",
+      "verifyingKeyRef",
+      "record",
+      "verifierRecord",
+      "verifyingKeyRecord",
+      "version",
+      "circuitId",
+      "circuit_id",
+      "ownerManifestId",
+      "owner_manifest_id",
+      "owner",
+      "namespace",
+      "backendTag",
+      "backend_tag",
+      "backend",
+      "curve",
+      "publicInputsSchemaHash",
+      "public_inputs_schema_hash",
+      "schemaHash",
+      "schema_hash",
+      "commitment",
+      "verifyingKeyCommitment",
+      "vkCommitment",
+      "vk_commitment",
+      "vkLen",
+      "vk_len",
+      "verifyingKeyLength",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "gasScheduleId",
+      "gas_schedule_id",
+      "metadataUriCid",
+      "metadata_uri_cid",
+      "vkBytesCid",
+      "vk_bytes_cid",
+      "activationHeight",
+      "activation_height",
+      "withdrawHeight",
+      "withdraw_height",
+      "key",
+      "verifyingKey",
+      "verifying_key",
+      "verifyingKeyBytes",
+      "verifying_key_bytes",
+      "vkBytes",
+      "vk_bytes",
+      "status",
+    ]),
+    context,
+  );
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const backendTag =
+    backendAlias.value === undefined
+      ? inferPrivacyBackendTagFromVerifierId(id, `${context}.backendTag`)
+      : normalizePrivacyBackendTag(backendAlias.value, `${context}.backendTag`);
+  assertRegisterablePrivacyBackendTag(backendTag, `${context}.backendTag`);
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const ownerAlias = readSingleAlias(
+    source,
+    ["ownerManifestId", "owner_manifest_id", "owner"],
+    `${context}.ownerManifestId`,
+    "owner manifest id",
+  );
+  const keyAlias = readSingleAlias(
+    source,
+    [
+      "key",
+      "verifyingKey",
+      "verifying_key",
+      "verifyingKeyBytes",
+      "verifying_key_bytes",
+      "vkBytes",
+      "vk_bytes",
+    ],
+    `${context}.key`,
+    "verifying key bytes",
+  );
+  const key = normalizePrivacyVerifyingKeyBox(keyAlias.value, id, `${context}.key`);
+  const vkLenAlias = readSingleAlias(
+    source,
+    ["vkLen", "vk_len", "verifyingKeyLength"],
+    `${context}.vkLen`,
+    "verifying key length",
+  );
+  const vkLen =
+    vkLenAlias.value === undefined
+      ? key?.bytes.length ?? 0
+      : normalizeU32(vkLenAlias.value, `${context}.vkLen`);
+  if (key && vkLen !== key.bytes.length) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.vkLen must match inline verifying key byte length`,
+      `${context}.vkLen`,
+    );
+  }
+  const maxProofAlias = readSingleAlias(
+    source,
+    ["maxProofBytes", "max_proof_bytes"],
+    `${context}.maxProofBytes`,
+    "maximum proof byte length",
+  );
+  const status = options.forceStatus ?? normalizeConfidentialStatus(
+    source.status,
+    `${context}.status`,
+    options.defaultStatus ?? "Proposed",
+  );
+  if (!options.allowWithdrawn && status === "Withdrawn") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.status cannot be Withdrawn when registering a verifier key`,
+      `${context}.status`,
+    );
+  }
+  const gasScheduleAlias = readSingleAlias(
+    source,
+    ["gasScheduleId", "gas_schedule_id"],
+    `${context}.gasScheduleId`,
+    "gas schedule id",
+  );
+  const gasScheduleId = normalizeOptionalNonBlankString(
+    gasScheduleAlias.value,
+    `${context}.gasScheduleId`,
+  );
+  if (gasScheduleId === null) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.gasScheduleId is required`,
+      `${context}.gasScheduleId`,
+    );
+  }
+  const schemaHashAlias = readSingleAlias(
+    source,
+    ["publicInputsSchemaHash", "public_inputs_schema_hash", "schemaHash", "schema_hash"],
+    `${context}.publicInputsSchemaHash`,
+    "public-input schema hash",
+  );
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["commitment", "verifyingKeyCommitment", "vkCommitment", "vk_commitment"],
+    `${context}.commitment`,
+    "verifying key commitment",
+  );
+  const metadataAlias = readSingleAlias(
+    source,
+    ["metadataUriCid", "metadata_uri_cid"],
+    `${context}.metadataUriCid`,
+    "metadata URI CID",
+  );
+  const vkBytesCidAlias = readSingleAlias(
+    source,
+    ["vkBytesCid", "vk_bytes_cid"],
+    `${context}.vkBytesCid`,
+    "verifying key bytes CID",
+  );
+  const activationAlias = readSingleAlias(
+    source,
+    ["activationHeight", "activation_height"],
+    `${context}.activationHeight`,
+    "activation height",
+  );
+  const withdrawAlias = readSingleAlias(
+    source,
+    ["withdrawHeight", "withdraw_height"],
+    `${context}.withdrawHeight`,
+    "withdraw height",
+  );
+  return {
+    version: normalizePositiveU32(source.version, `${context}.version`),
+    circuit_id: assertNonBlankString(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    owner_manifest_id: normalizeOptionalNonBlankString(
+      ownerAlias.value,
+      `${context}.ownerManifestId`,
+    ),
+    namespace: assertNonBlankString(source.namespace ?? "core", `${context}.namespace`),
+    backend: backendTag,
+    curve: normalizePrivacyCurve(source.curve, backendTag, `${context}.curve`),
+    public_inputs_schema_hash: normalizeNonZeroFixedBytes(
+      schemaHashAlias.value,
+      `${context}.publicInputsSchemaHash`,
+      32,
+    ),
+    commitment: normalizeNonZeroFixedBytes(
+      commitmentAlias.value,
+      `${context}.commitment`,
+      32,
+    ),
+    vk_len: vkLen,
+    max_proof_bytes:
+      maxProofAlias.value === undefined
+        ? DEFAULT_PRIVACY_MAX_PROOF_BYTES
+        : normalizePositiveU32(maxProofAlias.value, `${context}.maxProofBytes`),
+    gas_schedule_id: gasScheduleId,
+    metadata_uri_cid: normalizeOptionalNonBlankString(
+      metadataAlias.value,
+      `${context}.metadataUriCid`,
+    ),
+    vk_bytes_cid: normalizeOptionalNonBlankString(
+      vkBytesCidAlias.value,
+      `${context}.vkBytesCid`,
+    ),
+    activation_height: normalizeOptionalU64(
+      activationAlias.value,
+      `${context}.activationHeight`,
+    ),
+    withdraw_height: normalizeOptionalU64(
+      withdrawAlias.value,
+      `${context}.withdrawHeight`,
+    ),
+    key,
+    status,
+  };
+}
+
+function normalizeZkAceVerifierKeyId(value, name) {
+  const id = normalizeVerifyingKeyId(value, name);
+  if (id === null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} is required`, name);
+  }
+  if (id.backend !== ZK_ACE_BACKEND) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.backend must be ${ZK_ACE_BACKEND}`,
+      `${name}.backend`,
+    );
+  }
+  return id;
+}
+
+function normalizeZkAceAction(value, name) {
+  const action = assertNonBlankString(value ?? ZK_ACE_ACTION_TRANSFER, name);
+  if (action !== ZK_ACE_ACTION_TRANSFER) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ZK_ACE_ACTION_TRANSFER}`,
+      name,
+    );
+  }
+  return action;
+}
+
+function normalizeZkAceDomainTag(value, name) {
+  const domainTag = assertNonBlankString(value ?? ZK_ACE_DOMAIN_TAG, name);
+  if (domainTag !== ZK_ACE_DOMAIN_TAG) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ZK_ACE_DOMAIN_TAG}`,
+      name,
+    );
+  }
+  return domainTag;
+}
+
+function normalizeZkAceAllowedAccounts(value, name) {
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be an array`, name);
+  }
+  if (value.length === 0) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be non-empty`, name);
+  }
+  if (value.length > 16) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must contain at most 16 accounts`,
+      name,
+    );
+  }
+  const accounts = value.map((entry, index) =>
+    normalizeAccountId(entry, `${name}[${index}]`),
+  );
+  const seen = new Set();
+  for (const account of accounts) {
+    if (seen.has(account)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name} must not contain duplicates`,
+        name,
+      );
+    }
+    seen.add(account);
+  }
+  return accounts.sort();
+}
+
+function normalizeZkAcePublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  const version = asNonNegativeInteger(source.version ?? 1, `${name}.version`);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.version must be 1`,
+      `${name}.version`,
+    );
+  }
+  return {
+    version,
+    identity_commitment: normalizeNonZeroFixedBytes(
+      source.identityCommitment ?? source.identity_commitment,
+      `${name}.identityCommitment`,
+      32,
+    ),
+    tx_digest: normalizeNonZeroFixedBytes(
+      source.txDigest ?? source.tx_digest,
+      `${name}.txDigest`,
+      32,
+    ),
+    chain_id: assertNonBlankString(source.chainId ?? source.chain_id, `${name}.chainId`),
+    domain_tag: normalizeZkAceDomainTag(source.domainTag ?? source.domain_tag, `${name}.domainTag`),
+    action_class: normalizeZkAceAction(
+      source.actionClass ?? source.action_class,
+      `${name}.actionClass`,
+    ),
+    replay_nullifier: normalizeNonZeroFixedBytes(
+      source.replayNullifier ?? source.replay_nullifier,
+      `${name}.replayNullifier`,
+      32,
+    ),
+    policy_hash: normalizeNonZeroFixedBytes(
+      source.policyHash ?? source.policy_hash,
+      `${name}.policyHash`,
+      32,
+    ),
+    from: normalizeAccountId(source.fromAccountId ?? source.from, `${name}.from`),
+    to: normalizeAccountId(source.toAccountId ?? source.to, `${name}.to`),
+    asset: assertString(
+      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
+      `${name}.asset`,
+    ),
+    amount: asU128JsonNumber(source.amount, `${name}.amount`),
+    verifier_key_id: normalizeZkAceVerifierKeyId(
+      source.verifierKeyId ?? source.verifier_key_id ?? source.verifyingKeyRef,
+      `${name}.verifierKeyId`,
+    ),
+  };
+}
+
+function fixedBytesEqual(left, right) {
+  return left.length === right.length && left.every((byte, index) => byte === right[index]);
+}
+
+function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
+  const byteFields = [
+    ["identity_commitment", "identityCommitment"],
+    ["tx_digest", "txDigest"],
+    ["replay_nullifier", "replayNullifier"],
+    ["policy_hash", "policyHash"],
+  ];
+  for (const [field, transferField] of byteFields) {
+    if (!fixedBytesEqual(publicInputs[field], payload[field])) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.publicInputs.${field} must match zkAceAuthorizedTransfer.${transferField}`,
+        `${name}.publicInputs.${field}`,
+      );
+    }
+  }
+  const scalarFields = [
+    ["chain_id", "chainId"],
+    ["domain_tag", "domainTag"],
+    ["action_class", "actionClass"],
+    ["from", "from"],
+    ["to", "to"],
+    ["asset", "asset"],
+    ["amount", "amount"],
+  ];
+  for (const [field, transferField] of scalarFields) {
+    if (publicInputs[field] !== payload[field]) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.publicInputs.${field} must match zkAceAuthorizedTransfer.${transferField}`,
+        `${name}.publicInputs.${field}`,
+      );
+    }
+  }
+  if (
+    publicInputs.verifier_key_id.backend !== payload.proof.vk_ref.backend ||
+    publicInputs.verifier_key_id.name !== payload.proof.vk_ref.name
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.publicInputs.verifier_key_id must match zkAceAuthorizedTransfer.proof.verifyingKeyRef`,
+      `${name}.publicInputs.verifier_key_id`,
+    );
+  }
+}
+
+function normalizeZkAceWitness(value, name) {
+  const source = assertPlainObject(value, name);
+  return {
+    identity_root: normalizeNonZeroFixedBytes(
+      source.identityRoot ?? source.identity_root,
+      `${name}.identityRoot`,
+      32,
+    ),
+    identity_blinding: normalizeNonZeroFixedBytes(
+      source.identityBlinding ?? source.identity_blinding,
+      `${name}.identityBlinding`,
+      32,
+    ),
+    replay_secret: normalizeNonZeroFixedBytes(
+      source.replaySecret ?? source.replay_secret,
+      `${name}.replaySecret`,
+      32,
+    ),
+  };
+}
+
+function normalizeZkAceNativeResult(resultJson, name) {
+  let result;
+  try {
+    result = JSON.parse(resultJson);
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} native prover returned invalid JSON: ${error.message}`,
+      name,
+    );
+  }
+  return assertPlainObject(result, name);
 }
 
 function normalizeAccessSetHints(value, context) {
@@ -3851,6 +4567,173 @@ export function buildRemoveSmartContractBytesInstruction(options) {
 }
 
 /**
+ * Build canonical Norito bytes for an open-verify proof envelope.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildPrivacyProofEnvelope(options) {
+  const source = assertPlainObject(options, "privacyProofEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "publicInputs",
+      "public_inputs",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "privacyProofEnvelope",
+  );
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    "privacyProofEnvelope.backendTag",
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    "privacyProofEnvelope.circuitId",
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    "privacyProofEnvelope.vkHash",
+    "verifying key hash",
+  );
+  const publicInputsAlias = readSingleAlias(
+    source,
+    ["publicInputs", "public_inputs"],
+    "privacyProofEnvelope.publicInputs",
+    "public inputs",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    "privacyProofEnvelope.proofBytes",
+    "proof bytes",
+  );
+  const maxProofBytes = normalizePositiveU32(
+    source.maxProofBytes ?? source.max_proof_bytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+    "privacyProofEnvelope.maxProofBytes",
+  );
+  const maxPublicInputBytes = normalizePositiveU32(
+    source.maxPublicInputBytes ??
+      source.max_public_input_bytes ??
+      DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES,
+    "privacyProofEnvelope.maxPublicInputBytes",
+  );
+  const envelope = {
+    backend: normalizePrivacyBackendTag(
+      backendAlias.value,
+      "privacyProofEnvelope.backendTag",
+    ),
+    circuit_id: assertNonBlankString(
+      circuitAlias.value,
+      "privacyProofEnvelope.circuitId",
+    ),
+    vk_hash: normalizeNonZeroFixedBytes(
+      vkHashAlias.value,
+      "privacyProofEnvelope.vkHash",
+      32,
+    ),
+    public_inputs: normalizeBoundedByteArray(
+      publicInputsAlias.value,
+      "privacyProofEnvelope.publicInputs",
+      { maxBytes: maxPublicInputBytes },
+    ),
+    proof_bytes: normalizeBoundedByteArray(
+      proofAlias.value,
+      "privacyProofEnvelope.proofBytes",
+      { maxBytes: maxProofBytes },
+    ),
+    aux: normalizeBoundedByteArray(source.aux, "privacyProofEnvelope.aux", {
+      maxBytes: DEFAULT_PRIVACY_MAX_AUX_BYTES,
+      allowEmpty: true,
+    }),
+  };
+  return noritoEncodePrivacyProofEnvelope(envelope);
+}
+
+/**
+ * Build a verifier-key registration instruction for the privacy verifier WSV registry.
+ * @param {object} options
+ * @returns {{verifying_keys: {RegisterVerifyingKey: object}}}
+ */
+export function buildRegisterPrivacyVerifierKeyInstruction(options) {
+  const source = assertPlainObject(options, "registerPrivacyVerifierKey");
+  const id = normalizePrivacyVerifierKeyIdFromOptions(
+    source,
+    "registerPrivacyVerifierKey",
+  );
+  const recordAlias = readSingleAlias(
+    source,
+    ["record", "verifierRecord", "verifyingKeyRecord"],
+    "registerPrivacyVerifierKey.record",
+    "verifier key record",
+  );
+  const record = normalizePrivacyVerifierKeyRecord(
+    recordAlias.value ?? source,
+    id,
+    "registerPrivacyVerifierKey.record",
+    { defaultStatus: "Proposed", allowWithdrawn: false },
+  );
+  return {
+    verifying_keys: {
+      RegisterVerifyingKey: {
+        id,
+        record,
+      },
+    },
+  };
+}
+
+/**
+ * Build a verifier-key retirement instruction by updating the record status to Withdrawn.
+ * @param {object} options
+ * @returns {{verifying_keys: {UpdateVerifyingKey: object}}}
+ */
+export function buildRetirePrivacyVerifierKeyInstruction(options) {
+  const source = assertPlainObject(options, "retirePrivacyVerifierKey");
+  const id = normalizePrivacyVerifierKeyIdFromOptions(source, "retirePrivacyVerifierKey");
+  const recordAlias = readSingleAlias(
+    source,
+    ["record", "verifierRecord", "verifyingKeyRecord"],
+    "retirePrivacyVerifierKey.record",
+    "verifier key record",
+  );
+  const record = normalizePrivacyVerifierKeyRecord(
+    recordAlias.value ?? source,
+    id,
+    "retirePrivacyVerifierKey.record",
+    { defaultStatus: "Withdrawn", allowWithdrawn: true, forceStatus: "Withdrawn" },
+  );
+  return {
+    verifying_keys: {
+      UpdateVerifyingKey: {
+        id,
+        record,
+      },
+    },
+  };
+}
+
+/**
  * Build a `zk::RegisterZkAsset` instruction payload.
  * @param {object} options
  * @returns {{zk: {RegisterZkAsset: object}}}
@@ -3955,6 +4838,334 @@ export function buildRegisterAssetHiddenZkPoolInstruction(options) {
   return {
     zk: {
       RegisterAssetHiddenZkPool: payload,
+    },
+  };
+}
+
+/**
+ * Build a `zk::RegisterZkAceIdentityCommitment` instruction payload.
+ * @param {object} options
+ * @returns {{zk: {RegisterZkAceIdentityCommitment: object}}}
+ */
+export function buildRegisterZkAceIdentityCommitmentInstruction(options) {
+  const source = assertPlainObject(options, "registerZkAceIdentityCommitment");
+  const payload = {
+    asset: assertString(
+      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
+      "registerZkAceIdentityCommitment.asset",
+    ),
+    identity_commitment: normalizeNonZeroFixedBytes(
+      source.identityCommitment ?? source.identity_commitment,
+      "registerZkAceIdentityCommitment.identityCommitment",
+      32,
+    ),
+    policy_hash: normalizeNonZeroFixedBytes(
+      source.policyHash ?? source.policy_hash,
+      "registerZkAceIdentityCommitment.policyHash",
+      32,
+    ),
+    allowed_accounts: normalizeZkAceAllowedAccounts(
+      source.allowedAccounts ?? source.allowed_accounts,
+      "registerZkAceIdentityCommitment.allowedAccounts",
+    ),
+    action_class: normalizeZkAceAction(
+      source.actionClass ?? source.action_class,
+      "registerZkAceIdentityCommitment.actionClass",
+    ),
+    domain_tag: normalizeZkAceDomainTag(
+      source.domainTag ?? source.domain_tag,
+      "registerZkAceIdentityCommitment.domainTag",
+    ),
+    verifier_key: normalizeZkAceVerifierKeyId(
+      source.verifierKey ?? source.verifier_key ?? source.verifyingKeyRef,
+      "registerZkAceIdentityCommitment.verifierKey",
+    ),
+  };
+  return {
+    zk: {
+      RegisterZkAceIdentityCommitment: payload,
+    },
+  };
+}
+
+/**
+ * Build a `zk::RotateZkAceIdentityCommitment` instruction payload.
+ * @param {object} options
+ * @returns {{zk: {RotateZkAceIdentityCommitment: object}}}
+ */
+export function buildRotateZkAceIdentityCommitmentInstruction(options) {
+  const source = assertPlainObject(options, "rotateZkAceIdentityCommitment");
+  const oldCommitment = normalizeNonZeroFixedBytes(
+    source.oldIdentityCommitment ?? source.old_identity_commitment,
+    "rotateZkAceIdentityCommitment.oldIdentityCommitment",
+    32,
+  );
+  const newCommitment = normalizeNonZeroFixedBytes(
+    source.newIdentityCommitment ?? source.new_identity_commitment,
+    "rotateZkAceIdentityCommitment.newIdentityCommitment",
+    32,
+  );
+  if (Buffer.from(oldCommitment).equals(Buffer.from(newCommitment))) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "rotateZkAceIdentityCommitment replacement commitment must differ from the old commitment",
+      "rotateZkAceIdentityCommitment.newIdentityCommitment",
+    );
+  }
+  const payload = {
+    asset: assertString(
+      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
+      "rotateZkAceIdentityCommitment.asset",
+    ),
+    old_identity_commitment: oldCommitment,
+    new_identity_commitment: newCommitment,
+    policy_hash: normalizeNonZeroFixedBytes(
+      source.policyHash ?? source.policy_hash,
+      "rotateZkAceIdentityCommitment.policyHash",
+      32,
+    ),
+    allowed_accounts: normalizeZkAceAllowedAccounts(
+      source.allowedAccounts ?? source.allowed_accounts,
+      "rotateZkAceIdentityCommitment.allowedAccounts",
+    ),
+    action_class: normalizeZkAceAction(
+      source.actionClass ?? source.action_class,
+      "rotateZkAceIdentityCommitment.actionClass",
+    ),
+    domain_tag: normalizeZkAceDomainTag(
+      source.domainTag ?? source.domain_tag,
+      "rotateZkAceIdentityCommitment.domainTag",
+    ),
+    verifier_key: normalizeZkAceVerifierKeyId(
+      source.verifierKey ?? source.verifier_key ?? source.verifyingKeyRef,
+      "rotateZkAceIdentityCommitment.verifierKey",
+    ),
+  };
+  return {
+    zk: {
+      RotateZkAceIdentityCommitment: payload,
+    },
+  };
+}
+
+/**
+ * Build a `zk::RevokeZkAceIdentityCommitment` instruction payload.
+ * @param {object} options
+ * @returns {{zk: {RevokeZkAceIdentityCommitment: object}}}
+ */
+export function buildRevokeZkAceIdentityCommitmentInstruction(options) {
+  const source = assertPlainObject(options, "revokeZkAceIdentityCommitment");
+  return {
+    zk: {
+      RevokeZkAceIdentityCommitment: {
+        asset: assertString(
+          source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
+          "revokeZkAceIdentityCommitment.asset",
+        ),
+        identity_commitment: normalizeNonZeroFixedBytes(
+          source.identityCommitment ?? source.identity_commitment,
+          "revokeZkAceIdentityCommitment.identityCommitment",
+          32,
+        ),
+        reason_hash: normalizeOptionalFixedBytes(
+          source.reasonHash ?? source.reason_hash,
+          "revokeZkAceIdentityCommitment.reasonHash",
+          32,
+        ),
+      },
+    },
+  };
+}
+
+/**
+ * Normalize a prepared ZK-ACE authorization proof attachment and its public inputs.
+ * The native Rust prover crate produces the STARK/FRI envelope bytes consumed here.
+ * @param {object} options
+ * @returns {{public_inputs: object, proof: object}}
+ */
+export function buildZkAceAuthorizationProofV1(options) {
+  const source = assertPlainObject(options, "zkAceAuthorizationProof");
+  const publicInputs = normalizeZkAcePublicInputs(
+    source.publicInputs ?? source.public_inputs,
+    "zkAceAuthorizationProof.publicInputs",
+  );
+  const witnessSource = source.witness ?? source.privateWitness ?? source.private_witness;
+  const hasPreparedProof =
+    source.proof !== undefined ||
+    source.proofBytes !== undefined ||
+    source.proof_bytes !== undefined ||
+    source.proofAttachment !== undefined ||
+    source.proof_attachment !== undefined ||
+    source.attachment !== undefined;
+  if (witnessSource !== undefined && witnessSource !== null && !hasPreparedProof) {
+    const witness = normalizeZkAceWitness(witnessSource, "zkAceAuthorizationProof.witness");
+    const native = getNativeBinding();
+    if (!native || typeof native.zkAceBuildAuthorizationProofV1 !== "function") {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "zkAceAuthorizationProof witness proving requires the iroha_js_host native ZK-ACE prover",
+        "zkAceAuthorizationProof.witness",
+      );
+    }
+    const commitment = normalizeOptionalFixedBytes(
+      source.verifyingKeyCommitment ??
+        source.verifying_key_commitment ??
+        source.vkCommitment ??
+        source.vk_commitment,
+      "zkAceAuthorizationProof.verifyingKeyCommitment",
+      32,
+    );
+    const nativeResult = normalizeZkAceNativeResult(
+      native.zkAceBuildAuthorizationProofV1(
+        JSON.stringify(publicInputs),
+        JSON.stringify(witness),
+        commitment ? Buffer.from(commitment) : undefined,
+      ),
+      "zkAceAuthorizationProof.nativeResult",
+    );
+    const proof = normalizeProofAttachment(
+      nativeResult.proof,
+      "zkAceAuthorizationProof.proof",
+    );
+    const provedPublicInputs = normalizeZkAcePublicInputs(
+      nativeResult.public_inputs ?? nativeResult.publicInputs ?? publicInputs,
+      "zkAceAuthorizationProof.publicInputs",
+    );
+    if (
+      proof.vk_ref.backend !== provedPublicInputs.verifier_key_id.backend ||
+      proof.vk_ref.name !== provedPublicInputs.verifier_key_id.name
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "zkAceAuthorizationProof proof verifier must match public inputs",
+        "zkAceAuthorizationProof.proof.verifyingKeyRef",
+      );
+    }
+    return {
+      public_inputs: provedPublicInputs,
+      proof,
+    };
+  }
+  const directProof = source.proof;
+  const directProofIsAttachment =
+    directProof &&
+    typeof directProof === "object" &&
+    !Array.isArray(directProof) &&
+    !Buffer.isBuffer(directProof) &&
+    !ArrayBuffer.isView(directProof) &&
+    !(directProof instanceof ArrayBuffer) &&
+    Object.prototype.hasOwnProperty.call(directProof, "backend");
+  const proofSource =
+    source.proofAttachment ??
+    source.proof_attachment ??
+    source.attachment ??
+    (directProofIsAttachment ? directProof : undefined) ??
+    {
+      backend: ZK_ACE_BACKEND,
+      proofBytes: source.proofBytes ?? source.proof_bytes ?? source.proof,
+      verifyingKeyRef:
+        source.verifyingKeyRef ??
+        source.verifying_key_ref ??
+        publicInputs.verifier_key_id,
+      verifyingKeyCommitment:
+        source.verifyingKeyCommitment ??
+        source.verifying_key_commitment ??
+        source.vkCommitment ??
+        source.vk_commitment,
+      envelopeHash: source.envelopeHash ?? source.envelope_hash,
+    };
+  const proof = normalizeProofAttachment(proofSource, "zkAceAuthorizationProof.proof");
+  if (proof.backend !== ZK_ACE_BACKEND) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `zkAceAuthorizationProof.proof.backend must be ${ZK_ACE_BACKEND}`,
+      "zkAceAuthorizationProof.proof.backend",
+    );
+  }
+  if (
+    proof.vk_ref.backend !== publicInputs.verifier_key_id.backend ||
+    proof.vk_ref.name !== publicInputs.verifier_key_id.name
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAceAuthorizationProof proof verifier must match public inputs",
+      "zkAceAuthorizationProof.proof.verifyingKeyRef",
+    );
+  }
+  return {
+    public_inputs: publicInputs,
+    proof,
+  };
+}
+
+/**
+ * Build a `zk::SubmitZkAceAuthorizedTransfer` instruction payload.
+ * @param {object} options
+ * @returns {{zk: {SubmitZkAceAuthorizedTransfer: object}}}
+ */
+export function buildZkAceAuthorizedTransferInstruction(options) {
+  const source = assertPlainObject(options, "zkAceAuthorizedTransfer");
+  const proofBundle = source.authorizationProof ?? source.authorization_proof;
+  const authorization =
+    proofBundle && typeof proofBundle === "object" && !Array.isArray(proofBundle)
+      ? buildZkAceAuthorizationProofV1(proofBundle)
+      : null;
+  const proof =
+    authorization !== null
+      ? authorization.proof
+      : normalizeProofAttachment(source.proof, "zkAceAuthorizedTransfer.proof");
+  const payload = {
+    from: normalizeAccountId(source.fromAccountId ?? source.from, "zkAceAuthorizedTransfer.from"),
+    to: normalizeAccountId(source.toAccountId ?? source.to, "zkAceAuthorizedTransfer.to"),
+    asset: assertString(
+      source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
+      "zkAceAuthorizedTransfer.asset",
+    ),
+    amount: asU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount"),
+    identity_commitment: normalizeNonZeroFixedBytes(
+      source.identityCommitment ?? source.identity_commitment,
+      "zkAceAuthorizedTransfer.identityCommitment",
+      32,
+    ),
+    tx_digest: normalizeNonZeroFixedBytes(
+      source.txDigest ?? source.tx_digest,
+      "zkAceAuthorizedTransfer.txDigest",
+      32,
+    ),
+    chain_id: assertNonBlankString(
+      source.chainId ?? source.chain_id,
+      "zkAceAuthorizedTransfer.chainId",
+    ),
+    domain_tag: normalizeZkAceDomainTag(
+      source.domainTag ?? source.domain_tag,
+      "zkAceAuthorizedTransfer.domainTag",
+    ),
+    action_class: normalizeZkAceAction(
+      source.actionClass ?? source.action_class,
+      "zkAceAuthorizedTransfer.actionClass",
+    ),
+    replay_nullifier: normalizeNonZeroFixedBytes(
+      source.replayNullifier ?? source.replay_nullifier,
+      "zkAceAuthorizedTransfer.replayNullifier",
+      32,
+    ),
+    policy_hash: normalizeNonZeroFixedBytes(
+      source.policyHash ?? source.policy_hash,
+      "zkAceAuthorizedTransfer.policyHash",
+      32,
+    ),
+    proof,
+  };
+  if (authorization !== null) {
+    ensureZkAceAuthorizationMatchesTransfer(
+      authorization.public_inputs,
+      payload,
+      "zkAceAuthorizedTransfer.authorizationProof",
+    );
+  }
+  return {
+    zk: {
+      SubmitZkAceAuthorizedTransfer: payload,
     },
   };
 }

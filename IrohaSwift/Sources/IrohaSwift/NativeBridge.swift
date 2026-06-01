@@ -56,7 +56,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 5
+        return 6
     }
 
     private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
@@ -1607,6 +1607,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaRecursiveSpendArchiveFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1741,6 +1745,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var blake3HashFn: Blake3HashFn? = nil
     private var kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: KagemushaProveVerifiedCompactPaymentTokenWithRecordsFn? = nil
     private var kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn? = nil
+    private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
 #else
     private let bridgeHandle: Any? = nil
     private let encodeTransferFn: Any? = nil
@@ -1846,6 +1854,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let blake3HashFn: Any? = nil
     private let kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn: Any? = nil
     private let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
+    private let kagemushaRecursiveSpendInitFn: Any? = nil
+    private let kagemushaRecursiveSpendAppendFn: Any? = nil
+    private let kagemushaRecursiveSpendVerifyFn: Any? = nil
+    private let kagemushaRecursiveSpendRedeemFn: Any? = nil
 #endif
 
 #if canImport(Darwin)
@@ -2424,6 +2436,50 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
             }
+            if let kagemushaRecursiveSpendInitSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_init"
+            ) {
+                self.kagemushaRecursiveSpendInitFn = unsafeBitCast(
+                    kagemushaRecursiveSpendInitSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendInitFn = nil
+            }
+            if let kagemushaRecursiveSpendAppendSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_append"
+            ) {
+                self.kagemushaRecursiveSpendAppendFn = unsafeBitCast(
+                    kagemushaRecursiveSpendAppendSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendAppendFn = nil
+            }
+            if let kagemushaRecursiveSpendVerifySymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_verify"
+            ) {
+                self.kagemushaRecursiveSpendVerifyFn = unsafeBitCast(
+                    kagemushaRecursiveSpendVerifySymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendVerifyFn = nil
+            }
+            if let kagemushaRecursiveSpendRedeemSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_redeem"
+            ) {
+                self.kagemushaRecursiveSpendRedeemFn = unsafeBitCast(
+                    kagemushaRecursiveSpendRedeemSymbol,
+                    to: KagemushaRecursiveSpendArchiveFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendRedeemFn = nil
+            }
             if let sm2DefaultSymbol = dlsym(handle, "connect_norito_sm2_default_distid") {
                 self.sm2DefaultDistidFn = unsafeBitCast(sm2DefaultSymbol, to: Sm2DefaultDistidFn.self)
             } else {
@@ -2552,6 +2608,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.blake3HashFn = nil
             self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn = nil
             self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
+            self.kagemushaRecursiveSpendInitFn = nil
+            self.kagemushaRecursiveSpendAppendFn = nil
+            self.kagemushaRecursiveSpendVerifyFn = nil
+            self.kagemushaRecursiveSpendRedeemFn = nil
             self.encodeConfidentialPayloadFn = nil
             self.accountAddressParseFn = nil
             self.accountAddressRenderFn = nil
@@ -2658,6 +2718,19 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isKagemushaRecursiveSpendAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return kagemushaRecursiveSpendInitFn != nil
+            && kagemushaRecursiveSpendAppendFn != nil
+            && kagemushaRecursiveSpendVerifyFn != nil
+            && kagemushaRecursiveSpendRedeemFn != nil
+            && freeFn != nil
         #else
         return false
         #endif
@@ -5297,6 +5370,70 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #else
         return nil
         #endif
+    }
+
+    private func callKagemushaRecursiveSpend(
+        requestArchive: Data,
+        function: KagemushaRecursiveSpendArchiveFn?
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = requestArchive.withUnsafeBytes { buffer -> Int32 in
+            let baseAddress = buffer.bindMemory(to: UInt8.self).baseAddress
+            return function(
+                baseAddress,
+                CUnsignedLong(buffer.count),
+                &outPtr,
+                &outLen
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    func kagemushaRecursiveSpendInit(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendInitFn
+        )
+    }
+
+    func kagemushaRecursiveSpendAppend(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendAppendFn
+        )
+    }
+
+    func kagemushaRecursiveSpendVerify(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendVerifyFn
+        )
+    }
+
+    func kagemushaRecursiveSpendRedeem(requestArchive: Data) throws -> Data? {
+        try callKagemushaRecursiveSpend(
+            requestArchive: requestArchive,
+            function: kagemushaRecursiveSpendRedeemFn
+        )
     }
 
     var canUseConnectCrypto: Bool {
