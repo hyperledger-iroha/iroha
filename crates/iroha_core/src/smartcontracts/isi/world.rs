@@ -783,6 +783,11 @@ pub mod isi {
                 ));
             }
         }
+        if envelope.vk_hash == [0u8; 32] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
+            ));
+        }
         if envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
@@ -10199,6 +10204,13 @@ pub mod isi {
                 "ZK-ACE verifying key is not bound to zk_ace_pq_authorization_v0".into(),
             ));
         }
+        if record.public_inputs_schema_hash
+            != iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE verifying key public input schema hash mismatch".into(),
+            ));
+        }
         let key = record.key.as_ref().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 "ZK-ACE verifying key bytes missing".into(),
@@ -10276,6 +10288,11 @@ pub mod isi {
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
+            ));
+        }
+        if env.vk_hash == [0u8; 32] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
             ));
         }
         if env.vk_hash != record.commitment {
@@ -17026,14 +17043,17 @@ pub mod isi {
                 Vec::new(),
                 Vec::new(),
             );
+            let err = validate_open_verify_envelope_metadata(
+                "ballot",
+                "halo2/ipa",
+                &zero_commitment,
+                &vk_rec,
+            )
+            .expect_err("zero OpenVerifyEnvelope verifier hash must reject explicitly");
             assert!(
-                validate_open_verify_envelope_metadata(
-                    "ballot",
-                    "halo2/ipa",
-                    &zero_commitment,
-                    &vk_rec
-                )
-                .is_err()
+                err.to_string()
+                    .contains("verifier-key hash must be non-zero"),
+                "unexpected zero-hash rejection: {err}"
             );
 
             let mut non_empty_aux = OpenVerifyEnvelope::new(
@@ -17821,7 +17841,7 @@ pub mod isi {
                 "zk-ace",
                 BackendTag::Stark,
                 "goldilocks",
-                [0x91; 32],
+                iroha_data_model::zk::zk_ace_public_inputs_schema_hash_v1(),
                 commitment,
             );
             record.vk_len =
@@ -17925,6 +17945,17 @@ pub mod isi {
                 .expect("fixture carries one STARK public input");
             first_word[0] ^= 0x01;
             envelope.proof_bytes = norito::to_bytes(&open).expect("encode mutated STARK wrapper");
+            proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
+            proof
+        }
+
+        fn mutate_zk_ace_envelope_vk_hash(
+            mut proof: ProofAttachment,
+            vk_hash: [u8; 32],
+        ) -> ProofAttachment {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode envelope");
+            envelope.vk_hash = vk_hash;
             proof.proof.bytes = norito::to_bytes(&envelope).expect("encode mutated envelope");
             proof
         }
@@ -18156,6 +18187,136 @@ pub mod isi {
                 msg.contains("source account is not in the identity allowlist"),
                 "unexpected non-allowlisted source error: {msg}"
             );
+        }
+
+        #[test]
+        fn zk_ace_identity_management_permission_is_account_scoped() {
+            let fixture = zk_ace_transfer_fixture();
+            let delegate = gen_account_in(fixture.asset_def_id.domain()).0;
+            let outsider = gen_account_in(fixture.asset_def_id.domain()).0;
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+
+            Register::account(new_account_in_domain(&delegate))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ZK-ACE delegate account");
+            Register::account(new_account_in_domain(&outsider))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ZK-ACE outsider account");
+
+            let alice_permission: Permission = CanManageZkAceIdentityForAccount {
+                account: ALICE_ID.clone(),
+                asset: fixture.asset_def_id.clone(),
+            }
+            .into();
+            Grant::account_permission(alice_permission.clone(), delegate.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant delegate authority for Alice ZK-ACE identity");
+            Grant::account_permission(alice_permission, outsider.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant outsider authority only for Alice ZK-ACE identity");
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                [0x66; 32],
+                fixture.policy_hash,
+                vec![ALICE_ID.clone(), fixture.receiver.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&outsider, &mut stx)
+            .expect_err("partial ZK-ACE account authority must not register a wider allowlist");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("CanManageZkAceIdentityForAccount"),
+                "unexpected partial registration authority error: {msg}"
+            );
+
+            iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect("delegated account authority registers Alice ZK-ACE identity");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&fixture.identity_commitment))
+                .expect("delegated ZK-ACE registration creates identity record");
+            assert_eq!(record.allowed_accounts, vec![ALICE_ID.clone()]);
+
+            let replacement_commitment = [0x67; 32];
+            let err = iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                replacement_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone(), fixture.receiver.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect_err("partial ZK-ACE account authority must not rotate to a wider allowlist");
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("CanManageZkAceIdentityForAccount"),
+                "unexpected partial rotation authority error: {msg}"
+            );
+
+            let receiver_permission: Permission = CanManageZkAceIdentityForAccount {
+                account: fixture.receiver.clone(),
+                asset: fixture.asset_def_id.clone(),
+            }
+            .into();
+            Grant::account_permission(receiver_permission, delegate.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant delegate authority for receiver ZK-ACE identity");
+            iroha_data_model::isi::zk::RotateZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                replacement_commitment,
+                fixture.policy_hash,
+                vec![fixture.receiver.clone(), ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id.clone(),
+            )
+            .execute(&delegate, &mut stx)
+            .expect("fully delegated account authority rotates to the wider allowlist");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
+                .expect("delegated ZK-ACE rotation creates replacement identity record");
+            let mut expected_allowed_accounts = vec![fixture.receiver.clone(), ALICE_ID.clone()];
+            expected_allowed_accounts.sort();
+            assert_eq!(record.allowed_accounts, expected_allowed_accounts);
+
+            iroha_data_model::isi::zk::RevokeZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                replacement_commitment,
+                None,
+            )
+            .execute(&delegate, &mut stx)
+            .expect("fully delegated account authority revokes ZK-ACE identity");
+            let record = stx
+                .world
+                .zk_assets
+                .get(&fixture.asset_def_id)
+                .and_then(|state| state.zk_ace_identities.get(&replacement_commitment))
+                .expect("revoked replacement ZK-ACE identity remains recorded");
+            assert_eq!(record.status, crate::state::ZkAceIdentityStatus::Revoked);
         }
 
         #[test]
@@ -18562,6 +18723,28 @@ pub mod isi {
                 "unexpected domain error: {msg}"
             );
 
+            let zero_vk_hash_proof = mutate_zk_ace_envelope_vk_hash(proof.clone(), [0u8; 32]);
+            let zero_vk_hash_transfer = zk_ace_transfer_instruction(
+                ALICE_ID.clone(),
+                fixture.receiver.clone(),
+                fixture.asset_def_id.clone(),
+                amount,
+                fixture.identity_commitment,
+                tx_digest,
+                stx.chain_id.clone(),
+                replay_nullifier,
+                fixture.policy_hash,
+                zero_vk_hash_proof,
+            );
+            let err = zero_vk_hash_transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("zero ZK-ACE envelope verifier hash must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("verifier-key hash must be non-zero"),
+                "unexpected zero verifier-hash error: {msg}"
+            );
+
             let wrong_vk_id = VerifyingKeyId::new(
                 iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
                 "wrong_zk_ace_verifier",
@@ -18597,6 +18780,37 @@ pub mod isi {
             assert!(
                 msg.contains("verifying key reference mismatch"),
                 "unexpected verifier error: {msg}"
+            );
+        }
+
+        #[test]
+        fn zk_ace_rejects_verifier_schema_hash_mismatch() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(&mut stx, &fixture.vk_id, ConfidentialStatus::Active, 4096);
+            stx.world
+                .verifying_keys
+                .get_mut(&fixture.vk_id)
+                .expect("ZK-ACE verifier is installed")
+                .public_inputs_schema_hash[0] ^= 1;
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id,
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id,
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("wrong ZK-ACE verifier schema hash must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("public input schema hash mismatch"),
+                "unexpected verifier schema error: {msg}"
             );
         }
 
@@ -21568,7 +21782,7 @@ pub mod isi {
                 (
                     "zero_vk_hash",
                     Tamper::ZeroVerifyingKeyHash,
-                    "verifying key commitment mismatch",
+                    "verifier-key hash must be non-zero",
                 ),
                 (
                     "wrong_vk_hash",
@@ -25271,7 +25485,7 @@ pub mod isi {
                 (
                     "zero_vk_hash",
                     Tamper::ZeroVerifyingKeyHash,
-                    "verifying key commitment mismatch",
+                    "verifier-key hash must be non-zero",
                 ),
                 (
                     "vk_hash",

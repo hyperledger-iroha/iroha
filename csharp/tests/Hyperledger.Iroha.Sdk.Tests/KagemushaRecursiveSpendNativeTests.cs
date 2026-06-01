@@ -25,6 +25,13 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.Equal(
             "checked_prefold_v1",
             KagemushaOfflineSpendMode.CheckedPrefoldV1.WireName());
+        Assert.Equal(6u, KagemushaRecursiveSpendNative.RequiredBridgeAbiVersion);
+        Assert.Equal(
+            "kagemusha-recursive-aggregation-v1",
+            KagemushaRecursiveSpendNative.RecursiveAggregationProofCircuitIdV1);
+        Assert.Equal(
+            "kagemusha-recursive-spend-lineage-v1",
+            KagemushaRecursiveSpendNative.RecursiveSpendLineageProofCircuitIdV1);
 
         _ = KagemushaRecursiveSpendNative.PreferredMode();
     }
@@ -34,6 +41,24 @@ public sealed class KagemushaRecursiveSpendNativeTests
     {
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
+            Array.Empty<byte>(),
+            new byte[] { 0x01 }));
+        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
+            new byte[] { 0x01 },
+            Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+            Array.Empty<byte>(),
+            new byte[] { 0x01 },
+            new byte[] { 0x02 }));
+        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+            new byte[] { 0x01 },
+            Array.Empty<byte>(),
+            new byte[] { 0x02 }));
+        Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+            new byte[] { 0x01 },
+            new byte[] { 0x02 },
+            Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Verify(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Redeem(Array.Empty<byte>()));
     }
@@ -49,6 +74,13 @@ public sealed class KagemushaRecursiveSpendNativeTests
         var malformed = new byte[] { 0x01, 0x02 };
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Init(malformed));
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Append(malformed));
+        Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.LineageWitnessFromInitResult(
+            malformed,
+            new byte[] { 0x03, 0x04 }));
+        Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.LineageWitnessAppendResult(
+            malformed,
+            new byte[] { 0x03, 0x04 },
+            new byte[] { 0x05, 0x06 }));
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Verify(malformed));
         Assert.Throws<InvalidOperationException>(() => KagemushaRecursiveSpendNative.Redeem(malformed));
     }

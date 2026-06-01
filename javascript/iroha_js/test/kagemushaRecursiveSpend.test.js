@@ -4,9 +4,14 @@ import test from "node:test";
 import {
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendInit,
+  kagemushaRecursiveSpendLineageWitnessAppendResult,
+  kagemushaRecursiveSpendLineageWitnessFromInitResult,
   kagemushaRecursiveSpendRedeem,
   kagemushaRecursiveSpendVerify,
   preferredKagemushaOfflineSpendMode,
@@ -37,6 +42,26 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
       /requestArchive must not be empty/,
     );
     assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessFromInitResult(Buffer.alloc(0), Buffer.from([1])),
+      /requestArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessFromInitResult(Buffer.from([1]), Buffer.alloc(0)),
+      /bundleArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(Buffer.alloc(0), Buffer.from([1]), Buffer.from([2])),
+      /previousWitnessArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(Buffer.from([1]), Buffer.alloc(0), Buffer.from([2])),
+      /requestArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(Buffer.from([1]), Buffer.from([2]), Buffer.alloc(0)),
+      /bundleArchive must not be empty/,
+    );
+    assert.throws(
       () => kagemushaRecursiveSpendVerify(Buffer.alloc(0)),
       /requestArchive must not be empty/,
     );
@@ -49,8 +74,13 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
 
 test("Kagemusha offline spend mode defaults to recursive when native support is complete", () => {
   const completeBinding = {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
     kagemushaRecursiveSpendInit() {},
     kagemushaRecursiveSpendAppend() {},
+    kagemushaRecursiveSpendLineageWitnessFromInitResult() {},
+    kagemushaRecursiveSpendLineageWitnessAppendResult() {},
     kagemushaRecursiveSpendVerify() {},
     kagemushaRecursiveSpendRedeem() {},
   };
@@ -77,9 +107,24 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
   });
 });
 
+test("Kagemusha recursive spend exports stable proof circuit ids", () => {
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-aggregation-v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-spend-lineage-v1",
+  );
+});
+
 test("Kagemusha recursive spend helpers probe native availability and return Buffers", () => {
   const calls = [];
   const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
     kagemushaRecursiveSpendInit(request) {
       calls.push(["init", Buffer.from(request)]);
       return Uint8Array.from([1, 2, 3]);
@@ -87,6 +132,19 @@ test("Kagemusha recursive spend helpers probe native availability and return Buf
     kagemushaRecursiveSpendAppend(request) {
       calls.push(["append", Buffer.from(request)]);
       return Uint8Array.from([4, 5]);
+    },
+    kagemushaRecursiveSpendLineageWitnessFromInitResult(request, bundle) {
+      calls.push(["lineage-init", Buffer.from(request), Buffer.from(bundle)]);
+      return Uint8Array.from([10, 11]);
+    },
+    kagemushaRecursiveSpendLineageWitnessAppendResult(previousWitness, request, bundle) {
+      calls.push([
+        "lineage-append",
+        Buffer.from(previousWitness),
+        Buffer.from(request),
+        Buffer.from(bundle),
+      ]);
+      return Uint8Array.from([12, 13]);
     },
     kagemushaRecursiveSpendVerify(request) {
       calls.push(["verify", Buffer.from(request)]);
@@ -102,6 +160,18 @@ test("Kagemusha recursive spend helpers probe native availability and return Buf
     assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
     assert.deepEqual(kagemushaRecursiveSpendInit(Buffer.from([9])), Buffer.from([1, 2, 3]));
     assert.deepEqual(kagemushaRecursiveSpendAppend(Buffer.from([8])), Buffer.from([4, 5]));
+    assert.deepEqual(
+      kagemushaRecursiveSpendLineageWitnessFromInitResult(Buffer.from([3]), Buffer.from([4])),
+      Buffer.from([10, 11]),
+    );
+    assert.deepEqual(
+      kagemushaRecursiveSpendLineageWitnessAppendResult(
+        Buffer.from([5]),
+        Buffer.from([6]),
+        Buffer.from([7]),
+      ),
+      Buffer.from([12, 13]),
+    );
     assert.deepEqual(kagemushaRecursiveSpendVerify(Buffer.from([7])), Buffer.from([6]));
     assert.deepEqual(kagemushaRecursiveSpendRedeem(Buffer.from([6])), Buffer.from([7, 8, 9]));
   });
@@ -109,17 +179,54 @@ test("Kagemusha recursive spend helpers probe native availability and return Buf
   assert.deepEqual(calls, [
     ["init", Buffer.from([9])],
     ["append", Buffer.from([8])],
+    ["lineage-init", Buffer.from([3]), Buffer.from([4])],
+    ["lineage-append", Buffer.from([5]), Buffer.from([6]), Buffer.from([7])],
     ["verify", Buffer.from([7])],
     ["redeem", Buffer.from([6])],
   ]);
 });
 
+test("Kagemusha recursive spend availability requires bridge ABI 6", () => {
+  const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return 5;
+    },
+    kagemushaRecursiveSpendInit() {},
+    kagemushaRecursiveSpendAppend() {},
+    kagemushaRecursiveSpendLineageWitnessFromInitResult() {},
+    kagemushaRecursiveSpendLineageWitnessAppendResult() {},
+    kagemushaRecursiveSpendVerify() {},
+    kagemushaRecursiveSpendRedeem() {},
+  };
+
+  withNativeBinding(binding, () => {
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
+    assert.equal(
+      preferredKagemushaOfflineSpendMode(),
+      KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendInit(Buffer.from([1])),
+      /Kagemusha recursive spend helper 'kagemushaRecursiveSpendInit' is unavailable/,
+    );
+  });
+});
+
 test("Kagemusha recursive spend helpers reject empty native outputs", () => {
   const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
     kagemushaRecursiveSpendInit() {
       return Buffer.alloc(0);
     },
     kagemushaRecursiveSpendAppend() {
+      return Buffer.alloc(0);
+    },
+    kagemushaRecursiveSpendLineageWitnessFromInitResult() {
+      return Buffer.alloc(0);
+    },
+    kagemushaRecursiveSpendLineageWitnessAppendResult() {
       return Buffer.alloc(0);
     },
     kagemushaRecursiveSpendVerify() {
@@ -140,6 +247,14 @@ test("Kagemusha recursive spend helpers reject empty native outputs", () => {
       /native kagemushaRecursiveSpendAppend returned empty output/,
     );
     assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessFromInitResult(Buffer.from([1]), Buffer.from([2])),
+      /native kagemushaRecursiveSpendLineageWitnessFromInitResult returned empty output/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(Buffer.from([1]), Buffer.from([2]), Buffer.from([3])),
+      /native kagemushaRecursiveSpendLineageWitnessAppendResult returned empty output/,
+    );
+    assert.throws(
       () => kagemushaRecursiveSpendVerify(Buffer.from([1])),
       /native kagemushaRecursiveSpendVerify returned empty output/,
     );
@@ -152,10 +267,19 @@ test("Kagemusha recursive spend helpers reject empty native outputs", () => {
 
 test("Kagemusha recursive spend helpers reject missing native outputs", () => {
   const binding = {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
     kagemushaRecursiveSpendInit() {
       return null;
     },
     kagemushaRecursiveSpendAppend() {
+      return undefined;
+    },
+    kagemushaRecursiveSpendLineageWitnessFromInitResult() {
+      return null;
+    },
+    kagemushaRecursiveSpendLineageWitnessAppendResult() {
       return undefined;
     },
     kagemushaRecursiveSpendVerify() {
@@ -174,6 +298,14 @@ test("Kagemusha recursive spend helpers reject missing native outputs", () => {
     assert.throws(
       () => kagemushaRecursiveSpendAppend(Buffer.from([1])),
       /native kagemushaRecursiveSpendAppend returned no output/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessFromInitResult(Buffer.from([1]), Buffer.from([2])),
+      /native kagemushaRecursiveSpendLineageWitnessFromInitResult returned no output/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendLineageWitnessAppendResult(Buffer.from([1]), Buffer.from([2]), Buffer.from([3])),
+      /native kagemushaRecursiveSpendLineageWitnessAppendResult returned no output/,
     );
     assert.throws(
       () => kagemushaRecursiveSpendVerify(Buffer.from([1])),

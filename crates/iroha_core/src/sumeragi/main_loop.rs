@@ -6401,10 +6401,18 @@ impl Actor {
         if !pending.is_consensus_inactive() && !pending.is_retired_same_height() {
             return true;
         }
-        if pending.commit_qc_observed()
-            || self.pending_block_has_qc(block_hash, pending.height, pending.view)
-        {
+        let has_commit_certificate = pending.commit_qc_observed()
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view);
+        if has_commit_certificate {
             return true;
+        }
+        if pending.is_retired_same_height()
+            && self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+                pending.height,
+                pending.view,
+            )
+        {
+            return false;
         }
         pending.is_retired_same_height()
             && self.pending_block_has_commit_votes(block_hash, pending.height, pending.view)
@@ -28074,6 +28082,12 @@ impl Actor {
         {
             return false;
         }
+        if self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+            request.height,
+            request.view,
+        ) {
+            return false;
+        }
         let slot_owner_matches = self.authoritative_slot_owner_hash(request.height, request.view)
             == Some(block_hash)
             || self.frontier_slot.as_ref().is_some_and(|slot| {
@@ -28099,6 +28113,20 @@ impl Actor {
     ) -> bool {
         if height != self.committed_height_snapshot().saturating_add(1) {
             return false;
+        }
+
+        if let Some(committed_qc) = self.latest_committed_qc() {
+            let expected_epoch = self.epoch_for_height(height);
+            if self.qc_cache.values().any(|qc| {
+                qc.phase == crate::sumeragi::consensus::Phase::NewView
+                    && qc.height == height
+                    && qc.view > view
+                    && qc.epoch == expected_epoch
+                    && qc.subject_block_hash == committed_qc.subject_block_hash
+                    && qc.highest_qc == Some(committed_qc)
+            }) {
+                return true;
+            }
         }
 
         let roster = self.effective_commit_topology();

@@ -743,6 +743,37 @@ public final class OfflineNoteTest {
         "checked_prefold_v1",
         KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
         "checked pre-fold wire mode");
+    assertEquals(
+        6,
+        KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION,
+        "recursive Kagemusha spend requires bridge ABI 6");
+    assertEquals(
+        "kagemusha-recursive-aggregation-v1",
+        KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        "semantic recursive aggregation proof circuit id");
+    assertEquals(
+        "kagemusha-recursive-spend-lineage-v1",
+        KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        "reserved recursive spend lineage proof circuit id");
+    assertTrue(
+        KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {},
+            () -> 6,
+            () -> {
+              throw new IllegalArgumentException("empty archive probe");
+            }),
+        "recursive Kagemusha spend accepts ABI 6 with expected empty-probe rejection");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(() -> {}, () -> 5, () -> {}),
+        "recursive Kagemusha spend must reject native bridges older than ABI 6");
+    assertTrue(
+        !KagemushaRecursiveSpendProver.detectNativeAvailability(
+            () -> {
+              throw new UnsatisfiedLinkError("missing library");
+            },
+            () -> 6,
+            () -> {}),
+        "recursive Kagemusha spend availability must fail closed when JNI is missing");
 
     assertThrows(
         () -> KagemushaRecursiveSpendProver.initSpend(new byte[0]),
@@ -750,6 +781,31 @@ public final class OfflineNoteTest {
     assertThrows(
         () -> KagemushaRecursiveSpendProver.appendSpend(new byte[0]),
         "Kagemusha recursive spend append must reject empty archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                new byte[0], new byte[] {0x01}),
+        "Kagemusha recursive spend init witness helper must reject empty request archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                new byte[] {0x01}, new byte[0]),
+        "Kagemusha recursive spend init witness helper must reject empty bundle archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                new byte[0], new byte[] {0x01}, new byte[] {0x02}),
+        "Kagemusha recursive spend append witness helper must reject empty witness archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                new byte[] {0x01}, new byte[0], new byte[] {0x02}),
+        "Kagemusha recursive spend append witness helper must reject empty request archives before JNI");
+    assertThrows(
+        () ->
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                new byte[] {0x01}, new byte[] {0x02}, new byte[0]),
+        "Kagemusha recursive spend append witness helper must reject empty bundle archives before JNI");
     assertThrows(
         () -> KagemushaRecursiveSpendProver.verifySpend(new byte[0]),
         "Kagemusha recursive spend verify must reject empty archives before JNI");
@@ -763,6 +819,16 @@ public final class OfflineNoteTest {
       assertThrows(
           () -> KagemushaRecursiveSpendProver.appendSpend(new byte[] {0x01, 0x02}),
           "Kagemusha recursive spend append must reject malformed archives");
+      assertThrows(
+          () ->
+              KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                  new byte[] {0x01, 0x02}, new byte[] {0x03, 0x04}),
+          "Kagemusha recursive spend init witness helper must reject malformed archives");
+      assertThrows(
+          () ->
+              KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                  new byte[] {0x01, 0x02}, new byte[] {0x03, 0x04}, new byte[] {0x05, 0x06}),
+          "Kagemusha recursive spend append witness helper must reject malformed archives");
       assertThrows(
           () -> KagemushaRecursiveSpendProver.verifySpend(new byte[] {0x01, 0x02}),
           "Kagemusha recursive spend verify must reject malformed archives");

@@ -766,6 +766,13 @@ pub mod isi {
             verifier.proof_backend.clone().into(),
             verifier.verifying_key_bytes.clone(),
         );
+        if envelope.vk_hash == [0u8; Hash::LENGTH] {
+            return Err(Error::InvariantViolation(
+                "RAM-LFE proof envelope verifier-key hash must be non-zero"
+                    .to_owned()
+                    .into(),
+            ));
+        }
         if envelope.vk_hash != crate::zk::hash_vk(&verifying_key) {
             return Err(Error::InvariantViolation(
                 "RAM-LFE verifier metadata contains a mismatched verifying key"
@@ -906,6 +913,14 @@ pub mod isi {
                 message.contains("auxiliary bytes"),
                 "unexpected error: {message}"
             );
+
+            let zero_vk_hash = sample_proof_box(&verifier, |envelope| {
+                envelope.vk_hash = [0u8; Hash::LENGTH];
+            });
+            let err = verify_execution_proof(&zero_vk_hash, &execution, &verifier)
+                .expect_err("zero verifier-key hash must reject before proof parsing");
+            let message = err.to_string();
+            assert!(message.contains("non-zero"), "unexpected error: {message}");
         }
     }
 }

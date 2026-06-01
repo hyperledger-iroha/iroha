@@ -130,7 +130,81 @@ if TYPE_CHECKING:
     SignedTransactionEnvelope: TypeAlias = Any
     TransactionBuilder: TypeAlias = Any
 else:
-    Instruction = _crypto.Instruction
+    _NativeInstruction = _crypto.Instruction
+
+    def _normalize_zk_ace_allowed_accounts(allowed_accounts: Any) -> list[str]:
+        if allowed_accounts is None:
+            raise TypeError("allowed_accounts must be a non-empty sequence of account ids")
+        if isinstance(allowed_accounts, (str, bytes, bytearray, memoryview)):
+            raise TypeError("allowed_accounts must be a non-empty sequence of account ids")
+        try:
+            accounts = list(allowed_accounts)
+        except TypeError as exc:
+            raise TypeError("allowed_accounts must be a non-empty sequence of account ids") from exc
+        if not accounts:
+            raise ValueError("allowed_accounts must be non-empty")
+        if len(accounts) > 16:
+            raise ValueError("allowed_accounts must contain at most 16 accounts")
+        seen: set[str] = set()
+        for index, account in enumerate(accounts):
+            if not isinstance(account, str) or not account.strip():
+                raise ValueError(f"allowed_accounts[{index}] must be a non-empty account id")
+            if account in seen:
+                raise ValueError(f"allowed_accounts[{index}] duplicates an earlier account")
+            seen.add(account)
+        return accounts
+
+    class _InstructionFacadeMeta(type):
+        def __getattr__(cls, name: str) -> Any:
+            return getattr(_NativeInstruction, name)
+
+    class Instruction(metaclass=_InstructionFacadeMeta):
+        @staticmethod
+        def register_zk_ace_identity_commitment(
+            asset_definition_id: str,
+            identity_commitment: Any,
+            policy_hash: Any,
+            allowed_accounts: Any = None,
+            verifier_key: Any = None,
+            *,
+            action_class: Optional[str] = None,
+            domain_tag: Optional[str] = None,
+        ) -> Any:
+            accounts = _normalize_zk_ace_allowed_accounts(allowed_accounts)
+            return _NativeInstruction.register_zk_ace_identity_commitment(
+                asset_definition_id,
+                identity_commitment,
+                policy_hash,
+                accounts,
+                verifier_key,
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+
+        @staticmethod
+        def rotate_zk_ace_identity_commitment(
+            asset_definition_id: str,
+            old_identity_commitment: Any,
+            new_identity_commitment: Any,
+            policy_hash: Any,
+            allowed_accounts: Any = None,
+            verifier_key: Any = None,
+            *,
+            action_class: Optional[str] = None,
+            domain_tag: Optional[str] = None,
+        ) -> Any:
+            accounts = _normalize_zk_ace_allowed_accounts(allowed_accounts)
+            return _NativeInstruction.rotate_zk_ace_identity_commitment(
+                asset_definition_id,
+                old_identity_commitment,
+                new_identity_commitment,
+                policy_hash,
+                accounts,
+                verifier_key,
+                action_class=action_class,
+                domain_tag=domain_tag,
+            )
+
     SignedTransactionEnvelope = _crypto.SignedTransactionEnvelope
     TransactionBuilder = _crypto.TransactionBuilder
 verify_signed_transaction_versioned = _crypto.verify_signed_transaction_versioned

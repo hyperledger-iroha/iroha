@@ -12,9 +12,9 @@ use iroha_data_model::{
     zk::{
         BackendTag, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER, ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID, ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
-        ZkAcePublicInputsV1, ZkAceWitnessV1, derive_zk_ace_air_public_digest,
-        derive_zk_ace_identity_commitment, derive_zk_ace_public_inputs_digest,
+        ZkAcePublicInputsV1, ZkAceWitnessV1, derive_zk_ace_identity_commitment,
         derive_zk_ace_replay_nullifier, derive_zk_ace_transfer_digest,
+        zk_ace_public_inputs_schema_hash_v1,
     },
 };
 
@@ -95,12 +95,13 @@ pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
         BackendTag::Stark,
         "goldilocks",
-        [0u8; 32],
+        zk_ace_public_inputs_schema_hash_v1(),
         commitment,
     );
     record.namespace = "zk-ace".to_owned();
     record.vk_len = u32::try_from(key.bytes.len()).unwrap_or(u32::MAX);
     record.max_proof_bytes = 256 * 1024;
+    record.gas_schedule_id = Some("zk_ace_stark_default".to_owned());
     record.key = Some(key);
     record.status = ConfidentialStatus::Active;
     Ok(record)
@@ -297,7 +298,8 @@ mod tests {
         name::Name,
         zk::{
             OpenVerifyEnvelope, StarkFriOpenProofV1, ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
-            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG, derive_zk_ace_air_public_digest,
+            derive_zk_ace_public_inputs_digest,
         },
     };
     use std::str::FromStr;
@@ -308,9 +310,13 @@ mod tests {
     }
 
     fn asset() -> AssetDefinitionId {
+        asset_named("xor")
+    }
+
+    fn asset_named(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("domain"),
-            Name::from_str("xor").expect("asset name"),
+            Name::from_str(name).expect("asset name"),
         )
     }
 
@@ -397,6 +403,62 @@ mod tests {
         envelope.public_inputs = norito::to_bytes(&public_inputs).expect("encode public inputs");
         proof.proof.bytes = norito::to_bytes(&envelope).expect("encode open verify envelope");
         proof
+    }
+
+    fn assert_public_input_mutation_rejected(
+        label: &str,
+        proof: &ProofAttachment,
+        mutate: impl FnOnce(&mut ZkAcePublicInputsV1),
+    ) {
+        let tampered = tamper_outer_public_inputs(proof.clone(), mutate);
+        assert!(
+            !verify_attachment(&tampered),
+            "{label} mutation must be rejected by the STARK verifier"
+        );
+    }
+
+    fn field_sub(lhs: u64, rhs: u64) -> u64 {
+        const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+        if lhs >= rhs {
+            lhs - rhs
+        } else {
+            ((u128::from(lhs) + MOD_P) - u128::from(rhs)) as u64
+        }
+    }
+
+    fn bytes_from_zk_ace_limbs(limbs: &[u64]) -> [u8; 32] {
+        let limbs: &[u64; 5] = limbs.try_into().expect("five limbs");
+        let mut out = [0u8; 32];
+        let mut offset = 0usize;
+        for (index, limb) in limbs.iter().enumerate() {
+            let bytes = limb.to_le_bytes();
+            let take = if index == 4 { 4 } else { 7 };
+            out[offset..offset + take].copy_from_slice(&bytes[..take]);
+            offset += take;
+        }
+        out
+    }
+
+    fn recover_witness_from_opened_zk_ace_row(row: &[u64]) -> ZkAceWitnessV1 {
+        assert_eq!(row.len(), 31, "unexpected ZK-ACE AIR width");
+        let limbs = (0..15)
+            .map(|limb_index| field_sub(row[1 + limb_index], row[16 + limb_index]))
+            .collect::<Vec<_>>();
+        ZkAceWitnessV1 {
+            identity_root: bytes_from_zk_ace_limbs(&limbs[..5]),
+            identity_blinding: bytes_from_zk_ace_limbs(&limbs[5..10]),
+            replay_secret: bytes_from_zk_ace_limbs(&limbs[10..15]),
+        }
+    }
+
+    fn inner_stark_envelope(
+        proof: &ProofAttachment,
+    ) -> iroha_core::zk_stark::StarkVerifyEnvelopeV1 {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.proof.bytes).expect("open verify envelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&envelope.proof_bytes).expect("stark wrapper");
+        norito::decode_from_bytes(&open.envelope_bytes).expect("inner STARK envelope")
     }
 
     #[test]
@@ -532,6 +594,46 @@ mod tests {
     }
 
     #[test]
+    fn zk_ace_air_openings_do_not_recover_private_witness() {
+        let witness = witness(0x24);
+        let public_inputs = public_inputs_for(&witness);
+        let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
+        let proof = build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+            .expect("build proof");
+        let inner = inner_stark_envelope(&proof);
+        let opening = inner
+            .proof
+            .air
+            .as_ref()
+            .expect("ZK-ACE AIR section")
+            .openings
+            .first()
+            .expect("AIR opening");
+        let domain = 1usize << inner.params.n_log2;
+        let opened_index = opening.index as usize;
+        assert_ne!(
+            opened_index, 0,
+            "ZK-ACE AIR must not open the private witness row"
+        );
+        assert_ne!(
+            (opened_index + 1) % domain,
+            0,
+            "ZK-ACE AIR must not open the private witness row as next_row"
+        );
+
+        assert_ne!(
+            recover_witness_from_opened_zk_ace_row(&opening.row),
+            witness,
+            "ZK-ACE AIR row exposes enough information to recover the witness"
+        );
+        assert_ne!(
+            recover_witness_from_opened_zk_ace_row(&opening.next_row),
+            witness,
+            "ZK-ACE next AIR row exposes enough information to recover the witness"
+        );
+    }
+
+    #[test]
     fn verifier_rejects_tampered_zk_ace_air_openings() {
         let witness = witness(0x25);
         let public_inputs = public_inputs_for(&witness);
@@ -560,6 +662,56 @@ mod tests {
     }
 
     #[test]
+    fn verifier_rejects_tampered_zk_ace_air_bindings() {
+        let witness = witness(0x27);
+        let public_inputs = public_inputs_for(&witness);
+        let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
+        let proof = build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+            .expect("build proof");
+        assert!(verify_attachment(&proof));
+
+        let circuit_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            let air = inner.proof.air.as_mut().expect("AIR section");
+            air.circuit_id.push_str(":wrong");
+        });
+        assert!(!verify_attachment(&circuit_tampered));
+
+        let public_digest_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            let air = inner.proof.air.as_mut().expect("AIR section");
+            air.public_digest[0] ^= 1;
+        });
+        assert!(!verify_attachment(&public_digest_tampered));
+
+        let trace_root_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            let air = inner.proof.air.as_mut().expect("AIR section");
+            air.trace_root[0] ^= 1;
+        });
+        assert!(!verify_attachment(&trace_root_tampered));
+
+        let composition_root_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            let air = inner.proof.air.as_mut().expect("AIR section");
+            air.composition_root[0] ^= 1;
+        });
+        assert!(!verify_attachment(&composition_root_tampered));
+
+        let trace_width_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            let air = inner.proof.air.as_mut().expect("AIR section");
+            air.trace_width += 1;
+        });
+        assert!(!verify_attachment(&trace_width_tampered));
+
+        let domain_tampered = tamper_inner_stark(proof.clone(), |inner| {
+            inner.params.domain_tag.push_str(":wrong");
+        });
+        assert!(!verify_attachment(&domain_tampered));
+
+        let query_root_tampered = tamper_inner_stark(proof, |inner| {
+            inner.proof.commits.roots[0][0] ^= 1;
+        });
+        assert!(!verify_attachment(&query_root_tampered));
+    }
+
+    #[test]
     fn verifier_rejects_tampered_zk_ace_public_bindings() {
         let witness = witness(0x26);
         let public_inputs = public_inputs_for(&witness);
@@ -582,6 +734,90 @@ mod tests {
             public_inputs.domain_tag.push_str(":evil");
         });
         assert!(!verify_attachment(&domain_tampered));
+    }
+
+    #[test]
+    fn verifier_rejects_reproved_mismatched_zk_ace_witness() {
+        let valid_witness = witness(0x2a);
+        let wrong_witness = witness(0x2b);
+        let public_inputs = public_inputs_for(&valid_witness);
+        let vk = zk_ace_verifying_key_box_v1().expect("vk");
+        let proof = iroha_core::zk::prove_stark_fri_zk_ace_open_verify_envelope(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+            &vk,
+            &public_inputs,
+            &wrong_witness,
+        )
+        .expect("lower-level prover still emits a malformed-witness envelope");
+
+        assert!(
+            !iroha_core::zk::verify_backend(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, &proof, Some(&vk)),
+            "native STARK verifier must reject a re-proved envelope whose witness does not match public inputs"
+        );
+    }
+
+    #[test]
+    fn verifier_rejects_every_zk_ace_public_input_field_mutation() {
+        let witness = witness(0x28);
+        let public_inputs = public_inputs_for(&witness);
+        let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
+        let proof = build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+            .expect("build proof");
+        assert!(verify_attachment(&proof));
+
+        assert_public_input_mutation_rejected("identity commitment", &proof, |public_inputs| {
+            public_inputs.identity_commitment[0] ^= 1;
+        });
+        assert_public_input_mutation_rejected("tx digest", &proof, |public_inputs| {
+            public_inputs.tx_digest[0] ^= 1;
+        });
+        assert_public_input_mutation_rejected("chain id", &proof, |public_inputs| {
+            public_inputs.chain_id = ChainId::from_str("minamoto").expect("chain id");
+        });
+        assert_public_input_mutation_rejected("replay nullifier", &proof, |public_inputs| {
+            public_inputs.replay_nullifier[0] ^= 1;
+        });
+        assert_public_input_mutation_rejected("policy hash", &proof, |public_inputs| {
+            public_inputs.policy_hash[0] ^= 1;
+        });
+        assert_public_input_mutation_rejected("domain tag", &proof, |public_inputs| {
+            public_inputs.domain_tag.push_str(":wrong");
+        });
+        assert_public_input_mutation_rejected("action class", &proof, |public_inputs| {
+            public_inputs.action_class.push_str(":wrong");
+        });
+        assert_public_input_mutation_rejected("source account", &proof, |public_inputs| {
+            public_inputs.from = account(3);
+        });
+        assert_public_input_mutation_rejected("destination account", &proof, |public_inputs| {
+            public_inputs.to = account(4);
+        });
+        assert_public_input_mutation_rejected("asset", &proof, |public_inputs| {
+            public_inputs.asset = asset_named("rose");
+        });
+        assert_public_input_mutation_rejected("amount", &proof, |public_inputs| {
+            public_inputs.amount += 1;
+        });
+        assert_public_input_mutation_rejected("verifier key id", &proof, |public_inputs| {
+            public_inputs.verifier_key_id =
+                VerifyingKeyId::new(ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND, "wrong_circuit");
+        });
+    }
+
+    #[test]
+    fn verifier_rejects_corrupted_zk_ace_proof_bytes() {
+        let witness = witness(0x29);
+        let public_inputs = public_inputs_for(&witness);
+        let vk_commitment = zk_ace_verifying_key_commitment_v1().expect("vk commitment");
+        let mut proof =
+            build_zk_ace_authorization_proof_v1(&public_inputs, &witness, vk_commitment)
+                .expect("build proof");
+        assert!(verify_attachment(&proof));
+
+        let mid = proof.proof.bytes.len() / 2;
+        proof.proof.bytes[mid] ^= 1;
+        assert!(!verify_attachment(&proof));
     }
 
     #[test]

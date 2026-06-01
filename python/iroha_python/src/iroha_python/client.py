@@ -10,6 +10,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import time
 from dataclasses import asdict, dataclass, field, is_dataclass
 from decimal import Decimal
@@ -7736,6 +7737,90 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, expected_status)
         return self._maybe_json(response)
 
+    @staticmethod
+    def _operator_key_pair(
+        *,
+        key_pair: Optional[Any] = None,
+        private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        private_key_hex: Optional[str] = None,
+    ) -> Any:
+        provided = sum(value is not None for value in (key_pair, private_key, private_key_hex))
+        if provided != 1:
+            raise ValueError("provide exactly one of key_pair, private_key, or private_key_hex")
+        if key_pair is not None:
+            signer = getattr(key_pair, "sign", None)
+            public_key = getattr(key_pair, "public_key_multihash", None)
+            if not callable(signer) or public_key is None:
+                raise TypeError("key_pair must expose sign(message) and public_key_multihash")
+            return key_pair
+
+        from .crypto import CryptoKeyPair, Ed25519KeyPair
+
+        if private_key_hex is not None:
+            raw_hex = ToriiClient._require_non_empty_string(private_key_hex, "private_key_hex")
+            return Ed25519KeyPair.from_private_key_hex(raw_hex)
+
+        assert private_key is not None
+        if isinstance(private_key, (bytes, bytearray, memoryview)):
+            return Ed25519KeyPair.from_private_key(bytes(private_key))
+        secret = ToriiClient._require_non_empty_string(private_key, "private_key")
+        try:
+            return CryptoKeyPair.from_private_key_multihash(secret)
+        except Exception as multihash_error:
+            try:
+                raw = bytes.fromhex(secret)
+            except ValueError as exc:
+                raise ValueError(
+                    "private_key must be a private-key multihash or raw Ed25519 hex"
+                ) from exc
+            if len(raw) != 32:
+                raise ValueError("raw Ed25519 private_key must be 32 bytes") from multihash_error
+            return Ed25519KeyPair.from_private_key(raw)
+
+    @staticmethod
+    def build_operator_signature_headers(
+        *,
+        method: str,
+        path: str,
+        body: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        key_pair: Optional[Any] = None,
+        private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        private_key_hex: Optional[str] = None,
+        timestamp_ms: Optional[int] = None,
+        nonce: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Build `x-iroha-operator-*` headers for operator-only Torii endpoints."""
+
+        key = ToriiClient._operator_key_pair(
+            key_pair=key_pair,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+        )
+        public_key = getattr(key, "public_key_multihash", None)
+        public_key_text = str(public_key or "").strip()
+        if not public_key_text:
+            raise TypeError("operator key pair must expose a non-empty public_key_multihash")
+        effective_timestamp = int(timestamp_ms if timestamp_ms is not None else time.time() * 1000)
+        effective_nonce = nonce if nonce is not None else secrets.token_urlsafe(12)
+        if not isinstance(effective_nonce, str) or not effective_nonce:
+            raise ValueError("nonce must be a non-empty string")
+        message = canonical_request_signature_message(
+            method,
+            path,
+            body,
+            timestamp_ms=effective_timestamp,
+            nonce=effective_nonce,
+        )
+        signature = key.sign(message)
+        if not isinstance(signature, (bytes, bytearray, memoryview)):
+            raise TypeError("operator signer must return bytes")
+        return {
+            "x-iroha-operator-public-key": public_key_text,
+            "x-iroha-operator-timestamp-ms": str(effective_timestamp),
+            "x-iroha-operator-nonce": effective_nonce,
+            "x-iroha-operator-signature": base64.b64encode(bytes(signature)).decode("ascii"),
+        }
+
     # -------------------------
     # Explorer APIs
     # -------------------------
@@ -8350,9 +8435,14 @@ class ToriiClient(_BaseToriiClient):
         return params
 
     def get_status(self) -> Optional[Any]:
-        """Return Torii node status (`GET /v1/status`)."""
+        """Return Torii node status (`GET /v1/status`, falling back to `/status`)."""
 
-        return self.request_json("GET", "/v1/status", expected_status=(200,))
+        headers = {"Accept": "application/json"}
+        response = self._request("GET", "/v1/status", headers=headers)
+        if response.status_code == 404:
+            response = self._request("GET", "/status", headers=headers)
+        self._expect_status(response, (200,))
+        return self._maybe_json(response)
 
     @staticmethod
     def _status_mapping(status: Optional[Any]) -> Mapping[str, Any]:
@@ -8543,6 +8633,7 @@ class ToriiClient(_BaseToriiClient):
         alias_or_id: Union[str, int],
         *,
         expected_lane_count: Optional[int] = None,
+        expected_dataspace_id: Optional[int] = None,
         status: Optional[Any] = None,
     ) -> DataspaceStatus:
         """Validate dataspace readiness and optionally the configured lane count."""
@@ -8551,7 +8642,10 @@ class ToriiClient(_BaseToriiClient):
         if expected_lane_count is not None:
             lane_count = payload.get("lane_count")
             if lane_count is None:
-                lane_count = len(payload.get("lane_governance", []) or [])
+                lane_entries = payload.get("lane_governance")
+                if not lane_entries:
+                    lane_entries = payload.get("dataspace_catalog")
+                lane_count = len(lane_entries or [])
             if int(lane_count) < int(expected_lane_count):
                 raise AssertionError(
                     f"Torii reports lane_count={lane_count}, expected at least {expected_lane_count}"
@@ -8559,6 +8653,11 @@ class ToriiClient(_BaseToriiClient):
         result = self.dataspace_status(alias_or_id, status=payload)
         if not result.found:
             raise AssertionError(f"dataspace {alias_or_id!r} is not present in Torii status")
+        if expected_dataspace_id is not None and result.dataspace_id != int(expected_dataspace_id):
+            raise AssertionError(
+                f"dataspace {alias_or_id!r} has id {result.dataspace_id}, "
+                f"expected {int(expected_dataspace_id)}"
+            )
         if not result.ready:
             raise AssertionError(
                 f"dataspace {alias_or_id!r} is not ready "
@@ -8582,6 +8681,64 @@ class ToriiClient(_BaseToriiClient):
         """Write a dataspace plan to ``output_dir``."""
 
         return _write_dataspace_plan(plan, output_dir, force=force)
+
+    def nexus_lane_lifecycle(
+        self,
+        additions: Sequence[Mapping[str, Any]],
+        *,
+        retire: Optional[Sequence[int]] = None,
+        key_pair: Optional[Any] = None,
+        private_key: Optional[Union[str, bytes, bytearray, memoryview]] = None,
+        private_key_hex: Optional[str] = None,
+        expected_status: Sequence[int] = (200, 202),
+        timeout: Optional[float] = None,
+    ) -> Optional[Any]:
+        """Apply a Nexus lane lifecycle plan through the operator endpoint."""
+
+        if isinstance(additions, (str, bytes, bytearray, memoryview)) or not isinstance(
+            additions, Sequence
+        ):
+            raise TypeError("additions must be a sequence of lane config mappings")
+        normalized_additions: List[Dict[str, Any]] = []
+        for index, addition in enumerate(additions):
+            if not isinstance(addition, Mapping):
+                raise TypeError(f"additions[{index}] must be a mapping")
+            normalized_additions.append(dict(addition))
+
+        normalized_retire: List[int] = []
+        for index, lane_id in enumerate(retire or []):
+            parsed = int(lane_id)
+            if parsed < 0:
+                raise ValueError(f"retire[{index}] must be non-negative")
+            normalized_retire.append(parsed)
+
+        path = "/v1/nexus/lifecycle"
+        body = json.dumps(
+            _json_safe_value({"additions": normalized_additions, "retire": normalized_retire}),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            **self.build_operator_signature_headers(
+                method="POST",
+                path=path,
+                body=body,
+                key_pair=key_pair,
+                private_key=private_key,
+                private_key_hex=private_key_hex,
+            ),
+        }
+        return self.request_json(
+            "POST",
+            path,
+            headers=headers,
+            data=body,
+            expected_status=expected_status,
+            timeout=timeout,
+            allow_retry=False,
+        )
 
     def publish_dataspace_manifest(
         self,

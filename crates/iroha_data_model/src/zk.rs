@@ -276,6 +276,20 @@ pub fn zk_ace_pack_bytes_to_field_limbs(bytes: &[u8]) -> ZkAcePackedBytesV1 {
 /// Domain-separated Poseidon2 hash over already canonical byte parts.
 #[must_use]
 pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let words = zk_ace_poseidon2_domain_words(domain, parts);
+    let mut sponge = fastpq_isi::poseidon::PoseidonSponge::new();
+    sponge.absorb_slice(&words);
+
+    let mut out = [0u8; 32];
+    for chunk in out.chunks_exact_mut(core::mem::size_of::<u64>()) {
+        chunk.copy_from_slice(&sponge.squeeze_element().to_le_bytes());
+    }
+    out
+}
+
+/// Canonical Goldilocks field preimage used by ZK-ACE Poseidon2-domain hashing.
+#[must_use]
+pub fn zk_ace_poseidon2_domain_words(domain: &[u8], parts: &[&[u8]]) -> Vec<u64> {
     let mut words = Vec::new();
     let domain = zk_ace_pack_bytes_to_field_limbs(domain);
     words.push(domain.length);
@@ -286,7 +300,7 @@ pub fn zk_ace_poseidon2_domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] 
         words.push(packed.length);
         words.extend_from_slice(&packed.limbs);
     }
-    iroha_zkp_halo2::poseidon::hash_u64_words_bytes(&words)
+    words
 }
 
 fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -390,6 +404,32 @@ pub fn derive_zk_ace_public_inputs_digest(
     ))
 }
 
+/// Stable schema hash for ZK-ACE v0 transparent-transfer public inputs.
+#[must_use]
+pub fn zk_ace_public_inputs_schema_hash_v1() -> [u8; 32] {
+    zk_ace_poseidon2_domain_hash(
+        b"zk-ace.public-inputs-schema.v1",
+        &[
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes(),
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.as_bytes(),
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.as_bytes(),
+            b"version:u32",
+            b"identity_commitment:bytes32",
+            b"tx_digest:bytes32",
+            b"chain_id:string",
+            b"domain_tag:string",
+            b"action_class:string",
+            b"replay_nullifier:bytes32",
+            b"policy_hash:bytes32",
+            b"from:account_id",
+            b"to:account_id",
+            b"asset:asset_definition_id",
+            b"amount:u128",
+            b"verifier_key_id:verifying_key_id",
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr as _;
@@ -409,6 +449,19 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain"),
             Name::from_str("xor").expect("asset name"),
         )
+    }
+
+    #[cfg(feature = "json")]
+    fn assert_json_roundtrip<T>(value: &T)
+    where
+        T: PartialEq
+            + core::fmt::Debug
+            + norito::json::JsonSerialize
+            + norito::json::JsonDeserialize,
+    {
+        let json = norito::json::to_json(value).expect("serialize to json");
+        let decoded: T = norito::json::from_json(&json).expect("deserialize from json");
+        assert_eq!(&decoded, value);
     }
 
     #[test]
@@ -470,30 +523,98 @@ mod tests {
             derive_zk_ace_air_public_digest(&public_inputs).expect("air public digest");
         let air_statement_digest = derive_zk_ace_air_statement_digest(&public_inputs, &witness)
             .expect("air statement digest");
+        let schema_hash = zk_ace_public_inputs_schema_hash_v1();
 
         assert_eq!(
             hex::encode(identity_commitment),
-            "afb86b4d8d31dd551605442b0d3706042a5fd697e7012e2734541898f103541e"
+            "9cb1c494eaf171b6ce218d3c7c6de88cdc8228f9b4eda310a325b4b2c1cbd68f"
         );
         assert_eq!(
             hex::encode(tx_digest),
-            "ceb78d977f2e32dd7ebd064126a3b1c5b9392039c5bbb4a1c45959b0bd70081e"
+            "f5e3f7120d12b98f65f088b419db9607d40eedfd412f767062cc4f1e18527036"
         );
         assert_eq!(
             hex::encode(replay_nullifier),
-            "e8c50b001e1bc0da1ee3ddb5ac766182efe05b9309b25c659c90b643e0652307"
+            "1ddaf81b2865d10fdc5b597f0283c675a76928bfd171eadb6410aacb971cefc1"
         );
         assert_eq!(
             hex::encode(public_digest),
-            "aa7a49df531af5332b5feea5f0dc9235a864787ad34a2774733b9760cd67bd2e"
+            "2873792251b35ebcb9b9357b46bb38d0022dd7e6fb8091f2d5d85677bab52389"
         );
         assert_eq!(
             hex::encode(air_public_digest),
-            "ef5030d046180ccf0ecbaf56c8a22dca025d2721cbe9ebcd24be3b320ba31016"
+            "248c2c007fcfd20ab285bdad0490ed7b7b046001614b4d2aa4b6021d6c952bc1"
         );
         assert_eq!(
             hex::encode(air_statement_digest),
-            "bf33c20c22d0945354794f4f5d04e0c8e85433ee68ecd308897609eee5a95b1a"
+            "7c1cfdf8ec0e2a4c1a10eeca670558293c8468dd8ade96bd86bf1f95e2dc34f4"
         );
+        assert_eq!(
+            hex::encode(schema_hash),
+            "2f265a860aa24df7d6703513fb95cb9b6323eae70203cbb32b53bd6e4fd1325c"
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn zk_ace_json_roundtrips_public_proof_witness_and_packing() {
+        let witness = ZkAceWitnessV1 {
+            identity_root: [0x11; 32],
+            identity_blinding: [0x22; 32],
+            replay_secret: [0x33; 32],
+        };
+        let policy_hash = [0x44; 32];
+        let chain_id: ChainId = "boi-test-chain".parse().expect("chain id");
+        let from = account(1);
+        let to = account(2);
+        let asset = asset_definition_id();
+        let verifier_key_id = VerifyingKeyId::new(
+            ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND,
+            ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID,
+        );
+        let identity_commitment = derive_zk_ace_identity_commitment(
+            &witness.identity_root,
+            &witness.identity_blinding,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let tx_digest = derive_zk_ace_transfer_digest(
+            &from,
+            &to,
+            &asset,
+            17,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            &policy_hash,
+        );
+        let replay_nullifier = derive_zk_ace_replay_nullifier(
+            &witness.replay_secret,
+            &tx_digest,
+            &chain_id,
+            ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER,
+            ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG,
+        );
+        let public_inputs = ZkAcePublicInputsV1::transparent_transfer(
+            identity_commitment,
+            tx_digest,
+            chain_id,
+            replay_nullifier,
+            policy_hash,
+            from,
+            to,
+            asset,
+            17,
+            verifier_key_id,
+        );
+        let packed = zk_ace_pack_bytes_to_field_limbs(b"ABCDEFGH");
+        let open_proof = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[0xAA; 32], [0xBB; 32]], vec![[0xCC; 32]]],
+            envelope_bytes: vec![0x01, 0x02, 0x03, 0x04],
+        };
+
+        assert_json_roundtrip(&public_inputs);
+        assert_json_roundtrip(&witness);
+        assert_json_roundtrip(&packed);
+        assert_json_roundtrip(&open_proof);
     }
 }

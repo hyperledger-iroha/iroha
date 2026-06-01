@@ -50,7 +50,7 @@ telemetry = ["iroha_core/telemetry"]
 norito_streaming_fec = ["reed-solomon-erasure"]
 quic = ["iroha_core/quic", "iroha_p2p/quic"]
 js_host_parity = []
-zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
+zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark", "dep:zk_ace_prover"]
 
 [dependencies]
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }
@@ -69,6 +69,7 @@ hex = { workspace = true }
 rand = { workspace = true }
 rand_chacha = "0.9.0"
 iroha = { workspace = true }
+zk_ace_prover = { path = "../crates/zk_ace_prover", optional = true }
 
 [dev-dependencies]
 iroha_logger = { workspace = true }

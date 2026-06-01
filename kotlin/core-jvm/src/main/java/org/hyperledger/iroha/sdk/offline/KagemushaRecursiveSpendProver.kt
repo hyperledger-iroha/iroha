@@ -8,6 +8,12 @@ class KagemushaRecursiveSpendProver private constructor() {
     }
 
     companion object {
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 6
+        const val RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-aggregation-v1"
+        const val RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-spend-lineage-v1"
+
         private const val LIBRARY_NAME = "connect_norito_bridge"
         private val nativeAvailable: Boolean = loadLibrary()
         @JvmStatic
@@ -29,6 +35,32 @@ class KagemushaRecursiveSpendProver private constructor() {
             call("append", requestArchive, ::nativeAppendSpend)
 
         @JvmStatic
+        fun lineageWitnessFromInitResult(
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+        ): ByteArray =
+            call(
+                "lineage witness from init result",
+                requestArchive,
+                bundleArchive,
+                ::nativeLineageWitnessFromInitResult,
+            )
+
+        @JvmStatic
+        fun lineageWitnessAppendResult(
+            previousWitnessArchive: ByteArray,
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+        ): ByteArray =
+            call(
+                "lineage witness append result",
+                previousWitnessArchive,
+                requestArchive,
+                bundleArchive,
+                ::nativeLineageWitnessAppendResult,
+            )
+
+        @JvmStatic
         fun verifySpend(requestArchive: ByteArray): ByteArray =
             call("verify", requestArchive, ::nativeVerifySpend)
 
@@ -47,17 +79,102 @@ class KagemushaRecursiveSpendProver private constructor() {
             return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
         }
 
+        private fun call(
+            label: String,
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+            nativeCall: (ByteArray, ByteArray) -> ByteArray?,
+        ): ByteArray {
+            require(requestArchive.isNotEmpty()) { "requestArchive must not be empty" }
+            require(bundleArchive.isNotEmpty()) { "bundleArchive must not be empty" }
+            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            val output = nativeCall(requestArchive, bundleArchive)
+            return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+        }
+
+        private fun call(
+            label: String,
+            previousWitnessArchive: ByteArray,
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+            nativeCall: (ByteArray, ByteArray, ByteArray) -> ByteArray?,
+        ): ByteArray {
+            require(previousWitnessArchive.isNotEmpty()) { "previousWitnessArchive must not be empty" }
+            require(requestArchive.isNotEmpty()) { "requestArchive must not be empty" }
+            require(bundleArchive.isNotEmpty()) { "bundleArchive must not be empty" }
+            check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
+            val output = nativeCall(previousWitnessArchive, requestArchive, bundleArchive)
+            return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+        }
+
         private fun loadLibrary(): Boolean =
-            KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
+            detectNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
-                probeSymbol = { nativeVerifySpend(ByteArray(0)) },
+                bridgeAbiVersion = { nativeBridgeAbiVersion() },
+                probeSymbol = { probeRequiredNativeSymbols() },
             )
+
+        private fun probeRequiredNativeSymbols() {
+            expectIllegalArgumentProbe { nativeVerifySpend(ByteArray(0)) }
+            expectIllegalArgumentProbe {
+                nativeLineageWitnessFromInitResult(ByteArray(0), byteArrayOf(0x01))
+            }
+            expectIllegalArgumentProbe {
+                nativeLineageWitnessAppendResult(ByteArray(0), byteArrayOf(0x01), byteArrayOf(0x02))
+            }
+        }
+
+        private fun expectIllegalArgumentProbe(probe: () -> Unit) {
+            try {
+                probe()
+            } catch (_: IllegalArgumentException) {
+                return
+            }
+        }
+
+        internal fun detectNativeAvailability(
+            loadLibrary: () -> Unit,
+            bridgeAbiVersion: () -> Int,
+            probeSymbol: () -> Unit,
+        ): Boolean {
+            return try {
+                loadLibrary()
+                if (bridgeAbiVersion() < REQUIRED_BRIDGE_ABI_VERSION) {
+                    false
+                } else {
+                    probeSymbol()
+                    true
+                }
+            } catch (_: IllegalArgumentException) {
+                true
+            } catch (_: UnsatisfiedLinkError) {
+                false
+            } catch (_: SecurityException) {
+                false
+            }
+        }
+
+        @JvmStatic
+        private external fun nativeBridgeAbiVersion(): Int
 
         @JvmStatic
         private external fun nativeInitSpend(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativeAppendSpend(requestArchive: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeLineageWitnessFromInitResult(
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeLineageWitnessAppendResult(
+            previousWitnessArchive: ByteArray,
+            requestArchive: ByteArray,
+            bundleArchive: ByteArray,
+        ): ByteArray?
 
         @JvmStatic
         private external fun nativeVerifySpend(requestArchive: ByteArray): ByteArray?

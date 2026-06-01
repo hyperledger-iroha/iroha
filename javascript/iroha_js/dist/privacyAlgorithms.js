@@ -161,6 +161,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.",
       "Replay nullifiers must be chain-domain separated and irreversible after acceptance.",
       "A dev verifier must never be accepted under a production verifier key id.",
+      "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.",
     ]),
     requiredState: Object.freeze([
       "active identity commitment registry",
@@ -215,10 +216,10 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     coveredCriteria: Object.freeze(["hide_amount", "hide_sender", "hide_receiver"]),
     proofFamily: "anonymous-pgc-k-out-of-n",
     publicInputsSchema:
-      "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,link_tag,range_commitments,chain_id,domain_separator",
+      "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
     verifierKeyId: "anonymous_pgc_k_out_of_n_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "account-based private payments",
       "multi-receiver confidential transfers",
@@ -234,6 +235,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Requires fresh anonymity-set roots and replay/link-tag state.",
       "Amount privacy depends on the range-proof component and commitment binding.",
       "Receiver ciphertext commitments must bind to the same transaction digest as the proof.",
+      "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "anonymous account commitment set",
@@ -259,10 +261,13 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Create balance commitments, receiver ciphertext commitments, and link tag.",
       "Generate the Anonymous PGC proof and submit the transfer instruction.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildAnonymousPgcReceiverSet",
+      "buildAnonymousPgcDevProofFixture",
+      "verifyAnonymousPgcDevProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildAnonymousPgcAccountCommitmentInstruction",
-      "buildAnonymousPgcReceiverSet",
       "buildAnonymousPgcKOutOfNProofV1",
       "buildAnonymousPgcTransferInstruction",
     ]),
@@ -284,10 +289,10 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     coveredCriteria: Object.freeze(["hide_amount"]),
     proofFamily: "verange-transparent-range",
     publicInputsSchema:
-      "commitment,range_parameters,aggregation_count,domain_separator,payload_digest",
+      "commitments,range_parameters,aggregation_count,domain_separator,payload_digest",
     verifierKeyId: "verange_transparent_range_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "component",
     recommendedFor: Object.freeze([
       "confidential amount range proofs",
       "reserve or solvency proofs",
@@ -303,6 +308,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "This is a component, not a complete payment protocol.",
       "Range parameters must be bound to the transaction payload and verifier key.",
       "Aggregated proof limits must be enforced by validators.",
+      "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.",
     ]),
     requiredState: Object.freeze([
       "range-proof verifier parameters",
@@ -324,12 +330,14 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate a range proof bound to the transaction payload.",
       "Attach the range-proof envelope to the dependent confidential algorithm.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
-    plannedSdkEntrypoints: Object.freeze([
+    sdkEntrypoints: Object.freeze([
       "buildRangeCommitment",
+      "buildVeRangeDevProofFixture",
       "buildVeRangeProofEnvelope",
-      "buildVeRangeProofV1",
       "verifyVeRangeProofLocally",
+    ]),
+    plannedSdkEntrypoints: Object.freeze([
+      "buildVeRangeProofV1",
     ]),
     chainRequirements: Object.freeze([
       "VeRange verifier registry entry",
@@ -351,7 +359,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
     verifierKeyId: "zkat_policy_private_auth_v1",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "institutional wallet policy privacy",
       "hidden threshold authorization",
@@ -367,6 +375,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Hides authorization policy, not payment fields.",
       "Policy commitments require explicit epoch and rotation semantics.",
       "Combining with ZK-ACE requires both proofs to bind the same transaction digest.",
+      "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "policy commitment registry",
@@ -387,11 +396,15 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate a policy-private authenticator proof.",
       "Attach the authenticator envelope to the transaction authorization path.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildZkAtPolicyCommitment",
+      "buildZkAtAuthenticatorEnvelope",
+      "buildZkAtDevProofFixture",
+      "verifyZkAtAuthenticatorLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildZkAtPolicyCommitmentInstruction",
       "buildZkAtPolicyProofV1",
-      "buildZkAtAuthenticatorEnvelope",
       "buildZkAtAuthorizedTransaction",
     ]),
     chainRequirements: Object.freeze([
@@ -411,10 +424,10 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     coveredCriteria: Object.freeze([]),
     proofFamily: "recursive-anonymous-admission",
     publicInputsSchema:
-      "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest",
+      "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest,domain_separator",
     verifierKeyId: "zk_ams_recursive_admission_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "anonymous onboarding",
       "Sybil-resistant wallet issuance",
@@ -430,6 +443,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Admission privacy is separate from later payment privacy.",
       "Duplicate admission prevention depends on issuer-scoped nullifiers.",
       "Recursive batching must bind every admitted account commitment.",
+      "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "issuer root registry",
@@ -452,7 +466,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate or import a recursive admission proof.",
       "Submit the batch proof and admission nullifiers.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildZkAmsAdmissionBatch",
+      "buildZkAmsAdmissionProofEnvelope",
+      "buildZkAmsAdmissionDevProofFixture",
+      "verifyZkAmsAdmissionProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildZkAmsAdmissionBatchProofV0",
       "buildSubmitZkAmsAdmissionBatchInstruction",
@@ -477,7 +496,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
     verifierKeyId: "vega_existing_credential_zk_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "legacy credential bridges",
       "private eligibility checks",
@@ -493,6 +512,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Credential schema parsing must be deterministic and versioned.",
       "Proofs must bind to wallet or identity commitments to prevent credential replay.",
       "Issuer trust and revocation semantics remain external policy inputs.",
+      "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "credential issuer registry",
@@ -515,10 +535,15 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate a predicate proof and bind it to the wallet context.",
       "Submit the proof envelope to the admission or authorization flow.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildVegaCredentialPredicateCommitment",
+      "buildVegaCredentialProofEnvelope",
+      "buildVegaCredentialDevProofFixture",
+      "verifyVegaCredentialProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildVegaCredentialPredicateProofV0",
-      "buildVegaCredentialProofEnvelope",
+      "buildSubmitVegaCredentialProofInstruction",
     ]),
     chainRequirements: Object.freeze([
       "credential schema registry",
@@ -537,10 +562,10 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     coveredCriteria: Object.freeze([]),
     proofFamily: "threshold-anonymous-credentials",
     publicInputsSchema:
-      "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,verifier_policy_hash,domain_separator",
+      "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
     verifierKeyId: "silent_threshold_anoncred_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "multi-authority regulated credentials",
       "issuer-hiding eligibility proofs",
@@ -556,6 +581,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Credential issuance and revocation governance are as important as proof verification.",
       "Issuer-set commitments need rotation and downgrade protections.",
       "This is a credential layer, not a private payment protocol.",
+      "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "threshold issuer registry",
@@ -577,10 +603,15 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate a credential showing proof under the verifier policy.",
       "Submit the proof as an admission or authorization component.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildSilentThresholdCredentialCommitments",
+      "buildSilentThresholdCredentialEnvelope",
+      "buildSilentThresholdCredentialDevProofFixture",
+      "verifySilentThresholdCredentialProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildSilentThresholdCredentialShowingProofV0",
-      "buildSilentThresholdCredentialEnvelope",
+      "buildSubmitSilentThresholdCredentialProofInstruction",
     ]),
     chainRequirements: Object.freeze([
       "threshold issuer registry",
@@ -602,7 +633,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
     verifierKeyId: "zk_x509_onchain_identity_v0",
     pqLayers: PQ_LAYER_NONE,
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "institutional wallet identity",
       "legal-entity account binding",
@@ -618,6 +649,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Legacy X.509 trust roots are usually not post-quantum.",
       "Revocation root freshness must be explicit in the public inputs.",
       "Address binding must prevent proof replay across wallets and chains.",
+      "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "trusted CA root registry",
@@ -640,10 +672,15 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "Generate a proof of certificate validity, ownership, and revocation status.",
       "Bind the proof to an institution wallet or ZK-ACE identity commitment.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildZkX509IdentityCommitments",
+      "buildZkX509IdentityEnvelope",
+      "buildZkX509IdentityDevProofFixture",
+      "verifyZkX509IdentityProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildZkX509IdentityProofV0",
-      "buildZkX509IdentityEnvelope",
+      "buildSubmitZkX509IdentityProofInstruction",
     ]),
     chainRequirements: Object.freeze([
       "trusted CA root registry",
@@ -669,7 +706,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "post-quantum proof-system research",
       "future PQ verifier backend evaluation",
@@ -685,6 +722,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "This is a proof backend candidate, not a transaction algorithm.",
       "PQ proof coverage alone does not imply PQ authorization or note encryption.",
       "Parameter selection and implementation security require independent review.",
+      "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "lattice PCS parameter registry",
@@ -704,7 +742,12 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     executionSteps: Object.freeze([
       "Use as a candidate backend for future PQ circuits only after concrete circuit integration.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildJindoLatticePublicInputs",
+      "buildJindoLatticeProofEnvelope",
+      "buildJindoLatticeDevProofFixture",
+      "verifyJindoLatticeProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildJindoLatticeProofV0",
       "verifyJindoPolynomialCommitmentV0",
@@ -733,7 +776,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       authorization: false,
       noteEncryption: false,
     }),
-    implementationStage: CATALOG_STAGE_MAY_2026,
+    implementationStage: "sdk-builder",
     recommendedFor: Object.freeze([
       "post-quantum anonymous credential research",
       "future PQ KYC or eligibility proofs",
@@ -749,6 +792,7 @@ const PRIVACY_ALGORITHMS = Object.freeze([
       "This is a credential foundation, not an immediately deployable wallet protocol.",
       "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.",
       "Parameter choices and reduction assumptions need explicit governance.",
+      "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.",
     ]),
     requiredState: Object.freeze([
       "lattice credential parameter registry",
@@ -768,10 +812,15 @@ const PRIVACY_ALGORITHMS = Object.freeze([
     executionSteps: Object.freeze([
       "Use as a future PQ credential backend after a concrete credential protocol is selected.",
     ]),
-    sdkEntrypoints: Object.freeze([]),
+    sdkEntrypoints: Object.freeze([
+      "buildSisHintsCredentialCommitments",
+      "buildSisHintsCredentialEnvelope",
+      "buildSisHintsCredentialDevProofFixture",
+      "verifySisHintsCredentialProofLocally",
+    ]),
     plannedSdkEntrypoints: Object.freeze([
       "buildSisHintsAnonymousCredentialProofV0",
-      "buildSisHintsCredentialEnvelope",
+      "buildSubmitSisHintsCredentialProofInstruction",
     ]),
     chainRequirements: Object.freeze([
       "lattice anonymous credential verifier",

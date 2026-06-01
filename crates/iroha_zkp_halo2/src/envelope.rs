@@ -90,6 +90,13 @@ pub enum EnvelopeError {
         /// Actual proof length.
         actual: usize,
     },
+
+    /// Extra bytes followed the declared proof payload.
+    #[error("envelope has {actual} trailing bytes after declared proof length")]
+    TrailingBytes {
+        /// Number of bytes after the declared proof payload.
+        actual: usize,
+    },
 }
 
 /// Header describing a Halo2 proof envelope.
@@ -306,6 +313,11 @@ impl Halo2ProofEnvelope {
                 actual: bytes.len().saturating_sub(proof_start),
             });
         }
+        if bytes.len() != proof_end {
+            return Err(EnvelopeError::TrailingBytes {
+                actual: bytes.len().saturating_sub(proof_end),
+            });
+        }
         let proof = bytes[proof_start..proof_end].to_vec();
 
         let header = Halo2ProofEnvelopeHeader::new(k, n_in, n_out, flags, n_pi, pi_len);
@@ -453,5 +465,24 @@ mod tests {
         bytes[proof_len_offset..proof_len_offset + 4].copy_from_slice(&proof_len.to_le_bytes());
         let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
         assert!(matches!(err, EnvelopeError::ProofLength { .. }));
+    }
+
+    #[test]
+    fn parse_rejects_trailing_bytes_after_proof() {
+        let inputs = vec![
+            hex_array("7f19b2a9c5b8f1d3c4e2aa1100ddc3f0e1d2c3b4a5968776655443322110aa55"),
+            hex_array("0101010101010101010101010101010101010101010101010101010101010101"),
+            hex_array("0202020202020202020202020202020202020202020202020202020202020202"),
+            hex_array("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            hex_array("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+            hex_array("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff"),
+            hex_array("ffeeddccbbaa0099887766554433221100ffeeddccbbaa009988776655443322"),
+        ];
+        let env = Halo2ProofEnvelope::new(19, 2, 2, FLAG_LOOKUPS, inputs, vec![0u8; 16]).unwrap();
+        let mut bytes = env.to_bytes();
+        bytes.extend_from_slice(b"unbound suffix");
+
+        let err = Halo2ProofEnvelope::from_bytes(&bytes).unwrap_err();
+        assert!(matches!(err, EnvelopeError::TrailingBytes { actual: 14 }));
     }
 }
