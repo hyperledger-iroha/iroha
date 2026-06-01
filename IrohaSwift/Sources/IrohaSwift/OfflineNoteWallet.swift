@@ -231,6 +231,36 @@ public final class InMemoryOfflineNoteStore: OfflineNoteStore {
     }
 }
 
+final class AccountScopedOfflineNoteStore: OfflineNoteStore {
+    private let wrapped: OfflineNoteStore
+    private let chainId: String
+    private let accountId: String
+
+    init(wrapping wrapped: OfflineNoteStore, chainId: String, accountId: String) {
+        self.wrapped = wrapped
+        self.chainId = chainId
+        self.accountId = accountId
+    }
+
+    func mutateNotes<T>(_ body: (inout [String: OfflineNoteWalletNote]) throws -> T) throws -> T {
+        try wrapped.mutateNotes { all in
+            var scoped = all.filter { owns($0.value) }
+            let result = try body(&scoped)
+            for key in Array(all.keys) where all[key].map({ owns($0) }) == true {
+                all.removeValue(forKey: key)
+            }
+            for (key, note) in scoped {
+                all[key] = note
+            }
+            return result
+        }
+    }
+
+    private func owns(_ note: OfflineNoteWalletNote) -> Bool {
+        note.chainId == chainId && note.accountId == accountId
+    }
+}
+
 public protocol OfflineNoteAttestationProvider {
     func currentKeyCertificate() throws -> OfflineNoteKeyCertificate
 }
@@ -1420,7 +1450,7 @@ public final class OfflineNoteWallet {
         self.chainId = chainId
         self.accountId = accountId
         self.attestationProvider = attestationProvider
-        self.store = store
+        self.store = AccountScopedOfflineNoteStore(wrapping: store, chainId: chainId, accountId: accountId)
         self.issuerClient = issuerClient
         self.transactionSubmitter = transactionSubmitter
         self.syncResolver = syncResolver

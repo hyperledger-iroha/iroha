@@ -1611,6 +1611,38 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias EncodeOfflineNoteTxFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UInt32,
+        UInt8,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+    private typealias EncodeDefundOfflineNoteTxFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UInt32,
+        UInt8,
+        UnsafePointer<UInt8>?, UInt,
+        UInt32,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
     private typealias PublicKeyFromPrivateFn = @convention(c) (
         UInt8,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -1749,6 +1781,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
+    private var encodeRedeemOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
+    private var encodeAuditOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
+    private var encodeDefundOfflineNoteFn: EncodeDefundOfflineNoteTxFn? = nil
 #else
     private let bridgeHandle: Any? = nil
     private let encodeTransferFn: Any? = nil
@@ -1858,13 +1894,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
+    private let encodeIssueOfflineNoteFn: Any? = nil
+    private let encodeRedeemOfflineNoteFn: Any? = nil
+    private let encodeAuditOfflineNoteFn: Any? = nil
+    private let encodeDefundOfflineNoteFn: Any? = nil
 #endif
 
 #if canImport(Darwin)
 #endif
 
     #if canImport(Darwin)
-    private func installStaticallyLinkedTransferBridgeIfAvailable() {
+    private func installStaticallyLinkedBridgeIfAvailable() {
         #if IROHASWIFT_BRIDGE_PRESENT
         let abiVersion = connect_norito_bridge_abi_version()
         guard abiVersion == NoritoBridgeLoader.expectedBridgeAbiVersion else {
@@ -1881,10 +1921,33 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         self.encodeTransferWithAlgFn = connect_norito_encode_transfer_signed_transaction_alg
         self.encodeTransferWithFeeSponsorWithAlgFn =
             connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg
+        self.encodeMintFn = connect_norito_encode_mint_signed_transaction
+        self.encodeMintWithAlgFn = connect_norito_encode_mint_signed_transaction_alg
+        let staticHandle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL)
+        if let issueNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_issue_offline_note_signed_transaction") }) {
+            self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+        }
+        if let redeemNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_redeem_offline_note_signed_transaction") }) {
+            self.encodeRedeemOfflineNoteFn = unsafeBitCast(redeemNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+        }
+        if let auditNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_audit_offline_note_signed_transaction") }) {
+            self.encodeAuditOfflineNoteFn = unsafeBitCast(auditNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+        }
+        if let defundNoteSymbol = staticHandle.flatMap({ dlsym($0, "connect_norito_encode_defund_offline_note_signed_transaction") }) {
+            self.encodeDefundOfflineNoteFn = unsafeBitCast(defundNoteSymbol, to: EncodeDefundOfflineNoteTxFn.self)
+        }
+        self.kagemushaProveVerifiedCompactPaymentTokenWithRecordsFn =
+            connect_norito_kagemusha_prove_verified_compact_payment_token_with_records
+        self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn =
+            connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes
+        self.kagemushaRecursiveSpendInitFn = connect_norito_kagemusha_recursive_spend_init
+        self.kagemushaRecursiveSpendAppendFn = connect_norito_kagemusha_recursive_spend_append
+        self.kagemushaRecursiveSpendVerifyFn = connect_norito_kagemusha_recursive_spend_verify
+        self.kagemushaRecursiveSpendRedeemFn = connect_norito_kagemusha_recursive_spend_redeem
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
-        NSLog("[NoritoNativeBridge] using statically linked Norito transfer bridge")
+        NSLog("[NoritoNativeBridge] using statically linked Norito bridge")
         #endif
     }
 
@@ -1993,6 +2056,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeMintWithAlgFn = unsafeBitCast(mintAlgSymbol, to: EncodeMintWithAlgFn.self)
             } else {
                 self.encodeMintWithAlgFn = nil
+            }
+            if let issueNoteSymbol = dlsym(handle, "connect_norito_encode_issue_offline_note_signed_transaction") {
+                self.encodeIssueOfflineNoteFn = unsafeBitCast(issueNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+            } else {
+                self.encodeIssueOfflineNoteFn = nil
+            }
+            if let redeemNoteSymbol = dlsym(handle, "connect_norito_encode_redeem_offline_note_signed_transaction") {
+                self.encodeRedeemOfflineNoteFn = unsafeBitCast(redeemNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+            } else {
+                self.encodeRedeemOfflineNoteFn = nil
+            }
+            if let auditNoteSymbol = dlsym(handle, "connect_norito_encode_audit_offline_note_signed_transaction") {
+                self.encodeAuditOfflineNoteFn = unsafeBitCast(auditNoteSymbol, to: EncodeOfflineNoteTxFn.self)
+            } else {
+                self.encodeAuditOfflineNoteFn = nil
+            }
+            if let defundNoteSymbol = dlsym(handle, "connect_norito_encode_defund_offline_note_signed_transaction") {
+                self.encodeDefundOfflineNoteFn = unsafeBitCast(defundNoteSymbol, to: EncodeDefundOfflineNoteTxFn.self)
+            } else {
+                self.encodeDefundOfflineNoteFn = nil
             }
             if let shieldSymbol = dlsym(handle, "connect_norito_encode_shield_signed_transaction") {
                 self.encodeShieldFn = unsafeBitCast(shieldSymbol, to: EncodeShieldFn.self)
@@ -2557,6 +2640,10 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferWithFeeSponsorWithAlgFn = nil
             self.encodeMintFn = nil
             self.encodeMintWithAlgFn = nil
+            self.encodeIssueOfflineNoteFn = nil
+            self.encodeRedeemOfflineNoteFn = nil
+            self.encodeAuditOfflineNoteFn = nil
+            self.encodeDefundOfflineNoteFn = nil
             self.encodeShieldFn = nil
             self.encodeShieldWithAlgFn = nil
             self.encodeUnshieldFn = nil
@@ -2662,7 +2749,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
 
         if self.encodeTransferFn == nil || self.freeFn == nil {
-            installStaticallyLinkedTransferBridgeIfAvailable()
+            installStaticallyLinkedBridgeIfAvailable()
         }
 
         if let setAccelerationConfigFn {
@@ -3162,6 +3249,233 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             return nil
         }
         return takeData(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    private enum OfflineNoteTxKind {
+        case issue
+        case redeem
+        case audit
+    }
+
+    private func encodeOfflineNoteTransaction(
+        kind: OfflineNoteTxKind,
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32?,
+        modelBytes: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        #if canImport(Darwin)
+        guard let freeFn else { return nil }
+        let encodeFn: EncodeOfflineNoteTxFn?
+        switch kind {
+        case .issue: encodeFn = encodeIssueOfflineNoteFn
+        case .redeem: encodeFn = encodeRedeemOfflineNoteFn
+        case .audit: encodeFn = encodeAuditOfflineNoteFn
+        }
+        guard let encodeFn else { return nil }
+
+        let ttlValue = ttlMs ?? 0
+        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
+        let nonceValue = nonce ?? 0
+        let nonceFlag: UInt8 = nonce == nil ? 0 : 1
+
+        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
+        var signedLen: UInt = 0
+        var hashBytes = [UInt8](repeating: 0, count: 32)
+        let hashLength = UInt(hashBytes.count)
+
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
+            authority.withCString { authorityPtr in
+                modelBytes.withUnsafeBytes { modelBuffer -> Int32 in
+                    privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                        hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                            guard let hashPtr = hashBuffer.baseAddress else { return -1 }
+                            return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                encodeFn(
+                                    chainPtr, UInt(chainId.utf8.count),
+                                    authorityPtr, UInt(authority.utf8.count),
+                                    creationTimeMs,
+                                    ttlValue,
+                                    ttlFlag,
+                                    nonceValue,
+                                    nonceFlag,
+                                    modelBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(modelBytes.count),
+                                    keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                    signedPtrPtr,
+                                    signedLenPtr,
+                                    hashPtr,
+                                    hashLength
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }
+
+        if status != 0 {
+            if let signedPtr { freeFn(signedPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let signedPtr else { return nil }
+
+        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
+        freeFn(signedPtr)
+        let hashData = Data(hashBytes)
+        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
+        #else
+        return nil
+        #endif
+    }
+
+    func encodeIssueOfflineNote(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32? = nil,
+        issueModel: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        try encodeOfflineNoteTransaction(
+            kind: .issue,
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            modelBytes: issueModel,
+            privateKey: privateKey
+        )
+    }
+
+    func encodeRedeemOfflineNote(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32? = nil,
+        redemptionModel: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        try encodeOfflineNoteTransaction(
+            kind: .redeem,
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            modelBytes: redemptionModel,
+            privateKey: privateKey
+        )
+    }
+
+    func encodeAuditOfflineNote(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32? = nil,
+        auditModel: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        try encodeOfflineNoteTransaction(
+            kind: .audit,
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            nonce: nonce,
+            modelBytes: auditModel,
+            privateKey: privateKey
+        )
+    }
+
+    func encodeDefundOfflineNote(
+        chainId: String,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        nonce: UInt32? = nil,
+        bearerAuditTrail: [Data],
+        redemptionModel: Data,
+        privateKey: Data
+    ) throws -> NativeSignedTransaction? {
+        #if canImport(Darwin)
+        guard let freeFn, let encodeFn = encodeDefundOfflineNoteFn else { return nil }
+
+        var trail = Data()
+        for audit in bearerAuditTrail {
+            var len = UInt64(audit.count).littleEndian
+            withUnsafeBytes(of: &len) { trail.append(contentsOf: $0) }
+            trail.append(audit)
+        }
+        let auditCount = UInt32(bearerAuditTrail.count)
+
+        let ttlValue = ttlMs ?? 0
+        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
+        let nonceValue = nonce ?? 0
+        let nonceFlag: UInt8 = nonce == nil ? 0 : 1
+
+        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
+        var signedLen: UInt = 0
+        var hashBytes = [UInt8](repeating: 0, count: 32)
+        let hashLength = UInt(hashBytes.count)
+
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            chainId.withCString { chainPtr in
+            authority.withCString { authorityPtr in
+                trail.withUnsafeBytes { trailBuffer -> Int32 in
+                    redemptionModel.withUnsafeBytes { redeemBuffer -> Int32 in
+                        privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                            hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                                guard let hashPtr = hashBuffer.baseAddress else { return -1 }
+                                return self.withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                    encodeFn(
+                                        chainPtr, UInt(chainId.utf8.count),
+                                        authorityPtr, UInt(authority.utf8.count),
+                                        creationTimeMs,
+                                        ttlValue,
+                                        ttlFlag,
+                                        nonceValue,
+                                        nonceFlag,
+                                        trailBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(trail.count), auditCount,
+                                        redeemBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(redemptionModel.count),
+                                        keyBuffer.bindMemory(to: UInt8.self).baseAddress, UInt(privateKey.count),
+                                        signedPtrPtr,
+                                        signedLenPtr,
+                                        hashPtr,
+                                        hashLength
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            }
+        }
+
+        if status != 0 {
+            if let signedPtr { freeFn(signedPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let signedPtr else { return nil }
+
+        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
+        freeFn(signedPtr)
+        let hashData = Data(hashBytes)
+        return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
         #else
         return nil
         #endif

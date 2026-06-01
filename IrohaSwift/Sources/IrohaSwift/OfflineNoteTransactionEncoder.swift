@@ -1,216 +1,5 @@
 import Foundation
 
-private enum OfflineNoteSwiftNoritoEncoder {
-    private static let signedTransactionWireVersion: UInt8 = 1
-
-    static func encodeIssue(chainId: String,
-                            authority: String,
-                            creationTimeMs: UInt64,
-                            ttlMs: UInt64?,
-                            nonce: UInt32?,
-                            issue: OfflineNoteIssue,
-                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let instruction = try encodeInstruction(
-            wireName: OfflineNoteTypeNames.issueInstruction,
-            typeName: OfflineNoteTypeNames.issueInstruction,
-            modelPayload: OfflineNoteEncoding.encodeIssue(issue)
-        )
-        return try encodeTransaction(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            nonce: nonce,
-            instructionPayloads: [instruction],
-            signingKey: signingKey
-        )
-    }
-
-    static func encodeRedeem(chainId: String,
-                             authority: String,
-                             creationTimeMs: UInt64,
-                             ttlMs: UInt64?,
-                             nonce: UInt32?,
-                             redemption: OfflineNoteRedeem,
-                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        try redemption.validateProofBinding()
-        let instruction = try encodeInstruction(
-            wireName: OfflineNoteTypeNames.redeemInstruction,
-            typeName: OfflineNoteTypeNames.redeemInstruction,
-            modelPayload: OfflineNoteEncoding.encodeRedeem(redemption)
-        )
-        return try encodeTransaction(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            nonce: nonce,
-            instructionPayloads: [instruction],
-            signingKey: signingKey
-        )
-    }
-
-    static func encodeDefund(chainId: String,
-                             authority: String,
-                             creationTimeMs: UInt64,
-                             ttlMs: UInt64?,
-                             nonce: UInt32?,
-                             bearerAuditTrail: [OfflineNoteAuditBundle],
-                             redemption: OfflineNoteRedeem,
-                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        var instructions: [Data] = []
-        instructions.reserveCapacity(bearerAuditTrail.count + 1)
-        for audit in bearerAuditTrail {
-            try audit.validateProofBinding()
-            instructions.append(try encodeInstruction(
-                wireName: OfflineNoteTypeNames.auditInstruction,
-                typeName: OfflineNoteTypeNames.auditInstruction,
-                modelPayload: OfflineNoteEncoding.encodeAudit(audit)
-            ))
-        }
-        try redemption.validateProofBinding()
-        instructions.append(try encodeInstruction(
-            wireName: OfflineNoteTypeNames.redeemInstruction,
-            typeName: OfflineNoteTypeNames.redeemInstruction,
-            modelPayload: OfflineNoteEncoding.encodeRedeem(redemption)
-        ))
-        return try encodeTransaction(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            nonce: nonce,
-            instructionPayloads: instructions,
-            signingKey: signingKey
-        )
-    }
-
-    static func encodeAudit(chainId: String,
-                            authority: String,
-                            creationTimeMs: UInt64,
-                            ttlMs: UInt64?,
-                            nonce: UInt32?,
-                            audit: OfflineNoteAuditBundle,
-                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        try audit.validateProofBinding()
-        let instruction = try encodeInstruction(
-            wireName: OfflineNoteTypeNames.auditInstruction,
-            typeName: OfflineNoteTypeNames.auditInstruction,
-            modelPayload: OfflineNoteEncoding.encodeAudit(audit)
-        )
-        return try encodeTransaction(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            nonce: nonce,
-            instructionPayloads: [instruction],
-            signingKey: signingKey
-        )
-    }
-
-    private static func encodeInstruction(wireName: String,
-                                          typeName: String,
-                                          modelPayload: Data) -> Data {
-        var concreteInstruction = OfflineNoritoWriter()
-        concreteInstruction.writeField(modelPayload)
-        let framedInstruction = noritoEncode(
-            typeName: typeName,
-            payload: concreteInstruction.data,
-            flags: 0
-        )
-
-        var instructionBox = OfflineNoritoWriter()
-        instructionBox.writeField(OfflineNorito.encodeString(wireName))
-        instructionBox.writeField(OfflineNorito.encodeBytesVec(framedInstruction))
-        return instructionBox.data
-    }
-
-    private static func encodeTransaction(chainId: String,
-                                          authority: String,
-                                          creationTimeMs: UInt64,
-                                          ttlMs: UInt64?,
-                                          nonce: UInt32?,
-                                          instructionPayloads: [Data],
-                                          signingKey: SigningKey) throws -> SignedTransactionEnvelope {
-        let transactionPayload = try encodeTransactionPayload(
-            chainId: chainId,
-            authority: authority,
-            creationTimeMs: creationTimeMs,
-            ttlMs: ttlMs,
-            nonce: nonce,
-            instructionPayloads: instructionPayloads
-        )
-        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
-        let signedTransaction = encodeSignedTransaction(
-            signature: signature,
-            transactionPayload: transactionPayload
-        )
-        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
-        var norito = Data([signedTransactionWireVersion])
-        norito.append(signedTransaction)
-        return SignedTransactionEnvelope(
-            norito: norito,
-            signedTransaction: signedTransaction,
-            payload: nil,
-            transactionHash: transactionHash
-        )
-    }
-
-    private static func encodeTransactionPayload(chainId: String,
-                                                 authority: String,
-                                                 creationTimeMs: UInt64,
-                                                 ttlMs: UInt64?,
-                                                 nonce: UInt32?,
-                                                 instructionPayloads: [Data]) throws -> Data {
-        var transactionPayload = OfflineNoritoWriter()
-        transactionPayload.writeField(OfflineNorito.encodeString(chainId))
-        transactionPayload.writeField(OfflineNorito.encodeString(authority))
-        transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
-        transactionPayload.writeField(encodeExecutable(instructionPayloads: instructionPayloads))
-        transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
-        transactionPayload.writeField(try OfflineNorito.encodeOption(nonce, encode: OfflineNorito.encodeUInt32))
-        transactionPayload.writeField(encodeEmptyMetadata())
-        return transactionPayload.data
-    }
-
-    private static func encodeExecutable(instructionPayloads: [Data]) -> Data {
-        var instructions = OfflineNoritoWriter()
-        instructions.writeLength(UInt64(instructionPayloads.count))
-        for instructionPayload in instructionPayloads {
-            instructions.writeField(instructionPayload)
-        }
-
-        var executable = OfflineNoritoWriter()
-        executable.writeUInt32LE(0)
-        executable.writeField(instructions.data)
-        return executable.data
-    }
-
-    private static func encodeSignedTransaction(signature: Data,
-                                                transactionPayload: Data) -> Data {
-        var signedTransaction = OfflineNoritoWriter()
-        signedTransaction.writeField(OfflineNorito.encodeConstVec(signature))
-        signedTransaction.writeField(transactionPayload)
-        signedTransaction.writeField(Data([0]))
-        signedTransaction.writeField(Data([0]))
-        return signedTransaction.data
-    }
-
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
-        var entrypoint = OfflineNoritoWriter()
-        entrypoint.writeUInt32LE(0)
-        entrypoint.writeField(signedTransaction)
-        return entrypoint.data
-    }
-
-    private static func encodeEmptyMetadata() -> Data {
-        var metadata = OfflineNoritoWriter()
-        metadata.writeLength(0)
-        return metadata.data
-    }
-}
-
 extension SwiftTransactionEncoder {
     static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,
                                          keypair: Keypair,
@@ -230,15 +19,20 @@ extension SwiftTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteSwiftNoritoEncoder.encodeIssue(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            issue: request.issue,
-            signingKey: signingKey
-        )
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let issueModel = try request.issue.noritoEncoded()
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeIssueOfflineNote(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                nonce: request.nonce,
+                issueModel: issueModel,
+                privateKey: privateKey
+            )
+        }
+        return try wrap(native: native)
     }
 
     static func encodeRedeemOfflineNote(request: RedeemOfflineNoteRequest,
@@ -259,15 +53,21 @@ extension SwiftTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteSwiftNoritoEncoder.encodeRedeem(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            redemption: request.redemption,
-            signingKey: signingKey
-        )
+        try request.redemption.validateProofBinding()
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let redemptionModel = try request.redemption.noritoEncoded()
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeRedeemOfflineNote(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                nonce: request.nonce,
+                redemptionModel: redemptionModel,
+                privateKey: privateKey
+            )
+        }
+        return try wrap(native: native)
     }
 
     static func encodeDefundOfflineNote(request: DefundOfflineNoteRequest,
@@ -288,16 +88,26 @@ extension SwiftTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteSwiftNoritoEncoder.encodeDefund(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            bearerAuditTrail: request.bearerAuditTrail,
-            redemption: request.redemption,
-            signingKey: signingKey
-        )
+        for audit in request.bearerAuditTrail {
+            try audit.validateProofBinding()
+        }
+        try request.redemption.validateProofBinding()
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let bearerAuditTrail = try request.bearerAuditTrail.map { try $0.noritoEncoded() }
+        let redemptionModel = try request.redemption.noritoEncoded()
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeDefundOfflineNote(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                nonce: request.nonce,
+                bearerAuditTrail: bearerAuditTrail,
+                redemptionModel: redemptionModel,
+                privateKey: privateKey
+            )
+        }
+        return try wrap(native: native)
     }
 
     static func encodeAuditOfflineNote(request: AuditOfflineNoteRequest,
@@ -318,15 +128,21 @@ extension SwiftTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        return try OfflineNoteSwiftNoritoEncoder.encodeAudit(
-            chainId: ids.chainId,
-            authority: ids.authorityId,
-            creationTimeMs: creationTimeMs,
-            ttlMs: request.ttlMs,
-            nonce: request.nonce,
-            audit: request.audit,
-            signingKey: signingKey
-        )
+        try request.audit.validateProofBinding()
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let auditModel = try request.audit.noritoEncoded()
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeAuditOfflineNote(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                nonce: request.nonce,
+                auditModel: auditModel,
+                privateKey: privateKey
+            )
+        }
+        return try wrap(native: native)
     }
 }
 
