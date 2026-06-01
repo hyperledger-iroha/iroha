@@ -48,6 +48,12 @@ and completed history lives in [`status.md`](./status.md).
   metadata where exposed and copy-backed bundle/source-proof bytes across TON,
   EVM-family, TRON, and Substrate-family proof engines before app-linked
   callbacks return proof bytes.
+- Keep TAIRA-to-TRON XOR source records economically bound at consensus
+  admission; `taira_tron_xor` record overlays must include same-overlay
+  whole-unit XOR burns by the payload sender, with the TAIRA burn-record
+  contract and deployment evidence flow used for activation. Live route
+  activation still needs the browser-safe TRON prover bundle, deployed TAIRA
+  settlement contract evidence, and bidirectional smoke transfers.
 - Keep public SCCP phase evidence bound to executed production-corridor
   commands; release-readiness and release-bundle checks now require expected
   phase command fragments to appear on traced `+ ...` command lines inside the

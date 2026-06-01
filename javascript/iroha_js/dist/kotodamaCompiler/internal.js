@@ -12696,15 +12696,15 @@ function validateFeatureRequests(metadata, codeBytes) {
         throw new StudioCompileError(`semantic error: ${errors.join('; ')}`, 1, 1);
     }
 }
-function computeFeaturesBitmap(features, codeBytes = new Uint8Array()) {
+function computeFeaturesBitmap(features, codeBytes = new Uint8Array(), options = {}) {
     let bitmap = 0;
     for (const feature of features) {
         bitmap |= FEATURE_BITMAP_BY_NAME[feature] ?? 0;
     }
-    if (bytecodeUsesZkFeature(codeBytes)) {
+    if (options.forceZk === true || bytecodeUsesZkFeature(codeBytes)) {
         bitmap |= FEATURE_BITMAP_BY_NAME.zk;
     }
-    if (bytecodeUsesVectorFeature(codeBytes)) {
+    if (options.forceVector === true || bytecodeUsesVectorFeature(codeBytes)) {
         bitmap |= FEATURE_BITMAP_BY_NAME.vector;
     }
     return bitmap >>> 0;
@@ -31398,7 +31398,14 @@ export function compileKotodamaStudioProgram(source, options = {}) {
             validateProductionAccessHints(compiled.entrypoints);
         }
         validateFeatureRequests(compileProgram.metadata, generator.assembler.code);
-        const featuresBitmap = computeFeaturesBitmap(compileProgram.metadata.features, generator.assembler.code);
+        const featuresBitmap = computeFeaturesBitmap(
+            compileProgram.metadata.features,
+            generator.assembler.code,
+            {
+                forceZk: options.forceZk === true,
+                forceVector: options.forceVector === true,
+            },
+        );
         const cntrSection = encodeContractInterfaceSectionCompact(compiled.entrypoints, compileProgram.states, compiled.accessSetHints, featuresBitmap, compileProgram.kotoba);
         const debugSection = options.embedDebug === true
             ? encodeContractDebugSectionCompact(compiled.sourceMap, compiled.budgetReport)

@@ -115,6 +115,20 @@ function normalizeMetadataPayload(metadata, context) {
   throw new TypeError(`${context} must be an object or JSON string when provided`);
 }
 
+function normalizeJsonObjectPayload(value, context) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      throw new TypeError(`${context} must not be an empty JSON string`);
+    }
+    return trimmed;
+  }
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return JSON.stringify(value);
+  }
+  throw new TypeError(`${context} must be an object or JSON string`);
+}
+
 function normalizeOptionalPositiveInteger(value, context) {
   if (value === null || value === undefined) {
     return null;
@@ -286,6 +300,72 @@ export function buildTransaction(input) {
   const hashBytes = result?.hash ?? result?.hashBytes ?? null;
   if (!signed || !hashBytes) {
     throw new Error("native binding 'build_transaction' returned missing fields");
+  }
+
+  return {
+    signedTransaction: Buffer.from(signed),
+    hash: Buffer.from(hashBytes),
+  };
+}
+
+/**
+ * Build and sign a transaction whose executable is `Executable::IvmProved`.
+ * @param {{
+ *   chainId: string,
+ *   authority: string,
+ *   proved: object | string,
+ *   attachment: object | string,
+ *   metadata?: object | string | null,
+ *   creationTimeMs?: number,
+ *   ttlMs?: number,
+ *   nonce?: number,
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer
+ * }} input
+ * @returns {{signedTransaction: Buffer, hash: Buffer}}
+ */
+export function buildIvmProvedTransaction(input) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildIvmProvedTransaction !== "function") {
+    throw new Error("native binding 'build_ivm_proved_transaction' is unavailable");
+  }
+
+  const {
+    chainId,
+    authority,
+    proved,
+    attachment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+  } = input;
+
+  const canonicalAuthority = normalizeAuthority(authority);
+  const provedPayload = normalizeJsonObjectPayload(proved, "proved");
+  const attachmentPayload = normalizeJsonObjectPayload(attachment, "attachment");
+  const metadataPayload = normalizeMetadataPayload(metadata, "transaction metadata");
+  const result = native.buildIvmProvedTransaction(
+    chainId,
+    canonicalAuthority,
+    provedPayload,
+    attachmentPayload,
+    metadataPayload,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    toBuffer(privateKey),
+  );
+
+  const signed =
+    result?.signed_transaction ??
+    result?.signedTransaction ??
+    null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
+  if (!signed || !hashBytes) {
+    throw new Error(
+      "native binding 'build_ivm_proved_transaction' returned missing fields",
+    );
   }
 
   return {

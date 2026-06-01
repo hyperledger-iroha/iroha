@@ -2,6 +2,61 @@
 
 Last updated: 2026-06-01
 
+## 2026-06-01 TAIRA TRON SCCP XOR settlement admission
+
+- Hardened `taira_tron_xor` source-record admission so an `IvmProved`
+  execution that records a TAIRA-to-TRON XOR SCCP transfer must carry a
+  same-overlay `Burn<Numeric, Asset>` settlement from the payload sender.
+  Admission resolves the settlement asset from `nexus.fees.fee_asset_id`,
+  aggregates required burns per sender, and rejects malformed record payloads,
+  wrong routes/assets/senders, fractional burns, and burn reuse.
+- Extended the JavaScript SCCP descriptor for `taira_tron_xor` with the
+  consensus settlement requirements, and added Kotodama compiler SDK options to
+  force ZK/vector feature bits without inserting fake opcodes. The Torii SDK
+  now preserves SCCP destination-rollout verifier identity, verifier/key hash,
+  network id, and destination-binding fields so WalletConnect bridge UIs can
+  derive proof material from normalized manifests.
+- Added a TAIRA burn-and-record Kotodama contract plus deployment-tool support
+  for producing a forced-ZK contract artifact alongside the TRON bridge
+  deployment evidence flow.
+- Added browser-safe SDK builders for `RecordSccpMessage` instruction bytes
+  and the TAIRA XOR burn-record ZK IVM request. Torii now normalizes
+  self-describing ZK IVM `contract_payload` metadata before derive/prove
+  execution so large XOR base-unit amounts can arrive as JSON strings and still
+  execute as contract `int` values.
+- Extended the JavaScript Torii manifest normalizer with a typed
+  `tairaXorBurnRecord` field so route manifests preserve the TAIRA settlement
+  asset id, burn-record artifact, VK reference, and gas limit needed by the
+  wallet `/sccp` readiness and request builder.
+- Added a JavaScript/native `buildIvmProvedTransaction` helper so the wallet can
+  sign the TAIRA source leg with the Torii-generated `IvmProved` payload and
+  proof attachment instead of falling back to instruction-only transaction
+  assembly.
+- Added JavaScript SCCP canonical message-proof bundle byte builders so browser
+  workers can derive TRON Groth16 proof requests from normalized Torii message
+  jobs without reimplementing the Rust bundle layout in wallet code.
+- Validation:
+  - `cargo test -p iroha_core taira_tron_xor_record --lib`
+    (`8 passed`)
+  - `cargo test -p iroha_torii normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload --lib`
+    (`1 passed`)
+  - `node --test --test-name-pattern "TAIRA XOR|RecordSccpMessage|burn-record" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`9 passed`)
+  - `node --test --test-name-pattern "getSccpProofManifests" javascript/iroha_js/test/toriiClient.test.js`
+    (`3 passed`)
+  - `node --test --test-name-pattern "getSccpProofManifests|buildIvmProvedTransaction" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/transactionBuilder.test.js`
+    (`5 passed`)
+  - `cargo test -p iroha_js_host build_ivm_proved_transaction_roundtrip --lib`
+    (`1 passed`)
+  - `node --test --test-name-pattern "canonicalizes normalized SCCP message proof bundles|published package root exports" javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js`
+    (`2 passed`)
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js javascript/iroha_js/test/package_dist.test.js`
+    (`137 passed`)
+  - `node --test --test-name-pattern "force feature mode bits" javascript/iroha_js/test/kotodamaCompiler.test.js`
+    (`1 passed`)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs`
+    (`10 passed`)
+
 ## 2026-06-01 SCCP release artifact path control-character guard
 
 - Hardened SCCP release evidence tooling so public artifact paths containing

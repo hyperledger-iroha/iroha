@@ -10137,6 +10137,11 @@ test("getSccpCapabilities normalizes discovery response", async () => {
           anchorsReady: false,
           verifierIdentity: null,
           verifierCodeHash: null,
+          verifierKeyHash: null,
+          destinationNetworkId: null,
+          destinationBridgeAddress: null,
+          destinationBindingKey: null,
+          destinationBindingHash: null,
           anchorId: null,
           blockers: [
             "immutable TON verifier contract is not deployed for this SCCP lane",
@@ -10163,6 +10168,11 @@ test("getSccpCapabilities normalizes discovery response", async () => {
           anchorsReady: false,
           verifierIdentity: null,
           verifierCodeHash: null,
+          verifierKeyHash: null,
+          destinationNetworkId: null,
+          destinationBridgeAddress: null,
+          destinationBindingKey: null,
+          destinationBindingHash: null,
           anchorId: null,
           blockers: [
             "immutable TRON verifier contract is not deployed for this SCCP lane",
@@ -10233,6 +10243,11 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               anchors_ready: false,
               verifier_identity: null,
               verifier_code_hash: null,
+              verifier_key_hash: "cd".repeat(32),
+              destination_network_id: "ef".repeat(32),
+              destination_bridge_address: `0x${"12".repeat(20)}`,
+              destination_binding_key: "sccp:0:1:eth:evm-secp256k1-keccak-v1:1",
+              destination_binding_hash: "ab".repeat(32),
               anchor_id: null,
               blockers: [
                 "immutable EVM verifier contract is not deployed for this SCCP lane",
@@ -10264,6 +10279,15 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
                     "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
                 },
               ],
+            },
+            taira_xor_burn_record: {
+              settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+              contract_artifact_b64: "TnJ0MA==",
+              vk_ref: {
+                backend: "halo2/ipa",
+                name: "taira-xor-burn-record-v1",
+              },
+              gas_limit: 123456,
             },
           },
         ],
@@ -10323,6 +10347,11 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           anchorsReady: false,
           verifierIdentity: null,
           verifierCodeHash: null,
+          verifierKeyHash: "cd".repeat(32),
+          destinationNetworkId: "ef".repeat(32),
+          destinationBridgeAddress: `0x${"12".repeat(20)}`,
+          destinationBindingKey: "sccp:0:1:eth:evm-secp256k1-keccak-v1:1",
+          destinationBindingHash: "ab".repeat(32),
           anchorId: null,
           blockers: [
             "immutable EVM verifier contract is not deployed for this SCCP lane",
@@ -10355,9 +10384,97 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
             },
           ],
         },
+        tairaXorBurnRecord: {
+          settlementAssetDefinitionId: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+          contractArtifactB64: "TnJ0MA==",
+          vkRef: {
+            backend: "halo2/ipa",
+            name: "taira-xor-burn-record-v1",
+          },
+          gasLimit: 123456,
+        },
       },
     ],
   });
+});
+
+test("getSccpProofManifests rejects malformed TAIRA burn-record material", async () => {
+  const rawManifest = {
+    version: 1,
+    local_domain: 0,
+    local_chain: "sora",
+    counterparty_domain: 5,
+    chain: "tron",
+    security_model: "RecursiveZk",
+    anchor_governance: "CryptographicProof",
+    destination_binding: {
+      version: 1,
+      key: "sccp:tron:governed-recursive-zk:v1",
+      binding_hash: "ab".repeat(32),
+    },
+    proof_family: "stark-fri-v1",
+    verifier_backend: { version: 1, key: "tron-groth16-bn254-v1" },
+    message_backend: "sccp/stark-fri-v1/tron",
+    registry_backend: "bridge/sccp/stark-fri-v1/tron",
+    counterparty_account_codec: 5,
+    counterparty_account_codec_key: "tron_base58check",
+    finality_model: "TronDpos",
+    verifier_target: "TronContract",
+    manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:tron",
+    required_public_inputs: ["message_id"],
+    message_payload_kinds: ["transfer"],
+    destination_rollout: {
+      version: 1,
+      verifier_plan: "TronContractGroth16Bn254",
+      immutable_verifier_ready: true,
+      anchors_ready: true,
+      verifier_identity: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+      verifier_code_hash: "cd".repeat(32),
+      verifier_key_hash: "ef".repeat(32),
+      destination_network_id: "12".repeat(32),
+      destination_bridge_address: "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+      destination_binding_key: "sccp:0:5:tron:tron-groth16-bn254-v1:1",
+      destination_binding_hash: "34".repeat(32),
+      anchor_id: "tron-mainnet",
+      blockers: [],
+    },
+    production_ready: true,
+    disabled_reason: null,
+    submission_template: {
+      version: 1,
+      encoding: "tron_abi_tuple_v1",
+      submission_kind: "contract_call",
+      verifier_entrypoint:
+        "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+      required_arguments: [],
+    },
+    taira_xor_burn_record: {
+      settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      contract_artifact_b64: "not base64%%%!",
+      vk_ref: {
+        backend: "halo2/ipa",
+        name: "taira-xor-burn-record-v1",
+      },
+    },
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          local_domain: 0,
+          local_chain: "sora",
+          proof_family: "stark-fri-v1",
+          manifests: [rawManifest],
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+
+  await assert.rejects(
+    () => client.getSccpProofManifests(),
+    /taira_xor_burn_record\.contract_artifact_b64 must be a valid base64 string/,
+  );
 });
 
 const SCCP_TEST_MESSAGE_ID = "11".repeat(32);
