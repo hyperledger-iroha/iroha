@@ -626,7 +626,7 @@ export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1: "burn_and_record";
-export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
@@ -670,16 +670,90 @@ export interface TairaXorTransferPayloadInput {
   asset_key?: string;
   assetId?: string;
   asset_id?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaSender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   recipientAddress?: string;
   recipient_address?: string;
   recipient?: string;
   amount: string | number | bigint;
   nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  senderAddress?: string;
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  /** Optional TRON bridge contract address; when supplied, sourceEventDigest is bound to the burn event. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  tronBridgeAddress?: string | BinaryLike | number[];
+  tron_bridge_address?: string | BinaryLike | number[];
+  settlementDefaults?: Record<string, unknown>;
+  settlement_defaults?: Record<string, unknown>;
+}
+
+export interface TairaXorTronToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<Record<string, unknown> & {
+    entrypoint: "finalize_inbound";
+    route: "taira_tron_xor";
+  }>;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
 }
 
 export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
@@ -4719,14 +4793,7 @@ export interface TairaXorRouteHashInput {
   asset_key_hash?: string;
 }
 
-export interface TairaXorTransferPayloadHashInput extends TairaXorRouteHashInput {
-  bridgeAddress?: string | BinaryLike | number[];
-  bridge_address?: string | BinaryLike | number[];
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
-}
+export interface TairaXorTransferPayloadHashInput extends TairaXorTransferPayloadInput {}
 
 export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
   bridgeAddress?: string | BinaryLike | number[];
@@ -4738,9 +4805,13 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   taira_recipient_hash?: string;
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
   nonce?: string | number | bigint;
@@ -4748,25 +4819,37 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   burn_nonce?: string | number | bigint;
 }
 
-export interface TairaXorFinalizeFromTairaCallDataInput extends TairaXorRouteHashInput {
+export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXorTransferPayloadInput> {
   proofBytes?: BinaryLike | number[];
   proof_bytes?: BinaryLike | number[];
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
   statementHash?: string;
   statement_hash?: string;
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonicalPayloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonical_payload_bytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonicalPayloadHex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonical_payload_hex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payload_bytes?: BinaryLike | number[];
 }
 
 export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
 }
@@ -4774,6 +4857,9 @@ export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorTronToTairaTransferPayload(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
 ): Readonly<TairaXorSccpRecordDescriptor>;
@@ -4791,10 +4877,23 @@ export function tairaXorTransferMessageId(
   input: TairaXorTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
-export function tairaXorTransferPayloadHash(input: TairaXorTransferPayloadHashInput): string;
+export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTronToTairaTransferMessageId(
+  input: TairaXorTronToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTransferPayloadHash(
+  input: TairaXorTransferPayloadHashInput,
+  options?: { prefix?: boolean },
+): string;
 export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
 export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
 export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
+export function bindTairaXorTronToTairaSourceProofPackage(
+  input: TairaXorTronToTairaSourceProofPackageInput,
+): Readonly<TairaXorTronToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;

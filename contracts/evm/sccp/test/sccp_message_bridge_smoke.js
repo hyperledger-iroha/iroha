@@ -1,6 +1,8 @@
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
+const crypto = require("crypto");
+const { pathToFileURL } = require("url");
 const solc = require("solc");
 const ganache = require("ganache");
 const { ethers } = require("ethers");
@@ -235,27 +237,6 @@ function tronAddressWord(address) {
   return ethers.zeroPadValue(`0x41${ethers.getAddress(address).slice(2)}`, 32);
 }
 
-function computeTairaXorTransferPayloadHash(
-  abi,
-  { routeIdHash, assetKeyHash, bridgeAddress, recipient, amount }
-) {
-  return ethers.keccak256(
-    abi.encode(
-      ["bytes32", "bytes32", "bytes32", "address", "address", "uint256"],
-      [
-        ethers.keccak256(
-          ethers.toUtf8Bytes("iroha:sccp:taira-xor:transfer-payload:v1")
-        ),
-        routeIdHash,
-        assetKeyHash,
-        bridgeAddress,
-        recipient,
-        amount,
-      ]
-    )
-  );
-}
-
 function computeTairaXorBurnSourceEventDigest(
   abi,
   { routeIdHash, assetKeyHash, bridgeAddress, burner, tairaRecipientHash, amount, nonce }
@@ -286,6 +267,37 @@ function computeTairaXorBurnSourceEventDigest(
       ]
     )
   );
+}
+
+const BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+function base58Encode(bytes) {
+  let value = BigInt(`0x${Buffer.from(bytes).toString("hex") || "0"}`);
+  let encoded = "";
+  while (value > 0n) {
+    const digit = Number(value % 58n);
+    encoded = BASE58_ALPHABET[digit] + encoded;
+    value /= 58n;
+  }
+  for (const byte of bytes) {
+    if (byte !== 0) break;
+    encoded = `${BASE58_ALPHABET[0]}${encoded}`;
+  }
+  return encoded || BASE58_ALPHABET[0];
+}
+
+function tronBase58CheckFromEvmAddress(address) {
+  const payload = Buffer.concat([
+    Buffer.from([0x41]),
+    Buffer.from(ethers.getAddress(address).slice(2), "hex"),
+  ]);
+  const checksum = crypto
+    .createHash("sha256")
+    .update(crypto.createHash("sha256").update(payload).digest())
+    .digest()
+    .subarray(0, 4);
+  return base58Encode(Buffer.concat([payload, checksum]));
 }
 
 const BN254_BASE_FIELD_MODULUS =
@@ -425,6 +437,24 @@ function callExceptionWithReason(reason) {
 }
 
 async function main() {
+  const {
+    sccpPayloadHash,
+    tairaXorCanonicalTransferPayloadBytes,
+    tairaXorTransferMessageId,
+  } = await import(
+    pathToFileURL(repoPath("javascript", "iroha_js", "src", "sccp.js")).href
+  );
+  const { AccountAddress } = await import(
+    pathToFileURL(repoPath("javascript", "iroha_js", "src", "address.js")).href
+  );
+  const tairaAccountId = AccountAddress.fromAccount({
+    publicKey: Uint8Array.from(
+      Buffer.from(
+        "641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
+        "hex"
+      )
+    ),
+  }).toI105(369);
   const contracts = compileContracts();
   const provider = new ethers.BrowserProvider(
     ganache.provider({ logging: { quiet: true } })
@@ -2862,25 +2892,20 @@ async function main() {
   assert.equal(await bridgeSourceBridge.owner(), tairaXorBridgeAddress);
 
   const recipient = await outsider.getAddress();
+  const recipientTronAddress = tronBase58CheckFromEvmAddress(recipient);
   const mintAmount = 12_345n;
-  const bridgePayloadHash = computeTairaXorTransferPayloadHash(abi, {
-    routeIdHash,
-    assetKeyHash,
-    bridgeAddress: tairaXorBridgeAddress,
-    recipient,
+  const bridgePayloadInput = {
+    tairaAccountId,
+    recipientAddress: recipientTronAddress,
     amount: mintAmount,
-  });
+    nonce: 42n,
+  };
+  const bridgeCanonicalPayload = tairaXorCanonicalTransferPayloadBytes(bridgePayloadInput);
+  const bridgePayloadHash = sccpPayloadHash(bridgeCanonicalPayload);
+  const bridgeMessageId = tairaXorTransferMessageId(bridgePayloadInput);
   assert.equal(
-    await tairaXorBridge.tairaXorTransferPayloadHash.staticCall(
-      routeIdHash,
-      assetKeyHash,
-      recipient,
-      mintAmount
-    ),
-    bridgePayloadHash
-  );
-  const bridgeMessageId = ethers.keccak256(
-    ethers.toUtf8Bytes("taira-xor-bridge-message")
+    await tairaXorBridge.tairaXorTransferMessageId.staticCall(bridgeCanonicalPayload),
+    bridgeMessageId
   );
   const bridgeInputs = [
     bridgeMessageId,
@@ -2917,45 +2942,108 @@ async function main() {
       bridgeProofBytes,
       bridgeInputs,
       bridgeStatementHash,
-      routeIdHash,
-      assetKeyHash,
-      recipient,
-      mintAmount
+      bridgeCanonicalPayload
     ),
     bridgeMessageId
   );
 
-  const wrongRouteHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-route"));
+  const expectFinalizePayloadRejects = async (payload, expectedReason) => {
+    await assert.rejects(
+      async () => {
+        await tairaXorBridge.finalizeFromTaira.staticCall(
+          bridgeProofBytes,
+          bridgeInputs,
+          bridgeStatementHash,
+          payload
+        );
+      },
+      callExceptionWithReason(expectedReason)
+    );
+  };
+  const senderLengthOffset = 46;
+  const tairaSenderLength = new DataView(
+    bridgeCanonicalPayload.buffer,
+    bridgeCanonicalPayload.byteOffset + senderLengthOffset,
+    4
+  ).getUint32(0, true);
+  const recipientCodecOffset = senderLengthOffset + 4 + tairaSenderLength;
+  const recipientOffset = recipientCodecOffset + 1 + 4;
+
+  await expectFinalizePayloadRejects(
+    bridgeCanonicalPayload.slice(0, 20),
+    "Payload is too short"
+  );
+  const wrongVersionPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongVersionPayload[0] = 2;
+  await expectFinalizePayloadRejects(wrongVersionPayload, "Unsupported payload version");
+  const wrongSourcePayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongSourcePayload[1] = 1;
+  await expectFinalizePayloadRejects(wrongSourcePayload, "Unexpected source domain");
+  const wrongDestinationPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongDestinationPayload[5] = 0;
+  await expectFinalizePayloadRejects(
+    wrongDestinationPayload,
+    "Unexpected destination domain"
+  );
+  const wrongAssetHomePayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongAssetHomePayload[17] = 5;
+  await expectFinalizePayloadRejects(
+    wrongAssetHomePayload,
+    "Unexpected asset home domain"
+  );
+  const wrongAssetCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongAssetCodecPayload[21] = 2;
+  await expectFinalizePayloadRejects(wrongAssetCodecPayload, "Unexpected asset codec");
+  const wrongSenderCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongSenderCodecPayload[45] = 5;
+  await expectFinalizePayloadRejects(wrongSenderCodecPayload, "Unexpected sender codec");
+  const emptySenderPayload = Uint8Array.from(bridgeCanonicalPayload);
+  emptySenderPayload.fill(0, senderLengthOffset, senderLengthOffset + 4);
+  await expectFinalizePayloadRejects(emptySenderPayload, "Sender is required");
+  const wrongRecipientCodecPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongRecipientCodecPayload[recipientCodecOffset] = 1;
+  await expectFinalizePayloadRejects(
+    wrongRecipientCodecPayload,
+    "Unexpected recipient codec"
+  );
+  const invalidBase58RecipientPayload = Uint8Array.from(bridgeCanonicalPayload);
+  invalidBase58RecipientPayload[recipientOffset + 1] = "0".charCodeAt(0);
+  await expectFinalizePayloadRejects(
+    invalidBase58RecipientPayload,
+    "Recipient must be base58"
+  );
+  await expectFinalizePayloadRejects(
+    Uint8Array.from([...bridgeCanonicalPayload, 0]),
+    "Trailing payload bytes"
+  );
+
+  const wrongRoutePayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongRoutePayload[wrongRoutePayload.length - 1] ^= 1;
   await assert.rejects(
     async () => {
       const wrongRouteTx = await tairaXorBridge.finalizeFromTaira(
         bridgeProofBytes,
         bridgeInputs,
         bridgeStatementHash,
-        wrongRouteHash,
-        assetKeyHash,
-        recipient,
-        mintAmount
+        wrongRoutePayload
       );
       await wrongRouteTx.wait();
     },
-    callException
+    callExceptionWithReason("Unexpected route")
   );
-  const wrongAssetHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-asset"));
+  const wrongAssetPayload = Uint8Array.from(bridgeCanonicalPayload);
+  wrongAssetPayload[26] = "y".charCodeAt(0);
   await assert.rejects(
     async () => {
       const wrongAssetTx = await tairaXorBridge.finalizeFromTaira(
         bridgeProofBytes,
         bridgeInputs,
         bridgeStatementHash,
-        routeIdHash,
-        wrongAssetHash,
-        recipient,
-        mintAmount
+        wrongAssetPayload
       );
       await wrongAssetTx.wait();
     },
-    callException
+    callExceptionWithReason("Unexpected asset")
   );
   const wrongBridgePayloadInputs = bridgeInputs.slice();
   wrongBridgePayloadInputs[1] = ethers.keccak256(
@@ -2967,14 +3055,11 @@ async function main() {
         bridgeProofBytes,
         wrongBridgePayloadInputs,
         bridgeStatementHash,
-        routeIdHash,
-        assetKeyHash,
-        recipient,
-        mintAmount
+        bridgeCanonicalPayload
       );
       await wrongPayloadTx.wait();
     },
-    callExceptionWithReason("Payload hash mismatch")
+    callExceptionWithReason("Groth16 proof verification failed")
   );
   const wrongBridgeTargetInputs = bridgeInputs.slice();
   wrongBridgeTargetInputs[2] = ethers.zeroPadValue(ethers.toBeHex(4), 32);
@@ -2984,14 +3069,32 @@ async function main() {
         bridgeProofBytes,
         wrongBridgeTargetInputs,
         bridgeStatementHash,
-        routeIdHash,
-        assetKeyHash,
-        recipient,
-        mintAmount
+        bridgeCanonicalPayload
       );
       await wrongTargetTx.wait();
     },
     callExceptionWithReason("Unexpected target domain")
+  );
+  const wrongMessageInputs = bridgeInputs.slice();
+  wrongMessageInputs[0] = ethers.keccak256(
+    ethers.toUtf8Bytes("wrong-taira-xor-message")
+  );
+  await assert.rejects(
+    async () => {
+      const wrongMessageTx = await tairaXorBridge.finalizeFromTaira(
+        bridgeProofBytes,
+        wrongMessageInputs,
+        bridgeStatementHash,
+        bridgeCanonicalPayload
+      );
+      await wrongMessageTx.wait();
+    },
+    callExceptionWithReason("Message id mismatch")
+  );
+  const zeroRecipientPayload = Uint8Array.from(bridgeCanonicalPayload);
+  zeroRecipientPayload.set(
+    Buffer.from("T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"),
+    recipientOffset
   );
   await assert.rejects(
     async () => {
@@ -2999,39 +3102,32 @@ async function main() {
         bridgeProofBytes,
         bridgeInputs,
         bridgeStatementHash,
-        routeIdHash,
-        assetKeyHash,
-        ethers.ZeroAddress,
-        mintAmount
+        zeroRecipientPayload
       );
       await zeroRecipientTx.wait();
     },
-    callException
+    callExceptionWithReason("Recipient address is required")
   );
+  const zeroAmountPayload = Uint8Array.from(bridgeCanonicalPayload);
+  zeroAmountPayload.fill(0, 29, 45);
   await assert.rejects(
     async () => {
       const zeroAmountTx = await tairaXorBridge.finalizeFromTaira(
         bridgeProofBytes,
         bridgeInputs,
         bridgeStatementHash,
-        routeIdHash,
-        assetKeyHash,
-        recipient,
-        0
+        zeroAmountPayload
       );
       await zeroAmountTx.wait();
     },
-    callException
+    callExceptionWithReason("Amount is required")
   );
 
   const bridgeMintTx = await tairaXorBridge.finalizeFromTaira(
     bridgeProofBytes,
     bridgeInputs,
     bridgeStatementHash,
-    routeIdHash,
-    assetKeyHash,
-    recipient,
-    mintAmount
+    bridgeCanonicalPayload
   );
   const bridgeMintReceipt = await bridgeMintTx.wait();
   assert.equal(await tairaXorBridge.usedMessageProofs(bridgeMessageId), true);
@@ -3053,10 +3149,7 @@ async function main() {
         bridgeProofBytes,
         bridgeInputs,
         bridgeStatementHash,
-        routeIdHash,
-        assetKeyHash,
-        recipient,
-        mintAmount
+        bridgeCanonicalPayload
       );
       await bridgeReplayTx.wait();
     },
@@ -3078,6 +3171,8 @@ async function main() {
   assert.equal(await tairaXor.allowance(recipient, await signer.getAddress()), 0n);
   assert.equal(await tairaXor.balanceOf(await signer.getAddress()), 107n);
 
+  const wrongRouteHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-route"));
+  const wrongAssetHash = ethers.keccak256(ethers.toUtf8Bytes("wrong-asset"));
   await assert.rejects(
     async () => {
       const badBurnRouteTx = await tairaXorBridge

@@ -4,6 +4,20 @@ Last updated: 2026-06-01
 
 ## 2026-06-01 TAIRA TRON SCCP XOR settlement admission
 
+- Aligned `TairaXorSccpBridge.finalizeFromTaira` with canonical SCCP
+  payloads: the TRON bridge now accepts the recorded transfer payload bytes,
+  parses route/asset/recipient/amount on-chain, binds the proof by recomputing
+  the SCCP transfer message id, and treats `publicInputs[1]` as Iroha's
+  canonical SCCP commitment payload hash.
+- Tightened JavaScript SCCP builders so TAIRA account fields must be canonical
+  TAIRA I105 account ids, and ETH/BSC, Solana, and TON codec values are
+  validated before canonical payload hashing to match Rust
+  `verify_sccp_payload_structure`.
+- Hardened TAIRA XOR TRON finalize calldata generation so externally supplied
+  canonical payload bytes are parsed as the exact SORA->TRON XOR route before
+  hashing, optional cleartext fields must match those bytes, and TAIRA
+  recipient hash helpers reject account aliases unless callers deliberately
+  pass raw recipient bytes or a precomputed hash.
 - Hardened `taira_tron_xor` source-record admission so an `IvmProved`
   execution that records a TAIRA-to-TRON XOR SCCP transfer must carry a
   same-overlay `Burn<Numeric, Asset>` settlement from the payload sender.
@@ -19,6 +33,37 @@ Last updated: 2026-06-01
 - Added a TAIRA burn-and-record Kotodama contract plus deployment-tool support
   for producing a forced-ZK contract artifact alongside the TRON bridge
   deployment evidence flow.
+- Added a deterministic TRON mainnet funding/energy estimate to
+  `scripts/sccp_tron_taira_xor_deploy.mjs`; operators can now run
+  `estimate-budget` before funding the offline deployer, `account-status`
+  reports the funding gap against the recommended minimum, and deployment plans
+  persist the budget assumptions. The SCCP contract-smoke corridor now runs the
+  TRON deployment-helper tests so deployer signing, address validation,
+  verifier-material validation, funding estimates, and TAIRA burn-record
+  compilation stay covered.
+- Added a non-broadcasting `doctor` preflight to the TRON TAIRA XOR deployment
+  helper. It checks the local Node version, source/evidence-script readability,
+  optional `solc`/`ethers` availability, deployer secret validity, production
+  verifier material, safe endpoint shape, and optional deployer funding
+  readiness without printing private key material.
+- Added an offline `route-manifest` command to
+  `scripts/sccp_tron_taira_xor_deploy.mjs`. It validates deployment evidence,
+  TAIRA burn-record contract artifacts, canonical settlement asset IDs, IVM VK
+  references, verifier material, and the computed TRON destination binding
+  key/hash before writing the wallet/Torii `taira_tron_xor` manifest draft, and
+  refuses `productionReady: true` without explicit mainnet and live-readback
+  acknowledgements.
+- Hardened the TRON deployment helper's mainnet path so endpoint overrides must
+  be HTTPS public gateways without credentials, query strings, fragments, or
+  local/private/reserved hosts (including carrier-grade NAT, IPv4-mapped
+  loopback, IPv6 unique-local/link-local, and documentation ranges), and
+  `deploy --broadcast true` now fetches the deployer balance and fails before
+  creating deployment transactions when the account is below the current
+  recommended funding minimum.
+- Hardened TAIRA inbound TRON-source proof package binding so callers can pass
+  the deployed TRON bridge address and force `sourceEventDigest` to match the
+  deterministic `BurnToTaira` source-event digest for the selected burner,
+  TAIRA recipient, amount, and nonce before TAIRA settlement is submitted.
 - Added browser-safe SDK builders for `RecordSccpMessage` instruction bytes
   and the TAIRA XOR burn-record ZK IVM request. Torii now normalizes
   self-describing ZK IVM `contract_payload` metadata before derive/prove
@@ -40,8 +85,13 @@ Last updated: 2026-06-01
     (`8 passed`)
   - `cargo test -p iroha_torii normalize_contract_call_metadata_for_bytecode_canonicalizes_zk_ivm_payload --lib`
     (`1 passed`)
-  - `node --test --test-name-pattern "TAIRA XOR|RecordSccpMessage|burn-record" javascript/iroha_js/test/sccpSolanaProver.test.js`
-    (`9 passed`)
+  - `node --test --test-name-pattern "TAIRA XOR|SCCP codec" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`11 passed`; includes canonical account-id, non-text codec, raw
+    canonical-payload, and public-input mismatch negative cases)
+  - `NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules node contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
+    (`sccp_message_bridge_smoke: ok`; includes malformed TAIRA payload
+    parser cases for version, domains, codecs, route, asset, sender,
+    recipient, amount, trailing bytes, and replay)
   - `node --test --test-name-pattern "getSccpProofManifests" javascript/iroha_js/test/toriiClient.test.js`
     (`3 passed`)
   - `node --test --test-name-pattern "getSccpProofManifests|buildIvmProvedTransaction" javascript/iroha_js/test/toriiClient.test.js javascript/iroha_js/test/transactionBuilder.test.js`
@@ -51,11 +101,16 @@ Last updated: 2026-06-01
   - `node --test --test-name-pattern "canonicalizes normalized SCCP message proof bundles|published package root exports" javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js`
     (`2 passed`)
   - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js javascript/iroha_js/test/sccpPackageExports.test.js javascript/iroha_js/test/package_dist.test.js`
-    (`137 passed`)
+    (`144 passed`; includes TRON-source proof package source-event digest
+    binding against the deployed bridge address)
   - `node --test --test-name-pattern "force feature mode bits" javascript/iroha_js/test/kotodamaCompiler.test.js`
     (`1 passed`)
   - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_taira_xor_contract.test.mjs`
-    (`10 passed`)
+    (`24 passed`; includes route-manifest draft generation, production-ready
+    acknowledgment gates, destination binding mismatch rejection, settlement
+    alias rejection, malformed VK refs, and tampered burn-record artifacts)
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`SCCP production corridor completed`)
 
 ## 2026-06-01 SCCP release artifact path control-character guard
 

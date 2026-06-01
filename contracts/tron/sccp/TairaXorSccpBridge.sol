@@ -45,8 +45,9 @@ interface ISccpTronVerifierView {
 contract TairaXorSccpBridge {
     uint32 private constant SCCP_DOMAIN_SORA = 0;
     uint32 private constant SCCP_DOMAIN_TRON = 5;
-    bytes32 private constant TAIRA_XOR_TRANSFER_PAYLOAD_PREFIX =
-        keccak256("iroha:sccp:taira-xor:transfer-payload:v1");
+    uint8 private constant SCCP_CODEC_TEXT_UTF8 = 1;
+    uint8 private constant SCCP_CODEC_TRON_BASE58CHECK = 5;
+    string private constant SCCP_MSG_PREFIX_TRANSFER_V1 = "sccp:transfer:v1";
     bytes32 private constant TAIRA_XOR_BURN_SOURCE_EVENT_PREFIX =
         keccak256("iroha:sccp:taira-xor:burn-source-event:v1");
 
@@ -126,28 +127,20 @@ contract TairaXorSccpBridge {
         bytes calldata proofBytes,
         bytes32[6] calldata publicInputs,
         bytes32 statementHash,
-        bytes32 submittedRouteIdHash,
-        bytes32 submittedAssetKeyHash,
-        address recipient,
-        uint256 amount
+        bytes calldata canonicalPayloadBytes
     ) external returns (bytes32 messageId) {
         require(statementHash != bytes32(0), "Statement hash is required");
-        require(submittedRouteIdHash == routeIdHash, "Unexpected route");
-        require(submittedAssetKeyHash == assetKeyHash, "Unexpected asset");
-        require(recipient != address(0), "Recipient address is required");
-        require(amount != 0, "Amount is required");
         require(
             publicInputs[2] == _abiWordU32(SCCP_DOMAIN_TRON),
             "Unexpected target domain"
         );
-
-        bytes32 payloadHash = tairaXorTransferPayloadHash(
-            submittedRouteIdHash,
-            submittedAssetKeyHash,
-            recipient,
-            amount
-        );
-        require(publicInputs[1] == payloadHash, "Payload hash mismatch");
+        (address recipient, uint256 amount) =
+            _parseTairaXorTransferPayload(canonicalPayloadBytes);
+        bytes32 expectedMessageId =
+            tairaXorTransferMessageId(canonicalPayloadBytes);
+        require(publicInputs[0] == expectedMessageId, "Message id mismatch");
+        bytes32 payloadHash = publicInputs[1];
+        require(payloadHash != bytes32(0), "Payload hash is required");
 
         uint32 sourceDomain;
         bytes32 commitmentRoot;
@@ -174,8 +167,8 @@ contract TairaXorSccpBridge {
             messageId,
             recipient,
             amount,
-            submittedRouteIdHash,
-            submittedAssetKeyHash,
+            routeIdHash,
+            assetKeyHash,
             payloadHash
         );
     }
@@ -226,21 +219,11 @@ contract TairaXorSccpBridge {
         );
     }
 
-    function tairaXorTransferPayloadHash(
-        bytes32 submittedRouteIdHash,
-        bytes32 submittedAssetKeyHash,
-        address recipient,
-        uint256 amount
-    ) public view returns (bytes32) {
+    function tairaXorTransferMessageId(
+        bytes calldata canonicalPayloadBytes
+    ) public pure returns (bytes32) {
         return keccak256(
-            abi.encode(
-                TAIRA_XOR_TRANSFER_PAYLOAD_PREFIX,
-                submittedRouteIdHash,
-                submittedAssetKeyHash,
-                address(this),
-                recipient,
-                amount
-            )
+            abi.encodePacked(SCCP_MSG_PREFIX_TRANSFER_V1, canonicalPayloadBytes)
         );
     }
 
@@ -268,5 +251,226 @@ contract TairaXorSccpBridge {
 
     function _abiWordU32(uint32 value) private pure returns (bytes32 out) {
         out = bytes32(uint256(value));
+    }
+
+    function _parseTairaXorTransferPayload(
+        bytes calldata payload
+    ) private pure returns (address recipient, uint256 amount) {
+        uint256 offset = 0;
+        require(_readU8(payload, offset) == 1, "Unsupported payload version");
+        offset += 1;
+        require(
+            _readU32Le(payload, offset) == SCCP_DOMAIN_SORA,
+            "Unexpected source domain"
+        );
+        offset += 4;
+        require(
+            _readU32Le(payload, offset) == SCCP_DOMAIN_TRON,
+            "Unexpected destination domain"
+        );
+        offset += 4;
+        offset += 8; // nonce
+        require(
+            _readU32Le(payload, offset) == SCCP_DOMAIN_SORA,
+            "Unexpected asset home domain"
+        );
+        offset += 4;
+
+        require(
+            _readU8(payload, offset) == SCCP_CODEC_TEXT_UTF8,
+            "Unexpected asset codec"
+        );
+        offset += 1;
+        uint256 valueOffset;
+        uint256 valueLength;
+        (valueOffset, valueLength, offset) = _readVecRange(payload, offset);
+        require(_isTairaXorAssetKey(payload, valueOffset, valueLength), "Unexpected asset");
+
+        amount = _readU128Le(payload, offset);
+        require(amount != 0, "Amount is required");
+        offset += 16;
+
+        require(
+            _readU8(payload, offset) == SCCP_CODEC_TEXT_UTF8,
+            "Unexpected sender codec"
+        );
+        offset += 1;
+        (valueOffset, valueLength, offset) = _readVecRange(payload, offset);
+        require(valueLength != 0, "Sender is required");
+
+        require(
+            _readU8(payload, offset) == SCCP_CODEC_TRON_BASE58CHECK,
+            "Unexpected recipient codec"
+        );
+        offset += 1;
+        (valueOffset, valueLength, offset) = _readVecRange(payload, offset);
+        recipient = _decodeTronBase58CheckAddress(payload, valueOffset, valueLength);
+
+        require(
+            _readU8(payload, offset) == SCCP_CODEC_TEXT_UTF8,
+            "Unexpected route codec"
+        );
+        offset += 1;
+        (valueOffset, valueLength, offset) = _readVecRange(payload, offset);
+        require(_isTairaTronXorRoute(payload, valueOffset, valueLength), "Unexpected route");
+        require(offset == payload.length, "Trailing payload bytes");
+    }
+
+    function _readU8(
+        bytes calldata payload,
+        uint256 offset
+    ) private pure returns (uint8) {
+        require(offset < payload.length, "Payload is too short");
+        return uint8(payload[offset]);
+    }
+
+    function _readU32Le(
+        bytes calldata payload,
+        uint256 offset
+    ) private pure returns (uint32) {
+        require(
+            offset <= payload.length && payload.length - offset >= 4,
+            "Payload is too short"
+        );
+        return uint32(uint8(payload[offset]))
+            | (uint32(uint8(payload[offset + 1])) << 8)
+            | (uint32(uint8(payload[offset + 2])) << 16)
+            | (uint32(uint8(payload[offset + 3])) << 24);
+    }
+
+    function _readU128Le(
+        bytes calldata payload,
+        uint256 offset
+    ) private pure returns (uint256 value) {
+        require(
+            offset <= payload.length && payload.length - offset >= 16,
+            "Payload is too short"
+        );
+        for (uint256 i = 0; i < 16; i++) {
+            value |= uint256(uint8(payload[offset + i])) << (i * 8);
+        }
+    }
+
+    function _readVecRange(
+        bytes calldata payload,
+        uint256 offset
+    )
+        private
+        pure
+        returns (
+            uint256 valueOffset,
+            uint256 valueLength,
+            uint256 nextOffset
+        )
+    {
+        valueLength = uint256(_readU32Le(payload, offset));
+        valueOffset = offset + 4;
+        require(
+            valueOffset <= payload.length
+                && payload.length - valueOffset >= valueLength,
+            "Payload is too short"
+        );
+        nextOffset = valueOffset + valueLength;
+    }
+
+    function _isTairaXorAssetKey(
+        bytes calldata payload,
+        uint256 offset,
+        uint256 length
+    ) private pure returns (bool) {
+        return length == 3
+            && payload[offset] == bytes1(0x78)
+            && payload[offset + 1] == bytes1(0x6f)
+            && payload[offset + 2] == bytes1(0x72);
+    }
+
+    function _isTairaTronXorRoute(
+        bytes calldata payload,
+        uint256 offset,
+        uint256 length
+    ) private pure returns (bool) {
+        return length == 14
+            && payload[offset] == bytes1(0x74)
+            && payload[offset + 1] == bytes1(0x61)
+            && payload[offset + 2] == bytes1(0x69)
+            && payload[offset + 3] == bytes1(0x72)
+            && payload[offset + 4] == bytes1(0x61)
+            && payload[offset + 5] == bytes1(0x5f)
+            && payload[offset + 6] == bytes1(0x74)
+            && payload[offset + 7] == bytes1(0x72)
+            && payload[offset + 8] == bytes1(0x6f)
+            && payload[offset + 9] == bytes1(0x6e)
+            && payload[offset + 10] == bytes1(0x5f)
+            && payload[offset + 11] == bytes1(0x78)
+            && payload[offset + 12] == bytes1(0x6f)
+            && payload[offset + 13] == bytes1(0x72);
+    }
+
+    function _decodeTronBase58CheckAddress(
+        bytes calldata payload,
+        uint256 offset,
+        uint256 length
+    ) private pure returns (address) {
+        require(length == 34, "Recipient must be TRON address");
+        require(payload[offset] == bytes1(0x54), "Recipient must be TRON address");
+        uint256 value = 0;
+        for (uint256 i = 0; i < length; i++) {
+            value = value * 58 + _base58Digit(uint8(payload[offset + i]));
+        }
+
+        bytes memory decoded = new bytes(25);
+        uint256 remaining = value;
+        for (uint256 i = 25; i > 0; i--) {
+            decoded[i - 1] = bytes1(uint8(remaining));
+            remaining >>= 8;
+        }
+        require(remaining == 0, "Recipient address overflow");
+
+        bytes memory addressPayload = new bytes(21);
+        uint160 rawAddress = 0;
+        bool nonZero = false;
+        for (uint256 i = 0; i < 21; i++) {
+            addressPayload[i] = decoded[i];
+            if (i > 0) {
+                uint8 byteValue = uint8(decoded[i]);
+                rawAddress = (rawAddress << 8) | uint160(byteValue);
+                if (byteValue != 0) {
+                    nonZero = true;
+                }
+            }
+        }
+        require(decoded[0] == bytes1(0x41), "Recipient must use TRON prefix");
+        require(nonZero, "Recipient address is required");
+        bytes32 expectedChecksum = sha256(abi.encodePacked(sha256(addressPayload)));
+        require(
+            decoded[21] == expectedChecksum[0]
+                && decoded[22] == expectedChecksum[1]
+                && decoded[23] == expectedChecksum[2]
+                && decoded[24] == expectedChecksum[3],
+            "Recipient checksum mismatch"
+        );
+        return address(rawAddress);
+    }
+
+    function _base58Digit(uint8 character) private pure returns (uint8) {
+        if (character >= 0x31 && character <= 0x39) {
+            return character - 0x31;
+        }
+        if (character >= 0x41 && character <= 0x48) {
+            return character - 0x41 + 9;
+        }
+        if (character >= 0x4a && character <= 0x4e) {
+            return character - 0x4a + 17;
+        }
+        if (character >= 0x50 && character <= 0x5a) {
+            return character - 0x50 + 22;
+        }
+        if (character >= 0x61 && character <= 0x6b) {
+            return character - 0x61 + 33;
+        }
+        if (character >= 0x6d && character <= 0x7a) {
+            return character - 0x6d + 44;
+        }
+        revert("Recipient must be base58");
     }
 }
