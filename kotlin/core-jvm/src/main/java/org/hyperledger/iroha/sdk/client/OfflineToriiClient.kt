@@ -8,15 +8,15 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.offline.OfflineJsonParser
-import org.hyperledger.iroha.sdk.offline.OfflineToriiException
 import org.hyperledger.iroha.sdk.offline.OfflineReadiness
+import org.hyperledger.iroha.sdk.offline.OfflineToriiException
 import org.hyperledger.iroha.sdk.offline.OfflineV2Readiness
 
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
  * The legacy offline HTTP routes have been removed
- * from Torii. This client exposes only `/v1/offline/readiness`.
+ * from Torii. This client exposes the maintained offline readiness endpoints.
  */
 class OfflineToriiClient private constructor(builder: Builder) {
 

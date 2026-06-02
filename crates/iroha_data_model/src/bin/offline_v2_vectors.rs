@@ -763,7 +763,7 @@ fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
     let options = QrStreamOptions {
         chunk_size: 360,
         parity_group: 3,
-        payload_kind: QrPayloadKind::OfflinePaymentTokenV2,
+        payload_kind: QrPayloadKind::OfflinePaymentToken,
         ..QrStreamOptions::default()
     };
     let (envelope, frames) = QrStreamEncoder::encode_frames(payload, options)?;

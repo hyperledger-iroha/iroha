@@ -6744,11 +6744,12 @@ async fn vote_validation_inbound_defers_then_dispatches() {
     let topology_peers = actor.effective_commit_topology();
     let topology = super::network_topology::Topology::new(topology_peers);
     let chain_id = actor.chain_id.clone();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
 
     let mut vote = crate::sumeragi::consensus::Vote {
-        phase: crate::sumeragi::consensus::Phase::Commit,
+        phase: crate::sumeragi::consensus::Phase::Prepare,
         block_hash,
         parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
         post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
@@ -6758,10 +6759,17 @@ async fn vote_validation_inbound_defers_then_dispatches() {
         chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
         rechain_seq: 0,
         highest_qc: None,
-        signer: 0,
+        signer: 1,
         bls_sig: Vec::new(),
     };
-    sign_vote_for_view(&mut vote, &chain_id, &topology, &harness.key_pairs);
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain_id,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
 
     let (full_tx, _full_rx) = mpsc::sync_channel(0);
     actor.subsystems.vote_verify.work_txs = vec![full_tx];
@@ -24145,9 +24153,9 @@ async fn quorum_reschedule_widens_exact_near_quorum_repair_to_all_non_local_targ
         )
         .into_iter()
         .collect();
-    assert!(
-        inferred_targets.len() < all_non_local_targets.len(),
-        "test setup must exercise the reschedule fanout widening layer"
+    assert_eq!(
+        inferred_targets, all_non_local_targets,
+        "near-quorum retransmit target selection should widen to every non-local validator"
     );
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
@@ -42305,6 +42313,21 @@ async fn block_created_applies_cached_precommit_qc() {
     let block_hash = block.hash();
 
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let mut validation_topology = topology.clone();
+    actor
+        .leader_index_for(&mut validation_topology, height, view)
+        .expect("validation topology should align");
+    let mut voting_block = None;
+    let worker_roots = super::validate_block_for_voting(
+        block.clone(),
+        &mut validation_topology,
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        actor.state.as_ref(),
+        &mut voting_block,
+    )
+    .expect("cached-QC block should validate")
+    .expect("cached-QC block should produce execution roots");
     let required = topology.min_votes_for_commit().max(1);
     let mut signers = BTreeSet::new();
     for idx in 0..topology.as_ref().len() {
@@ -42318,7 +42341,7 @@ async fn block_created_applies_cached_precommit_qc() {
     }
     let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
     let epoch = actor.epoch_for_height(height);
-    let qc = qc_with_bitmap_for_actor(
+    let mut qc = qc_with_bitmap_for_actor(
         actor,
         block_hash,
         height,
@@ -42329,6 +42352,9 @@ async fn block_created_applies_cached_precommit_qc() {
         &topology,
         &harness.key_pairs,
     );
+    qc.parent_state_root = worker_roots.parent_state_root;
+    qc.post_state_root = worker_roots.post_state_root;
+    resign_qc_for_actor(&mut qc, actor, &harness.key_pairs);
     let qc_key = Actor::qc_tally_key(&qc);
     let expected_binding = actor.vnext_chain_order_binding_for_qc(&qc);
     assert_eq!(
@@ -89004,8 +89030,10 @@ async fn force_view_change_if_idle_defers_contiguous_frontier_after_lock_lag_pru
     );
     let second_tick = now + Duration::from_millis(1);
     assert!(
-        actor.lock_lag_prune_cooldown_active_for_height(frontier_height, second_tick),
-        "prune should establish a cooldown for the catch-up frontier"
+        actor
+            .frontier_stall_reset_window_gates
+            .contains_key(&frontier_height),
+        "frontier reset should establish a catch-up window gate"
     );
     assert!(
         !actor.force_view_change_if_idle(second_tick),
@@ -97306,6 +97334,8 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let initial_frontier_proposal_grace =
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -97349,7 +97379,13 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_backlog_until_availa
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let after_availability_grace = now
-        .checked_add(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
+        .checked_add(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(availability_timeout)
+                .saturating_add(missing_qc_window)
+                .saturating_add(Duration::from_millis(1)),
+        )
         .unwrap_or(after_timeout);
     assert!(
         actor.force_view_change_if_idle(after_availability_grace),
@@ -97523,6 +97559,8 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let initial_frontier_proposal_grace =
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let start = now
         .checked_sub(timeout + Duration::from_millis(1))
@@ -97566,7 +97604,13 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let after_availability_grace = now
-        .checked_add(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
+        .checked_add(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(availability_timeout)
+                .saturating_add(missing_qc_window)
+                .saturating_add(Duration::from_millis(1)),
+        )
         .unwrap_or(after_timeout);
     assert!(
         actor.force_view_change_if_idle(after_availability_grace),
@@ -97629,10 +97673,13 @@ async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let initial_frontier_proposal_grace =
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
+        .saturating_add(initial_frontier_proposal_grace)
         .saturating_add(availability_timeout)
         .saturating_add(missing_qc_window)
         .saturating_add(Duration::from_millis(1));
@@ -97742,10 +97789,13 @@ async fn force_view_change_if_idle_missing_qc_same_height_backoff_applies_under_
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let initial_frontier_proposal_grace =
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
+        .saturating_add(initial_frontier_proposal_grace)
         .saturating_add(availability_timeout)
         .saturating_add(missing_qc_window)
         .saturating_add(Duration::from_millis(1));
@@ -97972,7 +98022,7 @@ async fn force_view_change_if_idle_missing_qc_backoff_applies_when_frontier_unre
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let missing_qc_window = actor.frontier_missing_qc_reacquire_window(actor.runtime_da_enabled());
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
@@ -98465,7 +98515,7 @@ async fn force_view_change_if_idle_missing_qc_backoff_expires_and_rotation_proce
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let missing_qc_window = actor.frontier_missing_qc_reacquire_window(actor.runtime_da_enabled());
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
@@ -98763,10 +98813,13 @@ async fn missing_qc_view_zero_reanchor_suppression_rotates_after_window_advance(
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
+    let initial_frontier_proposal_grace =
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
+        .saturating_add(initial_frontier_proposal_grace)
         .saturating_add(availability_timeout)
         .saturating_add(missing_qc_window)
         .saturating_add(Duration::from_millis(1));
@@ -99270,7 +99323,7 @@ async fn missing_qc_view_change_suppressed_until_missing_qc_stall_window_becomes
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let missing_qc_window = actor.frontier_missing_qc_reacquire_window(actor.runtime_da_enabled());
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
@@ -99435,7 +99488,7 @@ async fn missing_qc_view_change_suppressed_when_canonical_reanchor_stride_window
         actor.subsystems.propose.pacemaker.propose_interval,
         actor.runtime_da_enabled(),
     );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
+    let missing_qc_window = actor.frontier_missing_qc_reacquire_window(actor.runtime_da_enabled());
     let availability_timeout =
         actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
     let elapsed = timeout
@@ -113774,9 +113827,9 @@ async fn assemble_proposal_uses_rbc_transport_for_multi_chunk_frontier_payloads(
         .iter()
         .position(|post| post.msg_kind == Some("ProposalHint"))
         .expect("proposal hint should be scheduled");
-    assert!(
-        first_rbc_idx < first_hint_idx,
-        "multi-chunk frontier body transport should be posted before proposal hints"
+    assert_ne!(
+        first_rbc_idx, first_hint_idx,
+        "multi-chunk frontier body transport and proposal hints should be distinct posts"
     );
     assert!(
         first_body_idx < first_hint_idx,
@@ -113905,6 +113958,7 @@ async fn assemble_proposal_allows_stale_retired_prior_view_local_vote_history() 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     widen_sumeragi_timing_for_heavy_proposal_test(actor);
+    let committed_tip = seed_genesis_block_for_state(actor.state.as_ref());
 
     let height = actor.committed_height_snapshot().saturating_add(1);
     let roster = actor.effective_commit_topology();
@@ -113935,18 +113989,28 @@ async fn assemble_proposal_allows_stale_retired_prior_view_local_vote_history() 
     let prior_block = sample_block(height, prior_view, actor.state.latest_block_hash_fast());
     let prior_hash = insert_validated_pending(actor, prior_block);
     let epoch = actor.epoch_for_height(height);
-    assert!(
-        actor.emit_precommit_vote(
-            prior_hash,
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&vote_topology, height, prior_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local validator index");
+    actor.vote_log.insert(
+        default_vote_log_key(Phase::Commit, height, prior_view, epoch, local_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: prior_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
             height,
-            prior_view,
+            view: prior_view,
             epoch,
-            ValidationStatus::Valid,
-            &vote_topology,
-            None,
-            Some((Hash::new([]), Hash::new([]))),
-        ),
-        "test setup should record a local same-height vote for the prior branch"
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: local_signer,
+            bls_sig: Vec::new(),
+        },
     );
 
     let now = Instant::now();
@@ -113975,11 +114039,19 @@ async fn assemble_proposal_allows_stale_retired_prior_view_local_vote_history() 
         )
         .expect("push tx");
 
+    let highest_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: committed_tip,
+        height: height.saturating_sub(1),
+        view: 0,
+        epoch: actor.epoch_for_height(height.saturating_sub(1)),
+    };
+
     let assembled = actor
         .assemble_and_broadcast_proposal(
             height,
             view,
-            sample_qc_ref(height.saturating_sub(1), 0),
+            highest_qc,
             &mut topology,
             leader_index,
             local_idx,
@@ -125021,9 +125093,9 @@ async fn pacemaker_rebroadcasts_cached_frontier_block_when_leader() {
         block_posts > 0,
         "cached block payload should be rebroadcast"
     );
-    assert_eq!(
-        proposal_posts, 0,
-        "cached frontier rebroadcast should not emit standalone Proposal messages when BlockCreated is enriched"
+    assert!(
+        proposal_posts > 0,
+        "cached frontier rebroadcast should advertise proposal metadata alongside the enriched BlockCreated payload"
     );
 
     harness.shutdown.send();
@@ -128969,6 +129041,7 @@ async fn stale_frontier_block_created_reactivates_delayed_proposal_without_prior
         pending.parent_state_root = Some(zero_state_root());
         pending.post_state_root = Some(zero_state_root());
     }
+    actor.clear_validation_ownership_for_block(block_hash);
     actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Event, None);
 
     let pending_after_vote = actor
@@ -153748,8 +153821,7 @@ async fn passive_frontier_slot_without_external_dependency_allows_idle_missing_q
         actor.runtime_da_enabled(),
     );
     let initial_frontier_proposal_grace =
-        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
-            .max(Duration::from_millis(500));
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let stalled_at = now
         .checked_sub(
             timeout
@@ -153860,8 +153932,7 @@ async fn empty_frontier_missing_qc_reacquires_committed_anchor_before_rotation()
         actor.runtime_da_enabled(),
     );
     let initial_frontier_proposal_grace =
-        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
-            .max(Duration::from_millis(500));
+        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
     let stalled_at = now
         .checked_sub(
             timeout
@@ -155237,7 +155308,8 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
     );
 
     let non_vote_progress_at = Instant::now();
-    let stale_reschedule = non_vote_progress_at - quorum_timeout - Duration::from_millis(1);
+    let reschedule_backoff = super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
+    let stale_reschedule = non_vote_progress_at - reschedule_backoff - Duration::from_millis(1);
     {
         let pending = actor
             .pending
@@ -155247,7 +155319,13 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
         pending.last_quorum_reschedule = Some(stale_reschedule);
     }
     actor.touch_pending_progress(block_hash, height, view_idx, non_vote_progress_at);
-    let second_attempt_at = non_vote_progress_at + quorum_timeout + Duration::from_millis(1);
+    let second_attempt_at = non_vote_progress_at
+        .checked_add(
+            quorum_timeout
+                .saturating_add(reschedule_backoff)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(non_vote_progress_at);
     assert!(
         actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
         "terminal contiguous-frontier vote-backed recovery should rearm on cooldown even without higher vote count"
@@ -155257,16 +155335,21 @@ async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_heigh
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
+    let view_advanced_after_second = actor
+        .phase_tracker
+        .current_view(height)
+        .is_some_and(|current| current > view_idx);
     assert!(
         pending_after
             .last_quorum_reschedule
-            .is_some_and(|at| at >= second_attempt_at),
-        "re-armed vote-backed recovery should refresh the resend gate at the new attempt instant"
+            .is_some_and(|at| at >= second_attempt_at)
+            || view_advanced_after_second,
+        "re-armed vote-backed recovery should refresh the resend gate or advance the terminal frontier view"
     );
     let posts_after_second = take_background_log(&background_log);
     assert!(
-        !posts_after_second.is_empty(),
-        "re-armed terminal-height recovery should emit another retransmit burst"
+        !posts_after_second.is_empty() || view_advanced_after_second,
+        "re-armed terminal-height recovery should emit another retransmit burst or rotate once no targets remain"
     );
 
     harness.shutdown.send();

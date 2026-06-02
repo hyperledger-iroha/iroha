@@ -62,7 +62,82 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   - embedded XMLDSig/XAdES markers recorded for generic ISO, rejected for live
     profiles that do not enable verification, and accepted for
     `require-verified` profiles only after P-256/SHA-256 verification plus
-    profile-specific public-key or certificate SHA-256 pin matching
+    profile-specific public-key, leaf-certificate, or linked certificate-chain
+    SHA-256 pin matching with uncompressed P-256 SEC1 raw public-key
+    validation, leaf `digitalSignature`, and issuer critical
+    CA `basicConstraints`/`keyCertSign` policy checks, certificate-chain
+    ECDSA-with-SHA256/secp256r1 plus uncompressed P-256 SEC1 SPKI enforcement,
+    child issuer distinguished-name binding to parent subject distinguished
+    names, issuer path-length constraint enforcement, unsupported-critical-extension
+    rejection, and validity-at-signing checks using verified signed XAdES
+    `SigningTime` or BAH `CreDt`. Unsigned
+    signature-local `SigningTime` values are not trusted. ECDSA `SignatureValue`
+    accepts fixed-width P-256 `r || s` and DER encodings only when `s` is
+    canonical low-S.
+    Reference URIs are limited to one empty URI or one unique same-document `#id`
+    target that strictly encloses the verified signature carrier, with an
+    enveloped-signature transform first, at most one final
+    supported C14N transform that controls digest canonicalization, and SHA-256
+    digest method. One optional XAdES `SignedProperties` Reference may target a
+    local `#id` with the XAdES `SignedProperties` Type URI, exactly one supported
+    C14N transform, and a SHA-256 digest; its enclosing `QualifyingProperties`
+    target must bind to the enclosing `Signature` `Id`. Certificate-backed XAdES
+    signatures must present a non-empty, duplicate-free ordered prefix of the
+    verified XMLDSig certificate-chain SHA-256 digests, starting with the leaf
+    certificate. The supported signed-property subset requires direct
+    `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties`
+    structure; `QualifyingProperties` accepts only `Target`,
+    `SigningCertificateV2` accepts only attribute-free direct `Cert` children
+    with attribute-free direct `CertDigest` children, a `DigestMethod` carrying
+    only `Algorithm`, and text-only digest values; signed `SigningTime` is a
+    singleton attribute-free text leaf. Prefixed XAdES structural elements must
+    resolve to the ETSI XAdES v1.3.2 namespace, and unprefixed XMLDSig/XAdES
+    structural elements reject explicit conflicting default namespaces. Any
+    `SignedProperties` element under the signature must be the verified
+    referenced direct target; unreferenced, wrapped, or duplicate
+    `SignedProperties` elements fail closed.
+    Same-document targets carry ancestor namespace
+    declarations into root canonicalization, constrained to a fail-closed
+    supported canonical XML subset for empty-element expansion, attribute quote normalization, namespace
+    declarations plus unprefixed, declared prefixed, and implicit `xml:`
+    attribute sorting, legal `xmlns:xml` declaration omission, and
+    predefined/numeric XML character-reference decoding.
+    Supported XMLDSig method and transform elements are parameter-free and reject
+    non-whitespace child content such as `InclusiveNamespaces`, XPath, HMAC, or
+    digest parameters. Method, transform, digest, and Reference policy
+    attributes are read by exact XML attribute name only, so namespace-qualified
+    spoof attributes fail closed. Critical method elements must appear exactly once, and
+    Reference transforms must be enclosed in exactly one attribute-free
+    `Transforms` wrapper; only implemented ordinary attributes are accepted
+    (`Algorithm`, payload Reference `URI`, and XAdES Reference `URI`/`Type`).
+    Extra direct children under `Reference` or `Transforms` fail closed, and
+    supported References must keep direct children ordered as `Transforms`,
+    `DigestMethod`, then `DigestValue`.
+    Top-level `Signature` and `SignedInfo` parsing accepts only implemented
+    direct children in supported XMLDSig order, so reordered or wrapped
+    `SignedInfo` or method nodes, unsupported direct children, and duplicate
+    singleton signature nodes fail closed. The payload may contain exactly one
+    supported signature carrier: either a bare XMLDSig `Signature` or an ISO
+    `Sgntr` wrapper with exactly one direct XMLDSig `Signature` child. Any
+    additional `Signature`/`Sgntr` element outside the verified carrier fails closed.
+    Prefixed XMLDSig structural elements
+    must resolve to the XMLDSig namespace in their inherited scope across
+    `Signature`, `SignedInfo`, Reference transforms/digests, and public-key or
+    X.509 `KeyInfo` material. Supported XML element spans require exact
+    qualified-name matches between opening and closing tags.
+    Required XMLDSig base64 fields reject duplicates and must be attribute-free
+    text leaves without nested markup or comments, and `PublicKey`/
+    `X509Certificate` credential leaves follow the same no-markup rule.
+    Public-key material cannot be mixed with `X509Certificate` material in one `KeyInfo`; key
+    material must be scoped to exactly one structured `KeyInfo` using either
+    `KeyValue/ECKeyValue` with P-256 `NamedCurve` or one `X509Data` wrapper,
+    with unsupported direct child elements, unsupported ordinary attributes, and
+    non-whitespace wrapper text rejected.
+    Valid XML comments are omitted for the supported no-comments C14N algorithms.
+    Root namespace declarations inherited from the enclosing `Signature` are
+    applied by C14N mode: all inherited root declarations for inclusive C14N and
+    only visibly used inherited root declarations for exclusive C14N.
+    `revoked_certificate_sha256` pins deny otherwise trusted chains
 - Added durable ISO bridge state under `store_dir/messages/*.json`, including
   payload hash, profile metadata, UETR, transaction hash, status history, reason
   codes, context, and reference snapshot id.
@@ -83,9 +158,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
 | Area | Current state | Target |
 | --- | --- | --- |
 | Rail connectivity | Local bridge endpoints only | Explicit operator adapters for live rail gateways, outside consensus-critical code |
-| XMLDSig/XAdES | Supported P-256/SHA-256 enveloped subset is verified against profile public-key/certificate pins | Add certificate-chain fixtures and official profile-specific trust-anchor packages |
-| Follow-up messages | Parser support exists for several families; Torii lifecycle endpoints are partial | Add inbound `pacs.002`, `pacs.004`, `camt.056`, `sese.023`, `sese.024`, `sese.025` transition handlers |
-| Return/cancel lifecycle | Status and rejection reasons exist | Add outbox helpers for `pacs.004`, `camt.029`, securities confirmation/rejection flows |
+| XMLDSig/XAdES | Supported P-256/SHA-256 enveloped subset is verified against profile public-key, leaf-certificate, and linked certificate-chain pins with non-CA XMLDSig leaf certificates carrying critical `keyUsage`/`digitalSignature`, deterministic child issuer distinguished-name binding to parent subject distinguished names, bounded duplicate-free `X509Data` certificate chains, certificate-chain ECDSA-with-SHA256/id-ecPublicKey-secp256r1 enforcement, critical issuer CA `basicConstraints` and `keyUsage`/`keyCertSign`, issuer path-length constraint enforcement, rejection for unknown, malformed, or unsupported parsed critical X.509 extensions, extension/validity checks against verified signed XAdES `SigningTime` or BAH `CreDt`, explicit certificate revocation pins, low-S fixed-width `r || s` or low-S DER ECDSA signature values, one empty or unique same-document `#id` payload Reference URI that strictly encloses the verified signature carrier with an enveloped-signature transform first, at most one final supported C14N transform, one optional XAdES `SignedProperties` Reference with a local `#id`, `QualifyingProperties` target bound to the enclosing `Signature` `Id`, exactly one supported bare `Signature` or direct-child `Sgntr`/`Signature` carrier, ordered direct `Signature`/`SignedInfo` child parsing, prefixed XMLDSig structure bound to the XMLDSig namespace, prefixed XAdES structure bound to the ETSI XAdES v1.3.2 namespace, exact QName opening/closing tag matching in supported XML spans, malformed structural QName rejection, direct `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties` XAdES parsing, certificate-backed `SigningCertificateV2` ordered duplicate-free chain-prefix digest binding with direct `Cert`/`CertDigest` children only, no unreferenced, wrapped, or duplicate `SignedProperties` elements, parameter-free XMLDSig method/transform elements with exact-one critical methods, exact-name method/digest/Reference policy attribute lookup, exact-one attribute-free `Transforms` wrappers, implemented ordinary attributes only, and ordered direct `Reference` children, singleton required base64 values, unambiguous public-key-or-certificate key material scoped to exactly one structured `KeyInfo`, inherited namespace context for referenced roots, and a fail-closed supported canonical XML subset for empty-element expansion, simple attribute normalization, namespace-aware attribute sorting, implicit `xml:` namespace attributes, legal `xmlns:xml` declaration omission, XML-character-reference decoding, no-comments C14N comment omission, and C14N-mode-specific root namespace declarations inherited from the enclosing `Signature` | Add complete official canonical XML fixture coverage, official profile-specific trust-anchor packages, and CRL/OCSP or rail revocation-feed fixtures |
+| Follow-up messages | Inbound `pacs.002`, `pacs.004`, `camt.056`, `sese.023`, `sese.024`, and `sese.025` lifecycle endpoints record durable messages, reject replay evidence, and update known referenced originals only | Add official MDR/XSD lifecycle fixtures per profile and live-rail gateway adapter coverage |
+| Return/cancel lifecycle | Durable outbox helpers exist for `pacs.004`, `camt.029`, `sese.024`, and `sese.025`; known-original return and cancellation transitions have focused Torii coverage | Add official rail/profile return and cancellation fixture packs |
 | Securities crosswalks | Reference snapshots load locally | Gate `sese.023` ledger mapping on configured account, instrument, venue, and CSD crosswalks |
 | Profile catalog | Static defaults plus config overrides | Add fixture coverage against official MDR/XSD releases per profile |
 | Persistence | Local JSON state files | Add operator retention policy, compaction, and tamper-evident audit export |

@@ -721,6 +721,8 @@ pub struct TradfiRailProfile {
     pub trusted_public_key_sha256: Vec<String>,
     /// Backward-compatible accepted SHA-256 pins of DER-encoded XMLDSig X.509 trust anchors.
     pub trusted_certificate_sha256: Vec<String>,
+    /// Denied SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
+    pub revoked_certificate_sha256: Vec<String>,
     /// Datasets that must be loaded before accepting live-profile messages.
     pub required_reference_datasets: Vec<ReferenceDatasetRequirement>,
     /// Message profiles supported by this rail profile.
@@ -763,6 +765,13 @@ impl TradfiRailProfile {
         public_key_sha256: &str,
         certificate_sha256: &[String],
     ) -> bool {
+        if certificate_sha256.iter().any(|digest| {
+            self.revoked_certificate_sha256
+                .iter()
+                .any(|pin| pin == digest)
+        }) {
+            return false;
+        }
         self.signature_public_key_sha256_pins
             .iter()
             .any(|pin| pin == public_key_sha256)
@@ -842,6 +851,8 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         canonical_sha256_pins(optional_string_array(obj, "trusted_public_key_sha256")?)?;
     let trusted_certificate_sha256 =
         canonical_sha256_pins(optional_string_array(obj, "trusted_certificate_sha256")?)?;
+    let revoked_certificate_sha256 =
+        canonical_sha256_pins(optional_string_array(obj, "revoked_certificate_sha256")?)?;
     let required_reference_datasets = optional_string_array(obj, "required_reference_datasets")?
         .into_iter()
         .map(|raw| {
@@ -891,6 +902,7 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         x509_ocsp_response_der_base64,
         trusted_public_key_sha256,
         trusted_certificate_sha256,
+        revoked_certificate_sha256,
         required_reference_datasets,
         message_profiles,
     })
@@ -1140,6 +1152,7 @@ mod tests {
         let mut profile = default_profile("generic-iso20022").expect("profile");
         profile.trusted_public_key_sha256 = vec!["aa".repeat(32)];
         profile.trusted_certificate_sha256 = vec!["bb".repeat(32)];
+        profile.revoked_certificate_sha256 = vec!["dd".repeat(32)];
 
         assert!(profile.accepts_xml_signature_key(&"aa".repeat(32), &[]));
         assert!(
@@ -1147,6 +1160,11 @@ mod tests {
                 .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "bb".repeat(32)])
         );
         assert!(!profile.accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32)]));
+        assert!(!profile.accepts_xml_signature_key(&"aa".repeat(32), &["dd".repeat(32)]));
+        assert!(
+            !profile
+                .accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32), "dd".repeat(32)])
+        );
     }
 
     #[test]

@@ -102,6 +102,19 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, payload
 
 
+def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
+    """Readiness and verifier constants must pin the Ethereum launch lane."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (report, verifier):
+        assert module.ACTIVE_LAUNCH_DOMAIN == 1
+        assert module.ACTIVE_LAUNCH_CHAIN == "eth"
+        assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
+        assert module.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+
+
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
     """Write only the active launch-lane evidence bundle."""
 
@@ -150,6 +163,22 @@ def write_phase_artifacts(tmp_path: Path) -> dict[str, str]:
         path.write_text(payload, encoding="utf-8")
         payloads[phase] = payload
     return payloads
+
+
+def complete_corridor_log() -> str:
+    """Return a synthetic successful full SCCP production-corridor transcript."""
+
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in PHASES:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        lines.extend(
+            phase_command_lines(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase])
+        )
+        lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase])
+    return "\n".join(
+        [*lines, ""]
+    ) + "SCCP production corridor completed.\n"
 
 
 def build_ready_bundle(tmp_path: Path) -> Path:
@@ -487,6 +516,56 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     assert verification["manifest_sha256"] == hashlib.sha256(
         manifest_json.read_bytes()
     ).hexdigest()
+
+
+def test_release_bundle_accepts_hash_bound_full_corridor_log(
+    tmp_path: Path,
+) -> None:
+    """A single full corridor transcript can be hash-bound for every phase."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    corridor_log = tmp_path / "sccp-production-corridor.log"
+    corridor_payload = complete_corridor_log()
+    corridor_log.write_text(corridor_payload, encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"all={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    artifact_by_path = {
+        artifact["path"]: artifact for artifact in manifest["artifacts"]
+    }
+    expected_hash = hashlib.sha256(corridor_payload.encode("utf-8")).hexdigest()
+    for phase in PHASES:
+        artifact = artifact_by_path[f"corridor/{phase}.log"]
+        assert artifact["sha256"] == expected_hash
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 0, verified.stdout + verified.stderr
 
 
 def test_release_bundle_accepts_active_launch_lane_without_future_lanes(
@@ -6381,20 +6460,38 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     surfaces = report._submission_surfaces(phase_status)
     evm_surface = next(surface for surface in surfaces if surface["lanes"] == "eth,bsc")
     sol_surface = next(surface for surface in surfaces if surface["lanes"] == "sol")
+    missing_swift_receipt_proof_helper = "EthereumMainnetReceiptProof"
+    missing_kotlin_receipt_proof_helper = "EthereumMainnetReceiptProof"
+    missing_java_receipt_proof_helper = "EthereumMainnetSccp.ReceiptProof"
+    missing_dotnet_receipt_proof_helper = "EthereumMainnetReceiptProof"
     missing_dotnet_helper = "IEthereumMainnetOutboundProver"
     missing_bsc_dotnet_helper = "IBscMainnetOutboundSubmitter"
     missing_evm_java_helper = "BscMainnetSccp.submitOutboundToBsc"
     missing_js_helper = "buildSolanaSccpFullLightClientAuditProofRequests"
     missing_java_helper = "SolanaSccpProver.FullLightClientAuditProofEngine"
+    evm_surface["sdk_helper_symbols_by_sdk"]["swift-sdk"] = [
+        helper
+        for helper in evm_surface["sdk_helper_symbols_by_sdk"]["swift-sdk"]
+        if helper != missing_swift_receipt_proof_helper
+    ]
+    evm_surface["sdk_helper_symbols_by_sdk"]["kotlin-sdk"] = [
+        helper
+        for helper in evm_surface["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
+        if helper != missing_kotlin_receipt_proof_helper
+    ]
     evm_surface["sdk_helper_symbols_by_sdk"]["dotnet-sdk"] = [
         helper
         for helper in evm_surface["sdk_helper_symbols_by_sdk"]["dotnet-sdk"]
-        if helper not in {missing_dotnet_helper, missing_bsc_dotnet_helper}
+        if helper not in {
+            missing_dotnet_helper,
+            missing_bsc_dotnet_helper,
+            missing_dotnet_receipt_proof_helper,
+        }
     ]
     evm_surface["sdk_helper_symbols_by_sdk"]["java-android"] = [
         helper
         for helper in evm_surface["sdk_helper_symbols_by_sdk"]["java-android"]
-        if helper != missing_evm_java_helper
+        if helper not in {missing_evm_java_helper, missing_java_receipt_proof_helper}
     ]
     sol_surface["sdk_helper_symbols"] = [
         helper
@@ -6431,8 +6528,28 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     ) in errors
     assert (
         "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[swift-sdk] missing required helper: "
+        f"{missing_swift_receipt_proof_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[kotlin-sdk] missing required helper: "
+        f"{missing_kotlin_receipt_proof_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
+        f"{missing_java_receipt_proof_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
         "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
         f"{missing_evm_java_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[dotnet-sdk] missing required helper: "
+        f"{missing_dotnet_receipt_proof_helper}"
     ) in errors
     assert (
         "readiness report user_prover_submission_surfaces lanes eth,bsc "
@@ -6865,6 +6982,54 @@ def test_release_bundle_verifier_requires_bsc_browser_no_wasm_marker(
     assert (
         "readiness report phase js-sdk evidence artifact is missing "
         f"expected phase-block success marker: {bsc_no_wasm_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_ethereum_browser_no_wasm_marker(
+    tmp_path: Path,
+) -> None:
+    """Published JS evidence must prove the browser Ethereum path stayed native JS."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    ethereum_no_wasm_marker = (
+        "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned"
+    )
+    assert ethereum_no_wasm_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != ethereum_no_wasm_marker
+    ]
+    phase_log = output_dir / "corridor" / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {ethereum_no_wasm_marker}"
     ) in verified.stdout
 
 

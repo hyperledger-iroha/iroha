@@ -15383,6 +15383,24 @@ pub mod isi {
             format!("0x{}", digit.to_string().repeat(40))
         }
 
+        fn test_sccp_evm_mainnet_network_id(domain: u32) -> String {
+            match domain {
+                iroha_sccp::SCCP_DOMAIN_ETH => {
+                    format!(
+                        "0x{}",
+                        hex::encode(iroha_sccp::sccp_eth_mainnet_network_id_word_v1())
+                    )
+                }
+                iroha_sccp::SCCP_DOMAIN_BSC => {
+                    format!(
+                        "0x{}",
+                        hex::encode(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1())
+                    )
+                }
+                _ => unreachable!("test helper only supports EVM mainnet domains"),
+            }
+        }
+
         fn test_sccp_h256_is_nonzero(hash: &[u8; 32]) -> bool {
             hash.iter().any(|byte| *byte != 0)
         }
@@ -15525,7 +15543,7 @@ pub mod isi {
                         test_sccp_evm_address(seed + 10),
                         test_sccp_hex32(seed + 11),
                         test_sccp_hex32(seed + 12),
-                        test_sccp_hex32(seed + 13),
+                        test_sccp_evm_mainnet_network_id(domain),
                         test_sccp_evm_address(seed + 14),
                     )
                     .expect("EVM-family SCCP destination rollout")

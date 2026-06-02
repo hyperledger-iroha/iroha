@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -172,10 +172,11 @@ track detailed unfinished engineering work.
 - Completed 2026-06-01: added inbound lifecycle endpoints for `pacs.002`,
   `pacs.004`, `camt.056`, `sese.023`, `sese.024`, and `sese.025`, with OpenAPI
   and MCP submission surfaces. The bridge records each lifecycle message in the
-  durable ISO record model, rejects duplicate payload/UETR replays, applies
-  `pacs.002`/`pacs.004`/`camt.056` and `sese.024`/`sese.025` updates only when
-  the referenced durable record is known, and keeps `sese.023` as a recorded
-  settlement instruction until all account, instrument, venue, CSD, and
+  durable ISO record model, rejects duplicate payload, business-message-id, and
+  UETR replays, applies `pacs.002`/`pacs.004`/`camt.056` and
+  `sese.024`/`sese.025` updates only when the referenced durable record is
+  known, and keeps `sese.023` as a recorded settlement instruction until all
+  account, instrument, venue, CSD, and
   cash-leg crosswalks are configured for ledger instruction mapping.
 - Completed 2026-06-01: added durable-record outbox helpers for `pacs.004`,
   `camt.029`, `sese.024`, and `sese.025`. Payment returns require recorded
@@ -188,6 +189,170 @@ track detailed unfinished engineering work.
   digest and signature verification, rejects tampered digests/signatures and
   unsupported algorithms, and keeps live `reject-unsupported` profiles rejecting
   embedded signature blocks.
+- Completed 2026-06-01: added profile-specific XMLDSig trust pins for
+  `require-verified` profiles. Torii now rejects otherwise valid signed
+  payloads unless the verified raw public key or DER certificate SHA-256 digest
+  matches the selected rail profile, rejects non-canonical/all-zero configured
+  pins at startup, and covers the supported C14N 1.0, C14N 1.1, and exclusive
+  C14N algorithm identifiers with deterministic fixtures.
+- Completed 2026-06-01: added XMLDSig/XAdES certificate-chain verification for
+  `KeyInfo/X509Data`. Torii now accepts at most eight unique DER certificates,
+  derives the signing key from the leaf
+  certificate, verifies each supplied leaf-to-issuer chain link by binding the
+  child issuer distinguished name to the parent subject distinguished name and
+  checking the child signature before exposing issuer/root DER SHA-256 digests
+  to the selected profile, requires leaf critical `keyUsage` carrying
+  `digitalSignature` while rejecting CA leaf certificates, requires issuer
+  critical CA `basicConstraints` plus critical `keyUsage` carrying
+  `keyCertSign`, requires every supplied certificate to use ECDSA-with-SHA256
+  over id-ecPublicKey secp256r1 with uncompressed P-256 SEC1 subject public-key
+  bytes, enforces issuer `pathLenConstraint` values for subordinate CA chains,
+  rejects unknown, malformed, or unsupported parsed critical X.509 extensions
+  on every supplied certificate, checks leaf and issuer certificate validity
+  against deterministic verified signed `SigningTime` or BAH `CreDt`, and
+  covers the pinned-issuer accept/reject corridor with generated P-256 fixtures.
+- Completed 2026-06-02: added a deterministic supported XML canonicalization
+  subset for XMLDSig verification. Torii now canonicalizes `SignedInfo` and the
+  referenced enveloped payload before hashing or signature verification. The
+  supported Reference URI scope is a single empty URI or a unique same-document
+  `#id` target using exact `Id`, `ID`, `id`, or `xml:id` attributes; remote,
+  empty-fragment, duplicate-ID, namespace-qualified non-`xml` ID attributes, and
+  same-document payload targets that do not strictly enclose the verified signature carrier
+  fail closed, while selected same-document targets carry ancestor namespace
+  declarations into root canonicalization. Each supported payload Reference must
+  declare an enveloped-signature transform first, may add at most one final
+  supported C14N transform that controls digest canonicalization, and must use a
+  SHA-256 digest method; missing, reordered, extra, or unsupported transforms
+  fail closed. The verifier also accepts one optional XAdES `SignedProperties`
+  Reference with the XAdES `SignedProperties` Type URI, a local `#id` target, one
+  supported C14N transform, and a SHA-256 digest; its enclosing
+  `QualifyingProperties` target must bind to the enclosing `Signature` `Id`, and
+  certificate-backed XAdES signatures must present a non-empty, duplicate-free
+  ordered prefix of the verified XMLDSig certificate-chain SHA-256 digests,
+  starting with the leaf certificate. The supported signed-property subset
+  requires direct
+  `Signature/Object/QualifyingProperties/SignedProperties/SignedSignatureProperties`
+  structure; `QualifyingProperties` accepts only `Target`,
+  `SigningCertificateV2` accepts only attribute-free direct `Cert` children with
+  attribute-free direct `CertDigest` children, a `DigestMethod` carrying only
+  `Algorithm`, and text-only digest values. Signed `SigningTime` is a singleton
+  attribute-free text leaf. Any `SignedProperties` element under the signature
+  must be the verified referenced direct target; unreferenced, wrapped, or
+  duplicate `SignedProperties` elements and unrelated additional References fail
+  closed.
+  Supported XMLDSig method and transform elements are parameter-free: `CanonicalizationMethod`,
+  `SignatureMethod`, `DigestMethod`, payload Reference transforms, and
+  `SignedProperties` transforms reject non-whitespace child content such as
+  `InclusiveNamespaces`, XPath, HMAC, or digest parameters. Critical XMLDSig
+  method elements must appear exactly once, Reference transforms must be
+  enclosed in exactly one attribute-free `Transforms` wrapper, and only
+  implemented ordinary attributes are accepted (`Algorithm`, payload Reference
+  `URI`, and XAdES Reference `URI`/`Type`). Extra direct children under
+  `Reference` or `Transforms` fail closed, and supported References must keep
+  direct children ordered as `Transforms`, `DigestMethod`, then `DigestValue`.
+  Top-level `Signature` and
+  `SignedInfo` parsing now accepts only implemented direct children in supported
+  XMLDSig order, so reordered or wrapped `SignedInfo`/method nodes, unsupported
+  direct children, and duplicate singleton signature nodes fail closed. The
+  payload may contain exactly one supported signature carrier: either a bare
+  XMLDSig `Signature` or an ISO `Sgntr` wrapper with exactly one direct XMLDSig
+  `Signature` child. Any additional `Signature`/`Sgntr` element outside the
+  verified carrier fails closed. Required XMLDSig base64 fields
+  such as `SignatureValue`, per-Reference `DigestValue`, and XAdES
+  `CertDigest` values reject duplicates and must be attribute-free text leaves
+  without nested markup or comments; `PublicKey` must be singular, and
+  `PublicKey`/`X509Certificate` credential leaves follow the same no-markup
+  rule. Public-key material must not be mixed with `X509Certificate` material
+  in the same `KeyInfo`. Key material must be scoped to exactly one `KeyInfo`
+  using either `KeyValue/ECKeyValue` with the P-256 `NamedCurve` URI whose
+  `PublicKey` bytes parse as an uncompressed P-256 SEC1 point, or one bounded
+  duplicate-free `X509Data` certificate-chain wrapper; those wrappers accept
+  only implemented direct children, and unsupported children, unsupported
+  ordinary attributes, non-whitespace wrapper text, duplicates, or out-of-scope
+  `PublicKey`/`X509Certificate` elements fail closed. The canonical subset
+  covers empty-element expansion, attribute quote normalization, namespace
+  declarations, unprefixed attributes, declared prefixed attributes, and implicit
+  `xml:` attributes while accepting and omitting the fixed legal `xmlns:xml`
+  declaration. It
+  also decodes predefined and numeric XML character references before
+  re-emitting canonical text/attribute bytes. It applies root namespace
+  declarations inherited from an enclosing XMLDSig `Signature` element according
+  to the declared C14N mode: inclusive C14N carries all inherited root namespace
+  declarations, while exclusive C14N carries only visibly used inherited root
+  namespace declarations. No-comments C14N now omits
+  valid XML comments from `SignedInfo` and referenced payload bytes while
+  rejecting malformed comments. The verifier still rejects processing
+  instructions, CDATA, DTD/general/custom entity expansion, carriage returns,
+  duplicate attributes, unbound prefixed attributes, explicit reserved namespace
+  rebindings, malformed structural QNames such as double-colon local-name
+  matches, inherited namespace context beyond root declarations, raw
+  attribute whitespace rewrites, and malformed tag structure.
+- Completed 2026-06-02: broadened XMLDSig ECDSA `SignatureValue`
+  interoperability. Torii now accepts the fixed-width P-256 `r || s` signature
+  encoding used by XMLDSig profiles while retaining DER fixture compatibility,
+  requires canonical low-S for both encodings to remove ECDSA malleability, and
+  the require-verified suite covers accepted low-S plus rejected high-S
+  signatures.
+- Completed 2026-06-02: hardened XMLDSig namespace binding for the supported
+  signed ISO subset. Prefixed XMLDSig structural elements must now resolve to
+  the XMLDSig namespace in their inherited scope across `Signature`,
+  `SignedInfo`, `Reference`/`Transforms`/`Transform`/`DigestMethod`/
+  `DigestValue`, and public-key or X.509 `KeyInfo` material, with regressions
+  covering a correctly signed payload that binds `ds` to a non-XMLDSig URI.
+  Unprefixed XMLDSig structural elements remain accepted for legacy fixtures
+  only when they do not carry an explicit conflicting default namespace.
+- Completed 2026-06-02: tightened supported XML element span matching so a
+  selected opening tag must close with the exact same qualified name. This keeps
+  local-name discovery for prefixed XMLDSig fixtures while rejecting malformed
+  mismatched-prefix close tags before structure or cryptographic verification
+  continues.
+- Completed 2026-06-02: tightened XMLDSig attribute value extraction to exact
+  XML attribute names. Namespace-qualified spoof attributes such as
+  `ds:Algorithm` or `ds:URI` no longer have a local-name fallback in the
+  accessor and remain rejected before method, transform, digest, or Reference
+  policy is evaluated.
+- Completed 2026-06-02: hardened XAdES namespace binding for the supported
+  signed-property subset. Prefixed XAdES structural elements now must resolve to
+  the ETSI XAdES v1.3.2 namespace (`http://uri.etsi.org/01903/v1.3.2#`) across
+  `QualifyingProperties`, `SignedProperties`, `SignedSignatureProperties`,
+  `SigningTime`, `SigningCertificateV2`, `Cert`, and `CertDigest`; referenced
+  `SignedProperties` targets carry inherited namespace scope into verification,
+  and wrong-namespace XAdES payloads fail closed even when re-signed. Unprefixed
+  XAdES structural elements now also reject explicit conflicting default
+  namespaces.
+- Completed 2026-06-02: added profile-level XMLDSig certificate revocation
+  pins. Operators can configure `revoked_certificate_sha256` alongside the
+  trust pins; Torii validates the SHA-256 deny list at startup and rejects an
+  otherwise trusted XMLDSig chain when any verified leaf/issuer DER digest is
+  explicitly revoked.
+- Completed 2026-06-02: documented the XMLDSig trust-anchor rotation pattern
+  for operators: overlap current and next certificate pins during upstream
+  cutover, remove the retired pin after cutover, and use
+  `revoked_certificate_sha256` only for compromised leaf/anchor digests that
+  must override otherwise valid trust pins.
+- Completed 2026-06-02: extended ISO bridge idempotency to business message
+  identifiers. Torii now indexes trimmed `BizMsgIdr`/BAH business-message IDs
+  alongside payload hashes and normalized UETRs, rejects replay by business
+  message id across distinct durable message records, and preserves the existing
+  conflict guard when a rejected message is retried with another record's
+  business message id.
+- Completed 2026-06-02: tightened reference snapshot checksum coverage for
+  profile validation. Torii now has focused coverage proving inbound admission
+  metadata records the exact `ReferenceDataSnapshots::snapshot_id()` checksum
+  after a BIC/LEI snapshot is loaded, and that the loaded-snapshot checksum
+  differs from the all-missing default snapshot.
+- Completed 2026-06-02: broadened Torii ISO profile/lifecycle transition
+  coverage. Profile admission now returns `UnknownMessageType` when the selected
+  rail profile has no inbound message profile for the submitted endpoint family,
+  rejects BAH `MsgDefIdr` values outside the selected profile's version set, and
+  covers known-original `pacs.004` return plus `camt.056` cancellation paths down
+  to durable original-message and lifecycle-message status fields.
+- Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
+  generated certificate-chain material, including complete canonical XML
+  coverage for broader signed ISO envelopes, official
+  rail/profile-specific trust-anchor packages, official CRL/OCSP or rail
+  revocation-feed fixtures.
+- Add official MDR/XSD fixture coverage per profile.
 - Completed 2026-06-01: tightened the deterministic XMLDSig/XAdES subset so
   `require-verified` profiles only accept the C14N 1.0 + single enveloped
   transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,

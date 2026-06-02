@@ -76,17 +76,22 @@ Substrate-family proof engines alongside their existing bundle-byte snapshot
 checks.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation. The
-active launch policy is BSC-mainnet lane readiness, so complete BSC mainnet
-source-proof, destination-rollout, route-allowlist, and route-canary records can
-open without waiting for Ethereum, Solana, TON, TRON, or Substrate-family
-lanes. Non-BSC lanes remain fail-closed until their own launch policy opens,
-while the all-lanes checker remains as a diagnostic and release-evidence
-consistency helper. Strict release-bundle verification applies complete
-cryptographic-evidence row checks to the active BSC launch lane and keeps
-future-lane rows diagnostic until their launch policy opens. Core admission
-regressions now assert that Solana, TON, and TRON route-canary,
+active launch policy is Ethereum-mainnet lane readiness, so complete Ethereum
+mainnet source-proof, destination-rollout, route-allowlist, and route-canary
+records can open without waiting for BSC, Solana, TON, TRON, or
+Substrate-family lanes. Non-ETH lanes remain fail-closed until their own launch
+policy opens, while the all-lanes checker remains as a diagnostic and
+release-evidence consistency helper. Strict release-bundle verification applies
+complete cryptographic-evidence row checks to the active Ethereum launch lane
+and keeps future-lane rows diagnostic until their launch policy opens. Core
+admission regressions now assert that BSC, Solana, TON, and TRON route-canary,
 route-allowlist, and destination-rollout drift checks remain behind that
-non-BSC lane-launch gate in the first-release policy.
+non-ETH lane-launch gate in the first-release policy.
+The Rust helper API exposes `build_sccp_eth_mainnet_source_adapter_deployment`,
+`verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production`, and
+`verify_sccp_eth_mainnet_source_chain_proof_envelope_production` for the
+deployment-bound ETH -> SORA source-admission path; BSC keeps its separate
+helper names for the future BSC lane.
 Release-readiness user-prover surface rows therefore require the
 `core-admission` corridor phase in addition to the web, Python,
 Swift, Kotlin, Java Android, and .NET SDK phases, so a portal/mobile proof path
@@ -3002,9 +3007,9 @@ material, replayed adapter verifier commitment, non-SORA source-adapter target,
 missing source-record hash comments, stale source-record hash comments,
 missing destination rollout, missing route allowlist, or replayed route material
 fails closed. Admission also enforces the configured launch policy against
-configured material: with the first-release BSC-mainnet launch policy, complete
-BSC evidence can open the BSC inbound lane independently, while non-BSC lanes
-remain blocked until their own lane policy opens. The all-lanes
+configured material: with the first-release Ethereum-mainnet launch policy,
+complete ETH evidence can open the ETH inbound lane independently, while
+non-ETH lanes remain blocked until their own lane policy opens. The all-lanes
 checker remains available as a diagnostic for future coordinated launches. The
 default
 production verifier continues to use the built-in catalog and therefore remains
@@ -5892,7 +5897,7 @@ as Nexus-origin messages from block-level SCCP records.
   - the per-counterparty generic message backends / registry backends for `eth`,
     `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and
     `sora-polkadot`.
-  - the production launch policy: the first-release runtime admits the BSC
+  - the production launch policy: the first-release runtime admits the Ethereum
     mainnet lane when its governed source material, source-adapter deployment,
     destination rollout, route allowlist, and route-canary evidence are
     complete; the all-lanes readiness checker remains available as a

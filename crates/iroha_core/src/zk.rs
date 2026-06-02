@@ -29351,10 +29351,17 @@ mod kagemusha_folded_real_prover_tests {
         assert_eq!(evidence.verifier_witness_batch_digest, batch_digest);
         assert_eq!(evidence.aggregation_statement.initial_root, hop.root_before);
         assert_eq!(evidence.aggregation_statement.final_root, hop.root_after);
-        assert!(matches!(
+        let recursive_projection =
             iroha_data_model::offline::kagemusha_folded_public_inputs_from_aggregation_statement(
                 &evidence.aggregation_statement,
-            ),
+            )
+            .expect("recursive aggregation transcript projection");
+        assert_eq!(
+            recursive_projection.aggregation_mode,
+            iroha_data_model::offline::KAGEMUSHA_AGGREGATION_MODE_RECURSIVE_IN_CIRCUIT_V1
+        );
+        assert!(matches!(
+            recursive_projection.validate_supported_context(),
             Err(iroha_data_model::offline::KagemushaFoldError::UnsupportedAggregationMode {
                 actual,
                 ..
@@ -30995,9 +31002,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_tampered_hop_proof() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0x91);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         let last = hop.attachment.proof.bytes.last_mut().expect("proof bytes");
         *last ^= 0x01;
 
@@ -31011,9 +31016,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_noncanonical_halo2_metadata_before_proof_verify() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut mutated = sample_verified_hop(root0, root1, 0x92);
+        let (_, _, mut mutated, _) = sample_confidential_v2_verified_hop();
 
         mutate_open_verify_envelope(&mut mutated.attachment.proof, |envelope| {
             envelope.public_inputs.extend_from_slice(b":forged-schema");
@@ -31024,7 +31027,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect_err("schema mutation must reject before proof verification");
         assert!(err.contains("schema"), "unexpected error: {err}");
 
-        let mut alias = sample_verified_hop(root0, root1, 0x93);
+        let (_, _, mut alias, _) = sample_confidential_v2_verified_hop();
         mutate_open_verify_envelope(&mut alias.attachment.proof, |envelope| {
             envelope.circuit_id = "anon-transfer-2x2-merkle16-poseidon-diversified".to_owned();
             let last = envelope.proof_bytes.last_mut().expect("proof payload");
@@ -31137,9 +31140,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_vk_commitment_mismatch() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xA1);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         hop.attachment.vk_commitment = Some([0xFE; 32]);
 
         let err = kagemusha_verified_fold_step(&hop.as_step())
@@ -31174,9 +31175,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_envelope_backend_mismatch_before_proof_verify() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xA4);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         mutate_open_verify_envelope(&mut hop.attachment.proof, |envelope| {
             envelope.backend = BackendTag::Stark;
             let last = envelope.proof_bytes.last_mut().expect("proof payload");
@@ -31190,9 +31189,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_missing_vk_commitment() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xA2);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         hop.attachment.vk_commitment = None;
 
         let err = kagemusha_verified_fold_step(&hop.as_step())
@@ -31202,9 +31199,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_empty_verifier_key_id_name() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xA5);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         hop.attachment.vk_ref.name = "   ".to_owned();
 
         let err = kagemusha_verified_fold_step(&hop.as_step())
@@ -31214,9 +31209,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_empty_verifier_key_bytes() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xA6);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         hop.vk_box.bytes.clear();
 
         let err = kagemusha_verified_fold_step(&hop.as_step())
@@ -31226,9 +31219,7 @@ mod kagemusha_folded_real_prover_tests {
 
     #[test]
     fn kagemusha_verified_fold_step_rejects_trusted_setup_backend() {
-        let root0 = fixed_bytes(b"kagemusha-verified-root-0");
-        let root1 = fixed_bytes(b"kagemusha-verified-root-1");
-        let mut hop = sample_verified_hop(root0, root1, 0xB1);
+        let (_, _, mut hop, _) = sample_confidential_v2_verified_hop();
         hop.attachment.backend = "halo2/pasta".into();
         hop.attachment.proof.backend = "halo2/pasta".into();
         hop.attachment.vk_ref = VerifyingKeyId::new("halo2/pasta", "kagemusha-hop-fixture");

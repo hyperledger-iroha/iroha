@@ -18499,6 +18499,9 @@ pub struct IsoBridgeProfile {
     /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
     pub trusted_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
+    /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
+    pub revoked_certificate_sha256: Vec<String>,
+    #[config(default = "Vec::new()")]
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
     #[config(default = "Vec::new()")]
@@ -20237,6 +20240,7 @@ impl IsoBridgeProfile {
             x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
             trusted_public_key_sha256: self.trusted_public_key_sha256,
             trusted_certificate_sha256: self.trusted_certificate_sha256,
+            revoked_certificate_sha256: self.revoked_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
                 .message_profiles
@@ -20620,6 +20624,9 @@ mod offline_cfg_tests {
                     "trusted_certificate_sha256": [
                         "2222222222222222222222222222222222222222222222222222222222222222"
                     ],
+                    "revoked_certificate_sha256": [
+                        "3333333333333333333333333333333333333333333333333333333333333333"
+                    ],
                     "required_reference_datasets": ["bic-lei"],
                     "message_profiles": [
                         {
@@ -20666,6 +20673,10 @@ mod offline_cfg_tests {
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         assert_eq!(parsed.default_profile, "swift-cbpr-plus");
         assert_eq!(parsed.profiles[0].id, "swift-cbpr-plus");
+        assert_eq!(
+            parsed.profiles[0].revoked_certificate_sha256,
+            vec!["3333333333333333333333333333333333333333333333333333333333333333"]
+        );
         assert_eq!(
             parsed.profiles[0].message_profiles[0].amount_minor_units[0].currency,
             "USD"

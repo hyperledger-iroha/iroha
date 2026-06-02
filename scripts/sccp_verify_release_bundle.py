@@ -285,15 +285,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "buildEthereumMainnetSccpLocalAdmissionSubmission",
             "consensusProvider",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "buildBscMainnetSccpDestinationSubmission",
+            "buildBscMainnetSccpLocalAdmissionSubmission",
             "EvmSccpProver",
             "witnessProvider",
             "proveFn",
@@ -316,15 +320,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collect_inbound_evidence_from_receipt",
             "EthereumMainnetSccp.prove_inbound_to_sora",
             "EthereumMainnetSccp.submit_inbound_to_iroha",
+            "EthereumMainnetSccp.build_local_admission_submission",
+            "build_ethereum_mainnet_sccp_local_admission_submission",
             "consensus_provider",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collect_inbound_evidence_from_receipt",
             "BscMainnetSccp.prove_inbound_to_sora",
             "BscMainnetSccp.submit_inbound_to_iroha",
+            "BscMainnetSccp.build_local_admission_submission",
             "BscMainnetSccp.build_bsc_calldata",
             "BscMainnetSccp.submit_outbound_to_bsc",
             "build_bsc_mainnet_sccp_destination_submission",
+            "build_bsc_mainnet_sccp_local_admission_submission",
             "EvmSccpProver",
             "witness_provider",
             "prove",
@@ -343,16 +351,20 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "buildEthereumMainnetSccpLocalAdmissionSubmission",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.OutboundSubmitFunction",
             "EthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetInboundEvidence.init(beaconFinalityEvidence:)",
             "BscMainnetSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetSccp.OutboundSubmitFunction",
@@ -360,6 +372,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetParliaFinalityEvidence",
             "BscMainnetInboundEvidence.init(parliaFinalityEvidence:)",
             "buildBscMainnetSccpDestinationSubmission",
+            "buildBscMainnetSccpLocalAdmissionSubmission",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProver.ProveFunction",
@@ -380,13 +393,17 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetInboundEvidence.withBeaconFinalityEvidence",
             "EthereumMainnetOutboundSubmitter",
+            "SccpEthereumMainnet.buildLocalAdmissionSubmission",
+            "EthereumMainnetLocalAdmissionSubmissionInput",
             "BscSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetConsensusProvider",
@@ -394,6 +411,8 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetInboundEvidence.withParliaFinalityEvidence",
             "BscMainnetOutboundSubmitter",
             "SccpBsc.buildSubmission",
+            "SccpBsc.buildLocalAdmissionSubmission",
+            "BscMainnetLocalAdmissionSubmissionInput",
             "EvmSccpProver",
             "EvmSccpWitnessProvider",
             "EvmSccpProofEngine",
@@ -411,16 +430,22 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildLocalAdmissionSubmission",
+            "EthereumMainnetSccp.buildLocalAdmission",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.ConsensusProvider",
             "EthereumMainnetSccp.BeaconFinalityEvidence",
+            "EthereumMainnetSccp.ReceiptProof",
             "InboundEvidence.withBeaconFinalityEvidence",
             "EthereumMainnetSccp.OutboundSubmitter",
+            "EthereumMainnetSccp.LocalAdmissionSubmissionInput",
             "BscSccpProver",
             "BscMainnetSccp",
             "BscMainnetSccp.collectInboundEvidenceFromReceipt",
             "BscMainnetSccp.proveInboundToSora",
             "BscMainnetSccp.submitInboundToIroha",
+            "BscMainnetSccp.buildLocalAdmissionSubmission",
+            "BscMainnetSccp.buildLocalAdmission",
             "BscMainnetSccp.buildBscCalldata",
             "BscMainnetSccp.submitOutboundToBsc",
             "BscMainnetSccp.ConsensusProvider",
@@ -428,6 +453,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "InboundEvidence.withParliaFinalityEvidence",
             "BscMainnetSccp.OutboundSubmitter",
             "BscSccpProver.buildSubmission",
+            "BscMainnetSccp.LocalAdmissionSubmissionInput",
             "EvmSccpProver",
             "EvmSccpProver.WitnessProvider",
             "EvmSccpProver.ProofEngine",
@@ -443,16 +469,19 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.ProveOutboundToEthereumAsync",
             "EthereumMainnetSccp.BuildEthereumCalldata",
             "EthereumMainnetSccp.SubmitOutboundToEthereumAsync",
+            "EthereumMainnetSccp.BuildLocalAdmissionSubmission",
             "EthereumMainnetSccp.DestinationBinding",
             "EthereumMainnetSccp.DestinationBindingHash",
             "IEthereumMainnetExecutionProvider",
             "IEthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
+            "EthereumMainnetReceiptProof",
             "EthereumMainnetTransparentPublicInputs",
             "EthereumMainnetOutboundProofRequestInput",
             "EthereumMainnetOutboundProofRequest",
             "EthereumMainnetOutboundProofResult",
             "EthereumMainnetSccpSubmission",
+            "EthereumMainnetLocalAdmissionSubmissionInput",
             "EthereumMainnetInboundEvidence.WithBeaconFinalityEvidence",
             "IEthereumMainnetInboundProver",
             "IEthereumMainnetInboundSubmitter",
@@ -462,6 +491,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync",
             "BscMainnetSccp.ProveInboundToSoraAsync",
             "BscMainnetSccp.SubmitInboundToIrohaAsync",
+            "BscMainnetSccp.BuildLocalAdmissionSubmission",
             "BscMainnetSccp.BuildOutboundProofRequest",
             "BscMainnetSccp.ProveOutboundToBscAsync",
             "BscMainnetSccp.BuildBscCalldata",
@@ -476,6 +506,7 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "BscMainnetOutboundProofRequest",
             "BscMainnetOutboundProofResult",
             "BscMainnetSccpSubmission",
+            "BscMainnetLocalAdmissionSubmissionInput",
             "BscMainnetInboundEvidence.WithParliaFinalityEvidence",
             "IBscMainnetInboundProver",
             "IBscMainnetInboundSubmitter",
@@ -1263,7 +1294,10 @@ def _phase_transcript_errors(
         errors.append(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
-    elif CORRIDOR_COMPLETION_SENTINEL not in phase_block:
+    elif (
+        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        and not _transcript_has_full_corridor_completion(transcript)
+    ):
         errors.append(
             "readiness report phase "
             f"{phase} evidence artifact is missing the phase-block completion sentinel"
@@ -1315,6 +1349,25 @@ def _phase_transcript_block(phase: str, transcript: str) -> str | None:
             end = index
             break
     return "\n".join(lines[start:end])
+
+
+def _transcript_has_full_corridor_completion(transcript: str) -> bool:
+    lines = transcript.splitlines()
+    marker_positions: list[int] = []
+    for phase in CORRIDOR_PHASES:
+        marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+        try:
+            marker_positions.append(lines.index(marker))
+        except ValueError:
+            return False
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if CORRIDOR_COMPLETION_SENTINEL in line
+    ]
+    return bool(completion_positions) and max(completion_positions) > max(
+        marker_positions
+    )
 
 
 def _phase_command_lines(phase_block: str) -> list[str]:

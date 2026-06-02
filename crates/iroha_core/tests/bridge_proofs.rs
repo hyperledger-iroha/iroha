@@ -946,6 +946,22 @@ fn configured_bsc_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMa
     material
 }
 
+fn configured_eth_source_verifier_material() -> iroha_sccp::SccpSourceVerifierMaterialV1 {
+    let material =
+        iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            [0xa1; 32],
+            [0xb2; 32],
+            [0xc3; 32],
+            [0xd4; 32],
+            [0x41; 20],
+            [0x51; 32],
+        )
+        .expect("ETH mainnet source verifier material");
+    assert!(iroha_sccp::sccp_source_verifier_material_is_production_ready(&material));
+    material
+}
+
 fn actual_source_verifier_material(
     material: &iroha_sccp::SccpSourceVerifierMaterialV1,
 ) -> iroha_config::parameters::actual::SccpSourceVerifierMaterial {
@@ -992,6 +1008,26 @@ fn configured_bsc_source_adapter_engine_deployment(
             &deployment,
         ),
         "configured BSC source-adapter deployment evidence should open the source-adapter gate"
+    );
+    deployment
+}
+
+fn configured_eth_source_adapter_engine_deployment(
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
+    let deployment =
+        iroha_sccp::build_sccp_eth_mainnet_source_adapter_deployment(material, [0xe6; 32])
+            .expect("ETH source adapter engine deployment");
+    assert!(
+        iroha_sccp::sccp_source_adapter_engine_deployment_matches_material(material, &deployment,)
+    );
+    assert!(
+        iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            material,
+            &deployment,
+        ),
+        "configured ETH source-adapter deployment evidence should open the source-adapter gate"
     );
     deployment
 }
@@ -1277,6 +1313,23 @@ fn configured_bsc_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 
     rollout
 }
 
+fn configured_eth_destination_rollout() -> iroha_sccp::SccpDestinationRolloutV1 {
+    let rollout = iroha_sccp::sccp_evm_mainnet_destination_rollout_with_binding_v1(
+        iroha_sccp::SCCP_DOMAIN_ETH,
+        "0x3333333333333333333333333333333333333333".to_owned(),
+        hex::encode([0x44; 32]),
+        hex::encode([0x55; 32]),
+        hex::encode(iroha_sccp::sccp_eth_mainnet_network_id_word_v1()),
+        "0x2222222222222222222222222222222222222222".to_owned(),
+    )
+    .expect("ETH destination rollout");
+    assert!(iroha_sccp::sccp_destination_rollout_is_production_ready(
+        iroha_sccp::SCCP_DOMAIN_ETH,
+        &rollout,
+    ));
+    rollout
+}
+
 fn actual_destination_rollout(
     rollout: &iroha_sccp::SccpDestinationRolloutV1,
 ) -> iroha_config::parameters::actual::SccpDestinationRollout {
@@ -1408,6 +1461,26 @@ fn configured_bsc_route_allowlist(
     let allowlist = with_bsc_route_canary(allowlist, material, deployment, destination_rollout);
     assert!(iroha_sccp::sccp_route_allowlist_is_production_ready(
         iroha_sccp::SCCP_DOMAIN_BSC,
+        &allowlist,
+    ));
+    allowlist
+}
+
+fn configured_eth_route_allowlist(
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
+) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+    let allowlist = iroha_sccp::sccp_profiled_route_allowlist_for_lane_evidence_v1(
+        iroha_sccp::SCCP_DOMAIN_ETH,
+        material,
+        deployment,
+        destination_rollout,
+    )
+    .expect("ETH route allowlist");
+    let allowlist = with_eth_route_canary(allowlist, material, deployment, destination_rollout);
+    assert!(iroha_sccp::sccp_route_allowlist_is_production_ready(
+        iroha_sccp::SCCP_DOMAIN_ETH,
         &allowlist,
     ));
     allowlist
@@ -1569,6 +1642,46 @@ fn with_bsc_route_canary(
         true,
     )
     .expect("BSC route canary evidence")
+}
+
+fn with_eth_route_canary(
+    allowlist: iroha_sccp::SccpRouteAllowlistReadinessV1,
+    material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    deployment: &iroha_sccp::SccpSourceAdapterEngineDeploymentV1,
+    destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
+) -> iroha_sccp::SccpRouteAllowlistReadinessV1 {
+    let binding_hash_hex = destination_rollout
+        .destination_binding_hash
+        .as_deref()
+        .expect("destination binding hash");
+    let destination_binding_hash: [u8; 32] = hex::decode(binding_hash_hex.trim_start_matches("0x"))
+        .expect("decode destination binding hash")
+        .try_into()
+        .expect("destination binding hash length");
+    iroha_sccp::sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+        allowlist,
+        destination_rollout,
+        destination_binding_hash,
+        iroha_sccp::sccp_source_verifier_material_hash(material),
+        iroha_sccp::sccp_source_adapter_engine_deployment_hash(deployment),
+        [0xaa; 32],
+        1,
+        56_000_000,
+        [0xab; 32],
+        [0xac; 32],
+        [0xad; 32],
+        [0xae; 32],
+        [0xaf; 32],
+        iroha_sccp::SCCP_DOMAIN_ETH,
+        [0xb0; 32],
+        [0xb1; 32],
+        [0xb3; 32],
+        [0xb4; 32],
+        1,
+        iroha_sccp::SCCP_DOMAIN_SORA,
+        true,
+    )
+    .expect("ETH route canary evidence")
 }
 
 fn actual_route_allowlist(
@@ -2915,6 +3028,112 @@ fn bsc_mainnet_source_chain_proof_rejects_replayed_source_adapter_deployment() {
         )
         .is_none(),
         "BSC bundle helper must reject replayed deployment material"
+    );
+}
+
+#[test]
+fn ethereum_mainnet_lane_readiness_requires_complete_eth_material() {
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_eth_destination_rollout();
+    let route_allowlist =
+        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
+
+    let readiness =
+        iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            &material,
+            &deployment,
+            &destination_rollout,
+            &route_allowlist,
+        )
+        .expect("ETH lane readiness from complete material");
+    assert!(
+        readiness.production_ready,
+        "complete ETH material should open only the Ethereum mainnet lane: {:?}",
+        readiness.blockers,
+    );
+    assert_eq!(readiness.domain, iroha_sccp::SCCP_DOMAIN_ETH);
+    assert_eq!(readiness.chain, "eth");
+    assert_eq!(
+        readiness.source_proof_plan,
+        iroha_sccp::SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
+    );
+    assert_eq!(
+        readiness.route_allowlist.evm_route_canary_target_domain,
+        Some(iroha_sccp::SCCP_DOMAIN_ETH),
+    );
+    assert_eq!(
+        readiness
+            .route_allowlist
+            .evm_route_canary_proof_source_domain,
+        Some(iroha_sccp::SCCP_DOMAIN_SORA),
+    );
+    assert_eq!(
+        readiness
+            .route_allowlist
+            .evm_route_canary_used_message_proof,
+        Some(true),
+    );
+
+    assert!(
+        iroha_sccp::sccp_evm_mainnet_destination_rollout_v1(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            "0x3333333333333333333333333333333333333333".to_owned(),
+            hex::encode([0x44; 32]),
+            hex::encode([0x55; 32]),
+        )
+        .is_none(),
+        "legacy ETH destination rollout without deployment binding evidence must stay disabled",
+    );
+
+    let mut missing_canary = route_allowlist.clone();
+    missing_canary.route_canary_evidence_hash = None;
+    let missing_canary_readiness =
+        iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            &material,
+            &deployment,
+            &destination_rollout,
+            &missing_canary,
+        )
+        .expect("ETH readiness with missing canary evidence");
+    assert!(!missing_canary_readiness.production_ready);
+    assert!(
+        missing_canary_readiness
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("route canary evidence is not bound")),
+        "unexpected blockers: {:?}",
+        missing_canary_readiness.blockers,
+    );
+
+    let mut replayed_deployment = deployment.clone();
+    replayed_deployment.deployment_receipt_hash = [0xe7; 32];
+    assert!(
+        iroha_sccp::sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            &material,
+            &replayed_deployment,
+        ),
+        "replayed ETH deployment is internally shaped but must not match the route evidence",
+    );
+    let replay_readiness =
+        iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
+            iroha_sccp::SCCP_DOMAIN_ETH,
+            &material,
+            &replayed_deployment,
+            &destination_rollout,
+            &route_allowlist,
+        )
+        .expect("ETH readiness with replayed deployment evidence");
+    assert!(!replay_readiness.production_ready);
+    assert!(
+        replay_readiness.blockers.iter().any(|blocker| blocker
+            .contains("route allowlist hash does not match")
+            || blocker.contains("route canary evidence is not bound")),
+        "unexpected blockers: {:?}",
+        replay_readiness.blockers,
     );
 }
 

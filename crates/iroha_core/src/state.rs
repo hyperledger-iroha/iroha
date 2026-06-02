@@ -9606,7 +9606,7 @@ mod sumeragi_timing_tests {
 
         assert_eq!(
             state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(400)
+            Duration::from_millis(800)
         );
 
         let config = SumeragiPolicyConfig {
@@ -9628,7 +9628,7 @@ mod sumeragi_timing_tests {
 
         assert_eq!(
             state.sumeragi_commit_quorum_timeout(),
-            Duration::from_millis(600)
+            Duration::from_millis(1_200)
         );
     }
 }

@@ -1420,11 +1420,11 @@ mod tests {
 
     #[test]
     fn collectors_fallback_bumps_small_k_to_quorum() {
-        // N = 5; min_votes = 3 => tail idx = 2.
+        // N = 5; min_votes = 4 => tail idx = 3.
         let peers = test_peers(5);
         let topology = Topology::new(peers);
-        // K=1 should still fill quorum=3: 2,3,4.
-        assert_eq!(topology.collector_indices_k_fallback(1), vec![2, 3, 4]);
+        // K=1 should still fill quorum=4 while skipping the leader: 3,4,1,2.
+        assert_eq!(topology.collector_indices_k_fallback(1), vec![3, 4, 1, 2]);
     }
 
     #[test]
@@ -1640,37 +1640,28 @@ mod tests {
 
     #[test]
     fn collectors_k3_follow_nth_rotation_for_n5() {
-        // N=5 -> min_votes=3 -> collector indices [2,3,4]
+        // N=5 -> min_votes=4 -> collector indices [3,4]
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         // r=0
         let idxs = topo.collector_indices_k(3);
         let cs0: Vec<_> = idxs.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(
-            cs0,
-            vec![peers[2].clone(), peers[3].clone(), peers[4].clone()]
-        );
+        assert_eq!(cs0, vec![peers[3].clone(), peers[4].clone()]);
         // r=2
         topo.nth_rotation(2);
         let idxs = topo.collector_indices_k(3);
         let cs2: Vec<_> = idxs.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(
-            cs2,
-            vec![peers[4].clone(), peers[0].clone(), peers[1].clone()]
-        );
+        assert_eq!(cs2, vec![peers[0].clone(), peers[1].clone()]);
     }
 
     #[test]
     fn collectors_k3_follow_block_committed_canonical_order_n5() {
-        // N=5 -> min_votes=3 -> canonicalized ordering only.
+        // N=5 -> min_votes=4 -> canonicalized ordering only.
         let peers = test_peers(5);
         let mut topo = Topology::new(peers.clone());
         let idxs_before = topo.collector_indices_k(3);
         let cs_before: Vec<_> = idxs_before.iter().map(|&i| topo.0[i].clone()).collect();
-        assert_eq!(
-            cs_before,
-            vec![peers[2].clone(), peers[3].clone(), peers[4].clone()]
-        );
+        assert_eq!(cs_before, vec![peers[3].clone(), peers[4].clone()]);
         let prev_hash = prev_hash_with_seed(2);
         topo.block_committed(peers.clone(), prev_hash);
         let idxs_after = topo.collector_indices_k(3);

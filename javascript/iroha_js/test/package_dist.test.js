@@ -115,6 +115,8 @@ import {
   canonicalSccpSourceAdapterEngineDeploymentBytes,
   canonicalSccpSourceVerifierMaterialBytes,
   canonicalEthSyncCommitteePayloadBytes,
+  SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
+  ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteePayloadHash,
   ethSyncCommitteeHashFromPayload,
   buildSubstrateSccpRuntimeStorageProofRequest,
@@ -941,7 +943,7 @@ test("package declarations expose BSC mainnet Parlia finality evidence hooks", (
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface BscMainnetInboundEvidenceInput[\s\S]*parliaFinality\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*finalityEvidence\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*receiptProof\?: BscSccpReceiptProofInput;/,
+    /export interface BscMainnetInboundEvidenceInput[\s\S]*parliaFinality\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*finalityEvidence\?: BscMainnetParliaFinalityEvidenceInput;[\s\S]*receiptProof\?: BscSccpReceiptProofInput;[\s\S]*receiptProofHash\?: string;[\s\S]*receipt_proof_hash\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -2454,6 +2456,9 @@ test("package dist entrypoint exports ETH sync-committee payload helpers", () =>
     ethSyncCommitteePayloadHash(payload),
     "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17",
   );
+  assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
 });
 
 test("package dist entrypoint exports ETH beacon execution-payload SSZ helpers", () => {

@@ -7629,6 +7629,8 @@ pub struct IsoBridgeProfile {
     pub trusted_public_key_sha256: Vec<String>,
     /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
     pub trusted_certificate_sha256: Vec<String>,
+    /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
+    pub revoked_certificate_sha256: Vec<String>,
     /// Required reference datasets for this profile.
     pub required_reference_datasets: Vec<String>,
     /// Message profile entries owned by this rail profile.

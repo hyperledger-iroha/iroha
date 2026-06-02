@@ -68,6 +68,7 @@ import {
   SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1,
   SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_ZERO_HASH_V1,
+  SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
   BscMainnetSccpProver,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
@@ -210,6 +211,7 @@ import {
   ethBeaconBlockHeaderRoot,
   ethBeaconBodyRootFromExecutionPayloadBranch,
   ethExecutionPayloadHeaderRootFromRlp,
+  ethMainnetSyncCommitteePeriodForSlot,
   ethSyncCommitteeTransitionMessageHash,
   ethSyncCommitteeTransitionSignatureHash,
   bscMainnetSccpDestinationBinding,
@@ -829,9 +831,9 @@ const ETH_NEXT_SYNC_COMMITTEE_HASH =
 const ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH =
   "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17";
 const ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH =
-  "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec";
+  "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e";
 const ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH =
-  "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858";
+  "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d";
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HEX = `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`;
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HASH =
   "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429";
@@ -10147,8 +10149,8 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
   const nextSyncCommitteePayload = canonicalEthSyncCommitteePayloadBytes(nextCommittee);
   const transitionMessage = {
     sourceDomain: SCCP_DOMAIN_ETH,
-    fromSyncPeriod: 7n,
-    toSyncPeriod: 8n,
+    fromSyncPeriod: 0n,
+    toSyncPeriod: 1n,
     transitionSlot: 19n,
     finalizedBeaconRoot: HEX32_A,
     parentSyncCommitteeHash: ETH_SYNC_COMMITTEE_HASH,
@@ -10176,6 +10178,9 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
   assert.equal(Buffer.from(nextSyncCommitteePayload).toString("hex"), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX);
   assert.equal(ethSyncCommitteeHashFromPayload(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_HASH);
   assert.equal(ethSyncCommitteePayloadHash(nextSyncCommitteePayload), ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH);
+  assert.equal(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD, 8192);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(19n), 0n);
+  assert.equal(ethMainnetSyncCommitteePeriodForSlot(8192n), 1n);
   assert.throws(
     () =>
       canonicalEthSyncCommitteePayloadBytes({
@@ -10209,9 +10214,34 @@ test("derives ETH sync-committee transition transcript hashes from UI witness ma
     () =>
       canonicalEthSyncCommitteeTransitionMessageBytes({
         ...transitionMessage,
-        from_sync_period: 7n,
+        from_sync_period: 0n,
       }),
     /fromSyncPeriod must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        toSyncPeriod: 2n,
+      }),
+    /toSyncPeriod/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        fromSyncPeriod: 1n,
+        toSyncPeriod: 2n,
+      }),
+    /transitionSlot must belong to fromSyncPeriod/u,
+  );
+  assert.throws(
+    () =>
+      canonicalEthSyncCommitteeTransitionMessageBytes({
+        ...transitionMessage,
+        transitionSlot: 0n,
+      }),
+    /transitionSlot must not be zero/u,
   );
   assert.throws(
     () =>

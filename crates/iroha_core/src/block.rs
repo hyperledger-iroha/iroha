@@ -12525,23 +12525,24 @@ pub(crate) mod valid {
 
         #[test]
         fn commit_with_signers_accepts_full_roster_quorum() {
-            // Six-node topology (min_votes_for_commit = 4). Provide a quorum that excludes the
-            // leader (0) and proxy tail (3) but still spans the full roster.
+            // Six-node topology (min_votes_for_commit = 5). Provide a quorum that excludes the
+            // leader (0) but still spans the full roster beyond the first commit set.
             let key_pairs =
                 core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
                     .take(6)
                     .collect::<Vec<_>>();
             let topology = test_topology_with_keys(&key_pairs);
-            assert_eq!(topology.min_votes_for_commit(), 4);
+            assert_eq!(topology.min_votes_for_commit(), 5);
 
             let mut block = ValidBlock::new_dummy(key_pairs[0].private_key());
-            // Populate the block with commit-role signatures so `is_commit` passes even though the
-            // QC signer set omits the leader and proxy tail.
+            // Populate the block with commit-role signatures so the QC signer set can omit the
+            // leader while still carrying the full commit quorum.
             block.sign(&key_pairs[1], &topology);
             block.sign(&key_pairs[2], &topology);
+            block.sign(&key_pairs[3], &topology);
             block.sign(&key_pairs[4], &topology);
             block.sign(&key_pairs[5], &topology);
-            let signers: BTreeSet<_> = [1_u32, 2_u32, 4_u32, 5_u32].into_iter().collect();
+            let signers: BTreeSet<_> = [1_u32, 2_u32, 3_u32, 4_u32, 5_u32].into_iter().collect();
 
             let result = block
                 .commit_with_signers(&topology, &signers, false)

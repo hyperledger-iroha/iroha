@@ -67,7 +67,7 @@ public enum OfflineNoteV2Error: Error, LocalizedError, Equatable {
     }
 }
 
-public struct OfflineNoteProofBox: Equatable, Sendable {
+public struct OfflineNoteProofBoxV2: Equatable, Sendable {
     public let backend: String
     public let bytes: Data
 
@@ -87,11 +87,11 @@ public struct OfflineNoteProofBox: Equatable, Sendable {
 public struct OfflineNoteRecursiveProofV2: Equatable, Sendable {
     public let verifierKeyId: VerifyingKeyIdReference
     public let publicInputsHash: Data
-    public let proof: OfflineNoteProofBox
+    public let proof: OfflineNoteProofBoxV2
 
     public init(verifierKeyId: VerifyingKeyIdReference,
                 publicInputsHash: Data,
-                proof: OfflineNoteProofBox) throws {
+                proof: OfflineNoteProofBoxV2) throws {
         try OfflineNoteV2Validation.validateHash(publicInputsHash, field: "public_inputs_hash")
         self.verifierKeyId = verifierKeyId
         self.publicInputsHash = publicInputsHash
@@ -104,7 +104,7 @@ public struct OfflineNoteRecursiveProofV2: Equatable, Sendable {
                 proofBytes: Data,
                 proofBackend: String = OfflineNoteV2Constants.recursiveBackend) throws {
         let verifierKeyId = try VerifyingKeyIdReference(backend: verifierBackend, name: verifierName)
-        let proof = try OfflineNoteProofBox(backend: proofBackend, bytes: proofBytes)
+        let proof = try OfflineNoteProofBoxV2(backend: proofBackend, bytes: proofBytes)
         try self.init(verifierKeyId: verifierKeyId, publicInputsHash: publicInputsHash, proof: proof)
     }
 }
@@ -808,7 +808,7 @@ enum OfflineNoteV2Encoding {
         return writer.data
     }
 
-    static func encodeProofBox(_ proof: OfflineNoteProofBox) -> Data {
+    static func encodeProofBox(_ proof: OfflineNoteProofBoxV2) -> Data {
         var writer = OfflineCompactNoritoWriter()
         writer.writeField(OfflineCompactNorito.encodeString(proof.backend))
         writer.writeField(encodeBytesVec(proof.bytes))

@@ -40,6 +40,7 @@ EXPECTED_RPC_CHAIN_IDS = {
     evidence.SCCP_DOMAIN_ETH: 1,
     evidence.SCCP_DOMAIN_BSC: 56,
 }
+EVM_LIVE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
 EVM_MESSAGE_PROOF_ACCEPTED_ABI = (
     b"MessageProofAccepted(bytes32,uint32,bytes32,bytes32,bytes32,bytes32,bytes32,bytes32)"
 )
@@ -141,11 +142,54 @@ def _parse_rpc_chain_id(value: str) -> int:
     return parsed
 
 
+def parse_block_tag(value: str) -> str:
+    """Parse a stable/canonical JSON-RPC block tag for read-only evidence."""
+
+    if value != value.strip():
+        raise argparse.ArgumentTypeError(
+            "--block-tag must not contain surrounding whitespace"
+        )
+    if value in EVM_LIVE_ALLOWED_BLOCK_TAGS:
+        return value
+    if value.startswith("0x"):
+        text = value[2:]
+        if (
+            not text
+            or any(symbol not in "0123456789abcdef" for symbol in text)
+            or (len(text) > 1 and text.startswith("0"))
+        ):
+            raise argparse.ArgumentTypeError(
+                "--block-tag must be latest, safe, finalized, or a positive "
+                "canonical lowercase 0x block number"
+            )
+        parsed = int(text, 16)
+        if parsed <= 0:
+            raise argparse.ArgumentTypeError(
+                "--block-tag block number must be positive"
+            )
+        return "0x" + format(parsed, "x")
+    raise argparse.ArgumentTypeError(
+        "--block-tag must be latest, safe, finalized, or a positive canonical "
+        "lowercase 0x block number"
+    )
+
+
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     try:
         return EXPECTED_RPC_CHAIN_IDS[domain]
     except KeyError as exc:
         raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from exc
+
+
+def _default_network_id_for_domain(domain: int) -> bytes:
+    try:
+        return evidence.evm_mainnet_network_id_for_domain(domain)
+    except argparse.ArgumentTypeError:
+        raise
+    except Exception as exc:
+        raise argparse.ArgumentTypeError(
+            "domain must have a canonical EVM mainnet network id"
+        ) from exc
 
 
 def _http_error_detail(exc: urllib.error.HTTPError) -> str:
@@ -412,6 +456,7 @@ def collect_destination_bridge_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only EVM destination bridge evidence."""
 
+    block_tag = parse_block_tag(block_tag)
     bridge = _parse_address_text(bridge_address, label="bridge address")
     chain_id = _rpc_quantity(
         _json_rpc(
@@ -886,6 +931,7 @@ def _collect_route_canary_transaction_evidence(
     opener: Urlopen,
     timeout: float,
 ) -> dict[str, Any]:
+    block_tag = parse_block_tag(block_tag)
     transaction_hash_hex = _hex(transaction_hash)
     receipt = _json_rpc(
         rpc_url,
@@ -1071,6 +1117,8 @@ def _route_canary_receipt_block_summary(
         receipt_block_number_text,
         method="route-canary receipt blockNumber",
     )
+    if receipt_block_number == 0:
+        raise RuntimeError("route-canary receipt blockNumber must be non-zero")
     receipt_block_hash = _parse_exact_hex32_blob(
         receipt.get("blockHash"),
         label="route-canary receipt blockHash",
@@ -1524,16 +1572,17 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect all requested evidence and return a JSON-serializable summary."""
 
+    block_tag = parse_block_tag(args.block_tag)
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
-        "block_tag": args.block_tag,
+        "block_tag": block_tag,
     }
     destination = collect_destination_bridge_evidence(
         args.rpc_url,
         domain=args.domain,
         bridge_address=args.bridge_address,
-        block_tag=args.block_tag,
+        block_tag=block_tag,
         opener=opener,
         timeout=args.timeout,
     )
@@ -1554,15 +1603,23 @@ def collect_live_evidence(
         )
     destination["expected_rpc_chain_id"] = expected_rpc_chain_id
     destination["expected_rpc_chain_id_matches"] = True
+    canonical_network_id = _default_network_id_for_domain(args.domain)
     expected_network_id = getattr(args, "expected_network_id", None)
-    if expected_network_id is not None:
-        if _hex(expected_network_id) != destination["network_id"]:
-            raise ValueError(
-                "--expected-network-id does not match bridge networkId(): "
-                f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
-            )
-        destination["expected_network_id"] = _hex(expected_network_id)
-        destination["expected_network_id_matches"] = True
+    if expected_network_id is None:
+        expected_network_id = canonical_network_id
+    elif expected_network_id != canonical_network_id:
+        raise ValueError(
+            "--expected-network-id must match the canonical "
+            f"{destination['chain']} mainnet EIP-155 network id "
+            f"{_hex(canonical_network_id)}"
+        )
+    if _hex(expected_network_id) != destination["network_id"]:
+        raise ValueError(
+            "--expected-network-id does not match bridge networkId(): "
+            f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
+        )
+    destination["expected_network_id"] = _hex(expected_network_id)
+    destination["expected_network_id_matches"] = True
     expected_bridge_code_hash = getattr(args, "expected_bridge_code_hash", None)
     if expected_bridge_code_hash is not None:
         if _hex(expected_bridge_code_hash) != destination["bridge_code_hash"]:
@@ -1613,7 +1670,7 @@ def collect_live_evidence(
             route_allowlist_hash=route_allowlist_hash,
             transaction_hash=route_canary_transaction_hash,
             log_index=route_canary_log_index,
-            block_tag=args.block_tag,
+            block_tag=block_tag,
             opener=opener,
             timeout=args.timeout,
         )
@@ -1767,7 +1824,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expected-network-id",
         type=lambda value: _parse_hex32(value, label="expected network id"),
-        help="Expected non-zero bridge networkId() bytes32.",
+        help=(
+            "Expected bridge networkId() bytes32. Defaults to the canonical "
+            "mainnet EIP-155 id for --domain: eth=1, bsc=56; an explicit "
+            "value must match that canonical id."
+        ),
     )
     parser.add_argument(
         "--expected-rpc-chain-id",
@@ -1875,7 +1936,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--block-tag",
         default="latest",
-        help="JSON-RPC block tag for eth_call/eth_getCode. Defaults to latest.",
+        type=parse_block_tag,
+        help=(
+            "JSON-RPC block tag for eth_call/eth_getCode. Must be latest, "
+            "safe, finalized, or a positive canonical lowercase 0x block "
+            "number. Defaults to latest."
+        ),
     )
     parser.add_argument(
         "--full-toml",

@@ -15,7 +15,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::{InstructionBox, IssueOfflineNoteV2},
-    offline::{OfflineNoteIssueV2, OfflineNoteKeyCertificateV2},
+    offline::{OFFLINE_NOTE_KEY_CERTIFICATE_VERSION, OfflineNoteIssue, OfflineNoteKeyCertificate},
     transaction::TransactionBuilder,
 };
 use iroha_primitives::numeric::Numeric;
@@ -254,7 +254,7 @@ pub(crate) async fn handle_notes_issue(
     let certificate = build_key_certificate(&issuer, &parsed, &attestation, now_ms)?;
     let chain_certificate = build_chain_certificate(&issuer, &parsed, &attestation)?;
     let note_commitment = Hash::new(entry_hash.as_bytes());
-    let issue = IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
+    let issue = IssueOfflineNoteV2::new(OfflineNoteIssue {
         note_commitment: note_commitment.clone(),
         key_certificate: chain_certificate,
         asset: AssetId::new(
@@ -1052,10 +1052,10 @@ fn build_chain_certificate(
     issuer: &OfflineV2IssuerRuntime,
     request: &ParsedOfflineRequest,
     attestation: &VerifiedDeviceAttestation,
-) -> Result<OfflineNoteKeyCertificateV2, Error> {
+) -> Result<OfflineNoteKeyCertificate, Error> {
     let usage_limit = assertion_usage_limit(request)?;
-    let mut certificate = OfflineNoteKeyCertificateV2 {
-        version: 2,
+    let mut certificate = OfflineNoteKeyCertificate {
+        version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
         platform: attestation.platform.clone(),
         key_id: attestation.key_id.clone(),
         device_id: request.device_id.clone(),

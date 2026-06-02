@@ -39,6 +39,13 @@ isi! {
     }
 }
 
+/// Compatibility alias for the first-release Offline note issue instruction.
+pub type IssueOfflineNoteV2 = IssueOfflineNote;
+/// Compatibility alias for the first-release Offline note redeem instruction.
+pub type RedeemOfflineNoteV2 = RedeemOfflineNote;
+/// Compatibility alias for the first-release Offline note audit instruction.
+pub type AuditOfflineNoteV2 = AuditOfflineNote;
+
 isi! {
     /// Settle a Kagemusha offline-offline shielded transfer.
     ///

@@ -11,15 +11,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
-import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineReadiness;
+import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
 
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
  * <p>The legacy offline HTTP routes have been
- * removed from Torii. This client exposes only {@code /v1/offline/readiness}.
+ * removed from Torii. This client exposes the maintained offline readiness endpoints.
  */
 public final class OfflineToriiClient {
 
