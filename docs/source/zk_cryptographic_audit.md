@@ -88,6 +88,11 @@ soundness; runtime API, schema, or wire-format changes.
 Severity: High if reachable during fresh transaction admission; otherwise a
 replay-boundary risk.
 
+Status: Remediated. ZK-ACE authorization now rejects local verifier failure even
+when committed-result trust is set; the flag may log the replay condition but no
+longer authorizes transfer execution, replay-nullifier consumption, or balance
+movement for a failed ZK-ACE proof.
+
 Evidence: `SubmitZkAceAuthorizedTransfer` in
 [../../crates/iroha_core/src/smartcontracts/isi/world.rs](../../crates/iroha_core/src/smartcontracts/isi/world.rs)
 performs local STARK verification and rejects a failed report unless
@@ -99,10 +104,14 @@ execution results, it is a recovery mechanism. If it can be enabled during new b
 production, fresh transaction admission, or uncommitted ledger execution, an invalid
 ZK-ACE proof can authorize a transparent transfer and consume a replay nullifier.
 
-Recommendation: enforce in code that `trust_committed_execution_results` is available
-only in committed-block replay/recovery contexts; consider refusing ZK-ACE bypass even
-under committed-result trust; add a regression test proving fresh ZK-ACE transactions
-cannot use this flag to bypass verifier rejection.
+Regression coverage: `zk_ace_rejects_inner_stark_tamper_even_when_committed_result_trust_is_set`
+builds a valid ZK-ACE STARK proof, tampers the inner STARK envelope after metadata
+binding, enables committed-result trust, and asserts rejection plus unchanged balances
+and unconsumed replay nullifier.
+
+Residual recommendation: keep `trust_committed_execution_results` restricted to
+committed-block replay/recovery contexts for all other proof-bearing flows, and avoid
+adding new proof-authorizing bypasses.
 
 ### ZK-AUDIT-02: Diagnostic proof endpoints require an explicit non-ledger contract
 
@@ -151,7 +160,9 @@ and runtime dispatch.
   transcript APIs correctly.
 - Norito encoding is deterministic and rejects malformed payloads according to its
   API contract.
-- `trust_committed_execution_results` is not available for fresh ledger admission.
+- `trust_committed_execution_results` remains a replay/recovery compatibility flag;
+  ZK-ACE no longer relies on that assumption because verifier failure is always
+  rejected.
 - Mock privacy features such as Kaigi privacy mock modes are not enabled in
   production.
 
@@ -265,7 +276,7 @@ counterexamples.
 | Circuit/schema/public inputs cannot be swapped | Satisfied for registry-bound paths | normalized circuit checks, schema hash checks, public-input digest checks |
 | STARK domain tag is bound | Satisfied | derived STARK domain tag checked against inner envelope |
 | Malformed STARK proof rejection | Satisfied by code shape and tests | decode, parameter, Merkle, AIR, and FRI checks |
-| ZK-ACE replay rejected | Satisfied except recovery-boundary finding | replay nullifier WSV checks; see ZK-AUDIT-01 |
+| ZK-ACE replay rejected | Satisfied; verifier-failure trust bypass remediated | replay nullifier WSV checks; see ZK-AUDIT-01 |
 | ZK-ACE privacy strength | Proof obligation | private-row avoidance and tests exist; production proof absent |
 | IPA metadata binding | Satisfied for Iroha-owned wrapper | generator DST, transcript limits, shape checks, VK/envelope checks |
 | Trusted setup fail-closed | Satisfied in audited policy | registry and runtime label rejection |
