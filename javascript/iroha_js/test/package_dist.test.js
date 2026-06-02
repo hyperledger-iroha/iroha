@@ -25,6 +25,11 @@ import {
   SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1,
   SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1,
   SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN,
   SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
   SCCP_TON_MESSAGE_BODY_BOC_V1,
@@ -93,6 +98,14 @@ import {
   wrapTonSccpProofResult,
   wrapTronSccpProofResult,
   wrapSolanaSccpProofResult,
+  preferredKagemushaOfflineSpendMode,
+  isKagemushaRecursiveSpendNativeAvailable,
+  kagemushaRecursiveSpendInit,
+  kagemushaRecursiveSpendAppend,
+  kagemushaRecursiveSpendLineageWitnessFromInitResult,
+  kagemushaRecursiveSpendLineageWitnessAppendResult,
+  kagemushaRecursiveSpendVerify,
+  kagemushaRecursiveSpendRedeem,
   canonicalBscCommitMessageBytes,
   canonicalBscCommitSealBytes,
   canonicalBscValidatorSetMetadataProofBytes,
@@ -563,6 +576,60 @@ test("package SCCP entrypoint and declarations cover public source exports", () 
     sourceExports.filter((name) => !declarationExports.has(name)),
     [],
   );
+});
+
+test("package dist entrypoint exports Kagemusha recursive spend helpers", () => {
+  const declarationExports = declarationExportNames();
+  const expected = [
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
+    "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+    "preferredKagemushaOfflineSpendMode",
+    "isKagemushaRecursiveSpendNativeAvailable",
+    "kagemushaRecursiveSpendInit",
+    "kagemushaRecursiveSpendAppend",
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+    "kagemushaRecursiveSpendVerify",
+    "kagemushaRecursiveSpendRedeem",
+  ];
+
+  for (const name of expected) {
+    assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
+    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+  }
+  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1, "recursive_spend_v1");
+  assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-aggregation-v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    "kagemusha-recursive-spend-lineage-v1",
+  );
+  assert.equal(
+    preferredKagemushaOfflineSpendMode(true),
+    KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
+  );
+  assert.equal(
+    preferredKagemushaOfflineSpendMode(false),
+    KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+  );
+  assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
+  for (const helper of [
+    kagemushaRecursiveSpendInit,
+    kagemushaRecursiveSpendAppend,
+    kagemushaRecursiveSpendLineageWitnessFromInitResult,
+    kagemushaRecursiveSpendLineageWitnessAppendResult,
+    kagemushaRecursiveSpendVerify,
+    kagemushaRecursiveSpendRedeem,
+  ]) {
+    assert.equal(typeof helper, "function");
+  }
 });
 
 test("package declarations mark SCCP FastPQ proof requests readonly", () => {

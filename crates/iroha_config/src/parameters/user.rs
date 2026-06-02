@@ -18463,10 +18463,40 @@ pub struct IsoBridgeProfile {
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
     #[config(default = "Vec::new()")]
-    /// SHA-256 pins of raw XMLDSig public keys accepted by this profile.
+    #[norito(default)]
+    /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
+    pub signature_public_key_sha256_pins: Vec<String>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
+    pub x509_trust_anchor_sha256_pins: Vec<String>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Certificate-policy OIDs required on accepted X.509 signer certificates.
+    pub x509_required_certificate_policy_oids: Vec<String>,
+    #[config(default = "false")]
+    #[norito(default)]
+    /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
+    pub x509_require_crl_revocation_check: bool,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Base64 DER CRLs accepted as rail-profile revocation material.
+    pub x509_crl_der_base64: Vec<String>,
+    #[config(default = "false")]
+    #[norito(default)]
+    /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
+    pub x509_require_ocsp_revocation_check: bool,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Base64 DER OCSP responses accepted as rail-profile revocation material.
+    pub x509_ocsp_response_der_base64: Vec<String>,
+    #[config(default = "Vec::new()")]
+    #[norito(default)]
+    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
     pub trusted_public_key_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
-    /// SHA-256 pins of DER XMLDSig X.509 certificates accepted by this profile.
+    #[norito(default)]
+    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
     pub trusted_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
@@ -20201,6 +20231,13 @@ impl IsoBridgeProfile {
             id: self.id,
             rail: self.rail,
             embedded_signature_policy: self.embedded_signature_policy,
+            signature_public_key_sha256_pins: self.signature_public_key_sha256_pins,
+            x509_trust_anchor_sha256_pins: self.x509_trust_anchor_sha256_pins,
+            x509_required_certificate_policy_oids: self.x509_required_certificate_policy_oids,
+            x509_require_crl_revocation_check: self.x509_require_crl_revocation_check,
+            x509_crl_der_base64: self.x509_crl_der_base64,
+            x509_require_ocsp_revocation_check: self.x509_require_ocsp_revocation_check,
+            x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
             trusted_public_key_sha256: self.trusted_public_key_sha256,
             trusted_certificate_sha256: self.trusted_certificate_sha256,
             revoked_certificate_sha256: self.revoked_certificate_sha256,
@@ -22222,6 +22259,43 @@ pin_torii_urls = [
             telemetry.telegram_metrics_period,
             Some(StdDuration::from_millis(100))
         );
+    }
+}
+
+#[cfg(test)]
+mod settlement_offline_tests {
+    use super::*;
+
+    #[test]
+    fn offline_parse_preserves_enabled_kagemusha_defaults() {
+        let mut emitter = Emitter::new();
+        let actual = Offline::default().parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert!(
+            actual.kagemusha_enabled,
+            "Kagemusha must remain enabled after user-config parsing"
+        );
+        assert!(
+            !actual.kagemusha_force_legacy,
+            "legacy Kagemusha fallback must remain opt-in after user-config parsing"
+        );
+    }
+
+    #[test]
+    fn offline_parse_preserves_explicit_kagemusha_legacy_opt_in() {
+        let user = Offline {
+            kagemusha_enabled: false,
+            kagemusha_force_legacy: true,
+            ..Offline::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let actual = user.parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert!(!actual.kagemusha_enabled);
+        assert!(actual.kagemusha_force_legacy);
     }
 }
 

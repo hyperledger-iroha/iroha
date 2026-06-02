@@ -31,6 +31,7 @@ EXPECTED_RPC_CHAIN_IDS = {
     SCCP_DOMAIN_ETH: 1,
     SCCP_DOMAIN_BSC: 56,
 }
+EVM_SOURCE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -176,6 +177,38 @@ def _parse_rpc_chain_id(value: str) -> int:
             "--expected-rpc-chain-id must be a positive u64 integer"
         )
     return parsed
+
+
+def parse_block_tag(value: str) -> str:
+    """Parse a stable/canonical JSON-RPC block tag for read-only evidence."""
+
+    if value != value.strip():
+        raise argparse.ArgumentTypeError(
+            "--block-tag must not contain surrounding whitespace"
+        )
+    if value in EVM_SOURCE_ALLOWED_BLOCK_TAGS:
+        return value
+    if value.startswith("0x"):
+        text = value[2:]
+        if (
+            not text
+            or any(symbol not in "0123456789abcdef" for symbol in text)
+            or (len(text) > 1 and text.startswith("0"))
+        ):
+            raise argparse.ArgumentTypeError(
+                "--block-tag must be latest, safe, finalized, or a positive "
+                "canonical lowercase 0x block number"
+            )
+        parsed = int(text, 16)
+        if parsed <= 0:
+            raise argparse.ArgumentTypeError(
+                "--block-tag block number must be positive"
+            )
+        return "0x" + format(parsed, "x")
+    raise argparse.ArgumentTypeError(
+        "--block-tag must be latest, safe, finalized, or a positive canonical "
+        "lowercase 0x block number"
+    )
 
 
 def _require_exact_positive_u64(value: object, *, label: str) -> int:
@@ -507,6 +540,7 @@ def collect_source_bridge_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only EVM-family source bridge evidence."""
 
+    block_tag = parse_block_tag(block_tag)
     evidence = _load_evidence_module(domain)
     bridge = _hex(evidence.parse_evm_address(bridge_address, label="bridge address"))
     chain_id = _rpc_quantity(
@@ -1189,16 +1223,17 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect live EVM-family source evidence and return a JSON summary."""
 
+    block_tag = parse_block_tag(args.block_tag)
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
-        "block_tag": args.block_tag,
+        "block_tag": block_tag,
     }
     source_bridge = collect_source_bridge_evidence(
         args.rpc_url,
         domain=args.domain,
         bridge_address=args.bridge_address,
-        block_tag=args.block_tag,
+        block_tag=block_tag,
         deployment_transaction_hash=args.deployment_transaction_hash,
         opener=opener,
         timeout=args.timeout,
@@ -1363,7 +1398,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--block-tag",
         default="latest",
-        help="JSON-RPC block tag for eth_getCode. Defaults to latest.",
+        type=parse_block_tag,
+        help=(
+            "JSON-RPC block tag for eth_getCode. Must be latest, safe, "
+            "finalized, or a positive canonical lowercase 0x block number. "
+            "Defaults to latest."
+        ),
     )
     parser.add_argument(
         "--toml",

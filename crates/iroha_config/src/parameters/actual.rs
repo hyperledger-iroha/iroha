@@ -7611,9 +7611,23 @@ pub struct IsoBridgeProfile {
     pub rail: String,
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
-    /// SHA-256 pins of raw XMLDSig public keys accepted by this profile.
+    /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
+    pub signature_public_key_sha256_pins: Vec<String>,
+    /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
+    pub x509_trust_anchor_sha256_pins: Vec<String>,
+    /// Certificate-policy OIDs required on accepted X.509 signer certificates.
+    pub x509_required_certificate_policy_oids: Vec<String>,
+    /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
+    pub x509_require_crl_revocation_check: bool,
+    /// Base64 DER CRLs accepted as rail-profile revocation material.
+    pub x509_crl_der_base64: Vec<String>,
+    /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
+    pub x509_require_ocsp_revocation_check: bool,
+    /// Base64 DER OCSP responses accepted as rail-profile revocation material.
+    pub x509_ocsp_response_der_base64: Vec<String>,
+    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
     pub trusted_public_key_sha256: Vec<String>,
-    /// SHA-256 pins of DER XMLDSig X.509 certificates accepted by this profile.
+    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
     pub trusted_certificate_sha256: Vec<String>,
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,

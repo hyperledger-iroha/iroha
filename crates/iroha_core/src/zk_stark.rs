@@ -1150,6 +1150,15 @@ fn zk_ace_air_trace_width() -> usize {
     31
 }
 
+const ZK_ACE_AIR_PRIVATE_ROW_INDEX: usize = 0;
+const ZK_ACE_AIR_SAFE_ROW_KIND: u64 = 0;
+const ZK_ACE_AIR_PRIVATE_ROW_KIND: u64 = 1;
+const ZK_ACE_AIR_PUBLIC_DIGEST_OFFSET: usize = 2;
+const ZK_ACE_AIR_WIDTH_OFFSET: usize = 6;
+const ZK_ACE_AIR_WITNESS_OFFSET: usize = 7;
+const ZK_ACE_AIR_WITNESS_LIMBS: usize = 15;
+const ZK_ACE_AIR_MAX_BLINDING_ATTEMPTS: u64 = 256;
+
 #[derive(Clone, Copy)]
 enum StarkAirVerificationContext<'a> {
     Binding,
@@ -1268,52 +1277,52 @@ fn zk_ace_witness_limbs(witness: &iroha_data_model::zk::ZkAceWitnessV1) -> Optio
     Some(limbs)
 }
 
-fn zk_ace_air_mask(statement_digest: &[u8; 32], index: usize, limb_index: usize) -> Option<Fq> {
+fn zk_ace_air_blinding(
+    statement_digest: &[u8; 32],
+    index: usize,
+    column_index: usize,
+    blinding_attempt: u64,
+) -> Option<Fq> {
     let mut h = Sha256::new();
-    h.update(b"iroha:zk-ace:air-mask:v1");
+    h.update(b"iroha:zk-ace:air-blinding:v2");
     h.update(statement_digest);
     h.update(&(index as u64).to_le_bytes());
-    h.update(&(limb_index as u64).to_le_bytes());
+    h.update(&(column_index as u64).to_le_bytes());
+    h.update(&blinding_attempt.to_le_bytes());
     let out = h.finalize();
     let mut word = [0u8; 8];
     word.copy_from_slice(&out[..8]);
-    let mask = u64::from_le_bytes(word);
-    let mask = (u128::from(mask) % (MOD_P - 1)) as u64 + 1;
-    Fq::from_canonical_u64(mask)
+    Some(Fq::new(u64::from_le_bytes(word)))
 }
 
 fn zk_ace_air_row(
     index: usize,
     witness_limbs: &[u64; 15],
+    public_digest: &[u8; 32],
     statement_digest: &[u8; 32],
+    blinding_attempt: u64,
 ) -> Option<Vec<u64>> {
-    let mut row = Vec::with_capacity(zk_ace_air_trace_width());
+    let width = zk_ace_air_trace_width();
+    let mut row = Vec::with_capacity(width);
     row.push((u128::from(u64::try_from(index).ok()?) % MOD_P) as u64);
-    for (limb_index, limb) in witness_limbs.iter().enumerate() {
-        let limb = Fq::from_canonical_u64(*limb)?;
-        let mask = zk_ace_air_mask(statement_digest, index, limb_index)?;
-        row.push(limb.add(mask).0);
+    row.push(if index == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
+        ZK_ACE_AIR_PRIVATE_ROW_KIND
+    } else {
+        ZK_ACE_AIR_SAFE_ROW_KIND
+    });
+    row.extend_from_slice(&stark_air_digest_limbs(public_digest));
+    row.push(u64::try_from(width).ok()?);
+    if index == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
+        row.extend_from_slice(witness_limbs);
     }
-    for limb_index in 0..witness_limbs.len() {
-        row.push(zk_ace_air_mask(statement_digest, index, limb_index)?.0);
+    while row.len() < width {
+        let value = zk_ace_air_blinding(statement_digest, index, row.len(), blinding_attempt)?;
+        row.push(value.0);
     }
-    Some(row)
-}
-
-fn zk_ace_unmask_witness_limbs(row: &[u64]) -> Option<[u64; 15]> {
-    if row.len() != zk_ace_air_trace_width() {
+    if row.len() != width {
         return None;
     }
-    let mut limbs = [0u64; 15];
-    for limb_index in 0..15 {
-        let masked = Fq::from_canonical_u64(row[1 + limb_index])?;
-        let mask = Fq::from_canonical_u64(row[16 + limb_index])?;
-        if mask == Fq::zero() {
-            return None;
-        }
-        limbs[limb_index] = masked.sub(mask).0;
-    }
-    Some(limbs)
+    Some(row)
 }
 
 fn zk_ace_air_row_residue(
@@ -1324,6 +1333,9 @@ fn zk_ace_air_row_residue(
 ) -> Option<Fq> {
     if row.len() != zk_ace_air_trace_width() {
         return None;
+    }
+    for value in row {
+        Fq::from_canonical_u64(*value)?;
     }
     let mut acc = Fq::zero();
     let mut coeff = Fq::from_canonical_u64(3)?;
@@ -1336,24 +1348,26 @@ fn zk_ace_air_row_residue(
 
     let index = (u128::from(u64::try_from(index).ok()?) % MOD_P) as u64;
     add_residue(&mut acc, &mut coeff, row[0], index)?;
-    for limb_index in 0..15 {
-        let mask = Fq::from_canonical_u64(row[16 + limb_index])?;
-        if mask == Fq::zero() {
-            acc = acc.add(coeff);
-        }
-        coeff = coeff.add(Fq::from_canonical_u64(2)?);
+    let expected_kind = if usize::try_from(index).ok()? == ZK_ACE_AIR_PRIVATE_ROW_INDEX {
+        ZK_ACE_AIR_PRIVATE_ROW_KIND
+    } else {
+        ZK_ACE_AIR_SAFE_ROW_KIND
+    };
+    add_residue(&mut acc, &mut coeff, row[1], expected_kind)?;
+    for (offset, expected) in stark_air_digest_limbs(public_digest).iter().enumerate() {
+        add_residue(
+            &mut acc,
+            &mut coeff,
+            row[ZK_ACE_AIR_PUBLIC_DIGEST_OFFSET + offset],
+            *expected,
+        )?;
     }
-
-    let limbs = zk_ace_unmask_witness_limbs(row)?;
-    let identity_root = zk_ace_limbs_to_bytes(&limbs[..5])?;
-    let identity_blinding = zk_ace_limbs_to_bytes(&limbs[5..10])?;
-    let replay_secret = zk_ace_limbs_to_bytes(&limbs[10..15])?;
-    for witness_bytes in [&identity_root, &identity_blinding, &replay_secret] {
-        if witness_bytes == &[0u8; 32] {
-            acc = acc.add(coeff);
-        }
-        coeff = coeff.add(Fq::from_canonical_u64(2)?);
-    }
+    add_residue(
+        &mut acc,
+        &mut coeff,
+        row[ZK_ACE_AIR_WIDTH_OFFSET],
+        u64::try_from(zk_ace_air_trace_width()).ok()?,
+    )?;
 
     let expected_air_digest =
         iroha_data_model::zk::derive_zk_ace_air_public_digest(public_inputs).ok()?;
@@ -1364,6 +1378,24 @@ fn zk_ace_air_row_residue(
             u64::from(*actual),
             u64::from(*expected),
         )?;
+    }
+
+    if expected_kind == ZK_ACE_AIR_SAFE_ROW_KIND {
+        return Some(acc);
+    }
+
+    let witness_end = ZK_ACE_AIR_WITNESS_OFFSET + ZK_ACE_AIR_WITNESS_LIMBS;
+    let limbs: [u64; ZK_ACE_AIR_WITNESS_LIMBS] = row[ZK_ACE_AIR_WITNESS_OFFSET..witness_end]
+        .try_into()
+        .ok()?;
+    let identity_root = zk_ace_limbs_to_bytes(&limbs[..5])?;
+    let identity_blinding = zk_ace_limbs_to_bytes(&limbs[5..10])?;
+    let replay_secret = zk_ace_limbs_to_bytes(&limbs[10..15])?;
+    for witness_bytes in [&identity_root, &identity_blinding, &replay_secret] {
+        if witness_bytes == &[0u8; 32] {
+            acc = acc.add(coeff);
+        }
+        coeff = coeff.add(Fq::from_canonical_u64(2)?);
     }
 
     let identity_commitment = iroha_data_model::zk::derive_zk_ace_identity_commitment(
@@ -1470,6 +1502,18 @@ fn stark_air_query_roots(roots: &[[u8; 32]], air: Option<&StarkAirProofV1>) -> V
         query_roots.push(air.public_digest);
     }
     query_roots
+}
+
+fn zk_ace_air_opening_is_private(index: usize, domain_size: usize) -> bool {
+    domain_size != 0 && index % domain_size == ZK_ACE_AIR_PRIVATE_ROW_INDEX
+}
+
+fn zk_ace_air_opening_is_safe(index: usize, domain_size: usize) -> bool {
+    if domain_size == 0 {
+        return false;
+    }
+    !zk_ace_air_opening_is_private(index, domain_size)
+        && !zk_ace_air_opening_is_private((index + 1) % domain_size, domain_size)
 }
 
 fn validate_stark_prover_params(
@@ -1872,104 +1916,128 @@ pub fn prove_stark_fri_zk_ace_air_envelope_bytes(
         .ok_or_else(|| "STARK domain size overflow".to_owned())?;
     let context = StarkAirVerificationContext::ZkAce { public_inputs };
 
-    let rows = (0..domain)
-        .map(|index| {
-            zk_ace_air_row(index, &witness_limbs, &statement_digest)
+    for blinding_attempt in 0..ZK_ACE_AIR_MAX_BLINDING_ATTEMPTS {
+        let rows = (0..domain)
+            .map(|index| {
+                zk_ace_air_row(
+                    index,
+                    &witness_limbs,
+                    &public_digest,
+                    &statement_digest,
+                    blinding_attempt,
+                )
                 .ok_or_else(|| "failed to build ZK-ACE AIR row".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let trace_leaves = rows
-        .iter()
-        .map(|row| {
-            stark_air_trace_leaf_hash(&params, row)
-                .ok_or_else(|| "failed to hash ZK-ACE AIR row".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let trace_levels = merkle_levels_from_hashes(&params, trace_leaves)
-        .ok_or_else(|| "failed to build ZK-ACE AIR trace commitment".to_owned())?;
-    let trace_root = merkle_root_from_levels(&trace_levels)
-        .ok_or_else(|| "failed to derive ZK-ACE AIR trace root".to_owned())?;
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let trace_leaves = rows
+            .iter()
+            .map(|row| {
+                stark_air_trace_leaf_hash(&params, row)
+                    .ok_or_else(|| "failed to hash ZK-ACE AIR row".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let trace_levels = merkle_levels_from_hashes(&params, trace_leaves)
+            .ok_or_else(|| "failed to build ZK-ACE AIR trace commitment".to_owned())?;
+        let trace_root = merkle_root_from_levels(&trace_levels)
+            .ok_or_else(|| "failed to derive ZK-ACE AIR trace root".to_owned())?;
 
-    let composition_values = (0..domain)
-        .map(|index| {
-            stark_air_composition_value_for_context(
+        let composition_values = (0..domain)
+            .map(|index| {
+                stark_air_composition_value_for_context(
+                    context,
+                    index,
+                    domain,
+                    &public_digest,
+                    &rows[index],
+                    &rows[(index + 1) % domain],
+                )
+                .ok_or_else(|| "failed to evaluate ZK-ACE AIR composition".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let composition_levels = merkle_levels_from_values(&params, &composition_values)
+            .ok_or_else(|| "failed to build ZK-ACE AIR composition commitment".to_owned())?;
+        let composition_root = merkle_root_from_levels(&composition_levels)
+            .ok_or_else(|| "failed to derive ZK-ACE AIR composition root".to_owned())?;
+        let extra_query_roots = [trace_root, composition_root, public_digest];
+
+        let mut envelope = synthesize_stark_fri_envelope_from_values(
+            params.clone(),
+            transcript_label.clone(),
+            composition_values,
+            &extra_query_roots,
+        )?;
+        if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
+            return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
+        }
+
+        let query_roots = stark_air_query_roots(&envelope.proof.commits.roots, None)
+            .into_iter()
+            .chain(extra_query_roots)
+            .collect::<Vec<_>>();
+        let mut query_indices = Vec::with_capacity(envelope.proof.queries.len());
+        let mut openings_are_private = false;
+        for qi in 0..envelope.proof.queries.len() {
+            let index = derive_query_index(
+                &envelope.transcript_label,
+                &envelope.params,
+                &query_roots,
+                qi,
+            )
+            .ok_or_else(|| "failed to derive ZK-ACE AIR query index".to_owned())?;
+            if !zk_ace_air_opening_is_safe(index, domain) {
+                openings_are_private = true;
+                break;
+            }
+            query_indices.push(index);
+        }
+        if openings_are_private {
+            continue;
+        }
+
+        let mut openings = Vec::with_capacity(envelope.proof.queries.len());
+        for index in query_indices {
+            let next_index = (index + 1) % domain;
+            let row_path = merkle_path_from_levels(index, &trace_levels)
+                .ok_or_else(|| "failed to open ZK-ACE AIR row".to_owned())?;
+            let next_row_path = merkle_path_from_levels(next_index, &trace_levels)
+                .ok_or_else(|| "failed to open next ZK-ACE AIR row".to_owned())?;
+            let composition_path = merkle_path_from_levels(index, &composition_levels)
+                .ok_or_else(|| "failed to open ZK-ACE AIR composition".to_owned())?;
+            let composition_value = stark_air_composition_value_for_context(
                 context,
                 index,
                 domain,
                 &public_digest,
                 &rows[index],
-                &rows[(index + 1) % domain],
+                &rows[next_index],
             )
-            .ok_or_else(|| "failed to evaluate ZK-ACE AIR composition".to_owned())
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let composition_levels = merkle_levels_from_values(&params, &composition_values)
-        .ok_or_else(|| "failed to build ZK-ACE AIR composition commitment".to_owned())?;
-    let composition_root = merkle_root_from_levels(&composition_levels)
-        .ok_or_else(|| "failed to derive ZK-ACE AIR composition root".to_owned())?;
-    let extra_query_roots = [trace_root, composition_root, public_digest];
-
-    let mut envelope = synthesize_stark_fri_envelope_from_values(
-        params,
-        transcript_label,
-        composition_values,
-        &extra_query_roots,
-    )?;
-    if envelope.proof.commits.roots.first().copied() != Some(composition_root) {
-        return Err("ZK-ACE AIR composition root does not match FRI base root".to_owned());
-    }
-
-    let query_roots = stark_air_query_roots(&envelope.proof.commits.roots, None)
-        .into_iter()
-        .chain(extra_query_roots)
-        .collect::<Vec<_>>();
-    let mut openings = Vec::with_capacity(envelope.proof.queries.len());
-    for qi in 0..envelope.proof.queries.len() {
-        let index = derive_query_index(
-            &envelope.transcript_label,
-            &envelope.params,
-            &query_roots,
-            qi,
-        )
-        .ok_or_else(|| "failed to derive ZK-ACE AIR query index".to_owned())?;
-        let next_index = (index + 1) % domain;
-        let row_path = merkle_path_from_levels(index, &trace_levels)
-            .ok_or_else(|| "failed to open ZK-ACE AIR row".to_owned())?;
-        let next_row_path = merkle_path_from_levels(next_index, &trace_levels)
-            .ok_or_else(|| "failed to open next ZK-ACE AIR row".to_owned())?;
-        let composition_path = merkle_path_from_levels(index, &composition_levels)
-            .ok_or_else(|| "failed to open ZK-ACE AIR composition".to_owned())?;
-        let composition_value = stark_air_composition_value_for_context(
-            context,
-            index,
-            domain,
-            &public_digest,
-            &rows[index],
-            &rows[next_index],
-        )
-        .ok_or_else(|| "failed to evaluate opened ZK-ACE AIR composition".to_owned())?;
-        openings.push(StarkAirOpeningV1 {
-            index: u32::try_from(index)
-                .map_err(|_| "ZK-ACE AIR query index does not fit u32".to_owned())?,
-            row: rows[index].clone(),
-            next_row: rows[next_index].clone(),
-            row_path,
-            next_row_path,
-            composition_value: composition_value.0,
-            composition_path,
+            .ok_or_else(|| "failed to evaluate opened ZK-ACE AIR composition".to_owned())?;
+            openings.push(StarkAirOpeningV1 {
+                index: u32::try_from(index)
+                    .map_err(|_| "ZK-ACE AIR query index does not fit u32".to_owned())?,
+                row: rows[index].clone(),
+                next_row: rows[next_index].clone(),
+                row_path,
+                next_row_path,
+                composition_value: composition_value.0,
+                composition_path,
+            });
+        }
+        envelope.proof.air = Some(StarkAirProofV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            public_digest,
+            trace_root,
+            composition_root,
+            trace_width: u16::try_from(zk_ace_air_trace_width())
+                .map_err(|_| "ZK-ACE AIR trace width does not fit u16".to_owned())?,
+            openings,
         });
+        return norito::to_bytes(&envelope)
+            .map_err(|err| format!("failed to encode STARK envelope: {err}"));
     }
-    envelope.proof.air = Some(StarkAirProofV1 {
-        version: 1,
-        circuit_id,
-        public_digest,
-        trace_root,
-        composition_root,
-        trace_width: u16::try_from(zk_ace_air_trace_width())
-            .map_err(|_| "ZK-ACE AIR trace width does not fit u16".to_owned())?,
-        openings,
-    });
-    norito::to_bytes(&envelope).map_err(|err| format!("failed to encode STARK envelope: {err}"))
+
+    Err("failed to derive ZK-ACE AIR blinding that keeps private rows unopened".to_owned())
 }
 
 /// Build a deterministic V1 STARK/FRI envelope with verifier-owned composition terms.
@@ -2325,6 +2393,10 @@ fn verify_stark_fri_envelope_with_context(
             last_z = Some(z);
             layer_domain /= fold_arity;
             idx_layer = expected_j;
+        }
+
+        if last_z != Some(Fq::zero()) {
+            return false;
         }
 
         if let (Some(comp_root), Some(cv_all)) =

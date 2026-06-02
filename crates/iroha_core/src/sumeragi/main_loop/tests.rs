@@ -28535,6 +28535,75 @@ async fn commit_pipeline_recovery_includes_vote_backed_retired_same_height_pendi
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_recovery_skips_retired_vote_backed_branch_after_new_view_qc() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let stale_view = 0_u64;
+    let recovery_view = stale_view.saturating_add(2);
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        stale_view,
+        Some(genesis_hash),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    {
+        let pending = actor
+            .pending
+            .pending_blocks
+            .get_mut(&block_hash)
+            .expect("pending block inserted");
+        pending.retire_same_height();
+        pending.validation_status = ValidationStatus::Valid;
+        pending.parent_state_root = Some(zero_state_root());
+        pending.post_state_root = Some(zero_state_root());
+    }
+
+    let seeded = seed_remote_commit_votes_for_block(
+        actor,
+        &harness.key_pairs,
+        block_hash,
+        height,
+        stale_view,
+        1,
+    );
+    assert_eq!(seeded, 1, "test should seed one raw commit vote");
+    while actor.poll_vote_verify_results() {}
+    assert!(
+        actor.pending_block_has_commit_votes(block_hash, height, stale_view),
+        "raw commit vote should make the retired branch recovery-visible before view-change proof"
+    );
+    assert_eq!(
+        actor.commit_candidate_blocks_len(true),
+        1,
+        "vote-backed retired branch should remain eligible until a higher NEW_VIEW QC supersedes it"
+    );
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, recovery_view, highest_qc);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    assert!(
+        actor.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+            height, stale_view,
+        ),
+        "cached NEW_VIEW QC should supersede stale raw commit-vote recovery after tracker pruning"
+    );
+    assert_eq!(
+        actor.commit_candidate_blocks_len(true),
+        0,
+        "retired branch with only raw commit votes must stop competing after a higher NEW_VIEW QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_request_frontier_gap_realign_after_commit_reanchors_missing_next_height_when_future_qc_evidence_survives()
  {
     let mut harness = test_actor_harness(4).await;
@@ -33665,6 +33734,79 @@ async fn retry_known_block_commit_qc_requests_waits_for_commit_quorum_new_view_s
             .missing_commit_qc_requests
             .contains_key(&block_hash),
         "higher NEW_VIEW commit quorum should retire the stale known-block commit-QC request",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_known_block_commit_qc_requests_uses_cached_new_view_qc_after_tracker_pruned() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let highest_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let higher_view = view.saturating_add(2);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    actor.kura.store_block(block).expect("store block");
+
+    let now = Instant::now();
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    cache_new_view_qc_for_frontier(actor, &harness.key_pairs, height, higher_view, highest_qc);
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    assert!(
+        actor.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(height, view),
+        "cached NEW_VIEW QC should keep supersession visible after tracker pruning"
+    );
+    let stats_snapshot = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .cloned()
+        .expect("known-block commit-QC request retained");
+    assert!(
+        !actor.missing_commit_qc_request_has_actionable_dependency(
+            block_hash,
+            &stats_snapshot,
+            actor.committed_height_snapshot(),
+            Instant::now(),
+        ),
+        "cached higher NEW_VIEW QC should make stale known-block commit-QC repair obsolete"
+    );
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "retry loop should clear known-block commit-QC repair from cached NEW_VIEW QC supersession"
+    );
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "cached higher NEW_VIEW QC should retire stale known-block commit-QC request"
     );
 
     harness.shutdown.send();

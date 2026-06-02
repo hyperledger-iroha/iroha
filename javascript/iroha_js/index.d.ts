@@ -633,7 +633,7 @@ export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1: "burn_and_record";
-export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
@@ -677,16 +677,90 @@ export interface TairaXorTransferPayloadInput {
   asset_key?: string;
   assetId?: string;
   asset_id?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaSender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   recipientAddress?: string;
   recipient_address?: string;
   recipient?: string;
   amount: string | number | bigint;
   nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaTransferPayloadInput {
+  routeId?: string;
+  route_id?: string;
+  assetKey?: string;
+  asset_key?: string;
+  assetId?: string;
+  asset_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  senderAddress?: string;
+  sender_address?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  nonce: string | number | bigint;
+}
+
+export interface TairaXorTronToTairaSourceProofPackageInput {
+  proofPackage?: Record<string, unknown>;
+  proof_package?: Record<string, unknown>;
+  txId?: string;
+  txID?: string;
+  transactionId?: string;
+  transaction_id?: string;
+  tronSender?: string;
+  tron_sender?: string;
+  sender?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+  /** Optional TRON bridge contract address; when supplied, sourceEventDigest is bound to the burn event. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  tronBridgeAddress?: string | BinaryLike | number[];
+  tron_bridge_address?: string | BinaryLike | number[];
+  settlementDefaults?: Record<string, unknown>;
+  settlement_defaults?: Record<string, unknown>;
+}
+
+export interface TairaXorTronToTairaBoundSourceProofPackage {
+  readonly messageBundle: Record<string, unknown>;
+  readonly settlement: Readonly<Record<string, unknown> & {
+    entrypoint: "finalize_inbound";
+    route: "taira_tron_xor";
+  }>;
+  readonly sourceEventDigest: string;
+  readonly txId: string;
+  readonly messageId: string;
+  readonly commitmentRoot: string;
+  readonly amount: string;
 }
 
 export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
@@ -5272,14 +5346,7 @@ export interface TairaXorRouteHashInput {
   asset_key_hash?: string;
 }
 
-export interface TairaXorTransferPayloadHashInput extends TairaXorRouteHashInput {
-  bridgeAddress?: string | BinaryLike | number[];
-  bridge_address?: string | BinaryLike | number[];
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
-}
+export interface TairaXorTransferPayloadHashInput extends TairaXorTransferPayloadInput {}
 
 export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInput {
   bridgeAddress?: string | BinaryLike | number[];
@@ -5291,9 +5358,13 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   taira_recipient_hash?: string;
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
   nonce?: string | number | bigint;
@@ -5301,25 +5372,37 @@ export interface TairaXorBurnSourceEventDigestInput extends TairaXorRouteHashInp
   burn_nonce?: string | number | bigint;
 }
 
-export interface TairaXorFinalizeFromTairaCallDataInput extends TairaXorRouteHashInput {
+export interface TairaXorFinalizeFromTairaCallDataInput extends Partial<TairaXorTransferPayloadInput> {
   proofBytes?: BinaryLike | number[];
   proof_bytes?: BinaryLike | number[];
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
   statementHash?: string;
   statement_hash?: string;
-  recipientAddress?: string | BinaryLike | number[];
-  recipient_address?: string | BinaryLike | number[];
-  recipient?: string | BinaryLike | number[];
-  amount: string | number | bigint;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonicalPayloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  canonical_payload_bytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonicalPayloadHex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload hex; optional cleartext fields must match. */
+  canonical_payload_hex?: string;
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payloadBytes?: BinaryLike | number[];
+  /** Canonical SORA->TRON TAIRA XOR transfer payload bytes; optional cleartext fields must match. */
+  payload_bytes?: BinaryLike | number[];
 }
 
 export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput {
   tairaRecipientBytes?: BinaryLike | number[];
   taira_recipient_bytes?: BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use tairaRecipientBytes for raw bytes. */
   tairaRecipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id when provided as text; use taira_recipient_bytes for raw bytes. */
   taira_recipient?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
   taira_account_id?: string;
   amount: string | number | bigint;
 }
@@ -5327,6 +5410,9 @@ export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
+export function buildTairaXorTronToTairaTransferPayload(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Readonly<SccpTransferPayload>;
 export function buildTairaXorSccpRecordDescriptor(
   input: TairaXorSccpRecordDescriptorInput,
 ): Readonly<TairaXorSccpRecordDescriptor>;
@@ -5344,10 +5430,23 @@ export function tairaXorTransferMessageId(
   input: TairaXorTransferPayloadInput,
   options?: { prefix?: boolean },
 ): string;
-export function tairaXorTransferPayloadHash(input: TairaXorTransferPayloadHashInput): string;
+export function tairaXorTronToTairaCanonicalTransferPayloadBytes(
+  input: TairaXorTronToTairaTransferPayloadInput,
+): Uint8Array;
+export function tairaXorTronToTairaTransferMessageId(
+  input: TairaXorTronToTairaTransferPayloadInput,
+  options?: { prefix?: boolean },
+): string;
+export function tairaXorTransferPayloadHash(
+  input: TairaXorTransferPayloadHashInput,
+  options?: { prefix?: boolean },
+): string;
 export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
 export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
 export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
+export function bindTairaXorTronToTairaSourceProofPackage(
+  input: TairaXorTronToTairaSourceProofPackageInput,
+): Readonly<TairaXorTronToTairaBoundSourceProofPackage>;
 export function normalizeSccpSourceVerifierMaterial(
   input: SccpSourceVerifierMaterialInput,
 ): SccpSourceVerifierMaterial;
@@ -5675,6 +5774,1179 @@ export interface PrivacyProofEnvelopeInput {
   max_proof_bytes?: NumericLike;
   maxPublicInputBytes?: NumericLike;
   max_public_input_bytes?: NumericLike;
+}
+
+export interface ZkAtPolicyCommitmentInput {
+  version?: NumericLike;
+  policyCommitment?: BinaryLike;
+  policy_commitment?: BinaryLike;
+  commitment?: BinaryLike;
+  policy?: unknown;
+  policyBytes?: BinaryLike;
+  policy_bytes?: BinaryLike;
+  policyJson?: unknown;
+  policy_json?: unknown;
+  policyEpoch?: NumericLike;
+  policy_epoch?: NumericLike;
+  domainSeparator?: string;
+  domain_separator?: string;
+  policySchema?: string;
+  policy_schema?: string;
+  maxPolicyBytes?: NumericLike;
+  max_policy_bytes?: NumericLike;
+}
+
+export interface ZkAtPolicyCommitment {
+  version: 1;
+  policy_commitment: number[];
+  policy_epoch: number;
+  domain_separator: string;
+  policy_schema: string;
+  commitment_kind: "external" | "dev-sha256-policy-digest";
+  policy_digest: number[] | null;
+}
+
+export interface ZkAtAuthenticatorEnvelopeInput extends ZkAtPolicyCommitmentInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  txDigest?: BinaryLike;
+  tx_digest?: BinaryLike;
+  payloadDigest?: BinaryLike;
+  payload_digest?: BinaryLike;
+  payload?: BinaryLike;
+  payloadBytes?: BinaryLike;
+  payload_bytes?: BinaryLike;
+  payloadJson?: unknown;
+  payload_json?: unknown;
+  accountId?: string;
+  account_id?: string;
+  actionClass?: string;
+  action_class?: string;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+  maxPayloadBytes?: NumericLike;
+  max_payload_bytes?: NumericLike;
+}
+
+export interface ZkAtPublicInputs {
+  version: 1;
+  policy_commitment: string;
+  tx_digest: string;
+  account_id: string;
+  action_class: string;
+  domain_separator: string;
+  policy_epoch: number;
+}
+
+export interface ZkAtDevProofFixture {
+  kind: "zkat-dev-fixture-v1";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  public_inputs: ZkAtPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface ZkAtAuthenticatorLocalVerificationInput
+  extends ZkAtAuthenticatorEnvelopeInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface ZkAtAuthenticatorLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "zkat-dev-fixture-v1";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkAtPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  account_id: string;
+  action_class: string;
+  policy_epoch: number;
+}
+
+export interface ZkAmsAdmissionBatchInput {
+  version?: NumericLike;
+  issuerRoot?: BinaryLike;
+  issuer_root?: BinaryLike;
+  admissionBatchRoot?: BinaryLike;
+  admission_batch_root?: BinaryLike;
+  batchRoot?: BinaryLike;
+  batch_root?: BinaryLike;
+  admissionNullifiers?: ReadonlyArray<BinaryLike>;
+  admission_nullifiers?: ReadonlyArray<BinaryLike>;
+  nullifiers?: ReadonlyArray<BinaryLike>;
+  anonymousAccountCommitments?: ReadonlyArray<BinaryLike>;
+  anonymous_account_commitments?: ReadonlyArray<BinaryLike>;
+  accountCommitments?: ReadonlyArray<BinaryLike>;
+  account_commitments?: ReadonlyArray<BinaryLike>;
+  recursiveProofDigest?: BinaryLike;
+  recursive_proof_digest?: BinaryLike;
+  recursiveProof?: BinaryLike;
+  recursiveProofBytes?: BinaryLike;
+  recursive_proof?: BinaryLike;
+  recursive_proof_bytes?: BinaryLike;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxBatchSize?: NumericLike;
+  max_batch_size?: NumericLike;
+  maxRecursiveProofBytes?: NumericLike;
+  max_recursive_proof_bytes?: NumericLike;
+}
+
+export interface ZkAmsAdmissionBatch {
+  version: 1;
+  issuer_root: number[];
+  admission_batch_root: number[];
+  admission_nullifiers: number[][];
+  anonymous_account_commitments: number[][];
+  recursive_proof_digest: number[];
+  domain_separator: string;
+  batch_size: number;
+  root_kind: "dev-sha256-admission-batch-root";
+}
+
+export interface ZkAmsAdmissionProofEnvelopeInput
+  extends ZkAmsAdmissionBatchInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface ZkAmsPublicInputs {
+  version: 1;
+  issuer_root: string;
+  admission_batch_root: string;
+  admission_nullifiers: string[];
+  anonymous_account_commitments: string[];
+  recursive_proof_digest: string;
+  domain_separator: string;
+}
+
+export interface ZkAmsAdmissionDevProofFixture {
+  kind: "zk-ams-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  batch: Omit<ZkAmsAdmissionBatch, "root_kind">;
+  public_inputs: ZkAmsPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface ZkAmsAdmissionLocalVerificationInput
+  extends ZkAmsAdmissionBatchInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface ZkAmsAdmissionLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "zk-ams-dev-fixture-v0";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkAmsPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  admission_batch_root: string;
+  batch_size: number;
+}
+
+export interface VegaCredentialPredicateCommitmentInput {
+  version?: NumericLike;
+  predicateCommitment?: BinaryLike;
+  predicate_commitment?: BinaryLike;
+  commitment?: BinaryLike;
+  predicate?: unknown;
+  predicateBytes?: BinaryLike;
+  predicate_bytes?: BinaryLike;
+  predicateJson?: unknown;
+  predicate_json?: unknown;
+  credentialSchema?: string;
+  credential_schema?: string;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxPredicateBytes?: NumericLike;
+  max_predicate_bytes?: NumericLike;
+}
+
+export interface VegaCredentialPredicateCommitment {
+  version: 1;
+  predicate_commitment: number[];
+  credential_schema: string;
+  domain_separator: string;
+  commitment_kind: "external" | "dev-sha256-predicate-digest";
+  predicate_digest: number[] | null;
+}
+
+export interface VegaCredentialProofEnvelopeInput
+  extends VegaCredentialPredicateCommitmentInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  issuerCommitment?: BinaryLike;
+  issuer_commitment?: BinaryLike;
+  issuer?: unknown;
+  issuerBytes?: BinaryLike;
+  issuer_bytes?: BinaryLike;
+  issuerJson?: unknown;
+  issuer_json?: unknown;
+  subjectBinding?: BinaryLike;
+  subject_binding?: BinaryLike;
+  identityCommitment?: BinaryLike;
+  identity_commitment?: BinaryLike;
+  accountCommitment?: BinaryLike;
+  account_commitment?: BinaryLike;
+  accountId?: string;
+  account_id?: string;
+  subjectAccountId?: string;
+  subject_account_id?: string;
+  expirationEpoch?: NumericLike;
+  expiration_epoch?: NumericLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxIssuerBytes?: NumericLike;
+  max_issuer_bytes?: NumericLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface VegaCredentialPublicInputs {
+  version: 1;
+  issuer_commitment: string;
+  credential_schema: string;
+  predicate_commitment: string;
+  subject_binding: string;
+  expiration_epoch: number;
+  domain_separator: string;
+}
+
+export interface VegaCredentialDevProofFixture {
+  kind: "vega-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  public_inputs: VegaCredentialPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface VegaCredentialLocalVerificationInput
+  extends VegaCredentialProofEnvelopeInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface VegaCredentialLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "vega-dev-fixture-v0";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: VegaCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  credential_schema: string;
+  expiration_epoch: number;
+}
+
+export interface SilentThresholdCredentialCommitmentsInput {
+  version?: NumericLike;
+  issuerSetCommitment?: BinaryLike;
+  issuer_set_commitment?: BinaryLike;
+  issuerSet?: unknown;
+  issuer_set?: unknown;
+  issuerSetBytes?: BinaryLike;
+  issuer_set_bytes?: BinaryLike;
+  issuerSetJson?: unknown;
+  issuer_set_json?: unknown;
+  thresholdPolicyHash?: BinaryLike;
+  threshold_policy_hash?: BinaryLike;
+  thresholdPolicy?: unknown;
+  threshold_policy?: unknown;
+  thresholdPolicyBytes?: BinaryLike;
+  threshold_policy_bytes?: BinaryLike;
+  thresholdPolicyJson?: unknown;
+  threshold_policy_json?: unknown;
+  credentialShowingCommitment?: BinaryLike;
+  credential_showing_commitment?: BinaryLike;
+  showingCommitment?: BinaryLike;
+  showing_commitment?: BinaryLike;
+  credentialShowing?: unknown;
+  credential_showing?: unknown;
+  credentialShowingBytes?: BinaryLike;
+  credential_showing_bytes?: BinaryLike;
+  credentialShowingJson?: unknown;
+  credential_showing_json?: unknown;
+  showing?: unknown;
+  showingBytes?: BinaryLike;
+  showing_bytes?: BinaryLike;
+  showingJson?: unknown;
+  showing_json?: unknown;
+  showingNullifier?: BinaryLike;
+  showing_nullifier?: BinaryLike;
+  credentialShowingNullifier?: BinaryLike;
+  credential_showing_nullifier?: BinaryLike;
+  nullifier?: BinaryLike;
+  verifierPolicyHash?: BinaryLike;
+  verifier_policy_hash?: BinaryLike;
+  verifierPolicy?: unknown;
+  verifier_policy?: unknown;
+  verifierPolicyBytes?: BinaryLike;
+  verifier_policy_bytes?: BinaryLike;
+  verifierPolicyJson?: unknown;
+  verifier_policy_json?: unknown;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxIssuerSetBytes?: NumericLike;
+  max_issuer_set_bytes?: NumericLike;
+  maxPolicyBytes?: NumericLike;
+  max_policy_bytes?: NumericLike;
+  maxShowingBytes?: NumericLike;
+  max_showing_bytes?: NumericLike;
+}
+
+export interface SilentThresholdCredentialCommitments {
+  version: 1;
+  issuer_set_commitment: number[];
+  threshold_policy_hash: number[];
+  credential_showing_commitment: number[];
+  showing_nullifier: number[];
+  verifier_policy_hash: number[];
+  domain_separator: string;
+  commitment_kinds: Record<string, "external" | string>;
+  source_digests: Record<string, number[] | null>;
+}
+
+export interface SilentThresholdCredentialEnvelopeInput
+  extends SilentThresholdCredentialCommitmentsInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface SilentThresholdCredentialPublicInputs {
+  version: 1;
+  issuer_set_commitment: string;
+  threshold_policy_hash: string;
+  credential_showing_commitment: string;
+  showing_nullifier: string;
+  verifier_policy_hash: string;
+  domain_separator: string;
+}
+
+export interface SilentThresholdCredentialDevProofFixture {
+  kind: "silent-threshold-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  commitments: Omit<SilentThresholdCredentialCommitments, "commitment_kinds" | "source_digests" | "version">;
+  public_inputs: SilentThresholdCredentialPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface SilentThresholdCredentialLocalVerificationInput
+  extends SilentThresholdCredentialCommitmentsInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface SilentThresholdCredentialLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "silent-threshold-dev-fixture-v0";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: SilentThresholdCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  showing_nullifier: string;
+}
+
+export interface ZkX509IdentityCommitmentsInput {
+  version?: NumericLike;
+  caRootCommitment?: BinaryLike;
+  ca_root_commitment?: BinaryLike;
+  caRoot?: unknown;
+  ca_root?: unknown;
+  caRootBytes?: BinaryLike;
+  ca_root_bytes?: BinaryLike;
+  caRootJson?: unknown;
+  ca_root_json?: unknown;
+  trustRoot?: unknown;
+  trust_root?: unknown;
+  trustRootJson?: unknown;
+  trust_root_json?: unknown;
+  certificatePolicyHash?: BinaryLike;
+  certificate_policy_hash?: BinaryLike;
+  certificatePolicy?: unknown;
+  certificate_policy?: unknown;
+  certificatePolicyBytes?: BinaryLike;
+  certificate_policy_bytes?: BinaryLike;
+  certificatePolicyJson?: unknown;
+  certificate_policy_json?: unknown;
+  revocationRoot?: BinaryLike;
+  revocation_root?: BinaryLike;
+  revocationData?: unknown;
+  revocation_data?: unknown;
+  revocationBytes?: BinaryLike;
+  revocation_bytes?: BinaryLike;
+  revocationJson?: unknown;
+  revocation_json?: unknown;
+  revocationSet?: unknown;
+  revocation_set?: unknown;
+  revocationSetJson?: unknown;
+  revocation_set_json?: unknown;
+  revocationList?: unknown;
+  revocation_list?: unknown;
+  revocationListJson?: unknown;
+  revocation_list_json?: unknown;
+  subjectCommitment?: BinaryLike;
+  subject_commitment?: BinaryLike;
+  subject?: unknown;
+  subjectBytes?: BinaryLike;
+  subject_bytes?: BinaryLike;
+  subjectJson?: unknown;
+  subject_json?: unknown;
+  certificateSubject?: unknown;
+  certificate_subject?: unknown;
+  certificateSubjectJson?: unknown;
+  certificate_subject_json?: unknown;
+  addressBinding?: BinaryLike;
+  address_binding?: BinaryLike;
+  walletBinding?: BinaryLike;
+  wallet_binding?: BinaryLike;
+  accountId?: string;
+  account_id?: string;
+  walletAccountId?: string;
+  wallet_account_id?: string;
+  walletAddress?: string;
+  wallet_address?: string;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxCaRootBytes?: NumericLike;
+  max_ca_root_bytes?: NumericLike;
+  maxPolicyBytes?: NumericLike;
+  max_policy_bytes?: NumericLike;
+  maxRevocationBytes?: NumericLike;
+  max_revocation_bytes?: NumericLike;
+  maxSubjectBytes?: NumericLike;
+  max_subject_bytes?: NumericLike;
+}
+
+export interface ZkX509IdentityCommitments {
+  version: 1;
+  ca_root_commitment: number[];
+  certificate_policy_hash: number[];
+  revocation_root: number[];
+  subject_commitment: number[];
+  address_binding: number[];
+  domain_separator: string;
+  commitment_kinds: Record<string, "external" | string>;
+  source_digests: Record<string, number[] | null>;
+}
+
+export interface ZkX509IdentityEnvelopeInput
+  extends ZkX509IdentityCommitmentsInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface ZkX509IdentityPublicInputs {
+  version: 1;
+  ca_root_commitment: string;
+  certificate_policy_hash: string;
+  revocation_root: string;
+  subject_commitment: string;
+  address_binding: string;
+  domain_separator: string;
+}
+
+export interface ZkX509IdentityDevProofFixture {
+  kind: "zk-x509-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  commitments: Omit<ZkX509IdentityCommitments, "commitment_kinds" | "source_digests" | "version">;
+  public_inputs: ZkX509IdentityPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface ZkX509IdentityLocalVerificationInput
+  extends ZkX509IdentityCommitmentsInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface ZkX509IdentityLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "zk-x509-dev-fixture-v0";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: ZkX509IdentityPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  address_binding: string;
+}
+
+export interface JindoLatticePublicInputsInput {
+  version?: NumericLike;
+  commitment?: BinaryLike;
+  polynomialCommitment?: BinaryLike;
+  polynomial_commitment?: BinaryLike;
+  polynomial?: unknown;
+  polynomialBytes?: BinaryLike;
+  polynomial_bytes?: BinaryLike;
+  polynomialJson?: unknown;
+  polynomial_json?: unknown;
+  commitmentMaterial?: unknown;
+  commitment_material?: unknown;
+  commitmentMaterialJson?: unknown;
+  commitment_material_json?: unknown;
+  openingClaimCommitment?: BinaryLike;
+  opening_claim_commitment?: BinaryLike;
+  openingClaimHash?: BinaryLike;
+  opening_claim_hash?: BinaryLike;
+  openingClaimDigest?: BinaryLike;
+  opening_claim_digest?: BinaryLike;
+  opening_claim?: BinaryLike;
+  openingClaim?: BinaryLike;
+  claim?: unknown;
+  claimBytes?: BinaryLike;
+  claim_bytes?: BinaryLike;
+  claimJson?: unknown;
+  claim_json?: unknown;
+  openingClaimBytes?: BinaryLike;
+  opening_claim_bytes?: BinaryLike;
+  openingClaimJson?: unknown;
+  opening_claim_json?: unknown;
+  evaluationClaim?: unknown;
+  evaluation_claim?: unknown;
+  evaluationClaimJson?: unknown;
+  evaluation_claim_json?: unknown;
+  querySetHash?: BinaryLike;
+  query_set_hash?: BinaryLike;
+  querySetRoot?: BinaryLike;
+  query_set_root?: BinaryLike;
+  querySet?: unknown;
+  query_set?: unknown;
+  querySetBytes?: BinaryLike;
+  query_set_bytes?: BinaryLike;
+  querySetJson?: unknown;
+  query_set_json?: unknown;
+  queries?: unknown;
+  queriesJson?: unknown;
+  queries_json?: unknown;
+  parameterHash?: BinaryLike;
+  parameter_hash?: BinaryLike;
+  paramsHash?: BinaryLike;
+  params_hash?: BinaryLike;
+  parameters?: unknown;
+  parametersBytes?: BinaryLike;
+  parameters_bytes?: BinaryLike;
+  parametersJson?: unknown;
+  parameters_json?: unknown;
+  parameterSet?: unknown;
+  parameter_set?: unknown;
+  parameterSetJson?: unknown;
+  parameter_set_json?: unknown;
+  params?: unknown;
+  paramsBytes?: BinaryLike;
+  params_bytes?: BinaryLike;
+  paramsJson?: unknown;
+  params_json?: unknown;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxPolynomialBytes?: NumericLike;
+  max_polynomial_bytes?: NumericLike;
+  maxOpeningClaimBytes?: NumericLike;
+  max_opening_claim_bytes?: NumericLike;
+  maxQuerySetBytes?: NumericLike;
+  max_query_set_bytes?: NumericLike;
+  maxParameterBytes?: NumericLike;
+  max_parameter_bytes?: NumericLike;
+}
+
+export interface JindoLatticePublicInputsDescriptor {
+  version: 1;
+  commitment: number[];
+  opening_claim: number[];
+  query_set: number[];
+  parameter_hash: number[];
+  domain_separator: string;
+  commitment_kinds: Record<string, "external" | string>;
+  source_digests: Record<string, number[] | null>;
+}
+
+export interface JindoLatticeProofEnvelopeInput
+  extends JindoLatticePublicInputsInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface JindoLatticePublicInputs {
+  version: 1;
+  commitment: string;
+  opening_claim: string;
+  query_set: string;
+  parameter_hash: string;
+  domain_separator: string;
+}
+
+export interface JindoLatticeDevProofFixture {
+  kind: "jindo-lattice-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  public_inputs: JindoLatticePublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface JindoLatticeLocalVerificationInput
+  extends JindoLatticePublicInputsInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface JindoLatticeLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "jindo-lattice-dev-fixture-v0";
+  backend: "unsupported";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: JindoLatticePublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  parameter_hash: string;
+}
+
+export interface SisHintsCredentialCommitmentsInput {
+  version?: NumericLike;
+  issuerCommitment?: BinaryLike;
+  issuer_commitment?: BinaryLike;
+  issuerParameterCommitment?: BinaryLike;
+  issuer_parameter_commitment?: BinaryLike;
+  issuer?: unknown;
+  issuerBytes?: BinaryLike;
+  issuer_bytes?: BinaryLike;
+  issuerJson?: unknown;
+  issuer_json?: unknown;
+  issuerParameters?: unknown;
+  issuer_parameters?: unknown;
+  issuerParametersJson?: unknown;
+  issuer_parameters_json?: unknown;
+  credentialCommitment?: BinaryLike;
+  credential_commitment?: BinaryLike;
+  credentialShowingCommitment?: BinaryLike;
+  credential_showing_commitment?: BinaryLike;
+  credential?: unknown;
+  credentialBytes?: BinaryLike;
+  credential_bytes?: BinaryLike;
+  credentialJson?: unknown;
+  credential_json?: unknown;
+  credentialShowing?: unknown;
+  credential_showing?: unknown;
+  credentialShowingJson?: unknown;
+  credential_showing_json?: unknown;
+  showing?: unknown;
+  showingJson?: unknown;
+  showing_json?: unknown;
+  showingPolicyHash?: BinaryLike;
+  showing_policy_hash?: BinaryLike;
+  policyHash?: BinaryLike;
+  policy_hash?: BinaryLike;
+  verifierPolicyHash?: BinaryLike;
+  verifier_policy_hash?: BinaryLike;
+  showingPolicy?: unknown;
+  showing_policy?: unknown;
+  showingPolicyBytes?: BinaryLike;
+  showing_policy_bytes?: BinaryLike;
+  showingPolicyJson?: unknown;
+  showing_policy_json?: unknown;
+  policy?: unknown;
+  policyBytes?: BinaryLike;
+  policy_bytes?: BinaryLike;
+  policyJson?: unknown;
+  policy_json?: unknown;
+  verifierPolicy?: unknown;
+  verifier_policy?: unknown;
+  verifierPolicyJson?: unknown;
+  verifier_policy_json?: unknown;
+  parameterHash?: BinaryLike;
+  parameter_hash?: BinaryLike;
+  paramsHash?: BinaryLike;
+  params_hash?: BinaryLike;
+  parameters?: unknown;
+  parametersBytes?: BinaryLike;
+  parameters_bytes?: BinaryLike;
+  parametersJson?: unknown;
+  parameters_json?: unknown;
+  parameterSet?: unknown;
+  parameter_set?: unknown;
+  parameterSetJson?: unknown;
+  parameter_set_json?: unknown;
+  sisParameters?: unknown;
+  sis_parameters?: unknown;
+  sisParametersJson?: unknown;
+  sis_parameters_json?: unknown;
+  params?: unknown;
+  paramsJson?: unknown;
+  params_json?: unknown;
+  domainSeparator?: string;
+  domain_separator?: string;
+  maxIssuerBytes?: NumericLike;
+  max_issuer_bytes?: NumericLike;
+  maxCredentialBytes?: NumericLike;
+  max_credential_bytes?: NumericLike;
+  maxPolicyBytes?: NumericLike;
+  max_policy_bytes?: NumericLike;
+  maxParameterBytes?: NumericLike;
+  max_parameter_bytes?: NumericLike;
+}
+
+export interface SisHintsCredentialCommitments {
+  version: 1;
+  issuer_commitment: number[];
+  credential_commitment: number[];
+  showing_policy_hash: number[];
+  parameter_hash: number[];
+  domain_separator: string;
+  commitment_kinds: Record<string, "external" | string>;
+  source_digests: Record<string, number[] | null>;
+}
+
+export interface SisHintsCredentialEnvelopeInput
+  extends SisHintsCredentialCommitmentsInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface SisHintsCredentialPublicInputs {
+  version: 1;
+  issuer_commitment: string;
+  credential_commitment: string;
+  showing_policy_hash: string;
+  parameter_hash: string;
+  domain_separator: string;
+}
+
+export interface SisHintsCredentialDevProofFixture {
+  kind: "sis-hints-dev-fixture-v0";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  commitments: Omit<SisHintsCredentialCommitments, "commitment_kinds" | "source_digests" | "version">;
+  public_inputs: SisHintsCredentialPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface SisHintsCredentialLocalVerificationInput
+  extends SisHintsCredentialCommitmentsInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface SisHintsCredentialLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "sis-hints-dev-fixture-v0";
+  backend: "unsupported";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: SisHintsCredentialPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  parameter_hash: string;
+}
+
+export interface AnonymousPgcReceiverInput {
+  accountCommitment?: BinaryLike;
+  account_commitment?: BinaryLike;
+  receiverCommitment?: BinaryLike;
+  receiver_commitment?: BinaryLike;
+  ciphertextCommitment?: BinaryLike;
+  ciphertext_commitment?: BinaryLike;
+  receiverCiphertextCommitment?: BinaryLike;
+  receiver_ciphertext_commitment?: BinaryLike;
+  ciphertext?: BinaryLike;
+  receiverCiphertext?: BinaryLike;
+  receiver_ciphertext?: BinaryLike;
+  encryptedNote?: BinaryLike;
+  encrypted_note?: BinaryLike;
+}
+
+export interface AnonymousPgcReceiverSetInput {
+  version?: NumericLike;
+  threshold?: NumericLike;
+  k?: NumericLike;
+  receivers: ReadonlyArray<AnonymousPgcReceiverInput>;
+}
+
+export interface AnonymousPgcReceiverSet {
+  version: 1;
+  threshold: number;
+  receiver_count: number;
+  receivers: Array<{
+    account_commitment: number[];
+    ciphertext_commitment: number[];
+    ciphertext_digest?: number[];
+  }>;
+  receiver_set_commitment: number[];
+}
+
+export interface AnonymousPgcDevProofFixtureInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  receiverSet?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+  receiver_set?: AnonymousPgcReceiverSetInput | AnonymousPgcReceiverSet;
+  version?: NumericLike;
+  threshold?: NumericLike;
+  k?: NumericLike;
+  receivers?: ReadonlyArray<AnonymousPgcReceiverInput>;
+  anonymitySetRoot?: BinaryLike;
+  anonymity_set_root?: BinaryLike;
+  txDigest?: BinaryLike;
+  tx_digest?: BinaryLike;
+  payloadDigest?: BinaryLike;
+  payload_digest?: BinaryLike;
+  payload?: BinaryLike;
+  payloadBytes?: BinaryLike;
+  payload_bytes?: BinaryLike;
+  payloadJson?: unknown;
+  payload_json?: unknown;
+  balanceCommitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
+  balance_commitments?: ReadonlyArray<BinaryLike | { commitment?: BinaryLike }>;
+  linkTag?: BinaryLike;
+  link_tag?: BinaryLike;
+  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  chainId?: string;
+  chain_id?: string;
+  domainSeparator?: string;
+  domain_separator?: string;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+  maxPayloadBytes?: NumericLike;
+  max_payload_bytes?: NumericLike;
+}
+
+export interface AnonymousPgcPublicInputs {
+  version: 1;
+  anonymity_set_root: string;
+  tx_digest: string;
+  balance_commitments: string[];
+  receiver_set_commitment: string;
+  receiver_ciphertext_commitments: string[];
+  receiver_threshold: number;
+  receiver_count: number;
+  link_tag: string;
+  range_commitments: string[];
+  chain_id: string;
+  domain_separator: string;
+}
+
+export interface AnonymousPgcDevProofFixture {
+  kind: "anonymous-pgc-dev-fixture-v1";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  receiver_set: AnonymousPgcReceiverSet;
+  public_inputs: AnonymousPgcPublicInputs;
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface AnonymousPgcDevProofLocalVerificationInput
+  extends AnonymousPgcDevProofFixtureInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface AnonymousPgcDevProofLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "anonymous-pgc-dev-fixture-v1";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: AnonymousPgcPublicInputs;
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
+  receiver_count: number;
+  receiver_threshold: number;
+}
+
+export type VeRangeCommitmentScheme =
+  | "pedersen-v1"
+  | "pedersen-bls12-381"
+  | "pedersen-decaf377"
+  | "verange-pedersen-v1"
+  | string;
+
+export interface RangeCommitmentInput {
+  version?: NumericLike;
+  commitment?: BinaryLike;
+  rangeCommitment?: BinaryLike;
+  range_commitment?: BinaryLike;
+  valueCommitment?: BinaryLike;
+  value_commitment?: BinaryLike;
+  bitLength?: NumericLike;
+  bit_length?: NumericLike;
+  aggregationCount?: NumericLike;
+  aggregation_count?: NumericLike;
+  commitmentScheme?: VeRangeCommitmentScheme;
+  commitment_scheme?: VeRangeCommitmentScheme;
+  domainSeparator?: string;
+  domain_separator?: string;
+  payloadDigest?: BinaryLike;
+  payload_digest?: BinaryLike;
+  txDigest?: BinaryLike;
+  tx_digest?: BinaryLike;
+  payload?: BinaryLike;
+  payloadBytes?: BinaryLike;
+  payload_bytes?: BinaryLike;
+  payloadJson?: unknown;
+  payload_json?: unknown;
+  maxPayloadBytes?: NumericLike;
+  max_payload_bytes?: NumericLike;
+}
+
+export interface RangeCommitmentDescriptor {
+  version: 1;
+  commitment: number[];
+  bit_length: number;
+  aggregation_count: number;
+  commitment_scheme: string;
+  domain_separator: string;
+  payload_digest: number[];
+}
+
+export interface VeRangeProofEnvelopeInput extends RangeCommitmentInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface VeRangeDevProofFixtureInput extends RangeCommitmentInput {
+  backend?: PrivacyBackendTag;
+  backendTag?: PrivacyBackendTag;
+  backend_tag?: PrivacyBackendTag;
+  circuitId?: string;
+  circuit_id?: string;
+  vkHash?: BinaryLike;
+  vk_hash?: BinaryLike;
+  verifierKeyHash?: BinaryLike;
+  verifyingKeyHash?: BinaryLike;
+  commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  rangeCommitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  range_commitments?: ReadonlyArray<BinaryLike | RangeCommitmentInput>;
+  aux?: BinaryLike;
+  maxProofBytes?: NumericLike;
+  max_proof_bytes?: NumericLike;
+  maxPublicInputBytes?: NumericLike;
+  max_public_input_bytes?: NumericLike;
+}
+
+export interface VeRangeDevProofFixture {
+  kind: "verange-dev-fixture-v1";
+  production: false;
+  proof_bytes: number[];
+  proofBytes: Buffer;
+  public_inputs: {
+    version: 1;
+    commitments: string[];
+    range_parameters: {
+      bit_length: number;
+      commitment_scheme: string;
+    };
+    aggregation_count: number;
+    domain_separator: string;
+    payload_digest: string;
+  };
+  publicInputBytes: Buffer;
+  envelope: Buffer;
+}
+
+export interface VeRangeLocalVerificationInput extends RangeCommitmentInput {
+  envelope?: BinaryLike;
+  proofEnvelope?: BinaryLike;
+  proof_envelope?: BinaryLike;
+  bytes?: BinaryLike;
+}
+
+export interface VeRangeLocalVerificationResult {
+  ok: true;
+  production: false;
+  kind: "verange-dev-fixture-v1";
+  backend: "stark/fri/sha256-goldilocks";
+  circuit_id: string;
+  verifier_key_hash: string;
+  public_inputs: VeRangeDevProofFixture["public_inputs"];
+  public_input_bytes: number;
+  proof_bytes: number;
+  aux_bytes: number;
 }
 
 export interface PrivacyVerifierKeyBoxInput {
@@ -13644,6 +14916,11 @@ export function deriveConfidentialNullifierV2(input: {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1: "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-aggregation-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1:
+  "kagemusha-recursive-spend-lineage-v1";
 export type KagemushaOfflineSpendMode =
   | "recursive_spend_v1"
   | "checked_prefold_v1";
@@ -13653,6 +14930,15 @@ export function preferredKagemushaOfflineSpendMode(
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(requestArchive: BinaryLike): Buffer;
+export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
+  requestArchive: BinaryLike,
+  bundleArchive: BinaryLike,
+): Buffer;
+export function kagemushaRecursiveSpendLineageWitnessAppendResult(
+  previousWitnessArchive: BinaryLike,
+  requestArchive: BinaryLike,
+  bundleArchive: BinaryLike,
+): Buffer;
 export function kagemushaRecursiveSpendVerify(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendRedeem(requestArchive: BinaryLike): Buffer;
 
@@ -14743,6 +16029,146 @@ export function buildSendToTwitterInstruction(
 export function buildCancelTwitterEscrowInstruction(
   input: CancelTwitterEscrowInstructionInput,
 ): object;
+
+export function buildZkAtPolicyCommitment(
+  input: ZkAtPolicyCommitmentInput,
+): ZkAtPolicyCommitment;
+
+export function buildZkAtAuthenticatorEnvelope(
+  input: ZkAtAuthenticatorEnvelopeInput,
+): Buffer;
+
+export function buildZkAtDevProofFixture(
+  input: Omit<ZkAtAuthenticatorEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): ZkAtDevProofFixture;
+
+export function verifyZkAtAuthenticatorLocally(
+  input: ZkAtAuthenticatorLocalVerificationInput | BinaryLike,
+): ZkAtAuthenticatorLocalVerificationResult;
+
+export function buildZkAmsAdmissionBatch(
+  input: ZkAmsAdmissionBatchInput,
+): ZkAmsAdmissionBatch;
+
+export function buildZkAmsAdmissionProofEnvelope(
+  input: ZkAmsAdmissionProofEnvelopeInput,
+): Buffer;
+
+export function buildZkAmsAdmissionDevProofFixture(
+  input: Omit<ZkAmsAdmissionProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): ZkAmsAdmissionDevProofFixture;
+
+export function verifyZkAmsAdmissionProofLocally(
+  input: ZkAmsAdmissionLocalVerificationInput | BinaryLike,
+): ZkAmsAdmissionLocalVerificationResult;
+
+export function buildVegaCredentialPredicateCommitment(
+  input: VegaCredentialPredicateCommitmentInput,
+): VegaCredentialPredicateCommitment;
+
+export function buildVegaCredentialProofEnvelope(
+  input: VegaCredentialProofEnvelopeInput,
+): Buffer;
+
+export function buildVegaCredentialDevProofFixture(
+  input: Omit<VegaCredentialProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): VegaCredentialDevProofFixture;
+
+export function verifyVegaCredentialProofLocally(
+  input: VegaCredentialLocalVerificationInput | BinaryLike,
+): VegaCredentialLocalVerificationResult;
+
+export function buildSilentThresholdCredentialCommitments(
+  input: SilentThresholdCredentialCommitmentsInput,
+): SilentThresholdCredentialCommitments;
+
+export function buildSilentThresholdCredentialEnvelope(
+  input: SilentThresholdCredentialEnvelopeInput,
+): Buffer;
+
+export function buildSilentThresholdCredentialDevProofFixture(
+  input: Omit<SilentThresholdCredentialEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): SilentThresholdCredentialDevProofFixture;
+
+export function verifySilentThresholdCredentialProofLocally(
+  input: SilentThresholdCredentialLocalVerificationInput | BinaryLike,
+): SilentThresholdCredentialLocalVerificationResult;
+
+export function buildZkX509IdentityCommitments(
+  input: ZkX509IdentityCommitmentsInput,
+): ZkX509IdentityCommitments;
+
+export function buildZkX509IdentityEnvelope(
+  input: ZkX509IdentityEnvelopeInput,
+): Buffer;
+
+export function buildZkX509IdentityDevProofFixture(
+  input: Omit<ZkX509IdentityEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): ZkX509IdentityDevProofFixture;
+
+export function verifyZkX509IdentityProofLocally(
+  input: ZkX509IdentityLocalVerificationInput | BinaryLike,
+): ZkX509IdentityLocalVerificationResult;
+
+export function buildJindoLatticePublicInputs(
+  input: JindoLatticePublicInputsInput,
+): JindoLatticePublicInputsDescriptor;
+
+export function buildJindoLatticeProofEnvelope(
+  input: JindoLatticeProofEnvelopeInput,
+): Buffer;
+
+export function buildJindoLatticeDevProofFixture(
+  input: Omit<JindoLatticeProofEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): JindoLatticeDevProofFixture;
+
+export function verifyJindoLatticeProofLocally(
+  input: JindoLatticeLocalVerificationInput | BinaryLike,
+): JindoLatticeLocalVerificationResult;
+
+export function buildSisHintsCredentialCommitments(
+  input: SisHintsCredentialCommitmentsInput,
+): SisHintsCredentialCommitments;
+
+export function buildSisHintsCredentialEnvelope(
+  input: SisHintsCredentialEnvelopeInput,
+): Buffer;
+
+export function buildSisHintsCredentialDevProofFixture(
+  input: Omit<SisHintsCredentialEnvelopeInput, "proof" | "proofBytes" | "proof_bytes">,
+): SisHintsCredentialDevProofFixture;
+
+export function verifySisHintsCredentialProofLocally(
+  input: SisHintsCredentialLocalVerificationInput | BinaryLike,
+): SisHintsCredentialLocalVerificationResult;
+
+export function buildAnonymousPgcReceiverSet(
+  input: AnonymousPgcReceiverSetInput,
+): AnonymousPgcReceiverSet;
+
+export function buildAnonymousPgcDevProofFixture(
+  input: AnonymousPgcDevProofFixtureInput,
+): AnonymousPgcDevProofFixture;
+
+export function verifyAnonymousPgcDevProofLocally(
+  input: AnonymousPgcDevProofLocalVerificationInput | BinaryLike,
+): AnonymousPgcDevProofLocalVerificationResult;
+
+export function buildRangeCommitment(
+  input: RangeCommitmentInput,
+): RangeCommitmentDescriptor;
+
+export function buildVeRangeDevProofFixture(
+  input: VeRangeDevProofFixtureInput,
+): VeRangeDevProofFixture;
+
+export function buildVeRangeProofEnvelope(
+  input: VeRangeProofEnvelopeInput,
+): Buffer;
+
+export function verifyVeRangeProofLocally(
+  input: VeRangeLocalVerificationInput | BinaryLike,
+): VeRangeLocalVerificationResult;
 
 export function buildPrivacyProofEnvelope(
   input: PrivacyProofEnvelopeInput,

@@ -969,6 +969,19 @@ mod tests {
         assert_eq!(decoded, value);
     }
 
+    #[cfg(feature = "json")]
+    fn assert_json_roundtrip<T>(value: &T)
+    where
+        T: PartialEq
+            + core::fmt::Debug
+            + norito::json::JsonSerialize
+            + norito::json::JsonDeserialize,
+    {
+        let json = norito::json::to_json(value).expect("serialize to json");
+        let decoded: T = norito::json::from_json(&json).expect("deserialize from json");
+        assert_eq!(&decoded, value);
+    }
+
     fn assert_registry_decodes<T>(
         registry: &crate::isi::InstructionRegistry,
         wire_id: &str,
@@ -1112,6 +1125,69 @@ mod tests {
             tally: vec![1, 2, 3],
             tally_proof: proof,
         });
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn zk_ace_instruction_json_roundtrips_include_allowlists() {
+        let asset = asset_definition_id();
+        let allowed_accounts = vec![account(1), account(2)];
+
+        let register = RegisterZkAceIdentityCommitment::new(
+            asset.clone(),
+            [0xA1; 32],
+            [0xA2; 32],
+            allowed_accounts.clone(),
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+            verifying_key("zk-ace"),
+        );
+        let register_json = norito::json::to_json(&register).expect("serialize register");
+        assert!(register_json.contains("allowed_accounts"));
+        let decoded_register: RegisterZkAceIdentityCommitment =
+            norito::json::from_json(&register_json).expect("deserialize register");
+        assert_eq!(decoded_register.allowed_accounts, allowed_accounts);
+        assert_eq!(decoded_register, register);
+
+        let rotate = RotateZkAceIdentityCommitment::new(
+            asset.clone(),
+            [0xB1; 32],
+            [0xB2; 32],
+            [0xB3; 32],
+            vec![account(3), account(4)],
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+            verifying_key("zk-ace-rotated"),
+        );
+        let rotate_json = norito::json::to_json(&rotate).expect("serialize rotate");
+        assert!(rotate_json.contains("allowed_accounts"));
+        let decoded_rotate: RotateZkAceIdentityCommitment =
+            norito::json::from_json(&rotate_json).expect("deserialize rotate");
+        assert_eq!(
+            decoded_rotate.allowed_accounts,
+            vec![account(3), account(4)]
+        );
+        assert_eq!(decoded_rotate, rotate);
+
+        assert_json_roundtrip(&RevokeZkAceIdentityCommitment::new(
+            asset.clone(),
+            [0xC1; 32],
+            Some([0xC2; 32]),
+        ));
+        assert_json_roundtrip(&SubmitZkAceAuthorizedTransfer::new(
+            account(5),
+            account(6),
+            asset,
+            125,
+            [0xD1; 32],
+            [0xD2; 32],
+            "boi-test-chain".parse().expect("chain id"),
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+            crate::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+            [0xD3; 32],
+            [0xD4; 32],
+            proof_attachment(),
+        ));
     }
 
     #[test]

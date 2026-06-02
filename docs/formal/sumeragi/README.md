@@ -7757,6 +7757,7 @@ Invariants:
 - `NoCommitEvidenceBeforeCommit`
 - `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
+- `RbcProgressEvidenceMatchesState`
 
 Fork-safety invariants:
 - `TypeInvariant`
@@ -8665,6 +8666,10 @@ Temporal properties:
   certificate evidence above threshold for all later states.
 - `RbcDeliveryNeverLost` proves that once RBC reaches the delivered state, later
   view-change, vote, or fault steps cannot roll it back.
+- `RbcProgressEvidenceNeverDiverges` proves that every reachable RBC progress
+  state keeps the evidence expected for that state: initialized states keep
+  validated header/digest evidence, chunk-covered states keep full chunk
+  coverage, and ready/delivered states keep ready quorum.
 
 Frontier recovery invariants:
 - `TypeInvariant`

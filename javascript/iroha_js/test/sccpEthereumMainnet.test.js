@@ -136,18 +136,20 @@ test("EthereumMainnetSccp rejects non-mainnet execution providers", async () => 
 });
 
 test("EthereumMainnetSccp rejects padded JSON-RPC chain ids", async () => {
-  const sdk = new EthereumMainnetSccp({
-    executionProvider: {
-      async request() {
-        return "0x01";
+  for (const chainId of ["0x01", "0X1", " 0x1", "0x1 "]) {
+    const sdk = new EthereumMainnetSccp({
+      executionProvider: {
+        async request() {
+          return chainId;
+        },
       },
-    },
-  });
+    });
 
-  await assert.rejects(
-    () => sdk.validateExecutionProviderMainnet(),
-    /hex, decimal, number, or bigint chain id/u,
-  );
+    await assert.rejects(
+      () => sdk.validateExecutionProviderMainnet(),
+      /hex, decimal, number, or bigint chain id/u,
+    );
+  }
 });
 
 test("EthereumMainnetSccp collects receipt evidence from user execution and consensus providers", async () => {

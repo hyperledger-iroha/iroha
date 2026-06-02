@@ -25,6 +25,10 @@ public enum KagemushaOfflineSpendMode: String, Equatable {
 }
 
 public enum KagemushaRecursiveSpendProver {
+    public static let requiredBridgeAbiVersion: UInt32 = 6
+    public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
+    public static let recursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1"
+
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
     }
@@ -55,6 +59,38 @@ public enum KagemushaRecursiveSpendProver {
         }
     }
 
+    public static func lineageWitnessFromInitResult(
+        requestArchive: Data,
+        bundleArchive: Data
+    ) throws -> Data {
+        try call(
+            archives: [requestArchive, bundleArchive],
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendLineageWitnessFromInitResult(
+                requestArchive: requestArchive,
+                bundleArchive: bundleArchive
+            )
+        }
+    }
+
+    public static func lineageWitnessAppendResult(
+        previousWitnessArchive: Data,
+        requestArchive: Data,
+        bundleArchive: Data
+    ) throws -> Data {
+        try call(
+            archives: [previousWitnessArchive, requestArchive, bundleArchive],
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendLineageWitnessAppendResult(
+                previousWitnessArchive: previousWitnessArchive,
+                requestArchive: requestArchive,
+                bundleArchive: bundleArchive
+            )
+        }
+    }
+
     public static func verifySpend(requestArchive: Data) throws -> Data {
         try call(
             requestArchive: requestArchive,
@@ -78,7 +114,20 @@ public enum KagemushaRecursiveSpendProver {
         bridgeAvailable: Bool,
         _ body: (Data) throws -> Data?
     ) throws -> Data {
-        guard !requestArchive.isEmpty else {
+        try call(
+            archives: [requestArchive],
+            bridgeAvailable: bridgeAvailable
+        ) {
+            try body(requestArchive)
+        }
+    }
+
+    static func call(
+        archives: [Data],
+        bridgeAvailable: Bool,
+        _ body: () throws -> Data?
+    ) throws -> Data {
+        guard archives.allSatisfy({ !$0.isEmpty }) else {
             throw KagemushaRecursiveSpendProverError.emptyRequestArchive
         }
         guard bridgeAvailable else {
@@ -86,7 +135,7 @@ public enum KagemushaRecursiveSpendProver {
         }
         let archive: Data?
         do {
-            archive = try body(requestArchive)
+            archive = try body()
         } catch NativeBridgeError.kagemushaProve {
             throw KagemushaRecursiveSpendProverError.proofRejected
         } catch {

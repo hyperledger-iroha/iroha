@@ -2288,6 +2288,12 @@ where
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, format!("{context}: {err}")))
 }
 
+/// Native ABI level required by the recursive Kagemusha spend helpers.
+#[napi(js_name = "connectNoritoBridgeAbiVersion")]
+pub fn connect_norito_bridge_abi_version() -> u32 {
+    6
+}
+
 /// Build the initial recursive Kagemusha spend bundle from a raw Norito request archive.
 #[napi(js_name = "kagemushaRecursiveSpendInit")]
 pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Result<Buffer> {
@@ -2335,40 +2341,75 @@ pub fn kagemusha_recursive_spend_append(request_archive: Uint8Array) -> napi::Re
     )
 }
 
+/// Build the initial recursive Kagemusha spend lineage witness from raw Norito archives.
+#[napi(js_name = "kagemushaRecursiveSpendLineageWitnessFromInitResult")]
+pub fn kagemusha_recursive_spend_lineage_witness_from_init_result(
+    request_archive: Uint8Array,
+    bundle_archive: Uint8Array,
+) -> napi::Result<Buffer> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(
+            &request_archive,
+            "Kagemusha recursive spend lineage witness init request",
+        )?;
+    let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            &bundle_archive,
+            "Kagemusha recursive spend lineage witness init bundle",
+        )?;
+    let witness =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_from_init_result(
+            &request, &bundle,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    encode_kagemusha_recursive_archive(
+        &witness,
+        "failed to encode Kagemusha recursive spend lineage witness",
+    )
+}
+
+/// Append one hop of recursive Kagemusha spend lineage witness material from raw Norito archives.
+#[napi(js_name = "kagemushaRecursiveSpendLineageWitnessAppendResult")]
+pub fn kagemusha_recursive_spend_lineage_witness_append_result(
+    previous_witness_archive: Uint8Array,
+    request_archive: Uint8Array,
+    bundle_archive: Uint8Array,
+) -> napi::Result<Buffer> {
+    let previous_witness: iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 =
+        decode_kagemusha_recursive_archive(
+            &previous_witness_archive,
+            "Kagemusha recursive spend previous lineage witness",
+        )?;
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 =
+        decode_kagemusha_recursive_archive(
+            &request_archive,
+            "Kagemusha recursive spend lineage witness append request",
+        )?;
+    let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            &bundle_archive,
+            "Kagemusha recursive spend lineage witness append bundle",
+        )?;
+    let witness =
+        iroha_data_model::offline::kagemusha_recursive_spend_lineage_witness_append_result(
+            &previous_witness,
+            &request,
+            &bundle,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    encode_kagemusha_recursive_archive(
+        &witness,
+        "failed to encode Kagemusha recursive spend lineage witness",
+    )
+}
+
 /// Verify a recursive Kagemusha spend bundle from a raw Norito request archive.
 #[napi(js_name = "kagemushaRecursiveSpendVerify")]
 pub fn kagemusha_recursive_spend_verify(request_archive: Uint8Array) -> napi::Result<Buffer> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendVerifyRequestV1 =
         decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend verify")?;
-    let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+    let result = iroha_core::zk::kagemusha_recursive_spend_verify_result(&request.bundle)
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
-    let result = match iroha_core::zk::preverify_kagemusha_recursive_spend_bundle(
-        &request.bundle,
-        &vk_box,
-    ) {
-        Ok(()) => {
-            let valid =
-                iroha_core::zk::verify_kagemusha_recursive_spend_bundle(&request.bundle, &vk_box);
-            iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
-                valid,
-                hop_count: request.bundle.accumulator.hop_count,
-                encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
-                    .unwrap_or(u32::MAX),
-                reason: if valid {
-                    String::new()
-                } else {
-                    "proof verification failed".to_owned()
-                },
-            }
-        }
-        Err(reason) => iroha_data_model::offline::KagemushaRecursiveSpendVerifyResultV1 {
-            valid: false,
-            hop_count: request.bundle.accumulator.hop_count,
-            encoded_bytes: u32::try_from(request.bundle.norito_encoded_len().unwrap_or(0))
-                .unwrap_or(u32::MAX),
-            reason,
-        },
-    };
     encode_kagemusha_recursive_archive(
         &result,
         "failed to encode Kagemusha recursive spend verify result",
@@ -2393,12 +2434,29 @@ fn kagemusha_recursive_spend_redeem_instruction_from_request(
     request
         .validate_public_binding()
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
-    let instruction = iroha_data_model::isi::offline::RedeemKagemushaRecursive::new(
-        request.bundle,
-        request.recipient,
-        request.public_amount,
-        request.redeem_proof,
-    );
+    if let Some(lineage_witness) = &request.lineage_witness {
+        let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+        iroha_core::zk::verify_kagemusha_recursive_spend_lineage_witness_and_bundle_with_vk_box(
+            &request.bundle,
+            lineage_witness,
+            &vk_box,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    } else {
+        iroha_core::zk::ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+            &request.bundle,
+        )
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    }
+    let instruction =
+        iroha_data_model::isi::offline::RedeemKagemushaRecursive::new_with_lineage_witness(
+            request.bundle,
+            request.recipient,
+            request.public_amount,
+            request.redeem_proof,
+            request.lineage_witness,
+        );
     Ok(instruction)
 }
 
@@ -10420,12 +10478,49 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_redeem_instruction_binds_public_amount_and_topup_anchor() {
+    fn kagemusha_recursive_spend_bridge_abi_version_is_six() {
+        assert_eq!(connect_norito_bridge_abi_version(), 6);
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_witness_host_helpers_reject_malformed_archives() {
+        let err = kagemusha_recursive_spend_lineage_witness_from_init_result(
+            Uint8Array::from(vec![0x01, 0x02]),
+            Uint8Array::from(vec![0x03, 0x04]),
+        )
+        .expect_err("init lineage helper must reject malformed archives");
+        assert!(
+            err.reason.contains("invalid Kagemusha recursive spend"),
+            "unexpected init lineage helper error: {err}"
+        );
+
+        let err = kagemusha_recursive_spend_lineage_witness_append_result(
+            Uint8Array::from(vec![0x01, 0x02]),
+            Uint8Array::from(vec![0x03, 0x04]),
+            Uint8Array::from(vec![0x05, 0x06]),
+        )
+        .expect_err("append lineage helper must reject malformed archives");
+        assert!(
+            err.reason.contains("invalid Kagemusha recursive spend"),
+            "unexpected append lineage helper error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_semantic_profile_after_public_binding()
+    {
         let request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-        let instruction =
-            kagemusha_recursive_spend_redeem_instruction_from_request(request.clone())
-                .expect("valid recursive spend redeem request");
-        assert_eq!(instruction.public_amount, 42);
+        request
+            .validate_public_binding()
+            .expect("semantic recursive spend redeem request has valid public bindings");
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
+            Ok(_) => panic!("semantic recursive spend redeem request must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("private-hop lineage"),
+            "unexpected semantic-profile error: {err}"
+        );
 
         let wrong_amount = sample_kagemusha_recursive_spend_redeem_request_for_js_host(41);
         let err = match kagemusha_recursive_spend_redeem_instruction_from_request(wrong_amount) {
@@ -10437,7 +10532,7 @@ mod tests {
             "unexpected wrong-amount error: {err}"
         );
 
-        let mut missing_anchor = request;
+        let mut missing_anchor = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
         missing_anchor
             .bundle
             .accumulator
@@ -10451,6 +10546,233 @@ mod tests {
             err.to_string().contains("topup_anchor_nullifiers"),
             "unexpected missing-anchor error: {err}"
         );
+
+        let mut missing_vk_commitment =
+            sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        missing_vk_commitment.redeem_proof.vk_commitment = None;
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(
+            missing_vk_commitment,
+        ) {
+            Ok(_) => panic!("missing recursive spend redeem VK commitment must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("vk_commitment"),
+            "unexpected missing-VK-commitment error: {err}"
+        );
+
+        let mut zero_vk_commitment =
+            sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        zero_vk_commitment.redeem_proof.vk_commitment = Some([0u8; Hash::LENGTH]);
+        let err =
+            match kagemusha_recursive_spend_redeem_instruction_from_request(zero_vk_commitment) {
+                Ok(_) => panic!("zero recursive spend redeem VK commitment must reject"),
+                Err(err) => err,
+            };
+        assert!(
+            err.to_string().contains("vk_commitment"),
+            "unexpected zero-VK-commitment error: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_reserved_lineage_profile() {
+        let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+        request.bundle.recursive_proof.verifier_key_id.name =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                .to_owned();
+        request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest = sample_hash(0xC1);
+        request.bundle.recursive_proof.public_inputs_hash = request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("lineage recursive spend public-input hash");
+        request
+            .validate_public_binding()
+            .expect("reserved lineage recursive spend redeem request has valid public bindings");
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request.clone()) {
+            Ok(_) => panic!("reserved lineage recursive spend redeem request must reject"),
+            Err(err) => err,
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("lineage proof")
+                && (err.contains("not wired into chain admission")
+                    || err.contains("failed to decode recursive spend lineage proof envelope")),
+            "unexpected reserved-lineage error: {err}"
+        );
+
+        request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .recursive_verifier_scalar_projection_digest = [0u8; Hash::LENGTH];
+        request.bundle.recursive_proof.public_inputs_hash = request
+            .bundle
+            .recursive_proof
+            .public_inputs
+            .public_inputs_hash()
+            .expect("zero lineage scalar public-input hash");
+        let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
+            Ok(_) => panic!("zero lineage scalar projection must reject"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("recursive_verifier_scalar_projection_digest"),
+            "unexpected zero-lineage-scalar error: {err}"
+        );
+    }
+
+    fn sample_kagemusha_recursive_spend_lineage_witness_for_js_host(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+    ) -> iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+        let vk_id = VerifyingKeyId::new("halo2/ipa", "js-host-recursive-lineage-hop");
+        let mut attachment = ProofAttachment::new_ref(
+            "halo2/ipa".to_owned(),
+            iroha_data_model::proof::ProofBox::new("halo2/ipa".to_owned(), vec![0xA1; 16]),
+            vk_id.clone(),
+        );
+        let vk_commitment = sample_hash(0xC8);
+        attachment.vk_commitment = Some(vk_commitment);
+        let verifier_key =
+            iroha_data_model::proof::VerifyingKeyBox::new("halo2/ipa".to_owned(), vec![0xC9; 32]);
+        let step = iroha_data_model::offline::KagemushaVerifiedFoldStep {
+            root_before: bundle.accumulator.initial_root,
+            input_nullifiers: vec![bundle.accumulator.topup_anchor_nullifiers[0]],
+            output_commitments: vec![bundle.accumulator.current_note.note_commitment],
+            root_after: bundle.accumulator.final_root,
+            attachment,
+            verifier_key: verifier_key.clone(),
+        };
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+            1,
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pasta",
+            sample_hash(0xCA),
+            vk_commitment,
+        );
+        record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("vk length fits");
+        record.max_proof_bytes = 4096;
+        record.key = Some(verifier_key);
+        iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                    chain_id: bundle.accumulator.chain_id.clone(),
+                    asset: bundle.accumulator.asset.clone(),
+                    steps: vec![step],
+                },
+                verifier_records: vec![
+                    iroha_data_model::offline::KagemushaVerifiedFoldVerifierRecord {
+                        id: vk_id,
+                        record,
+                    },
+                ],
+            },
+            pallas_open_envelopes_archive: vec![0xFF, 0x00, 0x01],
+            current_notes: vec![bundle.accumulator.current_note.clone()],
+            previous_recursive_proofs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_redeem_instruction_rejects_malformed_lineage_witnesses() {
+        let base_request = {
+            let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+            request.lineage_witness =
+                Some(sample_kagemusha_recursive_spend_lineage_witness_for_js_host(&request.bundle));
+            request
+        };
+
+        fn assert_rejects(
+            request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
+            label: &str,
+        ) {
+            let err = match kagemusha_recursive_spend_redeem_instruction_from_request(request) {
+                Ok(_) => panic!("JS host recursive redeem builder must reject {label}"),
+                Err(err) => err,
+            };
+            assert!(
+                !err.to_string().is_empty(),
+                "JS host recursive redeem builder must report a reason for {label}"
+            );
+        }
+
+        let mut missing_record = base_request.clone();
+        missing_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .clear();
+        assert_rejects(missing_record, "missing verifier record");
+
+        let mut duplicate_record = base_request.clone();
+        let duplicate = duplicate_record
+            .lineage_witness
+            .as_ref()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .clone();
+        duplicate_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .push(duplicate);
+        assert_rejects(duplicate_record, "duplicate verifier record");
+
+        let mut unreferenced_record = base_request.clone();
+        let mut extra = unreferenced_record
+            .lineage_witness
+            .as_ref()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records[0]
+            .clone();
+        extra.id = VerifyingKeyId::new("halo2/ipa", "unused-js-host-lineage-hop");
+        unreferenced_record
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .record_bundle
+            .verifier_records
+            .push(extra);
+        assert_rejects(unreferenced_record, "unreferenced verifier record");
+
+        let mut note_commitment_mismatch = base_request.clone();
+        note_commitment_mismatch
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .current_notes[0]
+            .note_commitment = sample_hash(0xDB);
+        assert_rejects(note_commitment_mismatch, "current note commitment mismatch");
+
+        let mut unexpected_previous_proof = base_request.clone();
+        let previous = unexpected_previous_proof.bundle.recursive_proof.clone();
+        unexpected_previous_proof
+            .lineage_witness
+            .as_mut()
+            .expect("lineage witness")
+            .previous_recursive_proofs
+            .push(previous);
+        assert_rejects(
+            unexpected_previous_proof,
+            "unexpected previous recursive proof for one-hop witness",
+        );
+
+        assert_rejects(base_request, "malformed Pallas envelope archive");
     }
 
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
@@ -10529,15 +10851,18 @@ mod tests {
     fn sample_kagemusha_recursive_spend_redeem_request_for_js_host(
         public_amount: u128,
     ) -> iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 {
+        let mut redeem_proof = ProofAttachment::new_ref(
+            "halo2/ipa".to_owned(),
+            iroha_data_model::proof::ProofBox::new("halo2/ipa".to_owned(), vec![0x5A; 64]),
+            VerifyingKeyId::new("halo2/ipa", "js-host-recursive-unshield"),
+        );
+        redeem_proof.vk_commitment = Some(sample_hash(0xB7));
         iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 {
             bundle: sample_kagemusha_recursive_spend_bundle_for_js_host(),
             recipient: sample_account("kagemusha-js-host"),
             public_amount,
-            redeem_proof: ProofAttachment::new_ref(
-                "halo2/ipa".to_owned(),
-                iroha_data_model::proof::ProofBox::new("halo2/ipa".to_owned(), vec![0x5A; 64]),
-                VerifyingKeyId::new("halo2/ipa", "js-host-recursive-unshield"),
-            ),
+            redeem_proof,
+            lineage_witness: None,
         }
     }
 

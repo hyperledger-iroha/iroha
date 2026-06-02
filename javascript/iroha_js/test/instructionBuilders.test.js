@@ -1,5 +1,6 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -49,6 +50,41 @@ import {
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
+  buildZkAtPolicyCommitment,
+  buildZkAtAuthenticatorEnvelope,
+  buildZkAtDevProofFixture,
+  verifyZkAtAuthenticatorLocally,
+  buildZkAmsAdmissionBatch,
+  buildZkAmsAdmissionProofEnvelope,
+  buildZkAmsAdmissionDevProofFixture,
+  verifyZkAmsAdmissionProofLocally,
+  buildVegaCredentialPredicateCommitment,
+  buildVegaCredentialProofEnvelope,
+  buildVegaCredentialDevProofFixture,
+  verifyVegaCredentialProofLocally,
+  buildSilentThresholdCredentialCommitments,
+  buildSilentThresholdCredentialEnvelope,
+  buildSilentThresholdCredentialDevProofFixture,
+  verifySilentThresholdCredentialProofLocally,
+  buildZkX509IdentityCommitments,
+  buildZkX509IdentityEnvelope,
+  buildZkX509IdentityDevProofFixture,
+  verifyZkX509IdentityProofLocally,
+  buildJindoLatticePublicInputs,
+  buildJindoLatticeProofEnvelope,
+  buildJindoLatticeDevProofFixture,
+  verifyJindoLatticeProofLocally,
+  buildSisHintsCredentialCommitments,
+  buildSisHintsCredentialEnvelope,
+  buildSisHintsCredentialDevProofFixture,
+  verifySisHintsCredentialProofLocally,
+  buildAnonymousPgcReceiverSet,
+  buildAnonymousPgcDevProofFixture,
+  verifyAnonymousPgcDevProofLocally,
+  buildRangeCommitment,
+  buildVeRangeDevProofFixture,
+  buildVeRangeProofEnvelope,
+  verifyVeRangeProofLocally,
   buildPrivacyProofEnvelope,
   buildRegisterPrivacyVerifierKeyInstruction,
   buildRetirePrivacyVerifierKeyInstruction,
@@ -1963,6 +1999,17 @@ test("ZK-ACE builders reject malformed proof and replay inputs", () => {
   );
   assert.throws(
     () =>
+      buildRegisterZkAceIdentityCommitmentInstruction({
+        assetDefinitionId: ASSET_DEFINITION_ID,
+        identityCommitment: Buffer.alloc(32, 0x11),
+        policyHash: Buffer.alloc(32, 0x22),
+        allowedAccounts: Array.from({ length: 17 }, () => ACCOUNT_ID_INPUT),
+        verifierKey,
+      }),
+    /allowedAccounts.*at most 16/,
+  );
+  assert.throws(
+    () =>
       buildZkAceAuthorizationProofV1({
         publicInputs,
         proofBytes: Buffer.from("proof"),
@@ -2057,6 +2104,1732 @@ descriptorTest("privacy proof envelopes encode canonical open-verify metadata", 
   assert.deepEqual(decoded.public_inputs, Array.from(publicInputs));
   assert.deepEqual(decoded.proof_bytes, Array.from(proofBytes));
   assert.deepEqual(decoded.aux, Array.from(aux));
+});
+
+descriptorTest("zkAt builders normalize policy commitments and authenticator envelopes", () => {
+  const policy = {
+    threshold: 2,
+    roles: ["ops", "risk", "treasury"],
+    fallback: { recovery_after_slots: 1440 },
+  };
+  const payload = Buffer.from("zkat:transparent-transfer:42");
+  const policyCommitment = buildZkAtPolicyCommitment({
+    policyJson: policy,
+    policyEpoch: 7,
+    domainSeparator: "boi:zkat:v1",
+    policySchema: "boi-hidden-threshold-v1",
+  });
+  assert.equal(policyCommitment.version, 1);
+  assert.equal(policyCommitment.commitment_kind, "dev-sha256-policy-digest");
+  assert.equal(policyCommitment.policy_commitment.length, 32);
+  assert.equal(policyCommitment.policy_digest.length, 32);
+
+  const vkHash = Buffer.alloc(32, 0x55);
+  const prepared = buildZkAtAuthenticatorEnvelope({
+    policyCommitment: policyCommitment.policy_commitment,
+    policyEpoch: 7,
+    payload,
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    vkHash,
+    proofBytes: Buffer.from("prepared-zkat-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Stark");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "stark/fri/sha256-goldilocks:zkat_policy_private_auth_v1",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(preparedInputs.account_id, ACCOUNT_ID_CANONICAL);
+  assert.equal(preparedInputs.action_class, "transparent_transfer");
+  assert.equal(preparedInputs.policy_epoch, 7);
+  assert.equal(
+    preparedInputs.policy_commitment,
+    Buffer.from(policyCommitment.policy_commitment).toString("hex"),
+  );
+
+  const fixture = buildZkAtDevProofFixture({
+    policyJson: policy,
+    policyEpoch: 7,
+    policySchema: "boi-hidden-threshold-v1",
+    payload,
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    vkHash,
+  });
+  assert.equal(fixture.kind, "zkat-dev-fixture-v1");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  assert.ok(Buffer.isBuffer(fixture.proofBytes));
+  const verified = verifyZkAtAuthenticatorLocally({
+    envelope: fixture.envelope,
+    policyJson: policy,
+    policySchema: "boi-hidden-threshold-v1",
+    payload,
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    policyEpoch: 7,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(verified.account_id, ACCOUNT_ID_CANONICAL);
+  assert.equal(verified.action_class, "transparent_transfer");
+  assert.equal(verified.policy_epoch, 7);
+  assert.deepEqual(verified.public_inputs, fixture.public_inputs);
+});
+
+descriptorTest("zkAt builders reject malformed policy and authenticator inputs", () => {
+  const policy = { threshold: 2, roles: ["ops", "risk"] };
+  const base = {
+    policyJson: policy,
+    policyEpoch: 7,
+    payload: Buffer.from("zkat:transparent-transfer:42"),
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  for (const patch of [
+    { policyEpoch: 0 },
+    { policyCommitment: Buffer.alloc(32, 0xee) },
+    { policyJson: undefined, policyCommitment: undefined },
+  ]) {
+    assert.throws(
+      () => buildZkAtPolicyCommitment({ ...base, ...patch }),
+      /zkAtPolicyCommitment/,
+    );
+  }
+  for (const patch of [
+    { policyEpoch: 0 },
+    { payload: Buffer.from("payload"), txDigest: Buffer.alloc(32, 0xee) },
+    { accountId: "alice@wonderland" },
+    { actionClass: " " },
+    { vkHash: Buffer.alloc(32) },
+    { proofBytes: Buffer.alloc(0) },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkAtAuthenticatorEnvelope({
+          ...base,
+          proofBytes: Buffer.from("prepared-zkat-proof"),
+          ...patch,
+        }),
+      /(zkAtAuthenticatorEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("zkAt local verifier rejects tampered dev fixtures", () => {
+  const policy = { threshold: 2, roles: ["ops", "risk"] };
+  const fixtureInput = {
+    policyJson: policy,
+    policyEpoch: 7,
+    policySchema: "boi-hidden-threshold-v1",
+    payload: Buffer.from("zkat:transparent-transfer:42"),
+    accountId: ACCOUNT_ID,
+    actionClass: "transparent_transfer",
+    domainSeparator: "boi:zkat:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const fixture = buildZkAtDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId: decoded.circuit_id,
+      vkHash: Buffer.alloc(32, 0x55),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroPolicyInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      policy_commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }), payload: fixtureInput.payload },
+    { envelope: fixture.envelope, payload: Buffer.from("substituted-payload") },
+    { envelope: fixture.envelope, policyJson: { threshold: 1, roles: ["ops"] }, policyEpoch: 7, policySchema: "boi-hidden-threshold-v1" },
+    { envelope: fixture.envelope, accountId: ACCOUNT_ID, actionClass: "different_action" },
+    { envelope: fixture.envelope, policyEpoch: 8 },
+    { envelope: rebuildEnvelope({ backend: "groth16" }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroPolicyInputs }), payload: fixtureInput.payload },
+  ]) {
+    assert.throws(
+      () => verifyZkAtAuthenticatorLocally(input),
+      /zkAtAuthenticatorLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("ZK-AMS builders normalize admission batches and proof envelopes", () => {
+  const issuerRoot = Buffer.alloc(32, 0x91);
+  const admissionNullifiers = [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)];
+  const anonymousAccountCommitments = [
+    Buffer.alloc(32, 0xb1),
+    Buffer.alloc(32, 0xb2),
+  ];
+  const recursiveProof = Buffer.from("zk-ams:recursive-proof:batch-7");
+  const domainSeparator = "boi:zk-ams:pilot:v0";
+  const vkHash = Buffer.alloc(32, 0x66);
+  const base = {
+    issuerRoot,
+    admissionNullifiers,
+    anonymousAccountCommitments,
+    recursiveProof,
+    domainSeparator,
+  };
+
+  const batch = buildZkAmsAdmissionBatch(base);
+  assert.equal(batch.version, 1);
+  assert.equal(batch.batch_size, 2);
+  assert.equal(batch.root_kind, "dev-sha256-admission-batch-root");
+  assert.equal(Buffer.from(batch.issuer_root).toString("hex"), issuerRoot.toString("hex"));
+  assert.equal(batch.admission_nullifiers.length, 2);
+
+  const prepared = buildZkAmsAdmissionProofEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-zk-ams-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Stark");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "stark/fri/sha256-goldilocks:zk_ams_recursive_admission_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(
+    preparedInputs.admission_batch_root,
+    Buffer.from(batch.admission_batch_root).toString("hex"),
+  );
+  assert.equal(preparedInputs.domain_separator, domainSeparator);
+
+  const fixture = buildZkAmsAdmissionDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "zk-ams-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  assert.equal(fixture.batch.batch_size, 2);
+  const verified = verifyZkAmsAdmissionProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(verified.batch_size, 2);
+  assert.equal(
+    verified.admission_batch_root,
+    Buffer.from(batch.admission_batch_root).toString("hex"),
+  );
+});
+
+descriptorTest("ZK-AMS builders reject malformed admission inputs", () => {
+  const base = {
+    issuerRoot: Buffer.alloc(32, 0x91),
+    admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+    anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb2)],
+    recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+    domainSeparator: "boi:zk-ams:pilot:v0",
+  };
+  for (const patch of [
+    { issuerRoot: Buffer.alloc(32) },
+    { admissionNullifiers: [] },
+    { admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa1)] },
+    { anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb1)] },
+    { anonymousAccountCommitments: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xb2)] },
+    { anonymousAccountCommitments: [Buffer.alloc(32, 0xb1)] },
+    { recursiveProofDigest: Buffer.alloc(32, 0xee) },
+    { admissionBatchRoot: Buffer.alloc(32, 0xdd) },
+    { maxBatchSize: 1 },
+  ]) {
+    assert.throws(
+      () => buildZkAmsAdmissionBatch({ ...base, ...patch }),
+      /zkAmsAdmissionBatch/,
+    );
+  }
+
+  for (const patch of [
+    { proofBytes: Buffer.alloc(0) },
+    { vkHash: Buffer.alloc(32) },
+    { backend: "groth16" },
+    { circuitId: "stark/fri/sha256-goldilocks:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkAmsAdmissionProofEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0x66),
+          proofBytes: Buffer.from("prepared-zk-ams-proof"),
+          ...patch,
+        }),
+      /(zkAmsAdmissionProofEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("ZK-AMS local verifier rejects tampered dev fixtures", () => {
+  const fixtureInput = {
+    issuerRoot: Buffer.alloc(32, 0x91),
+    admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+    anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb2)],
+    recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+    domainSeparator: "boi:zk-ams:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x66),
+  };
+  const fixture = buildZkAmsAdmissionDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId: decoded.circuit_id,
+      vkHash: Buffer.alloc(32, 0x66),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const duplicateNullifierInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      admission_nullifiers: [
+        publicInputs.admission_nullifiers[0],
+        publicInputs.admission_nullifiers[0],
+      ],
+    }),
+  );
+  const zeroIssuerInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuer_root: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, issuerRoot: Buffer.alloc(32, 0x92) },
+    { envelope: fixture.envelope, admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa3)] },
+    { envelope: fixture.envelope, anonymousAccountCommitments: [Buffer.alloc(32, 0xb1), Buffer.alloc(32, 0xb3)] },
+    { envelope: fixture.envelope, recursiveProof: Buffer.from("substituted-recursive-proof") },
+    { envelope: fixture.envelope, domainSeparator: "boi:zk-ams:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "groth16" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: duplicateNullifierInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroIssuerInputs }) },
+  ]) {
+    assert.throws(
+      () => verifyZkAmsAdmissionProofLocally(input),
+      /zkAmsAdmissionLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("Vega builders normalize credential predicates and proof envelopes", () => {
+  const issuer = { did: "did:example:issuer:boi", key: "issuer-key-1" };
+  const predicate = {
+    kind: "age_over",
+    attribute: "age",
+    threshold: 18,
+  };
+  const base = {
+    issuerJson: issuer,
+    predicateJson: predicate,
+    credentialSchema: "boi-age-credential-v1",
+    accountId: ACCOUNT_ID,
+    expirationEpoch: 42,
+    domainSeparator: "boi:vega:pilot:v0",
+  };
+  const predicateInput = {
+    predicateJson: predicate,
+    credentialSchema: base.credentialSchema,
+    domainSeparator: base.domainSeparator,
+  };
+  const vkHash = Buffer.alloc(32, 0x77);
+
+  const predicateCommitment = buildVegaCredentialPredicateCommitment(predicateInput);
+  assert.equal(predicateCommitment.version, 1);
+  assert.equal(predicateCommitment.credential_schema, "boi-age-credential-v1");
+  assert.equal(predicateCommitment.commitment_kind, "dev-sha256-predicate-digest");
+  assert.equal(predicateCommitment.predicate_commitment.length, 32);
+
+  const prepared = buildVegaCredentialProofEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-vega-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Stark");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "stark/fri/sha256-goldilocks:vega_existing_credential_zk_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(preparedInputs.credential_schema, "boi-age-credential-v1");
+  assert.equal(
+    preparedInputs.predicate_commitment,
+    Buffer.from(predicateCommitment.predicate_commitment).toString("hex"),
+  );
+
+  const fixture = buildVegaCredentialDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "vega-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  const verified = verifyVegaCredentialProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(verified.credential_schema, "boi-age-credential-v1");
+  assert.equal(verified.expiration_epoch, 42);
+});
+
+descriptorTest("Vega builders reject malformed credential proof inputs", () => {
+  const base = {
+    issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+    predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+    credentialSchema: "boi-age-credential-v1",
+    accountId: ACCOUNT_ID,
+    expirationEpoch: 42,
+    domainSeparator: "boi:vega:pilot:v0",
+  };
+  const predicateInput = {
+    predicateJson: base.predicateJson,
+    credentialSchema: base.credentialSchema,
+    domainSeparator: base.domainSeparator,
+  };
+  for (const patch of [
+    { predicateCommitment: Buffer.alloc(32, 0xee) },
+    { predicateJson: undefined, predicateCommitment: undefined },
+    { credentialSchema: " " },
+    { predicateCommitment: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildVegaCredentialPredicateCommitment({ ...predicateInput, ...patch }),
+      /vegaCredentialPredicateCommitment/,
+    );
+  }
+
+  for (const patch of [
+    { issuerJson: undefined, issuerCommitment: undefined },
+    { issuerCommitment: Buffer.alloc(32) },
+    { subjectBinding: Buffer.alloc(32, 0x01), accountId: ACCOUNT_ID },
+    { accountId: "alice@wonderland" },
+    { expirationEpoch: -1 },
+    { vkHash: Buffer.alloc(32) },
+    { proofBytes: Buffer.alloc(0) },
+    { backend: "groth16" },
+    { circuitId: "stark/fri/sha256-goldilocks:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildVegaCredentialProofEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0x77),
+          proofBytes: Buffer.from("prepared-vega-proof"),
+          ...patch,
+        }),
+      /(vegaCredentialProofEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("Vega local verifier rejects tampered dev fixtures", () => {
+  const fixtureInput = {
+    issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+    predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+    credentialSchema: "boi-age-credential-v1",
+    accountId: ACCOUNT_ID,
+    expirationEpoch: 42,
+    domainSeparator: "boi:vega:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x77),
+  };
+  const fixture = buildVegaCredentialDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId: decoded.circuit_id,
+      vkHash: Buffer.alloc(32, 0x77),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroIssuerInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuer_commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+  const aliasCollisionInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      credentialSchema: publicInputs.credential_schema,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, issuerJson: { did: "did:example:issuer:other" } },
+    { envelope: fixture.envelope, predicateJson: { kind: "age_over", attribute: "age", threshold: 21 } },
+    { envelope: fixture.envelope, accountId: SAMPLE_ACCOUNT_I105_LITERAL },
+    { envelope: fixture.envelope, expirationEpoch: 43 },
+    { envelope: fixture.envelope, credentialSchema: "boi-other-credential-v1" },
+    { envelope: fixture.envelope, domainSeparator: "boi:vega:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "groth16" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroIssuerInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: aliasCollisionInputs }) },
+  ]) {
+    assert.throws(
+      () => verifyVegaCredentialProofLocally(input),
+      /vegaCredentialLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("Silent threshold credential builders normalize commitments and envelopes", () => {
+  const base = {
+    issuerSetJson: {
+      version: 3,
+      threshold: 2,
+      issuers: ["boi-supervisor", "bank-a", "bank-b"],
+    },
+    thresholdPolicyJson: {
+      threshold: 2,
+      issuer_set_version: 3,
+      purpose: "retail-wallet-eligibility",
+    },
+    credentialShowingJson: {
+      credential_type: "retail-wallet-eligibility",
+      attributes: ["resident", "adult"],
+      presentation_nonce: "nonce-42",
+    },
+    verifierPolicyJson: {
+      verifier: "boi-wallet-enrollment",
+      accepted_purposes: ["retail-wallet-eligibility"],
+    },
+    domainSeparator: "boi:silent-threshold:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x88);
+
+  const commitments = buildSilentThresholdCredentialCommitments(base);
+  assert.equal(commitments.version, 1);
+  assert.equal(commitments.issuer_set_commitment.length, 32);
+  assert.equal(commitments.showing_nullifier.length, 32);
+  assert.equal(
+    commitments.commitment_kinds.credential_showing_commitment,
+    "dev-sha256-credential-showing-digest",
+  );
+
+  const prepared = buildSilentThresholdCredentialEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-silent-threshold-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Stark");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "stark/fri/sha256-goldilocks:silent_threshold_anoncred_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(
+    preparedInputs.issuer_set_commitment,
+    Buffer.from(commitments.issuer_set_commitment).toString("hex"),
+  );
+  assert.equal(
+    preparedInputs.showing_nullifier,
+    Buffer.from(commitments.showing_nullifier).toString("hex"),
+  );
+
+  const fixture = buildSilentThresholdCredentialDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "silent-threshold-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  const verified = verifySilentThresholdCredentialProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(
+    verified.showing_nullifier,
+    Buffer.from(commitments.showing_nullifier).toString("hex"),
+  );
+});
+
+descriptorTest("Silent threshold credential builders reject malformed inputs", () => {
+  const base = {
+    issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+    thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+    credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+    verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+    domainSeparator: "boi:silent-threshold:pilot:v0",
+  };
+  for (const patch of [
+    { issuerSetCommitment: Buffer.alloc(32, 0xee) },
+    { thresholdPolicyHash: Buffer.alloc(32, 0xee) },
+    { credentialShowingCommitment: Buffer.alloc(32, 0xee) },
+    { showingNullifier: Buffer.alloc(32, 0xee) },
+    { verifierPolicyHash: Buffer.alloc(32, 0xee) },
+    { issuerSetJson: undefined, issuerSetCommitment: undefined },
+    { thresholdPolicyJson: undefined, thresholdPolicyHash: undefined },
+    { credentialShowingJson: undefined, credentialShowingCommitment: undefined },
+    { verifierPolicyJson: undefined, verifierPolicyHash: undefined },
+    { domainSeparator: " " },
+    { issuerSetCommitment: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildSilentThresholdCredentialCommitments({ ...base, ...patch }),
+      /silentThresholdCredentialCommitments/,
+    );
+  }
+
+  for (const patch of [
+    { proofBytes: Buffer.alloc(0) },
+    { vkHash: Buffer.alloc(32) },
+    { backend: "groth16" },
+    { circuitId: "stark/fri/sha256-goldilocks:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildSilentThresholdCredentialEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0x88),
+          proofBytes: Buffer.from("prepared-silent-threshold-proof"),
+          ...patch,
+        }),
+      /(silentThresholdCredentialEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("Silent threshold local verifier rejects tampered dev fixtures", () => {
+  const fixtureInput = {
+    issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+    thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+    credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+    verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+    domainSeparator: "boi:silent-threshold:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x88),
+  };
+  const fixture = buildSilentThresholdCredentialDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId: decoded.circuit_id,
+      vkHash: Buffer.alloc(32, 0x88),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroIssuerInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuer_set_commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+  const aliasCollisionInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuerSetCommitment: publicInputs.issuer_set_commitment,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, issuerSetJson: { threshold: 1, issuers: ["a"] } },
+    { envelope: fixture.envelope, thresholdPolicyJson: { threshold: 1, purpose: "wallet" } },
+    { envelope: fixture.envelope, credentialShowingJson: { credential_type: "wallet", nonce: "n-2" } },
+    { envelope: fixture.envelope, showingNullifier: Buffer.alloc(32, 0x44) },
+    { envelope: fixture.envelope, verifierPolicyJson: { verifier: "other", purpose: "wallet" } },
+    { envelope: fixture.envelope, domainSeparator: "boi:silent-threshold:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "groth16" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroIssuerInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: aliasCollisionInputs }) },
+  ]) {
+    assert.throws(
+      () => verifySilentThresholdCredentialProofLocally(input),
+      /silentThresholdCredentialLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("ZK-X.509 identity builders normalize commitments and envelopes", () => {
+  const base = {
+    caRootJson: {
+      root: "boi-root-ca",
+      version: 1,
+      not_before: "2026-01-01T00:00:00Z",
+    },
+    certificatePolicyJson: {
+      eku: ["clientAuth"],
+      policy: "institutional-wallet",
+    },
+    revocationJson: {
+      epoch: 7,
+      root: "crlite-root-7",
+    },
+    subjectJson: {
+      cn: "Bank A",
+      lei: "5493001KJTIIGC8Y1R12",
+    },
+    accountId: ACCOUNT_ID,
+    domainSeparator: "boi:zk-x509:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0x99);
+
+  const commitments = buildZkX509IdentityCommitments(base);
+  assert.equal(commitments.version, 1);
+  assert.equal(commitments.ca_root_commitment.length, 32);
+  assert.equal(commitments.address_binding.length, 32);
+  assert.equal(
+    commitments.commitment_kinds.ca_root_commitment,
+    "dev-sha256-ca-root-digest",
+  );
+  assert.equal(
+    commitments.commitment_kinds.address_binding,
+    "dev-sha256-account-binding",
+  );
+
+  const prepared = buildZkX509IdentityEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-zk-x509-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Stark");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "stark/fri/sha256-goldilocks:zk_x509_onchain_identity_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(
+    preparedInputs.ca_root_commitment,
+    Buffer.from(commitments.ca_root_commitment).toString("hex"),
+  );
+  assert.equal(
+    preparedInputs.address_binding,
+    Buffer.from(commitments.address_binding).toString("hex"),
+  );
+
+  const fixture = buildZkX509IdentityDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "zk-x509-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  const verified = verifyZkX509IdentityProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(
+    verified.address_binding,
+    Buffer.from(commitments.address_binding).toString("hex"),
+  );
+});
+
+descriptorTest("ZK-X.509 identity builders reject malformed inputs", () => {
+  const base = {
+    caRootJson: { root: "boi-root-ca", version: 1 },
+    certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+    revocationJson: { epoch: 7, root: "revocation-root" },
+    subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+    accountId: ACCOUNT_ID,
+    domainSeparator: "boi:zk-x509:pilot:v0",
+  };
+  for (const patch of [
+    { caRootCommitment: Buffer.alloc(32, 0xee) },
+    { certificatePolicyHash: Buffer.alloc(32, 0xee) },
+    { revocationRoot: Buffer.alloc(32, 0xee) },
+    { subjectCommitment: Buffer.alloc(32, 0xee) },
+    { addressBinding: Buffer.alloc(32, 0xee) },
+    { caRootJson: undefined, caRootCommitment: undefined },
+    { certificatePolicyJson: undefined, certificatePolicyHash: undefined },
+    { revocationJson: undefined, revocationRoot: undefined },
+    { subjectJson: undefined, subjectCommitment: undefined },
+    { accountId: undefined, addressBinding: undefined },
+    { accountId: "not-an-account-id" },
+    { accountId: ACCOUNT_ID, walletAddress: "wallet-address-alias" },
+    { domainSeparator: " " },
+    { caRootCommitment: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildZkX509IdentityCommitments({ ...base, ...patch }),
+      /zkX509IdentityCommitments/,
+    );
+  }
+
+  for (const patch of [
+    { proofBytes: Buffer.alloc(0) },
+    { vkHash: Buffer.alloc(32) },
+    { backend: "groth16" },
+    { circuitId: "stark/fri/sha256-goldilocks:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildZkX509IdentityEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0x99),
+          proofBytes: Buffer.from("prepared-zk-x509-proof"),
+          ...patch,
+        }),
+      /(zkX509IdentityEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("ZK-X.509 local verifier rejects tampered dev fixtures", () => {
+  const otherAccount = AccountAddress.fromAccount({
+    publicKey: new Uint8Array(32).fill(11),
+  }).toI105(SORA_I105_DISCRIMINANT);
+  const fixtureInput = {
+    caRootJson: { root: "boi-root-ca", version: 1 },
+    certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+    revocationJson: { epoch: 7, root: "revocation-root" },
+    subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+    accountId: ACCOUNT_ID,
+    domainSeparator: "boi:zk-x509:pilot:v0",
+    vkHash: Buffer.alloc(32, 0x99),
+  };
+  const fixture = buildZkX509IdentityDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    circuitId = decoded.circuit_id,
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId,
+      vkHash: Buffer.alloc(32, 0x99),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroCaRootInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      ca_root_commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+  const aliasCollisionInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      caRootCommitment: publicInputs.ca_root_commitment,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, caRootJson: { root: "other-root" } },
+    { envelope: fixture.envelope, certificatePolicyJson: { eku: ["serverAuth"] } },
+    { envelope: fixture.envelope, revocationJson: { epoch: 8, root: "revocation-root" } },
+    { envelope: fixture.envelope, subjectJson: { cn: "Bank B" } },
+    { envelope: fixture.envelope, accountId: otherAccount },
+    { envelope: fixture.envelope, domainSeparator: "boi:zk-x509:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "groth16" }) },
+    { envelope: rebuildEnvelope({ circuitId: "stark/fri/sha256-goldilocks:wrong" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroCaRootInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: aliasCollisionInputs }) },
+  ]) {
+    assert.throws(
+      () => verifyZkX509IdentityProofLocally(input),
+      /zkX509IdentityLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("Jindo lattice PCS builders normalize public inputs and envelopes", () => {
+  const base = {
+    polynomialJson: {
+      ring: "Rq",
+      degree: 1024,
+      coefficients_digest: "poly-digest-1",
+    },
+    openingClaimJson: {
+      point: "x=42",
+      value_digest: "evaluation-digest-1",
+    },
+    querySetJson: {
+      queries: [0, 7, 42],
+      batch: "opening-batch-1",
+    },
+    parametersJson: {
+      scheme: "jindo-pcs-v0",
+      q_bits: 64,
+      sigma: "research-parameter-set",
+    },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0xaa);
+
+  const publicInputs = buildJindoLatticePublicInputs(base);
+  assert.equal(publicInputs.version, 1);
+  assert.equal(publicInputs.commitment.length, 32);
+  assert.equal(publicInputs.parameter_hash.length, 32);
+  assert.equal(
+    publicInputs.commitment_kinds.commitment,
+    "dev-sha256-commitment-digest",
+  );
+
+  const prepared = buildJindoLatticeProofEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-jindo-lattice-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Unsupported");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "lattice/jindo-pcs-v0:jindo_lattice_pcs_zk_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(
+    preparedInputs.commitment,
+    Buffer.from(publicInputs.commitment).toString("hex"),
+  );
+  assert.equal(
+    preparedInputs.parameter_hash,
+    Buffer.from(publicInputs.parameter_hash).toString("hex"),
+  );
+
+  const fixture = buildJindoLatticeDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "jindo-lattice-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  const verified = verifyJindoLatticeProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(
+    verified.parameter_hash,
+    Buffer.from(publicInputs.parameter_hash).toString("hex"),
+  );
+});
+
+descriptorTest("Jindo lattice PCS builders reject malformed inputs", () => {
+  const base = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+  };
+  for (const patch of [
+    { commitment: Buffer.alloc(32, 0xee) },
+    { openingClaimHash: Buffer.alloc(32, 0xee) },
+    { querySetHash: Buffer.alloc(32, 0xee) },
+    { parameterHash: Buffer.alloc(32, 0xee) },
+    { polynomialJson: undefined, commitment: undefined },
+    { openingClaimJson: undefined, openingClaimHash: undefined },
+    { querySetJson: undefined, querySetHash: undefined },
+    { parametersJson: undefined, parameterHash: undefined },
+    { domainSeparator: " " },
+    { commitment: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildJindoLatticePublicInputs({ ...base, ...patch }),
+      /jindoLatticePublicInputs/,
+    );
+  }
+
+  for (const patch of [
+    { proofBytes: Buffer.alloc(0) },
+    { vkHash: Buffer.alloc(32) },
+    { backend: "stark/fri/sha256-goldilocks" },
+    { circuitId: "lattice/jindo-pcs-v0:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildJindoLatticeProofEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0xaa),
+          proofBytes: Buffer.from("prepared-jindo-lattice-proof"),
+          ...patch,
+        }),
+      /(jindoLatticeProofEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("Jindo lattice local verifier rejects tampered dev fixtures", () => {
+  const fixtureInput = {
+    polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+    openingClaimJson: { point: "x=42", value_digest: "value" },
+    querySetJson: { queries: [0, 7, 42] },
+    parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+    domainSeparator: "boi:jindo:pcs:pilot:v0",
+    vkHash: Buffer.alloc(32, 0xaa),
+  };
+  const fixture = buildJindoLatticeDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "unsupported",
+    circuitId = decoded.circuit_id,
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId,
+      vkHash: Buffer.alloc(32, 0xaa),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroCommitmentInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+  const aliasCollisionInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      openingClaim: publicInputs.opening_claim,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, polynomialJson: { ring: "Rq", degree: 2048 } },
+    { envelope: fixture.envelope, openingClaimJson: { point: "x=9" } },
+    { envelope: fixture.envelope, querySetJson: { queries: [99] } },
+    { envelope: fixture.envelope, parametersJson: { scheme: "other" } },
+    { envelope: fixture.envelope, domainSeparator: "boi:jindo:pcs:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "stark/fri/sha256-goldilocks" }) },
+    { envelope: rebuildEnvelope({ circuitId: "lattice/jindo-pcs-v0:wrong" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroCommitmentInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: aliasCollisionInputs }) },
+  ]) {
+    assert.throws(
+      () => verifyJindoLatticeProofLocally(input),
+      /jindoLatticeLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("SIS-with-hints credential builders normalize commitments and envelopes", () => {
+  const base = {
+    issuerJson: {
+      issuer: "boi-issuer-set",
+      commitment_scheme: "sis-hints-v0",
+    },
+    credentialJson: {
+      credential_type: "pq-wallet-eligibility",
+      attributes: ["resident", "institution"],
+      nonce: "presentation-1",
+    },
+    showingPolicyJson: {
+      verifier: "boi-wallet-enrollment",
+      accepted_attributes: ["resident"],
+    },
+    parametersJson: {
+      scheme: "sis-hints-anoncred-v0",
+      q_bits: 64,
+      module_rank: 8,
+    },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  const vkHash = Buffer.alloc(32, 0xbb);
+
+  const commitments = buildSisHintsCredentialCommitments(base);
+  assert.equal(commitments.version, 1);
+  assert.equal(commitments.issuer_commitment.length, 32);
+  assert.equal(commitments.parameter_hash.length, 32);
+  assert.equal(
+    commitments.commitment_kinds.credential_commitment,
+    "dev-sha256-credential-digest",
+  );
+
+  const prepared = buildSisHintsCredentialEnvelope({
+    ...base,
+    vkHash,
+    proofBytes: Buffer.from("prepared-sis-hints-proof"),
+  });
+  const decodedPrepared = noritoDecodePrivacyProofEnvelope(prepared);
+  assert.equal(decodedPrepared.backend, "Unsupported");
+  assert.equal(
+    decodedPrepared.circuit_id,
+    "lattice/sis-hints-anoncred-v0:sis_hints_anoncred_pq_v0",
+  );
+  const preparedInputs = JSON.parse(
+    Buffer.from(decodedPrepared.public_inputs).toString("utf8"),
+  );
+  assert.equal(
+    preparedInputs.issuer_commitment,
+    Buffer.from(commitments.issuer_commitment).toString("hex"),
+  );
+  assert.equal(
+    preparedInputs.parameter_hash,
+    Buffer.from(commitments.parameter_hash).toString("hex"),
+  );
+
+  const fixture = buildSisHintsCredentialDevProofFixture({
+    ...base,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "sis-hints-dev-fixture-v0");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  const verified = verifySisHintsCredentialProofLocally({
+    envelope: fixture.envelope,
+    ...base,
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(
+    verified.parameter_hash,
+    Buffer.from(commitments.parameter_hash).toString("hex"),
+  );
+});
+
+descriptorTest("SIS-with-hints credential builders reject malformed inputs", () => {
+  const base = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+  };
+  for (const patch of [
+    { issuerCommitment: Buffer.alloc(32, 0xee) },
+    { credentialCommitment: Buffer.alloc(32, 0xee) },
+    { showingPolicyHash: Buffer.alloc(32, 0xee) },
+    { parameterHash: Buffer.alloc(32, 0xee) },
+    { issuerJson: undefined, issuerCommitment: undefined },
+    { credentialJson: undefined, credentialCommitment: undefined },
+    { showingPolicyJson: undefined, showingPolicyHash: undefined },
+    { parametersJson: undefined, parameterHash: undefined },
+    { domainSeparator: " " },
+    { issuerCommitment: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildSisHintsCredentialCommitments({ ...base, ...patch }),
+      /sisHintsCredentialCommitments/,
+    );
+  }
+
+  for (const patch of [
+    { proofBytes: Buffer.alloc(0) },
+    { vkHash: Buffer.alloc(32) },
+    { backend: "stark/fri/sha256-goldilocks" },
+    { circuitId: "lattice/sis-hints-anoncred-v0:wrong" },
+  ]) {
+    assert.throws(
+      () =>
+        buildSisHintsCredentialEnvelope({
+          ...base,
+          vkHash: Buffer.alloc(32, 0xbb),
+          proofBytes: Buffer.from("prepared-sis-hints-proof"),
+          ...patch,
+        }),
+      /(sisHintsCredentialEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("SIS-with-hints local verifier rejects tampered dev fixtures", () => {
+  const fixtureInput = {
+    issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+    credentialJson: { credential_type: "wallet", nonce: "n-1" },
+    showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+    parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+    domainSeparator: "boi:sis-hints:pilot:v0",
+    vkHash: Buffer.alloc(32, 0xbb),
+  };
+  const fixture = buildSisHintsCredentialDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "unsupported",
+    circuitId = decoded.circuit_id,
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId,
+      vkHash: Buffer.alloc(32, 0xbb),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const zeroIssuerInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuer_commitment: Buffer.alloc(32).toString("hex"),
+    }),
+  );
+  const aliasCollisionInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      issuerCommitment: publicInputs.issuer_commitment,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }) },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }) },
+    { envelope: fixture.envelope, issuerJson: { issuer: "other" } },
+    { envelope: fixture.envelope, credentialJson: { credential_type: "wallet", nonce: "n-2" } },
+    { envelope: fixture.envelope, showingPolicyJson: { verifier: "other" } },
+    { envelope: fixture.envelope, parametersJson: { scheme: "other" } },
+    { envelope: fixture.envelope, domainSeparator: "boi:sis-hints:other:v0" },
+    { envelope: rebuildEnvelope({ backend: "stark/fri/sha256-goldilocks" }) },
+    { envelope: rebuildEnvelope({ circuitId: "lattice/sis-hints-anoncred-v0:wrong" }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: zeroIssuerInputs }) },
+    { envelope: rebuildEnvelope({ publicInputsBytes: aliasCollisionInputs }) },
+  ]) {
+    assert.throws(
+      () => verifySisHintsCredentialProofLocally(input),
+      /sisHintsCredentialLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("Anonymous PGC builders normalize receiver sets and dev proof envelopes", () => {
+  const payload = Buffer.from("anonymous-pgc:alice:bob:42");
+  const receiverA = {
+    accountCommitment: Buffer.alloc(32, 0x21),
+    ciphertextCommitment: Buffer.alloc(32, 0x31),
+    ciphertext: Buffer.from("ciphertext-for-bob"),
+  };
+  const receiverB = {
+    accountCommitment: Buffer.alloc(32, 0x22),
+    ciphertextCommitment: Buffer.alloc(32, 0x32),
+    ciphertext: Buffer.from("ciphertext-for-carol"),
+  };
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [receiverA, receiverB],
+  });
+  assert.equal(receiverSet.version, 1);
+  assert.equal(receiverSet.threshold, 1);
+  assert.equal(receiverSet.receiver_count, 2);
+  assert.equal(receiverSet.receiver_set_commitment.length, 32);
+  assert.equal(receiverSet.receivers[0].ciphertext_digest.length, 32);
+
+  const vkHash = Buffer.alloc(32, 0x55);
+  const fixture = buildAnonymousPgcDevProofFixture({
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload,
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash,
+  });
+  assert.equal(fixture.kind, "anonymous-pgc-dev-fixture-v1");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  assert.ok(Buffer.isBuffer(fixture.proofBytes));
+  assert.equal(Buffer.from(fixture.proof_bytes).equals(fixture.proofBytes), true);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  assert.equal(decoded.backend, "Stark");
+  assert.equal(
+    decoded.circuit_id,
+    "stark/fri/sha256-goldilocks:anonymous_pgc_k_out_of_n_v1",
+  );
+  const publicInputs = JSON.parse(
+    Buffer.from(decoded.public_inputs).toString("utf8"),
+  );
+  assert.equal(publicInputs.receiver_threshold, 1);
+  assert.equal(publicInputs.receiver_count, 2);
+  assert.deepEqual(publicInputs.receiver_ciphertext_commitments, [
+    Buffer.alloc(32, 0x31).toString("hex"),
+    Buffer.alloc(32, 0x32).toString("hex"),
+  ]);
+  assert.equal(
+    publicInputs.receiver_set_commitment,
+    Buffer.from(receiverSet.receiver_set_commitment).toString("hex"),
+  );
+
+  const verified = verifyAnonymousPgcDevProofLocally({
+    envelope: fixture.envelope,
+    receiverSet,
+    payload,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(verified.receiver_count, 2);
+  assert.equal(verified.receiver_threshold, 1);
+  assert.deepEqual(verified.public_inputs, fixture.public_inputs);
+});
+
+descriptorTest("Anonymous PGC builders reject malformed receiver and proof inputs", () => {
+  const receiverA = {
+    accountCommitment: Buffer.alloc(32, 0x21),
+    ciphertextCommitment: Buffer.alloc(32, 0x31),
+  };
+  const receiverB = {
+    accountCommitment: Buffer.alloc(32, 0x22),
+    ciphertextCommitment: Buffer.alloc(32, 0x32),
+  };
+  const baseReceiverSet = {
+    threshold: 1,
+    receivers: [receiverA, receiverB],
+  };
+  for (const receiverSetPatch of [
+    { threshold: 0 },
+    { threshold: 3 },
+    { receivers: [] },
+    { receivers: [{ ...receiverA, accountCommitment: Buffer.alloc(32) }, receiverB] },
+    { receivers: [receiverA, { ...receiverB, accountCommitment: receiverA.accountCommitment }] },
+    { receivers: [receiverA, { ...receiverB, ciphertextCommitment: receiverA.ciphertextCommitment }] },
+    { receivers: [{ accountCommitment: Buffer.alloc(32, 0x23) }, receiverB] },
+    {
+      receivers: [
+        {
+          ...receiverA,
+          ciphertext: Buffer.from("ciphertext"),
+          ciphertextDigest: Buffer.alloc(32, 0xee),
+        },
+        receiverB,
+      ],
+    },
+  ]) {
+    assert.throws(
+      () =>
+        buildAnonymousPgcReceiverSet({
+          ...baseReceiverSet,
+          ...receiverSetPatch,
+        }),
+      /anonymousPgcReceiverSet/,
+    );
+  }
+
+  const receiverSet = buildAnonymousPgcReceiverSet(baseReceiverSet);
+  const baseFixture = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  for (const patch of [
+    { receiverSet: { ...receiverSet, receiver_set_commitment: Buffer.alloc(32, 0xaa) } },
+    { anonymitySetRoot: Buffer.alloc(32) },
+    { payload: Buffer.from("payload"), txDigest: Buffer.alloc(32, 0xee) },
+    { balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x51)] },
+    { rangeCommitments: [] },
+    { linkTag: Buffer.alloc(32) },
+    { chainId: " " },
+    { vkHash: Buffer.alloc(32) },
+  ]) {
+    assert.throws(
+      () => buildAnonymousPgcDevProofFixture({ ...baseFixture, ...patch }),
+      /anonymousPgcDevProofFixture/,
+    );
+  }
+});
+
+descriptorTest("Anonymous PGC local verifier rejects tampered dev fixtures", () => {
+  const receiverA = {
+    accountCommitment: Buffer.alloc(32, 0x21),
+    ciphertextCommitment: Buffer.alloc(32, 0x31),
+  };
+  const receiverB = {
+    accountCommitment: Buffer.alloc(32, 0x22),
+    ciphertextCommitment: Buffer.alloc(32, 0x32),
+  };
+  const receiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [receiverA, receiverB],
+  });
+  const fixtureInput = {
+    receiverSet,
+    anonymitySetRoot: Buffer.alloc(32, 0x41),
+    payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+    balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+    linkTag: Buffer.alloc(32, 0x61),
+    rangeCommitments: [Buffer.alloc(32, 0x71)],
+    chainId: "boi-localnet",
+    domainSeparator: "boi:anonymous-pgc:v1",
+    vkHash: Buffer.alloc(32, 0x55),
+  };
+  const fixture = buildAnonymousPgcDevProofFixture(fixtureInput);
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const publicInputs = JSON.parse(Buffer.from(decoded.public_inputs).toString("utf8"));
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    publicInputsBytes = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId: decoded.circuit_id,
+      vkHash: Buffer.alloc(32, 0x55),
+      publicInputs: publicInputsBytes,
+      proofBytes,
+    });
+  const tamperedProof = [...decoded.proof_bytes];
+  tamperedProof[tamperedProof.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(JSON.stringify(publicInputs, null, 2));
+  const duplicateReceiverInputs = Buffer.from(
+    JSON.stringify({
+      ...publicInputs,
+      receiver_ciphertext_commitments: [
+        publicInputs.receiver_ciphertext_commitments[0],
+        publicInputs.receiver_ciphertext_commitments[0],
+      ],
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProof }), payload: fixtureInput.payload },
+    { envelope: fixture.envelope, payload: Buffer.from("substituted-payload") },
+    { envelope: fixture.envelope, receiverSet: buildAnonymousPgcReceiverSet({ threshold: 1, receivers: [receiverB, receiverA] }) },
+    { envelope: fixture.envelope, chainId: "wrong-chain" },
+    { envelope: rebuildEnvelope({ backend: "groth16" }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ publicInputsBytes: nonCanonicalPublicInputs }), payload: fixtureInput.payload },
+    { envelope: rebuildEnvelope({ publicInputsBytes: duplicateReceiverInputs }), payload: fixtureInput.payload },
+  ]) {
+    assert.throws(
+      () => verifyAnonymousPgcDevProofLocally(input),
+      /anonymousPgcDevProofLocalVerification/,
+    );
+  }
+});
+
+descriptorTest("VeRange builders normalize commitments and prepared proof envelopes", () => {
+  const payload = Buffer.from("transfer:alice@wonderland:bob@wonderland:42");
+  const payloadDigest = createHash("sha256").update(payload).digest();
+  const commitmentA = Buffer.alloc(32, 0x44);
+  const commitmentB = Buffer.alloc(32, 0x45);
+
+  const descriptor = buildRangeCommitment({
+    commitment: commitmentA,
+    bitLength: 64,
+    aggregationCount: 2,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payload,
+  });
+  assert.deepEqual(descriptor, {
+    version: 1,
+    commitment: Array.from(commitmentA),
+    bit_length: 64,
+    aggregation_count: 2,
+    commitment_scheme: "pedersen-v1",
+    domain_separator: "boi:amount-range:v1",
+    payload_digest: Array.from(payloadDigest),
+  });
+
+  const vkHash = Buffer.alloc(32, 0x55);
+  const proofBytes = Buffer.from("prepared-verange-proof");
+  const aux = Buffer.from("prepared externally");
+  const encoded = buildVeRangeProofEnvelope({
+    commitments: [commitmentA, commitmentB],
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payloadDigest,
+    vkHash,
+    proofBytes,
+    aux,
+    maxProofBytes: 64,
+    maxPublicInputBytes: 512,
+  });
+  assert.ok(Buffer.isBuffer(encoded));
+  const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+  assert.equal(decoded.backend, "Stark");
+  assert.equal(
+    decoded.circuit_id,
+    "stark/fri/sha256-goldilocks:verange_transparent_range_v1",
+  );
+  assert.deepEqual(decoded.vk_hash, Array.from(vkHash));
+  assert.deepEqual(decoded.proof_bytes, Array.from(proofBytes));
+  assert.deepEqual(decoded.aux, Array.from(aux));
+
+  const publicInputs = JSON.parse(
+    Buffer.from(decoded.public_inputs).toString("utf8"),
+  );
+  assert.deepEqual(publicInputs, {
+    aggregation_count: 2,
+    commitments: [
+      commitmentA.toString("hex"),
+      commitmentB.toString("hex"),
+    ],
+    domain_separator: "boi:amount-range:v1",
+    payload_digest: payloadDigest.toString("hex"),
+    range_parameters: {
+      bit_length: 64,
+      commitment_scheme: "pedersen-v1",
+    },
+    version: 1,
+  });
+
+  const fixture = buildVeRangeDevProofFixture({
+    commitments: [commitmentA, commitmentB],
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payload,
+    vkHash,
+  });
+  assert.equal(fixture.kind, "verange-dev-fixture-v1");
+  assert.equal(fixture.production, false);
+  assert.ok(Buffer.isBuffer(fixture.envelope));
+  assert.ok(Buffer.isBuffer(fixture.proofBytes));
+  assert.equal(Buffer.from(fixture.proof_bytes).equals(fixture.proofBytes), true);
+  const verified = verifyVeRangeProofLocally({
+    envelope: fixture.envelope,
+    payload,
+    commitments: [commitmentA, commitmentB],
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+  });
+  assert.equal(verified.ok, true);
+  assert.equal(verified.production, false);
+  assert.equal(verified.kind, "verange-dev-fixture-v1");
+  assert.equal(verified.public_input_bytes, fixture.publicInputBytes.length);
+  assert.equal(verified.proof_bytes, fixture.proofBytes.length);
+  assert.deepEqual(verified.public_inputs, fixture.public_inputs);
+});
+
+descriptorTest("VeRange builders reject malformed commitments and unsafe envelopes", () => {
+  const payload = Buffer.from("transfer:alice@wonderland:bob@wonderland:42");
+  const payloadDigest = createHash("sha256").update(payload).digest();
+  const commitmentA = Buffer.alloc(32, 0x44);
+  const commitmentB = Buffer.alloc(32, 0x45);
+  const baseCommitment = {
+    commitment: commitmentA,
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payloadDigest,
+  };
+  const baseEnvelope = {
+    commitments: [commitmentA, commitmentB],
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payloadDigest,
+    vkHash: Buffer.alloc(32, 0x55),
+    proofBytes: Buffer.from("prepared-verange-proof"),
+  };
+
+  for (const payloadPatch of [
+    { commitment: Buffer.alloc(32) },
+    { bitLength: 0 },
+    { bitLength: 257 },
+    { aggregationCount: 0 },
+    { commitmentScheme: "sha256-dev" },
+    { commitment: commitmentA, valueCommitment: commitmentB },
+    { payload, payloadDigest: Buffer.alloc(32, 0xee) },
+    { payloadDigest: undefined, payload: undefined },
+  ]) {
+    assert.throws(
+      () =>
+        buildRangeCommitment({
+          ...baseCommitment,
+          ...payloadPatch,
+        }),
+      /rangeCommitment/,
+    );
+  }
+
+  for (const envelopePatch of [
+    { commitments: [] },
+    { commitments: [commitmentA, commitmentA] },
+    { aggregationCount: 1 },
+    { commitments: [commitmentA, { ...baseCommitment, commitment: commitmentB, bitLength: 128 }] },
+    { commitments: [commitmentA, { ...baseCommitment, commitment: commitmentB, payloadDigest: Buffer.alloc(32, 0x66) }] },
+    { backend: "groth16" },
+    { circuitId: "other_range_v1" },
+    { vkHash: Buffer.alloc(32) },
+    { proofBytes: Buffer.alloc(0) },
+    { maxProofBytes: 4 },
+    { commitment: commitmentA },
+  ]) {
+    assert.throws(
+      () =>
+        buildVeRangeProofEnvelope({
+          ...baseEnvelope,
+          ...envelopePatch,
+        }),
+      /(veRangeProofEnvelope|privacyProofEnvelope)/,
+    );
+  }
+});
+
+descriptorTest("VeRange local verifier rejects tampered dev fixtures", () => {
+  const payload = Buffer.from("transfer:alice@wonderland:bob@wonderland:42");
+  const commitmentA = Buffer.alloc(32, 0x44);
+  const commitmentB = Buffer.alloc(32, 0x45);
+  const vkHash = Buffer.alloc(32, 0x55);
+  const fixture = buildVeRangeDevProofFixture({
+    commitments: [commitmentA, commitmentB],
+    bitLength: 64,
+    commitmentScheme: "pedersen-v1",
+    domainSeparator: "boi:amount-range:v1",
+    payload,
+    vkHash,
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(fixture.envelope);
+  const rebuildEnvelope = ({
+    backend = "stark/fri/sha256-goldilocks",
+    circuitId = decoded.circuit_id,
+    verifierHash = vkHash,
+    publicInputs = decoded.public_inputs,
+    proofBytes = decoded.proof_bytes,
+  } = {}) =>
+    buildPrivacyProofEnvelope({
+      backend,
+      circuitId,
+      vkHash: verifierHash,
+      publicInputs,
+      proofBytes,
+    });
+  const tamperedProofBytes = [...decoded.proof_bytes];
+  tamperedProofBytes[tamperedProofBytes.length - 1] ^= 0xff;
+  const nonCanonicalPublicInputs = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      commitments: [
+        commitmentA.toString("hex"),
+        commitmentB.toString("hex"),
+      ],
+      range_parameters: {
+        bit_length: 64,
+        commitment_scheme: "pedersen-v1",
+      },
+      aggregation_count: 2,
+      domain_separator: "boi:amount-range:v1",
+      payload_digest: createHash("sha256").update(payload).digest("hex"),
+    }),
+  );
+  const duplicateCommitmentInputs = Buffer.from(
+    JSON.stringify({
+      aggregation_count: 2,
+      commitments: [
+        commitmentA.toString("hex"),
+        commitmentA.toString("hex"),
+      ],
+      domain_separator: "boi:amount-range:v1",
+      payload_digest: createHash("sha256").update(payload).digest("hex"),
+      range_parameters: {
+        bit_length: 64,
+        commitment_scheme: "pedersen-v1",
+      },
+      version: 1,
+    }),
+  );
+
+  for (const input of [
+    { envelope: rebuildEnvelope({ proofBytes: Buffer.from("arbitrary") }), payload },
+    { envelope: rebuildEnvelope({ proofBytes: tamperedProofBytes }), payload },
+    { envelope: fixture.envelope, payload: Buffer.from("substituted-payload") },
+    { envelope: fixture.envelope, payload, commitments: [commitmentB, commitmentA], bitLength: 64 },
+    { envelope: rebuildEnvelope({ backend: "groth16" }), payload },
+    { envelope: rebuildEnvelope({ publicInputs: nonCanonicalPublicInputs }), payload },
+    { envelope: rebuildEnvelope({ publicInputs: duplicateCommitmentInputs }), payload },
+  ]) {
+    assert.throws(
+      () => verifyVeRangeProofLocally(input),
+      /veRangeProofLocalVerification/,
+    );
+  }
 });
 
 descriptorTest("privacy verifier key builders encode register and retire instructions", () => {
@@ -2387,26 +4160,17 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   const jindo = getPrivacyAlgorithmDescriptor("jindo-lattice-pcs-zk-v0");
   const sisHints = getPrivacyAlgorithmDescriptor("sis-hints-anoncred-pq-v0");
 
-  for (const descriptor of [
-    anonymousPgc,
-    verange,
-    zkat,
-    zkAms,
-    vega,
-    silentThreshold,
-    zkX509,
-    jindo,
-    sisHints,
-  ]) {
-    assert.ok(descriptor);
-    assert.equal(descriptor.implementationStage, "catalog-as-of-2026-05");
-    assert.ok(descriptor.sourceReferences.length > 0);
-    assert.ok(descriptor.securityNotes.length > 0);
-    assert.ok(descriptor.requiredState.length > 0);
-    assert.ok(descriptor.failureModes.length > 0);
-    assert.deepEqual(descriptor.sdkEntrypoints, []);
-    assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
-  }
+  assert.ok(sisHints);
+  assert.ok(sisHints.sourceReferences.length > 0);
+  assert.ok(sisHints.securityNotes.length > 0);
+  assert.ok(sisHints.requiredState.length > 0);
+  assert.ok(sisHints.failureModes.length > 0);
+
+  assert.ok(zkAms);
+  assert.equal(zkAms.implementationStage, "sdk-builder");
+  assert.ok(zkAms.sdkEntrypoints.includes("buildZkAmsAdmissionBatch"));
+  assert.ok(zkAms.sdkEntrypoints.includes("buildZkAmsAdmissionProofEnvelope"));
+  assert.ok(zkAms.plannedSdkEntrypoints.includes("buildSubmitZkAmsAdmissionBatchInstruction"));
 
   assert.ok(zkAce);
   assert.equal(zkAce.category, "authorization");
@@ -2430,24 +4194,147 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
 
   assert.equal(anonymousPgc.category, "payment");
   assert.equal(anonymousPgc.maturity, "accepted_conference");
+  assert.equal(anonymousPgc.implementationStage, "sdk-builder");
   assert.deepEqual(anonymousPgc.coveredCriteria, [
     "hide_amount",
     "hide_sender",
     "hide_receiver",
   ]);
+  assert.deepEqual(anonymousPgc.sdkEntrypoints, [
+    "buildAnonymousPgcReceiverSet",
+    "buildAnonymousPgcDevProofFixture",
+    "verifyAnonymousPgcDevProofLocally",
+  ]);
+  assert.deepEqual(anonymousPgc.plannedSdkEntrypoints, [
+    "buildAnonymousPgcAccountCommitmentInstruction",
+    "buildAnonymousPgcKOutOfNProofV1",
+    "buildAnonymousPgcTransferInstruction",
+  ]);
 
   assert.equal(verange.category, "proof_backend");
+  assert.equal(verange.implementationStage, "component");
+  assert.equal(
+    verange.publicInputsSchema,
+    "commitments,range_parameters,aggregation_count,domain_separator,payload_digest",
+  );
+  assert.deepEqual(verange.sdkEntrypoints, [
+    "buildRangeCommitment",
+    "buildVeRangeDevProofFixture",
+    "buildVeRangeProofEnvelope",
+    "verifyVeRangeProofLocally",
+  ]);
+  assert.deepEqual(verange.plannedSdkEntrypoints, [
+    "buildVeRangeProofV1",
+  ]);
   assert.equal(verange.coveredCriteria.includes("hide_amount"), true);
   assert.equal(zkat.category, "authorization");
+  assert.equal(zkat.implementationStage, "sdk-builder");
+  assert.deepEqual(zkat.sdkEntrypoints, [
+    "buildZkAtPolicyCommitment",
+    "buildZkAtAuthenticatorEnvelope",
+    "buildZkAtDevProofFixture",
+    "verifyZkAtAuthenticatorLocally",
+  ]);
+  assert.deepEqual(zkat.plannedSdkEntrypoints, [
+    "buildZkAtPolicyCommitmentInstruction",
+    "buildZkAtPolicyProofV1",
+    "buildZkAtAuthorizedTransaction",
+  ]);
   assert.equal(zkAms.category, "admission");
+  assert.equal(zkAms.implementationStage, "sdk-builder");
+  assert.equal(
+    zkAms.publicInputsSchema,
+    "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest,domain_separator",
+  );
+  assert.deepEqual(zkAms.sdkEntrypoints, [
+    "buildZkAmsAdmissionBatch",
+    "buildZkAmsAdmissionProofEnvelope",
+    "buildZkAmsAdmissionDevProofFixture",
+    "verifyZkAmsAdmissionProofLocally",
+  ]);
+  assert.deepEqual(zkAms.plannedSdkEntrypoints, [
+    "buildZkAmsAdmissionBatchProofV0",
+    "buildSubmitZkAmsAdmissionBatchInstruction",
+  ]);
   assert.equal(vega.category, "credential");
+  assert.equal(vega.implementationStage, "sdk-builder");
+  assert.deepEqual(vega.sdkEntrypoints, [
+    "buildVegaCredentialPredicateCommitment",
+    "buildVegaCredentialProofEnvelope",
+    "buildVegaCredentialDevProofFixture",
+    "verifyVegaCredentialProofLocally",
+  ]);
+  assert.deepEqual(vega.plannedSdkEntrypoints, [
+    "buildVegaCredentialPredicateProofV0",
+    "buildSubmitVegaCredentialProofInstruction",
+  ]);
   assert.equal(silentThreshold.category, "credential");
+  assert.equal(silentThreshold.implementationStage, "sdk-builder");
+  assert.equal(
+    silentThreshold.publicInputsSchema,
+    "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
+  );
+  assert.deepEqual(silentThreshold.sdkEntrypoints, [
+    "buildSilentThresholdCredentialCommitments",
+    "buildSilentThresholdCredentialEnvelope",
+    "buildSilentThresholdCredentialDevProofFixture",
+    "verifySilentThresholdCredentialProofLocally",
+  ]);
+  assert.deepEqual(silentThreshold.plannedSdkEntrypoints, [
+    "buildSilentThresholdCredentialShowingProofV0",
+    "buildSubmitSilentThresholdCredentialProofInstruction",
+  ]);
   assert.equal(zkX509.category, "identity");
+  assert.equal(zkX509.implementationStage, "sdk-builder");
+  assert.equal(
+    zkX509.publicInputsSchema,
+    "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+  );
+  assert.deepEqual(zkX509.sdkEntrypoints, [
+    "buildZkX509IdentityCommitments",
+    "buildZkX509IdentityEnvelope",
+    "buildZkX509IdentityDevProofFixture",
+    "verifyZkX509IdentityProofLocally",
+  ]);
+  assert.deepEqual(zkX509.plannedSdkEntrypoints, [
+    "buildZkX509IdentityProofV0",
+    "buildSubmitZkX509IdentityProofInstruction",
+  ]);
   assert.equal(jindo.category, "proof_backend");
   assert.equal(jindo.maturity, "technical_report");
+  assert.equal(jindo.implementationStage, "sdk-builder");
+  assert.equal(
+    jindo.publicInputsSchema,
+    "commitment,opening_claim,query_set,parameter_hash,domain_separator",
+  );
+  assert.deepEqual(jindo.sdkEntrypoints, [
+    "buildJindoLatticePublicInputs",
+    "buildJindoLatticeProofEnvelope",
+    "buildJindoLatticeDevProofFixture",
+    "verifyJindoLatticeProofLocally",
+  ]);
+  assert.deepEqual(jindo.plannedSdkEntrypoints, [
+    "buildJindoLatticeProofV0",
+    "verifyJindoPolynomialCommitmentV0",
+  ]);
   assert.equal(jindo.pqLayers.proof, true);
   assert.equal(jindo.coveredCriteria.includes("post_quantum"), false);
   assert.equal(sisHints.category, "credential");
+  assert.equal(sisHints.implementationStage, "sdk-builder");
+  assert.equal(
+    sisHints.publicInputsSchema,
+    "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+  );
+  assert.deepEqual(sisHints.sdkEntrypoints, [
+    "buildSisHintsCredentialCommitments",
+    "buildSisHintsCredentialEnvelope",
+    "buildSisHintsCredentialDevProofFixture",
+    "verifySisHintsCredentialProofLocally",
+  ]);
+  assert.deepEqual(sisHints.plannedSdkEntrypoints, [
+    "buildSisHintsAnonymousCredentialProofV0",
+    "buildSubmitSisHintsCredentialProofInstruction",
+  ]);
   assert.equal(sisHints.pqLayers.proof, true);
   assert.equal(sisHints.coveredCriteria.includes("post_quantum"), false);
 });

@@ -1216,6 +1216,70 @@ def test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal():
             raise AssertionError(f"noncanonical EVM exact hex {value!r} was accepted")
 
 
+def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():
+    module = load_live_module()
+
+    assert module.parse_block_tag("latest") == "latest"
+    assert module.parse_block_tag("safe") == "safe"
+    assert module.parse_block_tag("finalized") == "finalized"
+    assert module.parse_block_tag("0x1234") == "0x1234"
+
+    for value in (
+        "pending",
+        "earliest",
+        " 0x1234",
+        "0x01234",
+        "0X1234",
+        "1234",
+        "0x0",
+    ):
+        try:
+            module.parse_block_tag(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "block-tag" in str(exc)
+        else:
+            raise AssertionError(
+                f"unstable/noncanonical block tag {value!r} was accepted"
+            )
+
+
+def test_live_evm_direct_collectors_reject_unstable_block_tag_before_rpc():
+    module = load_live_module()
+
+    def opener(_request, _timeout):
+        raise AssertionError("collector should reject block tag before JSON-RPC")
+
+    try:
+        module.collect_destination_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address="0x" + "11" * 20,
+            block_tag="pending",
+            opener=opener,
+            timeout=1.0,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "block-tag" in str(exc)
+    else:
+        raise AssertionError("unstable destination collector block tag was accepted")
+
+    try:
+        module._collect_route_canary_transaction_evidence(
+            "https://ethereum.example",
+            destination={},
+            route_allowlist_hash=bytes.fromhex("aa" * 32),
+            transaction_hash=bytes.fromhex("bb" * 32),
+            log_index=0,
+            block_tag="pending",
+            opener=opener,
+            timeout=1.0,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "block-tag" in str(exc)
+    else:
+        raise AssertionError("unstable route-canary block tag was accepted")
+
+
 def test_live_evm_full_toml_requires_expected_bridge_code_hash():
     module = load_live_module()
     fake = fake_opener_for(module)

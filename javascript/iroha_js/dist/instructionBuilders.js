@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import {
   noritoEncodeInstruction,
+  noritoDecodePrivacyProofEnvelope,
   noritoEncodePrivacyProofEnvelope,
 } from "./norito.js";
 import {
@@ -32,6 +34,106 @@ const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
 const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
 const ZK_ACE_DOMAIN_TAG = "iroha:zk-ace:pq-authorization:v0";
 const ZK_ACE_ACTION_TRANSFER = "transparent_asset_transfer";
+const ANON_PGC_BACKEND = "stark/fri/sha256-goldilocks";
+const ANON_PGC_CIRCUIT_ID = "stark/fri/sha256-goldilocks:anonymous_pgc_k_out_of_n_v1";
+const ANON_PGC_DOMAIN_SEPARATOR = "iroha:anonymous-pgc:k-out-of-n:v1";
+const ANON_PGC_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:anonymous-pgc:dev-fixture:v1:",
+  "utf8",
+);
+const ANON_PGC_MAX_RECEIVERS = 64;
+const ANON_PGC_MAX_BALANCE_COMMITMENTS = 64;
+const ANON_PGC_MAX_RANGE_COMMITMENTS = 64;
+const ANON_PGC_MAX_CIPHERTEXT_BYTES = 64 * 1024;
+const ZKAT_BACKEND = "stark/fri/sha256-goldilocks";
+const ZKAT_CIRCUIT_ID = "stark/fri/sha256-goldilocks:zkat_policy_private_auth_v1";
+const ZKAT_DOMAIN_SEPARATOR = "iroha:zkat:policy-private-auth:v1";
+const ZKAT_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:zkat:dev-fixture:v1:",
+  "utf8",
+);
+const ZKAT_MAX_POLICY_BYTES = 1024 * 1024;
+const ZK_AMS_BACKEND = "stark/fri/sha256-goldilocks";
+const ZK_AMS_CIRCUIT_ID = "stark/fri/sha256-goldilocks:zk_ams_recursive_admission_v0";
+const ZK_AMS_DOMAIN_SEPARATOR = "iroha:zk-ams:recursive-admission:v0";
+const ZK_AMS_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:zk-ams:dev-fixture:v0:",
+  "utf8",
+);
+const ZK_AMS_MAX_ADMISSIONS = 4096;
+const ZK_AMS_MAX_RECURSIVE_PROOF_BYTES = 64 * 1024 * 1024;
+const VEGA_BACKEND = "stark/fri/sha256-goldilocks";
+const VEGA_CIRCUIT_ID = "stark/fri/sha256-goldilocks:vega_existing_credential_zk_v0";
+const VEGA_DOMAIN_SEPARATOR = "iroha:vega:existing-credential-zk:v0";
+const VEGA_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:vega:dev-fixture:v0:",
+  "utf8",
+);
+const VEGA_MAX_PREDICATE_BYTES = 1024 * 1024;
+const VEGA_MAX_ISSUER_BYTES = 1024 * 1024;
+const SILENT_THRESHOLD_BACKEND = "stark/fri/sha256-goldilocks";
+const SILENT_THRESHOLD_CIRCUIT_ID =
+  "stark/fri/sha256-goldilocks:silent_threshold_anoncred_v0";
+const SILENT_THRESHOLD_DOMAIN_SEPARATOR =
+  "iroha:silent-threshold:anoncred:v0";
+const SILENT_THRESHOLD_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:silent-threshold:dev-fixture:v0:",
+  "utf8",
+);
+const SILENT_THRESHOLD_MAX_ISSUER_SET_BYTES = 1024 * 1024;
+const SILENT_THRESHOLD_MAX_POLICY_BYTES = 1024 * 1024;
+const SILENT_THRESHOLD_MAX_SHOWING_BYTES = 1024 * 1024;
+const ZK_X509_BACKEND = "stark/fri/sha256-goldilocks";
+const ZK_X509_CIRCUIT_ID =
+  "stark/fri/sha256-goldilocks:zk_x509_onchain_identity_v0";
+const ZK_X509_DOMAIN_SEPARATOR = "iroha:zk-x509:onchain-identity:v0";
+const ZK_X509_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:zk-x509:dev-fixture:v0:",
+  "utf8",
+);
+const ZK_X509_MAX_CA_ROOT_BYTES = 1024 * 1024;
+const ZK_X509_MAX_POLICY_BYTES = 1024 * 1024;
+const ZK_X509_MAX_REVOCATION_BYTES = 1024 * 1024;
+const ZK_X509_MAX_SUBJECT_BYTES = 1024 * 1024;
+const JINDO_BACKEND = "unsupported";
+const JINDO_CIRCUIT_ID = "lattice/jindo-pcs-v0:jindo_lattice_pcs_zk_v0";
+const JINDO_DOMAIN_SEPARATOR = "iroha:jindo:lattice-pcs:v0";
+const JINDO_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:jindo:dev-fixture:v0:",
+  "utf8",
+);
+const JINDO_MAX_POLYNOMIAL_BYTES = 16 * 1024 * 1024;
+const JINDO_MAX_OPENING_CLAIM_BYTES = 1024 * 1024;
+const JINDO_MAX_QUERY_SET_BYTES = 1024 * 1024;
+const JINDO_MAX_PARAMETER_BYTES = 1024 * 1024;
+const SIS_HINTS_BACKEND = "unsupported";
+const SIS_HINTS_CIRCUIT_ID =
+  "lattice/sis-hints-anoncred-v0:sis_hints_anoncred_pq_v0";
+const SIS_HINTS_DOMAIN_SEPARATOR = "iroha:sis-hints:anoncred:v0";
+const SIS_HINTS_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:sis-hints:dev-fixture:v0:",
+  "utf8",
+);
+const SIS_HINTS_MAX_ISSUER_BYTES = 1024 * 1024;
+const SIS_HINTS_MAX_CREDENTIAL_BYTES = 1024 * 1024;
+const SIS_HINTS_MAX_POLICY_BYTES = 1024 * 1024;
+const SIS_HINTS_MAX_PARAMETER_BYTES = 1024 * 1024;
+const VERANGE_BACKEND = "stark/fri/sha256-goldilocks";
+const VERANGE_CIRCUIT_ID = "stark/fri/sha256-goldilocks:verange_transparent_range_v1";
+const VERANGE_DOMAIN_SEPARATOR = "iroha:verange:transparent-range:v1";
+const VERANGE_DEV_PROOF_PREFIX = Buffer.from(
+  "iroha:verange:dev-fixture:v1:",
+  "utf8",
+);
+const VERANGE_MAX_AGGREGATION_COUNT = 1024;
+const VERANGE_MAX_BIT_LENGTH = 256;
+const VERANGE_MAX_PAYLOAD_BYTES = 1024 * 1024;
+const VERANGE_COMMITMENT_SCHEMES = Object.freeze(new Set([
+  "pedersen-v1",
+  "pedersen-bls12-381",
+  "pedersen-decaf377",
+  "verange-pedersen-v1",
+]));
 
 function crc16(tag, body) {
   let crc = 0xffff;
@@ -1548,6 +1650,6156 @@ function normalizeBoundedByteArray(
     );
   }
   return bytes;
+}
+
+function normalizeVeRangeVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeVeRangeBitLength(value, name) {
+  const bitLength = normalizePositiveU32(value, name);
+  if (bitLength > VERANGE_MAX_BIT_LENGTH) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be between 1 and ${VERANGE_MAX_BIT_LENGTH}`,
+      name,
+    );
+  }
+  return bitLength;
+}
+
+function normalizeVeRangeAggregationCount(value, name) {
+  const count = normalizePositiveU32(value ?? 1, name);
+  if (count > VERANGE_MAX_AGGREGATION_COUNT) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be between 1 and ${VERANGE_MAX_AGGREGATION_COUNT}`,
+      name,
+    );
+  }
+  return count;
+}
+
+function normalizeVeRangeCommitmentScheme(value, name) {
+  const scheme = assertNonBlankString(value ?? "pedersen-v1", name).toLowerCase();
+  if (!VERANGE_COMMITMENT_SCHEMES.has(scheme)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be one of ${Array.from(VERANGE_COMMITMENT_SCHEMES).join(", ")}`,
+      name,
+    );
+  }
+  return scheme;
+}
+
+function normalizeVeRangePayloadBytes(value, aliasKey, name, maxPayloadBytes) {
+  let bytes;
+  if (aliasKey === "payloadJson" || aliasKey === "payload_json") {
+    const normalizedJson = normalizeJsonValue(value, `${name}.payloadJson`);
+    bytes = Array.from(
+      Buffer.from(
+        canonicalJsonStringify(normalizedJson, `${name}.payloadJson`),
+        "utf8",
+      ).values(),
+    );
+  } else {
+    bytes = normalizeBoundedByteArray(value, `${name}.payload`, {
+      maxBytes: maxPayloadBytes,
+    });
+  }
+  if (bytes.length > maxPayloadBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name}.payload must be no larger than ${maxPayloadBytes} bytes`,
+      `${name}.payload`,
+    );
+  }
+  return bytes;
+}
+
+function normalizeVeRangePayloadDigest(source, name) {
+  const digestAlias = readSingleAlias(
+    source,
+    ["payloadDigest", "payload_digest", "txDigest", "tx_digest"],
+    `${name}.payloadDigest`,
+    "payload digest",
+  );
+  const payloadAlias = readSingleAlias(
+    source,
+    ["payload", "payloadBytes", "payload_bytes", "payloadJson", "payload_json"],
+    `${name}.payload`,
+    "payload",
+  );
+  const maxPayloadBytes = normalizePositiveU32(
+    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
+    `${name}.maxPayloadBytes`,
+  );
+  const explicitDigest =
+    digestAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          digestAlias.value,
+          `${name}.payloadDigest`,
+          32,
+        );
+  const payloadDigest =
+    payloadAlias.value === undefined
+      ? null
+      : Array.from(
+          createHash("sha256")
+            .update(
+              Buffer.from(
+                normalizeVeRangePayloadBytes(
+                  payloadAlias.value,
+                  payloadAlias.key,
+                  name,
+                  maxPayloadBytes,
+                ),
+              ),
+            )
+            .digest()
+            .values(),
+        );
+  if (explicitDigest === null && payloadDigest === null) {
+    fail(
+      ValidationErrorCode.MISSING_FIELD,
+      `${name}.payloadDigest or ${name}.payload is required`,
+      `${name}.payloadDigest`,
+    );
+  }
+  if (
+    explicitDigest !== null &&
+    payloadDigest !== null &&
+    !fixedBytesEqual(explicitDigest, payloadDigest)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.payloadDigest must match the SHA-256 digest of ${name}.payload`,
+      `${name}.payloadDigest`,
+    );
+  }
+  return explicitDigest ?? payloadDigest;
+}
+
+function normalizeAnonymousPgcVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeAnonymousPgcBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? ANON_PGC_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ANON_PGC_BACKEND}`,
+      name,
+    );
+  }
+  return ANON_PGC_BACKEND;
+}
+
+function normalizeAnonymousPgcCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? ANON_PGC_CIRCUIT_ID, name);
+  if (
+    circuitId !== ANON_PGC_CIRCUIT_ID &&
+    circuitId !== "anonymous_pgc_k_out_of_n_v1"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify anonymous_pgc_k_out_of_n_v1`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeAnonymousPgcPayloadDigest(source, name) {
+  const digestAlias = readSingleAlias(
+    source,
+    ["txDigest", "tx_digest", "payloadDigest", "payload_digest"],
+    `${name}.txDigest`,
+    "transaction digest",
+  );
+  const payloadAlias = readSingleAlias(
+    source,
+    ["payload", "payloadBytes", "payload_bytes", "payloadJson", "payload_json"],
+    `${name}.payload`,
+    "payload",
+  );
+  const maxPayloadBytes = normalizePositiveU32(
+    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
+    `${name}.maxPayloadBytes`,
+  );
+  const explicitDigest =
+    digestAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(digestAlias.value, `${name}.txDigest`, 32);
+  const payloadDigest =
+    payloadAlias.value === undefined
+      ? null
+      : Array.from(
+          createHash("sha256")
+            .update(
+              Buffer.from(
+                normalizeVeRangePayloadBytes(
+                  payloadAlias.value,
+                  payloadAlias.key,
+                  name,
+                  maxPayloadBytes,
+                ),
+              ),
+            )
+            .digest()
+            .values(),
+        );
+  if (explicitDigest === null && payloadDigest === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.txDigest or ${name}.payload is required`,
+      `${name}.txDigest`,
+    );
+  }
+  if (
+    explicitDigest !== null &&
+    payloadDigest !== null &&
+    !fixedBytesEqual(explicitDigest, payloadDigest)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.txDigest must match the SHA-256 digest of ${name}.payload`,
+      `${name}.txDigest`,
+    );
+  }
+  return explicitDigest ?? payloadDigest;
+}
+
+function normalizeAnonymousPgcCommitmentList(value, name, maxItems) {
+  if (!Array.isArray(value) || value.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be a non-empty array`,
+      name,
+    );
+  }
+  if (value.length > maxItems) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must contain at most ${maxItems} entries`,
+      name,
+    );
+  }
+  const commitments = value.map((entry, index) => {
+    let raw = entry;
+    if (
+      entry !== null &&
+      typeof entry === "object" &&
+      !Array.isArray(entry) &&
+      !Buffer.isBuffer(entry) &&
+      !ArrayBuffer.isView(entry) &&
+      !(entry instanceof ArrayBuffer)
+    ) {
+      const source = assertPlainObject(entry, `${name}[${index}]`);
+      const commitmentAlias = readSingleAlias(
+        source,
+        ["commitment", "rangeCommitment", "range_commitment", "valueCommitment", "value_commitment"],
+        `${name}[${index}].commitment`,
+        "commitment",
+      );
+      raw = commitmentAlias.value;
+    }
+    return normalizeNonZeroFixedBytes(raw, `${name}[${index}]`, 32);
+  });
+  const seen = new Set();
+  for (const commitment of commitments) {
+    const hex = Buffer.from(commitment).toString("hex");
+    if (seen.has(hex)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name} must not contain duplicates`,
+        name,
+      );
+    }
+    seen.add(hex);
+  }
+  return commitments;
+}
+
+function normalizeAnonymousPgcReceiverEntry(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "accountCommitment",
+      "account_commitment",
+      "receiverCommitment",
+      "receiver_commitment",
+      "ciphertextCommitment",
+      "ciphertext_commitment",
+      "receiverCiphertextCommitment",
+      "receiver_ciphertext_commitment",
+      "ciphertext",
+      "receiverCiphertext",
+      "receiver_ciphertext",
+      "encryptedNote",
+      "encrypted_note",
+      "ciphertextDigest",
+      "ciphertext_digest",
+    ]),
+    name,
+  );
+  const accountCommitmentAlias = readSingleAlias(
+    source,
+    ["accountCommitment", "account_commitment", "receiverCommitment", "receiver_commitment"],
+    `${name}.accountCommitment`,
+    "receiver account commitment",
+  );
+  const ciphertextCommitmentAlias = readSingleAlias(
+    source,
+    [
+      "ciphertextCommitment",
+      "ciphertext_commitment",
+      "receiverCiphertextCommitment",
+      "receiver_ciphertext_commitment",
+    ],
+    `${name}.ciphertextCommitment`,
+    "receiver ciphertext commitment",
+  );
+  const ciphertextAlias = readSingleAlias(
+    source,
+    ["ciphertext", "receiverCiphertext", "receiver_ciphertext", "encryptedNote", "encrypted_note"],
+    `${name}.ciphertext`,
+    "receiver ciphertext",
+  );
+  const ciphertextDigestAlias = readSingleAlias(
+    source,
+    ["ciphertextDigest", "ciphertext_digest"],
+    `${name}.ciphertextDigest`,
+    "receiver ciphertext digest",
+  );
+  const receiver = {
+    account_commitment: normalizeNonZeroFixedBytes(
+      accountCommitmentAlias.value,
+      `${name}.accountCommitment`,
+      32,
+    ),
+    ciphertext_commitment: normalizeNonZeroFixedBytes(
+      ciphertextCommitmentAlias.value,
+      `${name}.ciphertextCommitment`,
+      32,
+    ),
+  };
+  const suppliedDigest =
+    ciphertextDigestAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          ciphertextDigestAlias.value,
+          `${name}.ciphertextDigest`,
+          32,
+        );
+  const computedDigest =
+    ciphertextAlias.value === undefined
+      ? null
+      : Array.from(
+          createHash("sha256")
+            .update(
+              Buffer.from(
+                normalizeBoundedByteArray(ciphertextAlias.value, `${name}.ciphertext`, {
+                  maxBytes: ANON_PGC_MAX_CIPHERTEXT_BYTES,
+                }),
+              ),
+            )
+            .digest()
+            .values(),
+        );
+  if (
+    suppliedDigest !== null &&
+    computedDigest !== null &&
+    !fixedBytesEqual(suppliedDigest, computedDigest)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.ciphertextDigest must match the SHA-256 digest of ${name}.ciphertext`,
+      `${name}.ciphertextDigest`,
+    );
+  }
+  if (suppliedDigest !== null || computedDigest !== null) {
+    receiver.ciphertext_digest = suppliedDigest ?? computedDigest;
+  }
+  return receiver;
+}
+
+function normalizeAnonymousPgcReceiverSet(value, name) {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    !Buffer.isBuffer(value) &&
+    !ArrayBuffer.isView(value) &&
+    !(value instanceof ArrayBuffer)
+  ) {
+    const source = assertPlainObject(value, name);
+    const rebuilt = buildAnonymousPgcReceiverSet(
+      pickPresentFields(source, ["version", "threshold", "k", "receivers"]),
+      name,
+    );
+    if (Object.prototype.hasOwnProperty.call(source, "receiver_set_commitment")) {
+      const supplied = normalizeNonZeroFixedBytes(
+        source.receiver_set_commitment,
+        `${name}.receiverSetCommitment`,
+        32,
+      );
+      if (!fixedBytesEqual(supplied, rebuilt.receiver_set_commitment)) {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${name}.receiverSetCommitment must match receivers and threshold`,
+          `${name}.receiverSetCommitment`,
+        );
+      }
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(source, "receiver_count") &&
+      normalizePositiveU32(source.receiver_count, `${name}.receiverCount`) !==
+        rebuilt.receiver_count
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.receiverCount must match receivers length`,
+        `${name}.receiverCount`,
+      );
+    }
+    return rebuilt;
+  }
+  fail(
+    ValidationErrorCode.INVALID_OBJECT,
+    `${name} must be a receiver-set object`,
+    name,
+  );
+}
+
+function anonymousPgcReceiverSetCommitment({ version, threshold, receivers }) {
+  const payload = {
+    version,
+    receiver_count: receivers.length,
+    threshold,
+    receivers: receivers.map((entry) => ({
+      account_commitment: Buffer.from(entry.account_commitment).toString("hex"),
+      ciphertext_commitment: Buffer.from(entry.ciphertext_commitment).toString("hex"),
+    })),
+  };
+  return Array.from(
+    createHash("sha256")
+      .update("iroha:anonymous-pgc:receiver-set:v1", "utf8")
+      .update(Buffer.from([0]))
+      .update(Buffer.from(canonicalJsonStringify(payload, "anonymousPgcReceiverSet.commitment"), "utf8"))
+      .digest()
+      .values(),
+  );
+}
+
+function normalizeZkAtVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeZkAtBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? ZKAT_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ZKAT_BACKEND}`,
+      name,
+    );
+  }
+  return ZKAT_BACKEND;
+}
+
+function normalizeZkAtCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? ZKAT_CIRCUIT_ID, name);
+  if (circuitId !== ZKAT_CIRCUIT_ID && circuitId !== "zkat_policy_private_auth_v1") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify zkat_policy_private_auth_v1`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeZkAtPolicyEpoch(value, name) {
+  return normalizePositiveU32(value, name);
+}
+
+function normalizeZkAtPolicyBytes(value, aliasKey, name, maxPolicyBytes) {
+  let bytes;
+  if (aliasKey === "policyJson" || aliasKey === "policy_json" || aliasKey === "policy") {
+    const normalizedJson = normalizeJsonValue(value, `${name}.policyJson`);
+    bytes = Array.from(
+      Buffer.from(
+        canonicalJsonStringify(normalizedJson, `${name}.policyJson`),
+        "utf8",
+      ).values(),
+    );
+  } else {
+    bytes = normalizeBoundedByteArray(value, `${name}.policy`, {
+      maxBytes: maxPolicyBytes,
+    });
+  }
+  if (bytes.length > maxPolicyBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name}.policy must be no larger than ${maxPolicyBytes} bytes`,
+      `${name}.policy`,
+    );
+  }
+  return bytes;
+}
+
+function zkatPolicyCommitmentBytes({
+  policyBytes,
+  policyEpoch,
+  domainSeparator,
+  policySchema,
+}) {
+  const digest = createHash("sha256");
+  digest.update("iroha:zkat:policy-commitment:v1", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(String(policyEpoch), "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(policySchema, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(policyBytes));
+  return Array.from(digest.digest().values());
+}
+
+function normalizeZkAtPolicyCommitmentFromSource(source, context) {
+  const policyCommitmentAlias = readSingleAlias(
+    source,
+    ["policyCommitment", "policy_commitment", "commitment"],
+    `${context}.policyCommitment`,
+    "policy commitment",
+  );
+  const policyAlias = readSingleAlias(
+    source,
+    ["policy", "policyBytes", "policy_bytes", "policyJson", "policy_json"],
+    `${context}.policy`,
+    "policy",
+  );
+  if (policyCommitmentAlias.value !== undefined && policyAlias.value === undefined) {
+    return normalizeNonZeroFixedBytes(
+      policyCommitmentAlias.value,
+      `${context}.policyCommitment`,
+      32,
+    );
+  }
+  const commitment = buildZkAtPolicyCommitment(
+    pickPresentFields(source, [
+      "version",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "policySchema",
+      "policy_schema",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+    ]),
+    `${context}.policyCommitment`,
+  );
+  return commitment.policy_commitment;
+}
+
+function normalizeZkAtPayloadDigest(source, name) {
+  const digestAlias = readSingleAlias(
+    source,
+    ["txDigest", "tx_digest", "payloadDigest", "payload_digest"],
+    `${name}.txDigest`,
+    "transaction digest",
+  );
+  const payloadAlias = readSingleAlias(
+    source,
+    ["payload", "payloadBytes", "payload_bytes", "payloadJson", "payload_json"],
+    `${name}.payload`,
+    "payload",
+  );
+  const maxPayloadBytes = normalizePositiveU32(
+    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
+    `${name}.maxPayloadBytes`,
+  );
+  const explicitDigest =
+    digestAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(digestAlias.value, `${name}.txDigest`, 32);
+  const payloadDigest =
+    payloadAlias.value === undefined
+      ? null
+      : Array.from(
+          createHash("sha256")
+            .update(
+              Buffer.from(
+                normalizeVeRangePayloadBytes(
+                  payloadAlias.value,
+                  payloadAlias.key,
+                  name,
+                  maxPayloadBytes,
+                ),
+              ),
+            )
+            .digest()
+            .values(),
+        );
+  if (explicitDigest === null && payloadDigest === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.txDigest or ${name}.payload is required`,
+      `${name}.txDigest`,
+    );
+  }
+  if (
+    explicitDigest !== null &&
+    payloadDigest !== null &&
+    !fixedBytesEqual(explicitDigest, payloadDigest)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.txDigest must match the SHA-256 digest of ${name}.payload`,
+      `${name}.txDigest`,
+    );
+  }
+  return explicitDigest ?? payloadDigest;
+}
+
+function normalizeZkAtPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "policy_commitment",
+      "policyCommitment",
+      "tx_digest",
+      "txDigest",
+      "account_id",
+      "accountId",
+      "action_class",
+      "actionClass",
+      "domain_separator",
+      "domainSeparator",
+      "policy_epoch",
+      "policyEpoch",
+    ]),
+    name,
+  );
+  const policyAlias = readSingleAlias(
+    source,
+    ["policy_commitment", "policyCommitment"],
+    `${name}.policyCommitment`,
+    "policy commitment",
+  );
+  const txDigestAlias = readSingleAlias(
+    source,
+    ["tx_digest", "txDigest"],
+    `${name}.txDigest`,
+    "transaction digest",
+  );
+  const accountAlias = readSingleAlias(
+    source,
+    ["account_id", "accountId"],
+    `${name}.accountId`,
+    "account id",
+  );
+  const actionAlias = readSingleAlias(
+    source,
+    ["action_class", "actionClass"],
+    `${name}.actionClass`,
+    "action class",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  const epochAlias = readSingleAlias(
+    source,
+    ["policy_epoch", "policyEpoch"],
+    `${name}.policyEpoch`,
+    "policy epoch",
+  );
+  return {
+    version: normalizeZkAtVersion(source.version, `${name}.version`),
+    policy_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        policyAlias.value,
+        `${name}.policyCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    tx_digest: Buffer.from(
+      normalizeNonZeroFixedBytes(txDigestAlias.value, `${name}.txDigest`, 32),
+    ).toString("hex"),
+    account_id: normalizeAccountId(accountAlias.value, `${name}.accountId`),
+    action_class: assertNonBlankString(actionAlias.value, `${name}.actionClass`),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+    policy_epoch: normalizeZkAtPolicyEpoch(
+      epochAlias.value,
+      `${name}.policyEpoch`,
+    ),
+  };
+}
+
+function normalizeZkAtAuthenticatorParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const policyEpoch = normalizeZkAtPolicyEpoch(
+    source.policyEpoch ?? source.policy_epoch,
+    `${context}.policyEpoch`,
+  );
+  const domainSeparator = assertNonBlankString(
+    source.domainSeparator ?? source.domain_separator ?? ZKAT_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const publicInputs = {
+    version: 1,
+    policy_commitment: Buffer.from(
+      normalizeZkAtPolicyCommitmentFromSource(
+        {
+          ...source,
+          policyEpoch,
+          domainSeparator,
+        },
+        context,
+      ),
+    ).toString("hex"),
+    tx_digest: Buffer.from(normalizeZkAtPayloadDigest(source, context)).toString("hex"),
+    account_id: normalizeAccountId(source.accountId ?? source.account_id, `${context}.accountId`),
+    action_class: assertNonBlankString(
+      source.actionClass ?? source.action_class,
+      `${context}.actionClass`,
+    ),
+    domain_separator: domainSeparator,
+    policy_epoch: policyEpoch,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeZkAtBackend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeZkAtCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function zkatDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:zkat:dev-fixture:v1", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([ZKAT_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseZkAtPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeZkAtPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureZkAtVerificationExpectations(source, publicInputs, context) {
+  if (
+    hasPresentField(source, [
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+    ])
+  ) {
+    const expectedPolicy = Buffer.from(
+      normalizeZkAtPolicyCommitmentFromSource(
+        {
+          ...source,
+          policyEpoch: publicInputs.policy_epoch,
+          domainSeparator: publicInputs.domain_separator,
+        },
+        context,
+      ),
+    ).toString("hex");
+    if (expectedPolicy !== publicInputs.policy_commitment) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.policyCommitment must match the envelope public inputs`,
+        `${context}.policyCommitment`,
+      );
+    }
+  }
+  if (
+    hasPresentField(source, [
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+    ])
+  ) {
+    const expectedDigest = normalizeZkAtPayloadDigest(source, context);
+    if (Buffer.from(expectedDigest).toString("hex") !== publicInputs.tx_digest) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.txDigest must match the envelope public inputs`,
+        `${context}.txDigest`,
+      );
+    }
+  }
+  const scalarChecks = [
+    [
+      ["accountId", "account_id"],
+      "accountId",
+      (value) => normalizeAccountId(value, `${context}.accountId`),
+      publicInputs.account_id,
+    ],
+    [
+      ["actionClass", "action_class"],
+      "actionClass",
+      (value) => assertNonBlankString(value, `${context}.actionClass`),
+      publicInputs.action_class,
+    ],
+    [
+      ["domainSeparator", "domain_separator"],
+      "domainSeparator",
+      (value) => assertNonBlankString(value, `${context}.domainSeparator`),
+      publicInputs.domain_separator,
+    ],
+    [
+      ["policyEpoch", "policy_epoch"],
+      "policyEpoch",
+      (value) => normalizeZkAtPolicyEpoch(value, `${context}.policyEpoch`),
+      publicInputs.policy_epoch,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of scalarChecks) {
+    const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
+    if (alias.value !== undefined && normalize(alias.value) !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+}
+
+function normalizeZkAmsVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeZkAmsBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? ZK_AMS_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ZK_AMS_BACKEND}`,
+      name,
+    );
+  }
+  return ZK_AMS_BACKEND;
+}
+
+function normalizeZkAmsCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? ZK_AMS_CIRCUIT_ID, name);
+  if (
+    circuitId !== ZK_AMS_CIRCUIT_ID &&
+    circuitId !== "zk_ams_recursive_admission_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify zk_ams_recursive_admission_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeZkAmsAdmissionList(value, name, maxItems) {
+  if (!Array.isArray(value)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be an array`,
+      name,
+    );
+  }
+  if (value.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must not be empty`,
+      name,
+    );
+  }
+  if (value.length > maxItems) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must contain no more than ${maxItems} entries`,
+      name,
+    );
+  }
+  const seen = new Set();
+  return value.map((entry, index) => {
+    const bytes = normalizeNonZeroFixedBytes(entry, `${name}[${index}]`, 32);
+    const hex = Buffer.from(bytes).toString("hex");
+    if (seen.has(hex)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name} must not contain duplicate entries`,
+        `${name}[${index}]`,
+      );
+    }
+    seen.add(hex);
+    return bytes;
+  });
+}
+
+function normalizeZkAmsRecursiveProofDigest(source, context) {
+  const digestAlias = readSingleAlias(
+    source,
+    ["recursiveProofDigest", "recursive_proof_digest"],
+    `${context}.recursiveProofDigest`,
+    "recursive proof digest",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["recursiveProof", "recursiveProofBytes", "recursive_proof", "recursive_proof_bytes"],
+    `${context}.recursiveProof`,
+    "recursive proof bytes",
+  );
+  const explicitDigest =
+    digestAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          digestAlias.value,
+          `${context}.recursiveProofDigest`,
+          32,
+        );
+  const proofDigest =
+    proofAlias.value === undefined
+      ? null
+      : Array.from(
+          createHash("sha256")
+            .update(
+              Buffer.from(
+                normalizeBoundedByteArray(
+                  proofAlias.value,
+                  `${context}.recursiveProof`,
+                  {
+                    maxBytes: normalizePositiveU32(
+                      source.maxRecursiveProofBytes ??
+                        source.max_recursive_proof_bytes ??
+                        ZK_AMS_MAX_RECURSIVE_PROOF_BYTES,
+                      `${context}.maxRecursiveProofBytes`,
+                    ),
+                  },
+                ),
+              ),
+            )
+            .digest()
+            .values(),
+        );
+  if (explicitDigest === null && proofDigest === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.recursiveProofDigest or ${context}.recursiveProof is required`,
+      `${context}.recursiveProofDigest`,
+    );
+  }
+  if (
+    explicitDigest !== null &&
+    proofDigest !== null &&
+    !fixedBytesEqual(explicitDigest, proofDigest)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.recursiveProofDigest must match the SHA-256 digest of ${context}.recursiveProof`,
+      `${context}.recursiveProofDigest`,
+    );
+  }
+  return explicitDigest ?? proofDigest;
+}
+
+function zkamAdmissionBatchRootBytes({
+  issuerRoot,
+  admissionNullifiers,
+  anonymousAccountCommitments,
+  recursiveProofDigest,
+  domainSeparator,
+}) {
+  const payload = {
+    issuer_root: Buffer.from(issuerRoot).toString("hex"),
+    admission_nullifiers: admissionNullifiers.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    anonymous_account_commitments: anonymousAccountCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    recursive_proof_digest: Buffer.from(recursiveProofDigest).toString("hex"),
+    domain_separator: domainSeparator,
+  };
+  return Array.from(
+    createHash("sha256")
+      .update("iroha:zk-ams:admission-batch-root:v0", "utf8")
+      .update(Buffer.from([0]))
+      .update(Buffer.from(canonicalJsonStringify(payload, "zkAmsAdmissionBatch.root"), "utf8"))
+      .digest()
+      .values(),
+  );
+}
+
+function normalizeZkAmsAdmissionBatchParts(source, context) {
+  const issuerRootAlias = readSingleAlias(
+    source,
+    ["issuerRoot", "issuer_root"],
+    `${context}.issuerRoot`,
+    "issuer root",
+  );
+  const batchRootAlias = readSingleAlias(
+    source,
+    ["admissionBatchRoot", "admission_batch_root", "batchRoot", "batch_root"],
+    `${context}.admissionBatchRoot`,
+    "admission batch root",
+  );
+  const nullifierAlias = readSingleAlias(
+    source,
+    ["admissionNullifiers", "admission_nullifiers", "nullifiers"],
+    `${context}.admissionNullifiers`,
+    "admission nullifiers",
+  );
+  const accountCommitmentAlias = readSingleAlias(
+    source,
+    [
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+    ],
+    `${context}.anonymousAccountCommitments`,
+    "anonymous account commitments",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const maxBatchSize = normalizePositiveU32(
+    source.maxBatchSize ?? source.max_batch_size ?? ZK_AMS_MAX_ADMISSIONS,
+    `${context}.maxBatchSize`,
+  );
+  if (maxBatchSize > ZK_AMS_MAX_ADMISSIONS) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.maxBatchSize must be no greater than ${ZK_AMS_MAX_ADMISSIONS}`,
+      `${context}.maxBatchSize`,
+    );
+  }
+  const issuerRoot = normalizeNonZeroFixedBytes(
+    issuerRootAlias.value,
+    `${context}.issuerRoot`,
+    32,
+  );
+  const admissionNullifiers = normalizeZkAmsAdmissionList(
+    nullifierAlias.value,
+    `${context}.admissionNullifiers`,
+    maxBatchSize,
+  );
+  const anonymousAccountCommitments = normalizeZkAmsAdmissionList(
+    accountCommitmentAlias.value,
+    `${context}.anonymousAccountCommitments`,
+    maxBatchSize,
+  );
+  if (admissionNullifiers.length !== anonymousAccountCommitments.length) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.admissionNullifiers length must match anonymousAccountCommitments length`,
+      `${context}.admissionNullifiers`,
+    );
+  }
+  const nullifierSet = new Set(
+    admissionNullifiers.map((entry) => Buffer.from(entry).toString("hex")),
+  );
+  for (const [index, commitment] of anonymousAccountCommitments.entries()) {
+    if (nullifierSet.has(Buffer.from(commitment).toString("hex"))) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.anonymousAccountCommitments must not overlap admissionNullifiers`,
+        `${context}.anonymousAccountCommitments[${index}]`,
+      );
+    }
+  }
+  const recursiveProofDigest = normalizeZkAmsRecursiveProofDigest(source, context);
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? ZK_AMS_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const derivedBatchRoot = zkamAdmissionBatchRootBytes({
+    issuerRoot,
+    admissionNullifiers,
+    anonymousAccountCommitments,
+    recursiveProofDigest,
+    domainSeparator,
+  });
+  const explicitBatchRoot =
+    batchRootAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          batchRootAlias.value,
+          `${context}.admissionBatchRoot`,
+          32,
+        );
+  if (
+    explicitBatchRoot !== null &&
+    !fixedBytesEqual(explicitBatchRoot, derivedBatchRoot)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.admissionBatchRoot must match the derived admission batch root`,
+      `${context}.admissionBatchRoot`,
+    );
+  }
+  return {
+    version: normalizeZkAmsVersion(source.version, `${context}.version`),
+    issuerRoot,
+    admissionBatchRoot: explicitBatchRoot ?? derivedBatchRoot,
+    admissionNullifiers,
+    anonymousAccountCommitments,
+    recursiveProofDigest,
+    domainSeparator,
+    batchSize: admissionNullifiers.length,
+  };
+}
+
+function normalizeZkAmsPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "issuer_root",
+      "issuerRoot",
+      "admission_batch_root",
+      "admissionBatchRoot",
+      "admission_nullifiers",
+      "admissionNullifiers",
+      "anonymous_account_commitments",
+      "anonymousAccountCommitments",
+      "recursive_proof_digest",
+      "recursiveProofDigest",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const issuerRootAlias = readSingleAlias(
+    source,
+    ["issuer_root", "issuerRoot"],
+    `${name}.issuerRoot`,
+    "issuer root",
+  );
+  const batchRootAlias = readSingleAlias(
+    source,
+    ["admission_batch_root", "admissionBatchRoot"],
+    `${name}.admissionBatchRoot`,
+    "admission batch root",
+  );
+  const nullifierAlias = readSingleAlias(
+    source,
+    ["admission_nullifiers", "admissionNullifiers"],
+    `${name}.admissionNullifiers`,
+    "admission nullifiers",
+  );
+  const accountCommitmentAlias = readSingleAlias(
+    source,
+    ["anonymous_account_commitments", "anonymousAccountCommitments"],
+    `${name}.anonymousAccountCommitments`,
+    "anonymous account commitments",
+  );
+  const proofDigestAlias = readSingleAlias(
+    source,
+    ["recursive_proof_digest", "recursiveProofDigest"],
+    `${name}.recursiveProofDigest`,
+    "recursive proof digest",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  const batch = normalizeZkAmsAdmissionBatchParts(
+    {
+      version: source.version,
+      issuerRoot: issuerRootAlias.value,
+      admissionBatchRoot: batchRootAlias.value,
+      admissionNullifiers: nullifierAlias.value,
+      anonymousAccountCommitments: accountCommitmentAlias.value,
+      recursiveProofDigest: proofDigestAlias.value,
+      domainSeparator: domainAlias.value,
+    },
+    name,
+  );
+  return {
+    version: batch.version,
+    issuer_root: Buffer.from(batch.issuerRoot).toString("hex"),
+    admission_batch_root: Buffer.from(batch.admissionBatchRoot).toString("hex"),
+    admission_nullifiers: batch.admissionNullifiers.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    anonymous_account_commitments: batch.anonymousAccountCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    recursive_proof_digest: Buffer.from(batch.recursiveProofDigest).toString("hex"),
+    domain_separator: batch.domainSeparator,
+  };
+}
+
+function normalizeZkAmsAdmissionProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const batch = normalizeZkAmsAdmissionBatchParts(source, context);
+  const publicInputs = {
+    version: batch.version,
+    issuer_root: Buffer.from(batch.issuerRoot).toString("hex"),
+    admission_batch_root: Buffer.from(batch.admissionBatchRoot).toString("hex"),
+    admission_nullifiers: batch.admissionNullifiers.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    anonymous_account_commitments: batch.anonymousAccountCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    recursive_proof_digest: Buffer.from(batch.recursiveProofDigest).toString("hex"),
+    domain_separator: batch.domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeZkAmsBackend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeZkAmsCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    batch,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function zkamDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:zk-ams:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([ZK_AMS_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseZkAmsPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeZkAmsPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureZkAmsVerificationExpectations(source, publicInputs, context) {
+  const scalarChecks = [
+    [
+      ["issuerRoot", "issuer_root"],
+      "issuerRoot",
+      (value) => Buffer.from(
+        normalizeNonZeroFixedBytes(value, `${context}.issuerRoot`, 32),
+      ).toString("hex"),
+      publicInputs.issuer_root,
+    ],
+    [
+      ["admissionBatchRoot", "admission_batch_root", "batchRoot", "batch_root"],
+      "admissionBatchRoot",
+      (value) => Buffer.from(
+        normalizeNonZeroFixedBytes(value, `${context}.admissionBatchRoot`, 32),
+      ).toString("hex"),
+      publicInputs.admission_batch_root,
+    ],
+    [
+      [
+        "recursiveProofDigest",
+        "recursive_proof_digest",
+        "recursiveProof",
+        "recursiveProofBytes",
+        "recursive_proof",
+        "recursive_proof_bytes",
+      ],
+      "recursiveProofDigest",
+      () => Buffer.from(
+        normalizeZkAmsRecursiveProofDigest(source, context),
+      ).toString("hex"),
+      publicInputs.recursive_proof_digest,
+    ],
+    [
+      ["domainSeparator", "domain_separator"],
+      "domainSeparator",
+      (value) => assertNonBlankString(value, `${context}.domainSeparator`),
+      publicInputs.domain_separator,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of scalarChecks) {
+    const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
+    if (alias.value !== undefined && normalize(alias.value) !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  const nullifierAlias = readSingleAlias(
+    source,
+    ["admissionNullifiers", "admission_nullifiers", "nullifiers"],
+    `${context}.admissionNullifiers`,
+    "admission nullifiers",
+  );
+  const maxBatchSize = normalizePositiveU32(
+    source.maxBatchSize ?? source.max_batch_size ?? ZK_AMS_MAX_ADMISSIONS,
+    `${context}.maxBatchSize`,
+  );
+  if (maxBatchSize > ZK_AMS_MAX_ADMISSIONS) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.maxBatchSize must be no greater than ${ZK_AMS_MAX_ADMISSIONS}`,
+      `${context}.maxBatchSize`,
+    );
+  }
+  if (nullifierAlias.value !== undefined) {
+    const expected = normalizeZkAmsAdmissionList(
+      nullifierAlias.value,
+      `${context}.admissionNullifiers`,
+      maxBatchSize,
+    ).map((entry) => Buffer.from(entry).toString("hex"));
+    if (
+      expected.length !== publicInputs.admission_nullifiers.length ||
+      expected.some((entry, index) => entry !== publicInputs.admission_nullifiers[index])
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.admissionNullifiers must match the envelope public inputs`,
+        `${context}.admissionNullifiers`,
+      );
+    }
+  }
+  const accountAlias = readSingleAlias(
+    source,
+    [
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+    ],
+    `${context}.anonymousAccountCommitments`,
+    "anonymous account commitments",
+  );
+  if (accountAlias.value !== undefined) {
+    const expected = normalizeZkAmsAdmissionList(
+      accountAlias.value,
+      `${context}.anonymousAccountCommitments`,
+      maxBatchSize,
+    ).map((entry) => Buffer.from(entry).toString("hex"));
+    if (
+      expected.length !== publicInputs.anonymous_account_commitments.length ||
+      expected.some(
+        (entry, index) => entry !== publicInputs.anonymous_account_commitments[index],
+      )
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.anonymousAccountCommitments must match the envelope public inputs`,
+        `${context}.anonymousAccountCommitments`,
+      );
+    }
+  }
+}
+
+function normalizeVegaVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeVegaBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? VEGA_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${VEGA_BACKEND}`,
+      name,
+    );
+  }
+  return VEGA_BACKEND;
+}
+
+function normalizeVegaCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? VEGA_CIRCUIT_ID, name);
+  if (
+    circuitId !== VEGA_CIRCUIT_ID &&
+    circuitId !== "vega_existing_credential_zk_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify vega_existing_credential_zk_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeVegaCredentialSchema(value, name) {
+  const schema = assertNonBlankString(value, name);
+  if (schema.length > 256) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be no longer than 256 characters`,
+      name,
+    );
+  }
+  return schema;
+}
+
+function normalizeVegaExpirationEpoch(value, name) {
+  return normalizeU32(value, name);
+}
+
+function normalizeVegaStructuredBytes(
+  value,
+  aliasKey,
+  name,
+  jsonPath,
+  bytePath,
+  maxBytes,
+) {
+  let bytes;
+  if (
+    aliasKey.endsWith("Json") ||
+    aliasKey.endsWith("_json") ||
+    aliasKey === "predicate" ||
+    aliasKey === "issuer"
+  ) {
+    const normalizedJson = normalizeJsonValue(value, jsonPath);
+    bytes = Array.from(
+      Buffer.from(
+        canonicalJsonStringify(normalizedJson, jsonPath),
+        "utf8",
+      ).values(),
+    );
+  } else {
+    bytes = normalizeBoundedByteArray(value, bytePath, { maxBytes });
+  }
+  if (bytes.length > maxBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${bytePath} must be no larger than ${maxBytes} bytes`,
+      bytePath,
+    );
+  }
+  return bytes;
+}
+
+function vegaPredicateCommitmentBytes({
+  predicateBytes,
+  credentialSchema,
+  domainSeparator,
+}) {
+  const digest = createHash("sha256");
+  digest.update("iroha:vega:predicate-commitment:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(credentialSchema, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(predicateBytes));
+  return Array.from(digest.digest().values());
+}
+
+function vegaIssuerCommitmentBytes({ issuerBytes, domainSeparator }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:vega:issuer-commitment:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(issuerBytes));
+  return Array.from(digest.digest().values());
+}
+
+function vegaSubjectBindingBytes({ accountId, domainSeparator }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:vega:subject-binding:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(accountId, "utf8");
+  return Array.from(digest.digest().values());
+}
+
+function normalizeVegaPredicateCommitmentFromSource(source, context) {
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["predicateCommitment", "predicate_commitment", "commitment"],
+    `${context}.predicateCommitment`,
+    "predicate commitment",
+  );
+  const predicateAlias = readSingleAlias(
+    source,
+    ["predicate", "predicateBytes", "predicate_bytes", "predicateJson", "predicate_json"],
+    `${context}.predicate`,
+    "predicate",
+  );
+  const schemaAlias = readSingleAlias(
+    source,
+    ["credentialSchema", "credential_schema"],
+    `${context}.credentialSchema`,
+    "credential schema",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const schema = normalizeVegaCredentialSchema(
+    schemaAlias.value,
+    `${context}.credentialSchema`,
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? VEGA_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicitCommitment =
+    commitmentAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          commitmentAlias.value,
+          `${context}.predicateCommitment`,
+          32,
+        );
+  const predicateBytes =
+    predicateAlias.value === undefined
+      ? null
+      : normalizeVegaStructuredBytes(
+          predicateAlias.value,
+          predicateAlias.key,
+          context,
+          `${context}.predicateJson`,
+          `${context}.predicate`,
+          normalizePositiveU32(
+            source.maxPredicateBytes ??
+              source.max_predicate_bytes ??
+              VEGA_MAX_PREDICATE_BYTES,
+            `${context}.maxPredicateBytes`,
+          ),
+        );
+  if (explicitCommitment === null && predicateBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.predicateCommitment or ${context}.predicate is required`,
+      `${context}.predicateCommitment`,
+    );
+  }
+  const derivedCommitment =
+    predicateBytes === null
+      ? null
+      : vegaPredicateCommitmentBytes({
+          predicateBytes,
+          credentialSchema: schema,
+          domainSeparator,
+        });
+  if (
+    explicitCommitment !== null &&
+    derivedCommitment !== null &&
+    !fixedBytesEqual(explicitCommitment, derivedCommitment)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.predicateCommitment must match the derived predicate commitment`,
+      `${context}.predicateCommitment`,
+    );
+  }
+  return {
+    version: normalizeVegaVersion(source.version, `${context}.version`),
+    predicate_commitment: explicitCommitment ?? derivedCommitment,
+    credential_schema: schema,
+    domain_separator: domainSeparator,
+    commitment_kind:
+      predicateBytes === null ? "external" : "dev-sha256-predicate-digest",
+    predicate_digest:
+      predicateBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(predicateBytes)).digest().values()),
+  };
+}
+
+function normalizeVegaIssuerCommitmentFromSource(source, context) {
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["issuerCommitment", "issuer_commitment"],
+    `${context}.issuerCommitment`,
+    "issuer commitment",
+  );
+  const issuerAlias = readSingleAlias(
+    source,
+    ["issuer", "issuerBytes", "issuer_bytes", "issuerJson", "issuer_json"],
+    `${context}.issuer`,
+    "issuer",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? VEGA_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicitCommitment =
+    commitmentAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          commitmentAlias.value,
+          `${context}.issuerCommitment`,
+          32,
+        );
+  const issuerBytes =
+    issuerAlias.value === undefined
+      ? null
+      : normalizeVegaStructuredBytes(
+          issuerAlias.value,
+          issuerAlias.key,
+          context,
+          `${context}.issuerJson`,
+          `${context}.issuer`,
+          normalizePositiveU32(
+            source.maxIssuerBytes ?? source.max_issuer_bytes ?? VEGA_MAX_ISSUER_BYTES,
+            `${context}.maxIssuerBytes`,
+          ),
+        );
+  if (explicitCommitment === null && issuerBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.issuerCommitment or ${context}.issuer is required`,
+      `${context}.issuerCommitment`,
+    );
+  }
+  const derivedCommitment =
+    issuerBytes === null
+      ? null
+      : vegaIssuerCommitmentBytes({ issuerBytes, domainSeparator });
+  if (
+    explicitCommitment !== null &&
+    derivedCommitment !== null &&
+    !fixedBytesEqual(explicitCommitment, derivedCommitment)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.issuerCommitment must match the derived issuer commitment`,
+      `${context}.issuerCommitment`,
+    );
+  }
+  return explicitCommitment ?? derivedCommitment;
+}
+
+function normalizeVegaSubjectBindingFromSource(source, context) {
+  const bindingAlias = readSingleAlias(
+    source,
+    [
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+    ],
+    `${context}.subjectBinding`,
+    "subject binding",
+  );
+  const accountAlias = readSingleAlias(
+    source,
+    ["accountId", "account_id", "subjectAccountId", "subject_account_id"],
+    `${context}.accountId`,
+    "account id",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? VEGA_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicitBinding =
+    bindingAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(bindingAlias.value, `${context}.subjectBinding`, 32);
+  const accountBinding =
+    accountAlias.value === undefined
+      ? null
+      : vegaSubjectBindingBytes({
+          accountId: normalizeAccountId(accountAlias.value, `${context}.accountId`),
+          domainSeparator,
+        });
+  if (explicitBinding === null && accountBinding === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.subjectBinding or ${context}.accountId is required`,
+      `${context}.subjectBinding`,
+    );
+  }
+  if (
+    explicitBinding !== null &&
+    accountBinding !== null &&
+    !fixedBytesEqual(explicitBinding, accountBinding)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.subjectBinding must match the derived account subject binding`,
+      `${context}.subjectBinding`,
+    );
+  }
+  return explicitBinding ?? accountBinding;
+}
+
+function normalizeVegaPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "issuer_commitment",
+      "issuerCommitment",
+      "credential_schema",
+      "credentialSchema",
+      "predicate_commitment",
+      "predicateCommitment",
+      "subject_binding",
+      "subjectBinding",
+      "expiration_epoch",
+      "expirationEpoch",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const issuerAlias = readSingleAlias(
+    source,
+    ["issuer_commitment", "issuerCommitment"],
+    `${name}.issuerCommitment`,
+    "issuer commitment",
+  );
+  const schemaAlias = readSingleAlias(
+    source,
+    ["credential_schema", "credentialSchema"],
+    `${name}.credentialSchema`,
+    "credential schema",
+  );
+  const predicateAlias = readSingleAlias(
+    source,
+    ["predicate_commitment", "predicateCommitment"],
+    `${name}.predicateCommitment`,
+    "predicate commitment",
+  );
+  const subjectAlias = readSingleAlias(
+    source,
+    ["subject_binding", "subjectBinding"],
+    `${name}.subjectBinding`,
+    "subject binding",
+  );
+  const expirationAlias = readSingleAlias(
+    source,
+    ["expiration_epoch", "expirationEpoch"],
+    `${name}.expirationEpoch`,
+    "expiration epoch",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeVegaVersion(source.version, `${name}.version`),
+    issuer_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        issuerAlias.value,
+        `${name}.issuerCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    credential_schema: normalizeVegaCredentialSchema(
+      schemaAlias.value,
+      `${name}.credentialSchema`,
+    ),
+    predicate_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        predicateAlias.value,
+        `${name}.predicateCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    subject_binding: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        subjectAlias.value,
+        `${name}.subjectBinding`,
+        32,
+      ),
+    ).toString("hex"),
+    expiration_epoch: normalizeVegaExpirationEpoch(
+      expirationAlias.value,
+      `${name}.expirationEpoch`,
+    ),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeVegaProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const schemaAlias = readSingleAlias(
+    source,
+    ["credentialSchema", "credential_schema"],
+    `${context}.credentialSchema`,
+    "credential schema",
+  );
+  const expirationAlias = readSingleAlias(
+    source,
+    ["expirationEpoch", "expiration_epoch"],
+    `${context}.expirationEpoch`,
+    "expiration epoch",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? VEGA_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const credentialSchema = normalizeVegaCredentialSchema(
+    schemaAlias.value,
+    `${context}.credentialSchema`,
+  );
+  const publicInputs = {
+    version: 1,
+    issuer_commitment: Buffer.from(
+      normalizeVegaIssuerCommitmentFromSource(
+        source,
+        context,
+      ),
+    ).toString("hex"),
+    credential_schema: credentialSchema,
+    predicate_commitment: Buffer.from(
+      normalizeVegaPredicateCommitmentFromSource(
+        source,
+        context,
+      ).predicate_commitment,
+    ).toString("hex"),
+    subject_binding: Buffer.from(
+      normalizeVegaSubjectBindingFromSource(
+        source,
+        context,
+      ),
+    ).toString("hex"),
+    expiration_epoch: normalizeVegaExpirationEpoch(
+      expirationAlias.value,
+      `${context}.expirationEpoch`,
+    ),
+    domain_separator: domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeVegaBackend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeVegaCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function vegaDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:vega:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([VEGA_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseVegaPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeVegaPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureVegaVerificationExpectations(source, publicInputs, context) {
+  const expectationSource = { ...source };
+  if (!hasPresentField(expectationSource, ["domainSeparator", "domain_separator"])) {
+    expectationSource.domainSeparator = publicInputs.domain_separator;
+  }
+  if (!hasPresentField(expectationSource, ["credentialSchema", "credential_schema"])) {
+    expectationSource.credentialSchema = publicInputs.credential_schema;
+  }
+  if (
+    hasPresentField(source, [
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+    ])
+  ) {
+    const expectedIssuer = Buffer.from(
+      normalizeVegaIssuerCommitmentFromSource(
+        expectationSource,
+        context,
+      ),
+    ).toString("hex");
+    if (expectedIssuer !== publicInputs.issuer_commitment) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.issuerCommitment must match the envelope public inputs`,
+        `${context}.issuerCommitment`,
+      );
+    }
+  }
+  if (
+    hasPresentField(source, [
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+    ])
+  ) {
+    const expectedPredicate = Buffer.from(
+      normalizeVegaPredicateCommitmentFromSource(
+        expectationSource,
+        context,
+      ).predicate_commitment,
+    ).toString("hex");
+    if (expectedPredicate !== publicInputs.predicate_commitment) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.predicateCommitment must match the envelope public inputs`,
+        `${context}.predicateCommitment`,
+      );
+    }
+  }
+  if (
+    hasPresentField(source, [
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+    ])
+  ) {
+    const expectedSubject = Buffer.from(
+      normalizeVegaSubjectBindingFromSource(
+        expectationSource,
+        context,
+      ),
+    ).toString("hex");
+    if (expectedSubject !== publicInputs.subject_binding) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.subjectBinding must match the envelope public inputs`,
+        `${context}.subjectBinding`,
+      );
+    }
+  }
+  const scalarChecks = [
+    [
+      ["credentialSchema", "credential_schema"],
+      "credentialSchema",
+      (value) => normalizeVegaCredentialSchema(value, `${context}.credentialSchema`),
+      publicInputs.credential_schema,
+    ],
+    [
+      ["expirationEpoch", "expiration_epoch"],
+      "expirationEpoch",
+      (value) => normalizeVegaExpirationEpoch(value, `${context}.expirationEpoch`),
+      publicInputs.expiration_epoch,
+    ],
+    [
+      ["domainSeparator", "domain_separator"],
+      "domainSeparator",
+      (value) => assertNonBlankString(value, `${context}.domainSeparator`),
+      publicInputs.domain_separator,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of scalarChecks) {
+    const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
+    if (alias.value !== undefined && normalize(alias.value) !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+}
+
+function normalizeSilentThresholdVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeSilentThresholdBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(
+    value ?? SILENT_THRESHOLD_BACKEND,
+    name,
+  );
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${SILENT_THRESHOLD_BACKEND}`,
+      name,
+    );
+  }
+  return SILENT_THRESHOLD_BACKEND;
+}
+
+function normalizeSilentThresholdCircuitId(value, name) {
+  const circuitId = assertNonBlankString(
+    value ?? SILENT_THRESHOLD_CIRCUIT_ID,
+    name,
+  );
+  if (
+    circuitId !== SILENT_THRESHOLD_CIRCUIT_ID &&
+    circuitId !== "silent_threshold_anoncred_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify silent_threshold_anoncred_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeSilentThresholdStructuredBytes(
+  value,
+  aliasKey,
+  jsonAliases,
+  jsonPath,
+  bytePath,
+  maxBytes,
+) {
+  let bytes;
+  if (
+    aliasKey.endsWith("Json") ||
+    aliasKey.endsWith("_json") ||
+    jsonAliases.has(aliasKey)
+  ) {
+    const normalizedJson = normalizeJsonValue(value, jsonPath);
+    bytes = Array.from(
+      Buffer.from(
+        canonicalJsonStringify(normalizedJson, jsonPath),
+        "utf8",
+      ).values(),
+    );
+  } else {
+    bytes = normalizeBoundedByteArray(value, bytePath, { maxBytes });
+  }
+  if (bytes.length > maxBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${bytePath} must be no larger than ${maxBytes} bytes`,
+      bytePath,
+    );
+  }
+  return bytes;
+}
+
+function silentThresholdDigestBytes(label, bytes, domainSeparator) {
+  const digest = createHash("sha256");
+  digest.update(`iroha:silent-threshold:${label}:v0`, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(bytes));
+  return Array.from(digest.digest().values());
+}
+
+function normalizeSilentThresholdDerivedField(
+  source,
+  context,
+  {
+    explicitAliases,
+    dataAliases,
+    jsonAliases,
+    fieldPath,
+    dataPath,
+    dataJsonPath,
+    dataDescription,
+    digestLabel,
+    kindLabel,
+    maxBytes,
+  },
+) {
+  const explicitAlias = readSingleAlias(
+    source,
+    explicitAliases,
+    `${context}.${fieldPath}`,
+    dataDescription,
+  );
+  const dataAlias = readSingleAlias(
+    source,
+    dataAliases,
+    `${context}.${dataPath}`,
+    dataDescription,
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? SILENT_THRESHOLD_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicit =
+    explicitAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          explicitAlias.value,
+          `${context}.${fieldPath}`,
+          32,
+        );
+  const dataBytes =
+    dataAlias.value === undefined
+      ? null
+      : normalizeSilentThresholdStructuredBytes(
+          dataAlias.value,
+          dataAlias.key,
+          jsonAliases,
+          `${context}.${dataJsonPath}`,
+          `${context}.${dataPath}`,
+          normalizePositiveU32(maxBytes, `${context}.maxBytes`),
+        );
+  if (explicit === null && dataBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} or ${context}.${dataPath} is required`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  const derived =
+    dataBytes === null
+      ? null
+      : silentThresholdDigestBytes(digestLabel, dataBytes, domainSeparator);
+  if (explicit !== null && derived !== null && !fixedBytesEqual(explicit, derived)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} must match the derived ${dataDescription}`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  return {
+    value: explicit ?? derived,
+    kind: dataBytes === null ? "external" : `dev-sha256-${kindLabel}`,
+    digest:
+      dataBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(dataBytes)).digest().values()),
+  };
+}
+
+function silentThresholdIssuerSetField(source, context) {
+  return normalizeSilentThresholdDerivedField(source, context, {
+    explicitAliases: ["issuerSetCommitment", "issuer_set_commitment"],
+    dataAliases: [
+      "issuerSet",
+      "issuer_set",
+      "issuerSetBytes",
+      "issuer_set_bytes",
+      "issuerSetJson",
+      "issuer_set_json",
+    ],
+    jsonAliases: new Set(["issuerSet", "issuer_set"]),
+    fieldPath: "issuerSetCommitment",
+    dataPath: "issuerSet",
+    dataJsonPath: "issuerSetJson",
+    dataDescription: "issuer-set commitment",
+    digestLabel: "issuer-set-commitment",
+    kindLabel: "issuer-set-digest",
+    maxBytes:
+      source.maxIssuerSetBytes ??
+      source.max_issuer_set_bytes ??
+      SILENT_THRESHOLD_MAX_ISSUER_SET_BYTES,
+  });
+}
+
+function silentThresholdPolicyHashField(source, context) {
+  return normalizeSilentThresholdDerivedField(source, context, {
+    explicitAliases: ["thresholdPolicyHash", "threshold_policy_hash"],
+    dataAliases: [
+      "thresholdPolicy",
+      "threshold_policy",
+      "thresholdPolicyBytes",
+      "threshold_policy_bytes",
+      "thresholdPolicyJson",
+      "threshold_policy_json",
+    ],
+    jsonAliases: new Set(["thresholdPolicy", "threshold_policy"]),
+    fieldPath: "thresholdPolicyHash",
+    dataPath: "thresholdPolicy",
+    dataJsonPath: "thresholdPolicyJson",
+    dataDescription: "threshold policy hash",
+    digestLabel: "threshold-policy-hash",
+    kindLabel: "threshold-policy-digest",
+    maxBytes:
+      source.maxPolicyBytes ??
+      source.max_policy_bytes ??
+      SILENT_THRESHOLD_MAX_POLICY_BYTES,
+  });
+}
+
+function silentThresholdShowingCommitmentField(source, context) {
+  return normalizeSilentThresholdDerivedField(source, context, {
+    explicitAliases: [
+      "credentialShowingCommitment",
+      "credential_showing_commitment",
+      "showingCommitment",
+      "showing_commitment",
+    ],
+    dataAliases: [
+      "credentialShowing",
+      "credential_showing",
+      "credentialShowingBytes",
+      "credential_showing_bytes",
+      "credentialShowingJson",
+      "credential_showing_json",
+      "showing",
+      "showingBytes",
+      "showing_bytes",
+      "showingJson",
+      "showing_json",
+    ],
+    jsonAliases: new Set(["credentialShowing", "credential_showing", "showing"]),
+    fieldPath: "credentialShowingCommitment",
+    dataPath: "credentialShowing",
+    dataJsonPath: "credentialShowingJson",
+    dataDescription: "credential showing commitment",
+    digestLabel: "credential-showing-commitment",
+    kindLabel: "credential-showing-digest",
+    maxBytes:
+      source.maxShowingBytes ??
+      source.max_showing_bytes ??
+      SILENT_THRESHOLD_MAX_SHOWING_BYTES,
+  });
+}
+
+function silentThresholdShowingNullifierField(source, context) {
+  return normalizeSilentThresholdDerivedField(source, context, {
+    explicitAliases: [
+      "showingNullifier",
+      "showing_nullifier",
+      "credentialShowingNullifier",
+      "credential_showing_nullifier",
+      "nullifier",
+    ],
+    dataAliases: [
+      "credentialShowing",
+      "credential_showing",
+      "credentialShowingBytes",
+      "credential_showing_bytes",
+      "credentialShowingJson",
+      "credential_showing_json",
+      "showing",
+      "showingBytes",
+      "showing_bytes",
+      "showingJson",
+      "showing_json",
+    ],
+    jsonAliases: new Set(["credentialShowing", "credential_showing", "showing"]),
+    fieldPath: "showingNullifier",
+    dataPath: "credentialShowing",
+    dataJsonPath: "credentialShowingJson",
+    dataDescription: "credential showing nullifier",
+    digestLabel: "credential-showing-nullifier",
+    kindLabel: "credential-showing-nullifier",
+    maxBytes:
+      source.maxShowingBytes ??
+      source.max_showing_bytes ??
+      SILENT_THRESHOLD_MAX_SHOWING_BYTES,
+  });
+}
+
+function silentThresholdVerifierPolicyHashField(source, context) {
+  return normalizeSilentThresholdDerivedField(source, context, {
+    explicitAliases: ["verifierPolicyHash", "verifier_policy_hash"],
+    dataAliases: [
+      "verifierPolicy",
+      "verifier_policy",
+      "verifierPolicyBytes",
+      "verifier_policy_bytes",
+      "verifierPolicyJson",
+      "verifier_policy_json",
+    ],
+    jsonAliases: new Set(["verifierPolicy", "verifier_policy"]),
+    fieldPath: "verifierPolicyHash",
+    dataPath: "verifierPolicy",
+    dataJsonPath: "verifierPolicyJson",
+    dataDescription: "verifier policy hash",
+    digestLabel: "verifier-policy-hash",
+    kindLabel: "verifier-policy-digest",
+    maxBytes:
+      source.maxPolicyBytes ??
+      source.max_policy_bytes ??
+      SILENT_THRESHOLD_MAX_POLICY_BYTES,
+  });
+}
+
+function normalizeSilentThresholdCommitmentParts(source, context) {
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? SILENT_THRESHOLD_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const normalized = { ...source, domainSeparator };
+  const issuerSet = silentThresholdIssuerSetField(normalized, context);
+  const thresholdPolicy = silentThresholdPolicyHashField(normalized, context);
+  const showing = silentThresholdShowingCommitmentField(normalized, context);
+  const showingNullifier = silentThresholdShowingNullifierField(normalized, context);
+  const verifierPolicy = silentThresholdVerifierPolicyHashField(normalized, context);
+  return {
+    version: normalizeSilentThresholdVersion(source.version, `${context}.version`),
+    issuerSet,
+    thresholdPolicy,
+    showing,
+    showingNullifier,
+    verifierPolicy,
+    domainSeparator,
+  };
+}
+
+function normalizeSilentThresholdPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "issuer_set_commitment",
+      "issuerSetCommitment",
+      "threshold_policy_hash",
+      "thresholdPolicyHash",
+      "credential_showing_commitment",
+      "credentialShowingCommitment",
+      "showing_nullifier",
+      "showingNullifier",
+      "credential_showing_nullifier",
+      "credentialShowingNullifier",
+      "verifier_policy_hash",
+      "verifierPolicyHash",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const issuerAlias = readSingleAlias(
+    source,
+    ["issuer_set_commitment", "issuerSetCommitment"],
+    `${name}.issuerSetCommitment`,
+    "issuer-set commitment",
+  );
+  const thresholdAlias = readSingleAlias(
+    source,
+    ["threshold_policy_hash", "thresholdPolicyHash"],
+    `${name}.thresholdPolicyHash`,
+    "threshold policy hash",
+  );
+  const showingAlias = readSingleAlias(
+    source,
+    ["credential_showing_commitment", "credentialShowingCommitment"],
+    `${name}.credentialShowingCommitment`,
+    "credential showing commitment",
+  );
+  const nullifierAlias = readSingleAlias(
+    source,
+    [
+      "showing_nullifier",
+      "showingNullifier",
+      "credential_showing_nullifier",
+      "credentialShowingNullifier",
+    ],
+    `${name}.showingNullifier`,
+    "showing nullifier",
+  );
+  const verifierAlias = readSingleAlias(
+    source,
+    ["verifier_policy_hash", "verifierPolicyHash"],
+    `${name}.verifierPolicyHash`,
+    "verifier policy hash",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeSilentThresholdVersion(source.version, `${name}.version`),
+    issuer_set_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        issuerAlias.value,
+        `${name}.issuerSetCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    threshold_policy_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        thresholdAlias.value,
+        `${name}.thresholdPolicyHash`,
+        32,
+      ),
+    ).toString("hex"),
+    credential_showing_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        showingAlias.value,
+        `${name}.credentialShowingCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    showing_nullifier: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        nullifierAlias.value,
+        `${name}.showingNullifier`,
+        32,
+      ),
+    ).toString("hex"),
+    verifier_policy_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        verifierAlias.value,
+        `${name}.verifierPolicyHash`,
+        32,
+      ),
+    ).toString("hex"),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeSilentThresholdProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const parts = normalizeSilentThresholdCommitmentParts(source, context);
+  const publicInputs = {
+    version: parts.version,
+    issuer_set_commitment: Buffer.from(parts.issuerSet.value).toString("hex"),
+    threshold_policy_hash: Buffer.from(parts.thresholdPolicy.value).toString("hex"),
+    credential_showing_commitment: Buffer.from(parts.showing.value).toString("hex"),
+    showing_nullifier: Buffer.from(parts.showingNullifier.value).toString("hex"),
+    verifier_policy_hash: Buffer.from(parts.verifierPolicy.value).toString("hex"),
+    domain_separator: parts.domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeSilentThresholdBackend(
+      backendAlias.value,
+      `${context}.backendTag`,
+    ),
+    circuitId: normalizeSilentThresholdCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    commitments: parts,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function silentThresholdDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:silent-threshold:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([SILENT_THRESHOLD_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseSilentThresholdPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeSilentThresholdPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureSilentThresholdVerificationExpectations(source, publicInputs, context) {
+  const expectationSource = { ...source };
+  if (!hasPresentField(expectationSource, ["domainSeparator", "domain_separator"])) {
+    expectationSource.domainSeparator = publicInputs.domain_separator;
+  }
+  const derivedChecks = [
+    [
+      [
+        "issuerSetCommitment",
+        "issuer_set_commitment",
+        "issuerSet",
+        "issuer_set",
+        "issuerSetBytes",
+        "issuer_set_bytes",
+        "issuerSetJson",
+        "issuer_set_json",
+      ],
+      "issuerSetCommitment",
+      () => Buffer.from(
+        silentThresholdIssuerSetField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.issuer_set_commitment,
+    ],
+    [
+      [
+        "thresholdPolicyHash",
+        "threshold_policy_hash",
+        "thresholdPolicy",
+        "threshold_policy",
+        "thresholdPolicyBytes",
+        "threshold_policy_bytes",
+        "thresholdPolicyJson",
+        "threshold_policy_json",
+      ],
+      "thresholdPolicyHash",
+      () => Buffer.from(
+        silentThresholdPolicyHashField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.threshold_policy_hash,
+    ],
+    [
+      [
+        "credentialShowingCommitment",
+        "credential_showing_commitment",
+        "showingCommitment",
+        "showing_commitment",
+        "credentialShowing",
+        "credential_showing",
+        "credentialShowingBytes",
+        "credential_showing_bytes",
+        "credentialShowingJson",
+        "credential_showing_json",
+        "showing",
+        "showingBytes",
+        "showing_bytes",
+        "showingJson",
+        "showing_json",
+      ],
+      "credentialShowingCommitment",
+      () => Buffer.from(
+        silentThresholdShowingCommitmentField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.credential_showing_commitment,
+    ],
+    [
+      [
+        "showingNullifier",
+        "showing_nullifier",
+        "credentialShowingNullifier",
+        "credential_showing_nullifier",
+        "nullifier",
+        "credentialShowing",
+        "credential_showing",
+        "credentialShowingBytes",
+        "credential_showing_bytes",
+        "credentialShowingJson",
+        "credential_showing_json",
+        "showing",
+        "showingBytes",
+        "showing_bytes",
+        "showingJson",
+        "showing_json",
+      ],
+      "showingNullifier",
+      () => Buffer.from(
+        silentThresholdShowingNullifierField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.showing_nullifier,
+    ],
+    [
+      [
+        "verifierPolicyHash",
+        "verifier_policy_hash",
+        "verifierPolicy",
+        "verifier_policy",
+        "verifierPolicyBytes",
+        "verifier_policy_bytes",
+        "verifierPolicyJson",
+        "verifier_policy_json",
+      ],
+      "verifierPolicyHash",
+      () => Buffer.from(
+        silentThresholdVerifierPolicyHashField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.verifier_policy_hash,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of derivedChecks) {
+    if (hasPresentField(source, fields) && normalize() !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
+}
+
+function normalizeZkX509Version(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeZkX509Backend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? ZK_X509_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${ZK_X509_BACKEND}`,
+      name,
+    );
+  }
+  return ZK_X509_BACKEND;
+}
+
+function normalizeZkX509CircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? ZK_X509_CIRCUIT_ID, name);
+  if (
+    circuitId !== ZK_X509_CIRCUIT_ID &&
+    circuitId !== "zk_x509_onchain_identity_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify zk_x509_onchain_identity_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeZkX509StructuredBytes(
+  value,
+  aliasKey,
+  jsonAliases,
+  jsonPath,
+  bytePath,
+  maxBytes,
+) {
+  let bytes;
+  if (
+    aliasKey.endsWith("Json") ||
+    aliasKey.endsWith("_json") ||
+    jsonAliases.has(aliasKey)
+  ) {
+    const normalizedJson = normalizeJsonValue(value, jsonPath);
+    bytes = Array.from(
+      Buffer.from(
+        canonicalJsonStringify(normalizedJson, jsonPath),
+        "utf8",
+      ).values(),
+    );
+  } else {
+    bytes = normalizeBoundedByteArray(value, bytePath, { maxBytes });
+  }
+  if (bytes.length > maxBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${bytePath} must be no larger than ${maxBytes} bytes`,
+      bytePath,
+    );
+  }
+  return bytes;
+}
+
+function zkX509DigestBytes(label, bytes, domainSeparator) {
+  const digest = createHash("sha256");
+  digest.update(`iroha:zk-x509:${label}:v0`, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(bytes));
+  return Array.from(digest.digest().values());
+}
+
+function zkX509AddressBindingBytes({ bindingText, domainSeparator }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:zk-x509:address-binding:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(bindingText, "utf8");
+  return Array.from(digest.digest().values());
+}
+
+function normalizeZkX509DerivedField(
+  source,
+  context,
+  {
+    explicitAliases,
+    dataAliases,
+    jsonAliases,
+    fieldPath,
+    dataPath,
+    dataJsonPath,
+    description,
+    digestLabel,
+    kindLabel,
+    maxBytes,
+  },
+) {
+  const explicitAlias = readSingleAlias(
+    source,
+    explicitAliases,
+    `${context}.${fieldPath}`,
+    description,
+  );
+  const dataAlias = readSingleAlias(
+    source,
+    dataAliases,
+    `${context}.${dataPath}`,
+    description,
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? ZK_X509_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicit =
+    explicitAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          explicitAlias.value,
+          `${context}.${fieldPath}`,
+          32,
+        );
+  const dataBytes =
+    dataAlias.value === undefined
+      ? null
+      : normalizeZkX509StructuredBytes(
+          dataAlias.value,
+          dataAlias.key,
+          jsonAliases,
+          `${context}.${dataJsonPath}`,
+          `${context}.${dataPath}`,
+          normalizePositiveU32(maxBytes, `${context}.maxBytes`),
+        );
+  if (explicit === null && dataBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} or ${context}.${dataPath} is required`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  const derived =
+    dataBytes === null ? null : zkX509DigestBytes(digestLabel, dataBytes, domainSeparator);
+  if (explicit !== null && derived !== null && !fixedBytesEqual(explicit, derived)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} must match the derived ${description}`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  return {
+    value: explicit ?? derived,
+    kind: dataBytes === null ? "external" : `dev-sha256-${kindLabel}`,
+    digest:
+      dataBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(dataBytes)).digest().values()),
+  };
+}
+
+function zkX509CaRootField(source, context) {
+  return normalizeZkX509DerivedField(source, context, {
+    explicitAliases: ["caRootCommitment", "ca_root_commitment"],
+    dataAliases: [
+      "caRoot",
+      "ca_root",
+      "caRootBytes",
+      "ca_root_bytes",
+      "caRootJson",
+      "ca_root_json",
+      "trustRoot",
+      "trust_root",
+      "trustRootJson",
+      "trust_root_json",
+    ],
+    jsonAliases: new Set(["caRoot", "ca_root", "trustRoot", "trust_root"]),
+    fieldPath: "caRootCommitment",
+    dataPath: "caRoot",
+    dataJsonPath: "caRootJson",
+    description: "CA root commitment",
+    digestLabel: "ca-root-commitment",
+    kindLabel: "ca-root-digest",
+    maxBytes:
+      source.maxCaRootBytes ??
+      source.max_ca_root_bytes ??
+      ZK_X509_MAX_CA_ROOT_BYTES,
+  });
+}
+
+function zkX509CertificatePolicyField(source, context) {
+  return normalizeZkX509DerivedField(source, context, {
+    explicitAliases: ["certificatePolicyHash", "certificate_policy_hash"],
+    dataAliases: [
+      "certificatePolicy",
+      "certificate_policy",
+      "certificatePolicyBytes",
+      "certificate_policy_bytes",
+      "certificatePolicyJson",
+      "certificate_policy_json",
+    ],
+    jsonAliases: new Set(["certificatePolicy", "certificate_policy"]),
+    fieldPath: "certificatePolicyHash",
+    dataPath: "certificatePolicy",
+    dataJsonPath: "certificatePolicyJson",
+    description: "certificate policy hash",
+    digestLabel: "certificate-policy-hash",
+    kindLabel: "certificate-policy-digest",
+    maxBytes:
+      source.maxPolicyBytes ??
+      source.max_policy_bytes ??
+      ZK_X509_MAX_POLICY_BYTES,
+  });
+}
+
+function zkX509RevocationRootField(source, context) {
+  return normalizeZkX509DerivedField(source, context, {
+    explicitAliases: ["revocationRoot", "revocation_root"],
+    dataAliases: [
+      "revocationData",
+      "revocation_data",
+      "revocationBytes",
+      "revocation_bytes",
+      "revocationJson",
+      "revocation_json",
+      "revocationSet",
+      "revocation_set",
+      "revocationSetJson",
+      "revocation_set_json",
+      "revocationList",
+      "revocation_list",
+      "revocationListJson",
+      "revocation_list_json",
+    ],
+    jsonAliases: new Set([
+      "revocationData",
+      "revocation_data",
+      "revocationSet",
+      "revocation_set",
+      "revocationList",
+      "revocation_list",
+    ]),
+    fieldPath: "revocationRoot",
+    dataPath: "revocationData",
+    dataJsonPath: "revocationJson",
+    description: "revocation root",
+    digestLabel: "revocation-root",
+    kindLabel: "revocation-root-digest",
+    maxBytes:
+      source.maxRevocationBytes ??
+      source.max_revocation_bytes ??
+      ZK_X509_MAX_REVOCATION_BYTES,
+  });
+}
+
+function zkX509SubjectCommitmentField(source, context) {
+  return normalizeZkX509DerivedField(source, context, {
+    explicitAliases: ["subjectCommitment", "subject_commitment"],
+    dataAliases: [
+      "subject",
+      "subjectBytes",
+      "subject_bytes",
+      "subjectJson",
+      "subject_json",
+      "certificateSubject",
+      "certificate_subject",
+      "certificateSubjectJson",
+      "certificate_subject_json",
+    ],
+    jsonAliases: new Set(["subject", "certificateSubject", "certificate_subject"]),
+    fieldPath: "subjectCommitment",
+    dataPath: "subject",
+    dataJsonPath: "subjectJson",
+    description: "subject commitment",
+    digestLabel: "subject-commitment",
+    kindLabel: "subject-digest",
+    maxBytes:
+      source.maxSubjectBytes ??
+      source.max_subject_bytes ??
+      ZK_X509_MAX_SUBJECT_BYTES,
+  });
+}
+
+function zkX509AddressBindingField(source, context) {
+  const bindingAlias = readSingleAlias(
+    source,
+    ["addressBinding", "address_binding", "walletBinding", "wallet_binding"],
+    `${context}.addressBinding`,
+    "address binding",
+  );
+  const accountAlias = readSingleAlias(
+    source,
+    ["accountId", "account_id", "walletAccountId", "wallet_account_id"],
+    `${context}.accountId`,
+    "account id",
+  );
+  const walletAlias = readSingleAlias(
+    source,
+    ["walletAddress", "wallet_address"],
+    `${context}.walletAddress`,
+    "wallet address",
+  );
+  if (accountAlias.value !== undefined && walletAlias.value !== undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.accountId and ${context}.walletAddress must not both be provided`,
+      `${context}.addressBinding`,
+    );
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? ZK_X509_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicit =
+    bindingAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(bindingAlias.value, `${context}.addressBinding`, 32);
+  const bindingText =
+    accountAlias.value !== undefined
+      ? normalizeAccountId(accountAlias.value, `${context}.accountId`)
+      : walletAlias.value === undefined
+        ? null
+        : assertNonBlankString(walletAlias.value, `${context}.walletAddress`);
+  const derived =
+    bindingText === null
+      ? null
+      : zkX509AddressBindingBytes({
+          bindingText,
+          domainSeparator,
+        });
+  if (explicit === null && derived === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.addressBinding or ${context}.accountId is required`,
+      `${context}.addressBinding`,
+    );
+  }
+  if (explicit !== null && derived !== null && !fixedBytesEqual(explicit, derived)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.addressBinding must match the derived account binding`,
+      `${context}.addressBinding`,
+    );
+  }
+  return {
+    value: explicit ?? derived,
+    kind: derived === null ? "external" : "dev-sha256-account-binding",
+    digest: null,
+  };
+}
+
+function normalizeZkX509CommitmentParts(source, context) {
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? ZK_X509_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const normalized = { ...source, domainSeparator };
+  const caRoot = zkX509CaRootField(normalized, context);
+  const certificatePolicy = zkX509CertificatePolicyField(normalized, context);
+  const revocationRoot = zkX509RevocationRootField(normalized, context);
+  const subject = zkX509SubjectCommitmentField(normalized, context);
+  const addressBinding = zkX509AddressBindingField(normalized, context);
+  return {
+    version: normalizeZkX509Version(source.version, `${context}.version`),
+    caRoot,
+    certificatePolicy,
+    revocationRoot,
+    subject,
+    addressBinding,
+    domainSeparator,
+  };
+}
+
+function normalizeZkX509PublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "ca_root_commitment",
+      "caRootCommitment",
+      "certificate_policy_hash",
+      "certificatePolicyHash",
+      "revocation_root",
+      "revocationRoot",
+      "subject_commitment",
+      "subjectCommitment",
+      "address_binding",
+      "addressBinding",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const caAlias = readSingleAlias(
+    source,
+    ["ca_root_commitment", "caRootCommitment"],
+    `${name}.caRootCommitment`,
+    "CA root commitment",
+  );
+  const policyAlias = readSingleAlias(
+    source,
+    ["certificate_policy_hash", "certificatePolicyHash"],
+    `${name}.certificatePolicyHash`,
+    "certificate policy hash",
+  );
+  const revocationAlias = readSingleAlias(
+    source,
+    ["revocation_root", "revocationRoot"],
+    `${name}.revocationRoot`,
+    "revocation root",
+  );
+  const subjectAlias = readSingleAlias(
+    source,
+    ["subject_commitment", "subjectCommitment"],
+    `${name}.subjectCommitment`,
+    "subject commitment",
+  );
+  const addressAlias = readSingleAlias(
+    source,
+    ["address_binding", "addressBinding"],
+    `${name}.addressBinding`,
+    "address binding",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeZkX509Version(source.version, `${name}.version`),
+    ca_root_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        caAlias.value,
+        `${name}.caRootCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    certificate_policy_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        policyAlias.value,
+        `${name}.certificatePolicyHash`,
+        32,
+      ),
+    ).toString("hex"),
+    revocation_root: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        revocationAlias.value,
+        `${name}.revocationRoot`,
+        32,
+      ),
+    ).toString("hex"),
+    subject_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        subjectAlias.value,
+        `${name}.subjectCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    address_binding: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        addressAlias.value,
+        `${name}.addressBinding`,
+        32,
+      ),
+    ).toString("hex"),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeZkX509ProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const parts = normalizeZkX509CommitmentParts(source, context);
+  const publicInputs = {
+    version: parts.version,
+    ca_root_commitment: Buffer.from(parts.caRoot.value).toString("hex"),
+    certificate_policy_hash: Buffer.from(parts.certificatePolicy.value).toString("hex"),
+    revocation_root: Buffer.from(parts.revocationRoot.value).toString("hex"),
+    subject_commitment: Buffer.from(parts.subject.value).toString("hex"),
+    address_binding: Buffer.from(parts.addressBinding.value).toString("hex"),
+    domain_separator: parts.domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeZkX509Backend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeZkX509CircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    commitments: parts,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function zkX509DevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:zk-x509:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([ZK_X509_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseZkX509PublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeZkX509PublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureZkX509VerificationExpectations(source, publicInputs, context) {
+  const expectationSource = { ...source };
+  if (!hasPresentField(expectationSource, ["domainSeparator", "domain_separator"])) {
+    expectationSource.domainSeparator = publicInputs.domain_separator;
+  }
+  const checks = [
+    [
+      [
+        "caRootCommitment",
+        "ca_root_commitment",
+        "caRoot",
+        "ca_root",
+        "caRootBytes",
+        "ca_root_bytes",
+        "caRootJson",
+        "ca_root_json",
+        "trustRoot",
+        "trust_root",
+        "trustRootJson",
+        "trust_root_json",
+      ],
+      "caRootCommitment",
+      () => Buffer.from(zkX509CaRootField(expectationSource, context).value).toString("hex"),
+      publicInputs.ca_root_commitment,
+    ],
+    [
+      [
+        "certificatePolicyHash",
+        "certificate_policy_hash",
+        "certificatePolicy",
+        "certificate_policy",
+        "certificatePolicyBytes",
+        "certificate_policy_bytes",
+        "certificatePolicyJson",
+        "certificate_policy_json",
+      ],
+      "certificatePolicyHash",
+      () => Buffer.from(
+        zkX509CertificatePolicyField(expectationSource, context).value,
+      ).toString("hex"),
+      publicInputs.certificate_policy_hash,
+    ],
+    [
+      [
+        "revocationRoot",
+        "revocation_root",
+        "revocationData",
+        "revocation_data",
+        "revocationBytes",
+        "revocation_bytes",
+        "revocationJson",
+        "revocation_json",
+        "revocationSet",
+        "revocation_set",
+        "revocationSetJson",
+        "revocation_set_json",
+        "revocationList",
+        "revocation_list",
+        "revocationListJson",
+        "revocation_list_json",
+      ],
+      "revocationRoot",
+      () => Buffer.from(zkX509RevocationRootField(expectationSource, context).value).toString("hex"),
+      publicInputs.revocation_root,
+    ],
+    [
+      [
+        "subjectCommitment",
+        "subject_commitment",
+        "subject",
+        "subjectBytes",
+        "subject_bytes",
+        "subjectJson",
+        "subject_json",
+        "certificateSubject",
+        "certificate_subject",
+        "certificateSubjectJson",
+        "certificate_subject_json",
+      ],
+      "subjectCommitment",
+      () => Buffer.from(zkX509SubjectCommitmentField(expectationSource, context).value).toString("hex"),
+      publicInputs.subject_commitment,
+    ],
+    [
+      [
+        "addressBinding",
+        "address_binding",
+        "walletBinding",
+        "wallet_binding",
+        "accountId",
+        "account_id",
+        "walletAccountId",
+        "wallet_account_id",
+        "walletAddress",
+        "wallet_address",
+      ],
+      "addressBinding",
+      () => Buffer.from(zkX509AddressBindingField(expectationSource, context).value).toString("hex"),
+      publicInputs.address_binding,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of checks) {
+    if (hasPresentField(source, fields) && normalize() !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
+}
+
+function normalizeJindoVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeJindoBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? JINDO_BACKEND, name);
+  if (backendTag !== "Unsupported") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must remain unsupported until a production Jindo backend is registered`,
+      name,
+    );
+  }
+  return JINDO_BACKEND;
+}
+
+function normalizeJindoCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? JINDO_CIRCUIT_ID, name);
+  if (
+    circuitId !== JINDO_CIRCUIT_ID &&
+    circuitId !== "jindo_lattice_pcs_zk_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify jindo_lattice_pcs_zk_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function jindoDigestBytes(label, bytes, domainSeparator) {
+  const digest = createHash("sha256");
+  digest.update(`iroha:jindo:${label}:v0`, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(bytes));
+  return Array.from(digest.digest().values());
+}
+
+function normalizeJindoDerivedField(
+  source,
+  context,
+  {
+    explicitAliases,
+    dataAliases,
+    jsonAliases,
+    fieldPath,
+    dataPath,
+    dataJsonPath,
+    description,
+    digestLabel,
+    kindLabel,
+    maxBytes,
+  },
+) {
+  const explicitAlias = readSingleAlias(
+    source,
+    explicitAliases,
+    `${context}.${fieldPath}`,
+    description,
+  );
+  const dataAlias = readSingleAlias(
+    source,
+    dataAliases,
+    `${context}.${dataPath}`,
+    description,
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? JINDO_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicit =
+    explicitAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          explicitAlias.value,
+          `${context}.${fieldPath}`,
+          32,
+        );
+  const dataBytes =
+    dataAlias.value === undefined
+      ? null
+      : normalizeZkX509StructuredBytes(
+          dataAlias.value,
+          dataAlias.key,
+          jsonAliases,
+          `${context}.${dataJsonPath}`,
+          `${context}.${dataPath}`,
+          normalizePositiveU32(maxBytes, `${context}.maxBytes`),
+        );
+  if (explicit === null && dataBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} or ${context}.${dataPath} is required`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  const derived =
+    dataBytes === null ? null : jindoDigestBytes(digestLabel, dataBytes, domainSeparator);
+  if (explicit !== null && derived !== null && !fixedBytesEqual(explicit, derived)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} must match the derived ${description}`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  return {
+    value: explicit ?? derived,
+    kind: dataBytes === null ? "external" : `dev-sha256-${kindLabel}`,
+    digest:
+      dataBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(dataBytes)).digest().values()),
+  };
+}
+
+function jindoCommitmentField(source, context) {
+  return normalizeJindoDerivedField(source, context, {
+    explicitAliases: [
+      "commitment",
+      "polynomialCommitment",
+      "polynomial_commitment",
+    ],
+    dataAliases: [
+      "polynomial",
+      "polynomialBytes",
+      "polynomial_bytes",
+      "polynomialJson",
+      "polynomial_json",
+      "commitmentMaterial",
+      "commitment_material",
+      "commitmentMaterialJson",
+      "commitment_material_json",
+    ],
+    jsonAliases: new Set([
+      "polynomial",
+      "commitmentMaterial",
+      "commitment_material",
+    ]),
+    fieldPath: "commitment",
+    dataPath: "polynomial",
+    dataJsonPath: "polynomialJson",
+    description: "polynomial commitment",
+    digestLabel: "commitment",
+    kindLabel: "commitment-digest",
+    maxBytes:
+      source.maxPolynomialBytes ??
+      source.max_polynomial_bytes ??
+      JINDO_MAX_POLYNOMIAL_BYTES,
+  });
+}
+
+function jindoOpeningClaimField(source, context) {
+  return normalizeJindoDerivedField(source, context, {
+    explicitAliases: [
+      "openingClaimCommitment",
+      "opening_claim_commitment",
+      "openingClaimHash",
+      "opening_claim_hash",
+      "openingClaimDigest",
+      "opening_claim_digest",
+      "opening_claim",
+      "openingClaim",
+    ],
+    dataAliases: [
+      "claim",
+      "claimBytes",
+      "claim_bytes",
+      "claimJson",
+      "claim_json",
+      "openingClaimBytes",
+      "opening_claim_bytes",
+      "openingClaimJson",
+      "opening_claim_json",
+      "evaluationClaim",
+      "evaluation_claim",
+      "evaluationClaimJson",
+      "evaluation_claim_json",
+    ],
+    jsonAliases: new Set([
+      "claim",
+      "evaluationClaim",
+      "evaluation_claim",
+    ]),
+    fieldPath: "openingClaim",
+    dataPath: "openingClaim",
+    dataJsonPath: "openingClaimJson",
+    description: "opening claim",
+    digestLabel: "opening-claim",
+    kindLabel: "opening-claim-digest",
+    maxBytes:
+      source.maxOpeningClaimBytes ??
+      source.max_opening_claim_bytes ??
+      JINDO_MAX_OPENING_CLAIM_BYTES,
+  });
+}
+
+function jindoQuerySetField(source, context) {
+  return normalizeJindoDerivedField(source, context, {
+    explicitAliases: [
+      "querySetHash",
+      "query_set_hash",
+      "querySetRoot",
+      "query_set_root",
+    ],
+    dataAliases: [
+      "querySet",
+      "query_set",
+      "querySetBytes",
+      "query_set_bytes",
+      "querySetJson",
+      "query_set_json",
+      "queries",
+      "queriesJson",
+      "queries_json",
+    ],
+    jsonAliases: new Set(["querySet", "query_set", "queries"]),
+    fieldPath: "querySet",
+    dataPath: "querySet",
+    dataJsonPath: "querySetJson",
+    description: "query set",
+    digestLabel: "query-set",
+    kindLabel: "query-set-digest",
+    maxBytes:
+      source.maxQuerySetBytes ??
+      source.max_query_set_bytes ??
+      JINDO_MAX_QUERY_SET_BYTES,
+  });
+}
+
+function jindoParameterHashField(source, context) {
+  return normalizeJindoDerivedField(source, context, {
+    explicitAliases: [
+      "parameterHash",
+      "parameter_hash",
+      "paramsHash",
+      "params_hash",
+    ],
+    dataAliases: [
+      "parameters",
+      "parametersBytes",
+      "parameters_bytes",
+      "parametersJson",
+      "parameters_json",
+      "parameterSet",
+      "parameter_set",
+      "parameterSetJson",
+      "parameter_set_json",
+      "params",
+      "paramsBytes",
+      "params_bytes",
+      "paramsJson",
+      "params_json",
+    ],
+    jsonAliases: new Set([
+      "parameters",
+      "parameterSet",
+      "parameter_set",
+      "params",
+    ]),
+    fieldPath: "parameterHash",
+    dataPath: "parameters",
+    dataJsonPath: "parametersJson",
+    description: "parameter hash",
+    digestLabel: "parameter-hash",
+    kindLabel: "parameter-hash",
+    maxBytes:
+      source.maxParameterBytes ??
+      source.max_parameter_bytes ??
+      JINDO_MAX_PARAMETER_BYTES,
+  });
+}
+
+function normalizeJindoPublicInputParts(source, context) {
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? JINDO_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const normalized = { ...source, domainSeparator };
+  const commitment = jindoCommitmentField(normalized, context);
+  const openingClaim = jindoOpeningClaimField(normalized, context);
+  const querySet = jindoQuerySetField(normalized, context);
+  const parameterHash = jindoParameterHashField(normalized, context);
+  return {
+    version: normalizeJindoVersion(source.version, `${context}.version`),
+    commitment,
+    openingClaim,
+    querySet,
+    parameterHash,
+    domainSeparator,
+  };
+}
+
+function normalizeJindoPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "commitment",
+      "opening_claim",
+      "openingClaim",
+      "query_set",
+      "querySet",
+      "parameter_hash",
+      "parameterHash",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["commitment"],
+    `${name}.commitment`,
+    "commitment",
+  );
+  const openingAlias = readSingleAlias(
+    source,
+    ["opening_claim", "openingClaim"],
+    `${name}.openingClaim`,
+    "opening claim",
+  );
+  const queryAlias = readSingleAlias(
+    source,
+    ["query_set", "querySet"],
+    `${name}.querySet`,
+    "query set",
+  );
+  const parameterAlias = readSingleAlias(
+    source,
+    ["parameter_hash", "parameterHash"],
+    `${name}.parameterHash`,
+    "parameter hash",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeJindoVersion(source.version, `${name}.version`),
+    commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        commitmentAlias.value,
+        `${name}.commitment`,
+        32,
+      ),
+    ).toString("hex"),
+    opening_claim: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        openingAlias.value,
+        `${name}.openingClaim`,
+        32,
+      ),
+    ).toString("hex"),
+    query_set: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        queryAlias.value,
+        `${name}.querySet`,
+        32,
+      ),
+    ).toString("hex"),
+    parameter_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        parameterAlias.value,
+        `${name}.parameterHash`,
+        32,
+      ),
+    ).toString("hex"),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeJindoProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const parts = normalizeJindoPublicInputParts(source, context);
+  const publicInputs = {
+    version: parts.version,
+    commitment: Buffer.from(parts.commitment.value).toString("hex"),
+    opening_claim: Buffer.from(parts.openingClaim.value).toString("hex"),
+    query_set: Buffer.from(parts.querySet.value).toString("hex"),
+    parameter_hash: Buffer.from(parts.parameterHash.value).toString("hex"),
+    domain_separator: parts.domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeJindoBackend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeJindoCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    inputs: parts,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function jindoDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:jindo:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([JINDO_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseJindoPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeJindoPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureJindoVerificationExpectations(source, publicInputs, context) {
+  const expectationSource = { ...source };
+  if (!hasPresentField(expectationSource, ["domainSeparator", "domain_separator"])) {
+    expectationSource.domainSeparator = publicInputs.domain_separator;
+  }
+  const checks = [
+    [
+      [
+        "commitment",
+        "polynomialCommitment",
+        "polynomial_commitment",
+        "polynomial",
+        "polynomialBytes",
+        "polynomial_bytes",
+        "polynomialJson",
+        "polynomial_json",
+        "commitmentMaterial",
+        "commitment_material",
+        "commitmentMaterialJson",
+        "commitment_material_json",
+      ],
+      "commitment",
+      () => Buffer.from(jindoCommitmentField(expectationSource, context).value).toString("hex"),
+      publicInputs.commitment,
+    ],
+    [
+      [
+        "openingClaimCommitment",
+        "opening_claim_commitment",
+        "openingClaimHash",
+        "opening_claim_hash",
+        "openingClaimDigest",
+        "opening_claim_digest",
+        "opening_claim",
+        "openingClaim",
+        "claim",
+        "claimBytes",
+        "claim_bytes",
+        "claimJson",
+        "claim_json",
+        "openingClaimBytes",
+        "opening_claim_bytes",
+        "openingClaimJson",
+        "opening_claim_json",
+        "evaluationClaim",
+        "evaluation_claim",
+        "evaluationClaimJson",
+        "evaluation_claim_json",
+      ],
+      "openingClaim",
+      () => Buffer.from(jindoOpeningClaimField(expectationSource, context).value).toString("hex"),
+      publicInputs.opening_claim,
+    ],
+    [
+      [
+        "querySetHash",
+        "query_set_hash",
+        "querySetRoot",
+        "query_set_root",
+        "querySet",
+        "query_set",
+        "querySetBytes",
+        "query_set_bytes",
+        "querySetJson",
+        "query_set_json",
+        "queries",
+        "queriesJson",
+        "queries_json",
+      ],
+      "querySet",
+      () => Buffer.from(jindoQuerySetField(expectationSource, context).value).toString("hex"),
+      publicInputs.query_set,
+    ],
+    [
+      [
+        "parameterHash",
+        "parameter_hash",
+        "paramsHash",
+        "params_hash",
+        "parameters",
+        "parametersBytes",
+        "parameters_bytes",
+        "parametersJson",
+        "parameters_json",
+        "parameterSet",
+        "parameter_set",
+        "parameterSetJson",
+        "parameter_set_json",
+        "params",
+        "paramsBytes",
+        "params_bytes",
+        "paramsJson",
+        "params_json",
+      ],
+      "parameterHash",
+      () => Buffer.from(jindoParameterHashField(expectationSource, context).value).toString("hex"),
+      publicInputs.parameter_hash,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of checks) {
+    if (hasPresentField(source, fields) && normalize() !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
+}
+
+function normalizeSisHintsVersion(value, name) {
+  const version = normalizePositiveU32(value ?? 1, name);
+  if (version !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be 1`,
+      name,
+    );
+  }
+  return version;
+}
+
+function normalizeSisHintsBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? SIS_HINTS_BACKEND, name);
+  if (backendTag !== "Unsupported") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must remain unsupported until a production SIS-with-hints backend is registered`,
+      name,
+    );
+  }
+  return SIS_HINTS_BACKEND;
+}
+
+function normalizeSisHintsCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? SIS_HINTS_CIRCUIT_ID, name);
+  if (
+    circuitId !== SIS_HINTS_CIRCUIT_ID &&
+    circuitId !== "sis_hints_anoncred_pq_v0"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify sis_hints_anoncred_pq_v0`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function sisHintsDigestBytes(label, bytes, domainSeparator) {
+  const digest = createHash("sha256");
+  digest.update(`iroha:sis-hints:${label}:v0`, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(domainSeparator, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(bytes));
+  return Array.from(digest.digest().values());
+}
+
+function normalizeSisHintsDerivedField(
+  source,
+  context,
+  {
+    explicitAliases,
+    dataAliases,
+    jsonAliases,
+    fieldPath,
+    dataPath,
+    dataJsonPath,
+    description,
+    digestLabel,
+    kindLabel,
+    maxBytes,
+  },
+) {
+  const explicitAlias = readSingleAlias(
+    source,
+    explicitAliases,
+    `${context}.${fieldPath}`,
+    description,
+  );
+  const dataAlias = readSingleAlias(
+    source,
+    dataAliases,
+    `${context}.${dataPath}`,
+    description,
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? SIS_HINTS_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const explicit =
+    explicitAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          explicitAlias.value,
+          `${context}.${fieldPath}`,
+          32,
+        );
+  const dataBytes =
+    dataAlias.value === undefined
+      ? null
+      : normalizeZkX509StructuredBytes(
+          dataAlias.value,
+          dataAlias.key,
+          jsonAliases,
+          `${context}.${dataJsonPath}`,
+          `${context}.${dataPath}`,
+          normalizePositiveU32(maxBytes, `${context}.maxBytes`),
+        );
+  if (explicit === null && dataBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} or ${context}.${dataPath} is required`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  const derived =
+    dataBytes === null ? null : sisHintsDigestBytes(digestLabel, dataBytes, domainSeparator);
+  if (explicit !== null && derived !== null && !fixedBytesEqual(explicit, derived)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.${fieldPath} must match the derived ${description}`,
+      `${context}.${fieldPath}`,
+    );
+  }
+  return {
+    value: explicit ?? derived,
+    kind: dataBytes === null ? "external" : `dev-sha256-${kindLabel}`,
+    digest:
+      dataBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(dataBytes)).digest().values()),
+  };
+}
+
+function sisHintsIssuerField(source, context) {
+  return normalizeSisHintsDerivedField(source, context, {
+    explicitAliases: [
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuerParameterCommitment",
+      "issuer_parameter_commitment",
+    ],
+    dataAliases: [
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "issuerParameters",
+      "issuer_parameters",
+      "issuerParametersJson",
+      "issuer_parameters_json",
+    ],
+    jsonAliases: new Set(["issuer", "issuerParameters", "issuer_parameters"]),
+    fieldPath: "issuerCommitment",
+    dataPath: "issuer",
+    dataJsonPath: "issuerJson",
+    description: "issuer commitment",
+    digestLabel: "issuer-commitment",
+    kindLabel: "issuer-digest",
+    maxBytes:
+      source.maxIssuerBytes ??
+      source.max_issuer_bytes ??
+      SIS_HINTS_MAX_ISSUER_BYTES,
+  });
+}
+
+function sisHintsCredentialField(source, context) {
+  return normalizeSisHintsDerivedField(source, context, {
+    explicitAliases: [
+      "credentialCommitment",
+      "credential_commitment",
+      "credentialShowingCommitment",
+      "credential_showing_commitment",
+    ],
+    dataAliases: [
+      "credential",
+      "credentialBytes",
+      "credential_bytes",
+      "credentialJson",
+      "credential_json",
+      "credentialShowing",
+      "credential_showing",
+      "credentialShowingJson",
+      "credential_showing_json",
+      "showing",
+      "showingJson",
+      "showing_json",
+    ],
+    jsonAliases: new Set([
+      "credential",
+      "credentialShowing",
+      "credential_showing",
+      "showing",
+    ]),
+    fieldPath: "credentialCommitment",
+    dataPath: "credential",
+    dataJsonPath: "credentialJson",
+    description: "credential commitment",
+    digestLabel: "credential-commitment",
+    kindLabel: "credential-digest",
+    maxBytes:
+      source.maxCredentialBytes ??
+      source.max_credential_bytes ??
+      SIS_HINTS_MAX_CREDENTIAL_BYTES,
+  });
+}
+
+function sisHintsShowingPolicyField(source, context) {
+  return normalizeSisHintsDerivedField(source, context, {
+    explicitAliases: [
+      "showingPolicyHash",
+      "showing_policy_hash",
+      "policyHash",
+      "policy_hash",
+      "verifierPolicyHash",
+      "verifier_policy_hash",
+    ],
+    dataAliases: [
+      "showingPolicy",
+      "showing_policy",
+      "showingPolicyBytes",
+      "showing_policy_bytes",
+      "showingPolicyJson",
+      "showing_policy_json",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "verifierPolicy",
+      "verifier_policy",
+      "verifierPolicyJson",
+      "verifier_policy_json",
+    ],
+    jsonAliases: new Set([
+      "showingPolicy",
+      "showing_policy",
+      "policy",
+      "verifierPolicy",
+      "verifier_policy",
+    ]),
+    fieldPath: "showingPolicyHash",
+    dataPath: "showingPolicy",
+    dataJsonPath: "showingPolicyJson",
+    description: "showing policy hash",
+    digestLabel: "showing-policy-hash",
+    kindLabel: "showing-policy-hash",
+    maxBytes:
+      source.maxPolicyBytes ??
+      source.max_policy_bytes ??
+      SIS_HINTS_MAX_POLICY_BYTES,
+  });
+}
+
+function sisHintsParameterHashField(source, context) {
+  return normalizeSisHintsDerivedField(source, context, {
+    explicitAliases: [
+      "parameterHash",
+      "parameter_hash",
+      "paramsHash",
+      "params_hash",
+    ],
+    dataAliases: [
+      "parameters",
+      "parametersBytes",
+      "parameters_bytes",
+      "parametersJson",
+      "parameters_json",
+      "parameterSet",
+      "parameter_set",
+      "parameterSetJson",
+      "parameter_set_json",
+      "sisParameters",
+      "sis_parameters",
+      "sisParametersJson",
+      "sis_parameters_json",
+      "params",
+      "paramsJson",
+      "params_json",
+    ],
+    jsonAliases: new Set([
+      "parameters",
+      "parameterSet",
+      "parameter_set",
+      "sisParameters",
+      "sis_parameters",
+      "params",
+    ]),
+    fieldPath: "parameterHash",
+    dataPath: "parameters",
+    dataJsonPath: "parametersJson",
+    description: "parameter hash",
+    digestLabel: "parameter-hash",
+    kindLabel: "parameter-hash",
+    maxBytes:
+      source.maxParameterBytes ??
+      source.max_parameter_bytes ??
+      SIS_HINTS_MAX_PARAMETER_BYTES,
+  });
+}
+
+function normalizeSisHintsCommitmentParts(source, context) {
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? SIS_HINTS_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const normalized = { ...source, domainSeparator };
+  const issuer = sisHintsIssuerField(normalized, context);
+  const credential = sisHintsCredentialField(normalized, context);
+  const showingPolicy = sisHintsShowingPolicyField(normalized, context);
+  const parameterHash = sisHintsParameterHashField(normalized, context);
+  return {
+    version: normalizeSisHintsVersion(source.version, `${context}.version`),
+    issuer,
+    credential,
+    showingPolicy,
+    parameterHash,
+    domainSeparator,
+  };
+}
+
+function normalizeSisHintsPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "issuer_commitment",
+      "issuerCommitment",
+      "credential_commitment",
+      "credentialCommitment",
+      "showing_policy_hash",
+      "showingPolicyHash",
+      "parameter_hash",
+      "parameterHash",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const issuerAlias = readSingleAlias(
+    source,
+    ["issuer_commitment", "issuerCommitment"],
+    `${name}.issuerCommitment`,
+    "issuer commitment",
+  );
+  const credentialAlias = readSingleAlias(
+    source,
+    ["credential_commitment", "credentialCommitment"],
+    `${name}.credentialCommitment`,
+    "credential commitment",
+  );
+  const policyAlias = readSingleAlias(
+    source,
+    ["showing_policy_hash", "showingPolicyHash"],
+    `${name}.showingPolicyHash`,
+    "showing policy hash",
+  );
+  const parameterAlias = readSingleAlias(
+    source,
+    ["parameter_hash", "parameterHash"],
+    `${name}.parameterHash`,
+    "parameter hash",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeSisHintsVersion(source.version, `${name}.version`),
+    issuer_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        issuerAlias.value,
+        `${name}.issuerCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    credential_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        credentialAlias.value,
+        `${name}.credentialCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    showing_policy_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        policyAlias.value,
+        `${name}.showingPolicyHash`,
+        32,
+      ),
+    ).toString("hex"),
+    parameter_hash: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        parameterAlias.value,
+        `${name}.parameterHash`,
+        32,
+      ),
+    ).toString("hex"),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeSisHintsProofParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const parts = normalizeSisHintsCommitmentParts(source, context);
+  const publicInputs = {
+    version: parts.version,
+    issuer_commitment: Buffer.from(parts.issuer.value).toString("hex"),
+    credential_commitment: Buffer.from(parts.credential.value).toString("hex"),
+    showing_policy_hash: Buffer.from(parts.showingPolicy.value).toString("hex"),
+    parameter_hash: Buffer.from(parts.parameterHash.value).toString("hex"),
+    domain_separator: parts.domainSeparator,
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeSisHintsBackend(backendAlias.value, `${context}.backendTag`),
+    circuitId: normalizeSisHintsCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    commitments: parts,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function sisHintsDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:sis-hints:dev-fixture:v0", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([SIS_HINTS_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseSisHintsPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeSisHintsPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureSisHintsVerificationExpectations(source, publicInputs, context) {
+  const expectationSource = { ...source };
+  if (!hasPresentField(expectationSource, ["domainSeparator", "domain_separator"])) {
+    expectationSource.domainSeparator = publicInputs.domain_separator;
+  }
+  const checks = [
+    [
+      [
+        "issuerCommitment",
+        "issuer_commitment",
+        "issuerParameterCommitment",
+        "issuer_parameter_commitment",
+        "issuer",
+        "issuerBytes",
+        "issuer_bytes",
+        "issuerJson",
+        "issuer_json",
+        "issuerParameters",
+        "issuer_parameters",
+        "issuerParametersJson",
+        "issuer_parameters_json",
+      ],
+      "issuerCommitment",
+      () => Buffer.from(sisHintsIssuerField(expectationSource, context).value).toString("hex"),
+      publicInputs.issuer_commitment,
+    ],
+    [
+      [
+        "credentialCommitment",
+        "credential_commitment",
+        "credentialShowingCommitment",
+        "credential_showing_commitment",
+        "credential",
+        "credentialBytes",
+        "credential_bytes",
+        "credentialJson",
+        "credential_json",
+        "credentialShowing",
+        "credential_showing",
+        "credentialShowingJson",
+        "credential_showing_json",
+        "showing",
+        "showingJson",
+        "showing_json",
+      ],
+      "credentialCommitment",
+      () => Buffer.from(sisHintsCredentialField(expectationSource, context).value).toString("hex"),
+      publicInputs.credential_commitment,
+    ],
+    [
+      [
+        "showingPolicyHash",
+        "showing_policy_hash",
+        "policyHash",
+        "policy_hash",
+        "verifierPolicyHash",
+        "verifier_policy_hash",
+        "showingPolicy",
+        "showing_policy",
+        "showingPolicyBytes",
+        "showing_policy_bytes",
+        "showingPolicyJson",
+        "showing_policy_json",
+        "policy",
+        "policyBytes",
+        "policy_bytes",
+        "policyJson",
+        "policy_json",
+        "verifierPolicy",
+        "verifier_policy",
+        "verifierPolicyJson",
+        "verifier_policy_json",
+      ],
+      "showingPolicyHash",
+      () => Buffer.from(sisHintsShowingPolicyField(expectationSource, context).value).toString("hex"),
+      publicInputs.showing_policy_hash,
+    ],
+    [
+      [
+        "parameterHash",
+        "parameter_hash",
+        "paramsHash",
+        "params_hash",
+        "parameters",
+        "parametersBytes",
+        "parameters_bytes",
+        "parametersJson",
+        "parameters_json",
+        "parameterSet",
+        "parameter_set",
+        "parameterSetJson",
+        "parameter_set_json",
+        "sisParameters",
+        "sis_parameters",
+        "sisParametersJson",
+        "sis_parameters_json",
+        "params",
+        "paramsJson",
+        "params_json",
+      ],
+      "parameterHash",
+      () => Buffer.from(sisHintsParameterHashField(expectationSource, context).value).toString("hex"),
+      publicInputs.parameter_hash,
+    ],
+  ];
+  for (const [fields, path, normalize, actual] of checks) {
+    if (hasPresentField(source, fields) && normalize() !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
+}
+
+function pickPresentFields(source, fields) {
+  const result = {};
+  for (const field of fields) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      result[field] = source[field];
+    }
+  }
+  return result;
+}
+
+function hasPresentField(source, fields) {
+  return fields.some((field) => Object.prototype.hasOwnProperty.call(source, field));
+}
+
+function normalizeVeRangeBackend(value, name) {
+  const backendTag = normalizePrivacyBackendTag(value ?? VERANGE_BACKEND, name);
+  if (backendTag !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be ${VERANGE_BACKEND}`,
+      name,
+    );
+  }
+  return VERANGE_BACKEND;
+}
+
+function normalizeVeRangeCircuitId(value, name) {
+  const circuitId = assertNonBlankString(value ?? VERANGE_CIRCUIT_ID, name);
+  if (
+    circuitId !== VERANGE_CIRCUIT_ID &&
+    circuitId !== "verange_transparent_range_v1"
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must identify verange_transparent_range_v1`,
+      name,
+    );
+  }
+  return circuitId;
+}
+
+function normalizeVeRangePublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "commitments",
+      "range_parameters",
+      "rangeParameters",
+      "aggregation_count",
+      "aggregationCount",
+      "domain_separator",
+      "domainSeparator",
+      "payload_digest",
+      "payloadDigest",
+    ]),
+    name,
+  );
+  const rangeParametersAlias = readSingleAlias(
+    source,
+    ["range_parameters", "rangeParameters"],
+    `${name}.rangeParameters`,
+    "range parameters",
+  );
+  const rangeParameters = assertPlainObject(
+    rangeParametersAlias.value,
+    `${name}.rangeParameters`,
+  );
+  assertAllowedFields(
+    rangeParameters,
+    new Set(["bit_length", "bitLength", "commitment_scheme", "commitmentScheme"]),
+    `${name}.rangeParameters`,
+  );
+  const bitLengthAlias = readSingleAlias(
+    rangeParameters,
+    ["bit_length", "bitLength"],
+    `${name}.rangeParameters.bitLength`,
+    "bit length",
+  );
+  const schemeAlias = readSingleAlias(
+    rangeParameters,
+    ["commitment_scheme", "commitmentScheme"],
+    `${name}.rangeParameters.commitmentScheme`,
+    "commitment scheme",
+  );
+  const aggregationAlias = readSingleAlias(
+    source,
+    ["aggregation_count", "aggregationCount"],
+    `${name}.aggregationCount`,
+    "aggregation count",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  const digestAlias = readSingleAlias(
+    source,
+    ["payload_digest", "payloadDigest"],
+    `${name}.payloadDigest`,
+    "payload digest",
+  );
+  if (!Array.isArray(source.commitments) || source.commitments.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.commitments must be a non-empty array`,
+      `${name}.commitments`,
+    );
+  }
+  const commitments = source.commitments.map((entry, index) =>
+    Buffer.from(
+      normalizeNonZeroFixedBytes(entry, `${name}.commitments[${index}]`, 32),
+    ).toString("hex"),
+  );
+  const seen = new Set();
+  for (const commitment of commitments) {
+    if (seen.has(commitment)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.commitments must not contain duplicate commitments`,
+        `${name}.commitments`,
+      );
+    }
+    seen.add(commitment);
+  }
+  const aggregationCount = normalizeVeRangeAggregationCount(
+    aggregationAlias.value,
+    `${name}.aggregationCount`,
+  );
+  if (aggregationCount !== commitments.length) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.aggregationCount must equal the number of commitments`,
+      `${name}.aggregationCount`,
+    );
+  }
+  return {
+    version: normalizeVeRangeVersion(source.version, `${name}.version`),
+    commitments,
+    range_parameters: {
+      bit_length: normalizeVeRangeBitLength(
+        bitLengthAlias.value,
+        `${name}.rangeParameters.bitLength`,
+      ),
+      commitment_scheme: normalizeVeRangeCommitmentScheme(
+        schemeAlias.value,
+        `${name}.rangeParameters.commitmentScheme`,
+      ),
+    },
+    aggregation_count: aggregationCount,
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+    payload_digest: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        digestAlias.value,
+        `${name}.payloadDigest`,
+        32,
+      ),
+    ).toString("hex"),
+  };
+}
+
+function normalizeVeRangeCommitments(source, name) {
+  const listAlias = readSingleAlias(
+    source,
+    ["commitments", "rangeCommitments", "range_commitments"],
+    `${name}.commitments`,
+    "range commitment list",
+  );
+  const singleAlias = readSingleAlias(
+    source,
+    ["commitment", "rangeCommitment", "range_commitment", "valueCommitment", "value_commitment"],
+    `${name}.commitment`,
+    "range commitment",
+  );
+  if (listAlias.value !== undefined && singleAlias.value !== undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must include either commitments or commitment, not both`,
+      name,
+    );
+  }
+
+  const commonFields = pickPresentFields(source, [
+    "version",
+    "bitLength",
+    "bit_length",
+    "aggregationCount",
+    "aggregation_count",
+    "commitmentScheme",
+    "commitment_scheme",
+    "domainSeparator",
+    "domain_separator",
+    "payloadDigest",
+    "payload_digest",
+    "txDigest",
+    "tx_digest",
+    "payload",
+    "payloadBytes",
+    "payload_bytes",
+    "payloadJson",
+    "payload_json",
+    "maxPayloadBytes",
+    "max_payload_bytes",
+  ]);
+
+  let commitmentSources;
+  if (listAlias.value !== undefined) {
+    if (!Array.isArray(listAlias.value) || listAlias.value.length === 0) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.commitments must be a non-empty array`,
+        `${name}.commitments`,
+      );
+    }
+    commitmentSources = listAlias.value.map((entry, index) => {
+      if (
+        entry !== null &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        !Buffer.isBuffer(entry) &&
+        !ArrayBuffer.isView(entry) &&
+        !(entry instanceof ArrayBuffer)
+      ) {
+        return {
+          ...commonFields,
+          ...assertPlainObject(entry, `${name}.commitments[${index}]`),
+        };
+      }
+      return {
+        ...commonFields,
+        commitment: entry,
+      };
+    });
+  } else {
+    commitmentSources = [
+      {
+        ...commonFields,
+        ...pickPresentFields(source, [
+          "commitment",
+          "rangeCommitment",
+          "range_commitment",
+          "valueCommitment",
+          "value_commitment",
+        ]),
+      },
+    ];
+  }
+
+  return commitmentSources.map((entry, index) =>
+    buildRangeCommitment(entry, `${name}.commitments[${index}]`),
+  );
+}
+
+function ensureVeRangeCommitmentConsistency(commitments, name) {
+  const first = commitments[0];
+  const seenCommitments = new Set();
+  for (const [index, commitment] of commitments.entries()) {
+    const prefix = `${name}.commitments[${index}]`;
+    if (commitment.bit_length !== first.bit_length) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${prefix}.bitLength must match the first commitment`,
+        `${prefix}.bitLength`,
+      );
+    }
+    if (commitment.commitment_scheme !== first.commitment_scheme) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${prefix}.commitmentScheme must match the first commitment`,
+        `${prefix}.commitmentScheme`,
+      );
+    }
+    if (commitment.domain_separator !== first.domain_separator) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${prefix}.domainSeparator must match the first commitment`,
+        `${prefix}.domainSeparator`,
+      );
+    }
+    if (!fixedBytesEqual(commitment.payload_digest, first.payload_digest)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${prefix}.payloadDigest must match the first commitment`,
+        `${prefix}.payloadDigest`,
+      );
+    }
+    const commitmentHex = Buffer.from(commitment.commitment).toString("hex");
+    if (seenCommitments.has(commitmentHex)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.commitments must not contain duplicate commitments`,
+        `${name}.commitments`,
+      );
+    }
+    seenCommitments.add(commitmentHex);
+  }
+}
+
+function normalizeVeRangeProofEnvelopeParts(
+  source,
+  context,
+  { requireProofBytes = true } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const aggregationAlias = readSingleAlias(
+    source,
+    ["aggregationCount", "aggregation_count"],
+    `${context}.aggregationCount`,
+    "aggregation count",
+  );
+  const commitments = normalizeVeRangeCommitments(source, context);
+  ensureVeRangeCommitmentConsistency(commitments, context);
+  const aggregationCount =
+    aggregationAlias.value === undefined
+      ? commitments.length
+      : normalizeVeRangeAggregationCount(
+          aggregationAlias.value,
+          `${context}.aggregationCount`,
+        );
+  if (aggregationCount !== commitments.length) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.aggregationCount must equal the number of commitments`,
+      `${context}.aggregationCount`,
+    );
+  }
+  for (const [index, commitment] of commitments.entries()) {
+    if (
+      commitment.aggregation_count !== 1 &&
+      commitment.aggregation_count !== aggregationCount
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.commitments[${index}].aggregationCount must be 1 or match ${context}.aggregationCount`,
+        `${context}.commitments[${index}].aggregationCount`,
+      );
+    }
+  }
+
+  const first = commitments[0];
+  const publicInputs = {
+    version: 1,
+    commitments: commitments.map((entry) =>
+      Buffer.from(entry.commitment).toString("hex"),
+    ),
+    range_parameters: {
+      bit_length: first.bit_length,
+      commitment_scheme: first.commitment_scheme,
+    },
+    aggregation_count: aggregationCount,
+    domain_separator: first.domain_separator,
+    payload_digest: Buffer.from(first.payload_digest).toString("hex"),
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeVeRangeBackend(
+      backendAlias.value,
+      `${context}.backendTag`,
+    ),
+    circuitId: normalizeVeRangeCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function veRangeDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:verange:dev-fixture:v1", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([VERANGE_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function decodeVeRangeEnvelope(value, name) {
+  try {
+    return noritoDecodePrivacyProofEnvelope(value);
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be a valid OpenVerifyEnvelope`,
+      name,
+      error,
+    );
+  }
+}
+
+function parseVeRangePublicInputs(bytes, name) {
+  let parsed;
+  const text = Buffer.from(bytes).toString("utf8");
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeVeRangePublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureVeRangeVerificationExpectations(source, publicInputs, context) {
+  if (
+    hasPresentField(source, [
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+    ])
+  ) {
+    const expectedDigest = normalizeVeRangePayloadDigest(source, context);
+    if (Buffer.from(expectedDigest).toString("hex") !== publicInputs.payload_digest) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.payloadDigest must match the envelope public inputs`,
+        `${context}.payloadDigest`,
+      );
+    }
+  }
+  const bitLengthAlias = readSingleAlias(
+    source,
+    ["bitLength", "bit_length"],
+    `${context}.bitLength`,
+    "bit length",
+  );
+  if (
+    bitLengthAlias.value !== undefined &&
+    normalizeVeRangeBitLength(bitLengthAlias.value, `${context}.bitLength`) !==
+      publicInputs.range_parameters.bit_length
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bitLength must match the envelope public inputs`,
+      `${context}.bitLength`,
+    );
+  }
+  const schemeAlias = readSingleAlias(
+    source,
+    ["commitmentScheme", "commitment_scheme"],
+    `${context}.commitmentScheme`,
+    "commitment scheme",
+  );
+  if (
+    schemeAlias.value !== undefined &&
+    normalizeVeRangeCommitmentScheme(
+      schemeAlias.value,
+      `${context}.commitmentScheme`,
+    ) !== publicInputs.range_parameters.commitment_scheme
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.commitmentScheme must match the envelope public inputs`,
+      `${context}.commitmentScheme`,
+    );
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
+  const aggregationAlias = readSingleAlias(
+    source,
+    ["aggregationCount", "aggregation_count"],
+    `${context}.aggregationCount`,
+    "aggregation count",
+  );
+  if (
+    aggregationAlias.value !== undefined &&
+    normalizeVeRangeAggregationCount(
+      aggregationAlias.value,
+      `${context}.aggregationCount`,
+    ) !== publicInputs.aggregation_count
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.aggregationCount must match the envelope public inputs`,
+      `${context}.aggregationCount`,
+    );
+  }
+  if (
+    hasPresentField(source, [
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+    ])
+  ) {
+    const expectedCommitments = normalizeVeRangeCommitments(source, context);
+    const expectedCommitmentHex = expectedCommitments.map((entry) =>
+      Buffer.from(entry.commitment).toString("hex"),
+    );
+    if (
+      expectedCommitmentHex.length !== publicInputs.commitments.length ||
+      expectedCommitmentHex.some(
+        (commitment, index) => commitment !== publicInputs.commitments[index],
+      )
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.commitments must match the envelope public inputs`,
+        `${context}.commitments`,
+      );
+    }
+  }
+}
+
+function normalizeAnonymousPgcReceiverSetFromSource(source, context) {
+  const receiverSetAlias = readSingleAlias(
+    source,
+    ["receiverSet", "receiver_set"],
+    `${context}.receiverSet`,
+    "receiver set",
+  );
+  if (receiverSetAlias.value !== undefined) {
+    return normalizeAnonymousPgcReceiverSet(
+      receiverSetAlias.value,
+      `${context}.receiverSet`,
+    );
+  }
+  return buildAnonymousPgcReceiverSet(
+    pickPresentFields(source, ["version", "threshold", "k", "receivers"]),
+    `${context}.receiverSet`,
+  );
+}
+
+function normalizeAnonymousPgcPublicInputs(value, name) {
+  const source = assertPlainObject(value, name);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "anonymity_set_root",
+      "anonymitySetRoot",
+      "tx_digest",
+      "txDigest",
+      "balance_commitments",
+      "balanceCommitments",
+      "receiver_set_commitment",
+      "receiverSetCommitment",
+      "receiver_ciphertext_commitments",
+      "receiverCiphertextCommitments",
+      "receiver_threshold",
+      "receiverThreshold",
+      "receiver_count",
+      "receiverCount",
+      "link_tag",
+      "linkTag",
+      "range_commitments",
+      "rangeCommitments",
+      "chain_id",
+      "chainId",
+      "domain_separator",
+      "domainSeparator",
+    ]),
+    name,
+  );
+  const anonymityRootAlias = readSingleAlias(
+    source,
+    ["anonymity_set_root", "anonymitySetRoot"],
+    `${name}.anonymitySetRoot`,
+    "anonymity set root",
+  );
+  const txDigestAlias = readSingleAlias(
+    source,
+    ["tx_digest", "txDigest"],
+    `${name}.txDigest`,
+    "transaction digest",
+  );
+  const balanceAlias = readSingleAlias(
+    source,
+    ["balance_commitments", "balanceCommitments"],
+    `${name}.balanceCommitments`,
+    "balance commitments",
+  );
+  const receiverSetAlias = readSingleAlias(
+    source,
+    ["receiver_set_commitment", "receiverSetCommitment"],
+    `${name}.receiverSetCommitment`,
+    "receiver-set commitment",
+  );
+  const receiverCiphertextAlias = readSingleAlias(
+    source,
+    ["receiver_ciphertext_commitments", "receiverCiphertextCommitments"],
+    `${name}.receiverCiphertextCommitments`,
+    "receiver ciphertext commitments",
+  );
+  const receiverThresholdAlias = readSingleAlias(
+    source,
+    ["receiver_threshold", "receiverThreshold"],
+    `${name}.receiverThreshold`,
+    "receiver threshold",
+  );
+  const receiverCountAlias = readSingleAlias(
+    source,
+    ["receiver_count", "receiverCount"],
+    `${name}.receiverCount`,
+    "receiver count",
+  );
+  const linkTagAlias = readSingleAlias(
+    source,
+    ["link_tag", "linkTag"],
+    `${name}.linkTag`,
+    "link tag",
+  );
+  const rangeAlias = readSingleAlias(
+    source,
+    ["range_commitments", "rangeCommitments"],
+    `${name}.rangeCommitments`,
+    "range commitments",
+  );
+  const chainAlias = readSingleAlias(
+    source,
+    ["chain_id", "chainId"],
+    `${name}.chainId`,
+    "chain id",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domain_separator", "domainSeparator"],
+    `${name}.domainSeparator`,
+    "domain separator",
+  );
+  const receiverCiphertextCommitments = normalizeAnonymousPgcCommitmentList(
+    receiverCiphertextAlias.value,
+    `${name}.receiverCiphertextCommitments`,
+    ANON_PGC_MAX_RECEIVERS,
+  );
+  const receiverThreshold = normalizePositiveU32(
+    receiverThresholdAlias.value,
+    `${name}.receiverThreshold`,
+  );
+  const receiverCount = normalizePositiveU32(
+    receiverCountAlias.value,
+    `${name}.receiverCount`,
+  );
+  if (receiverCount !== receiverCiphertextCommitments.length) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.receiverCount must match receiverCiphertextCommitments length`,
+      `${name}.receiverCount`,
+    );
+  }
+  if (receiverThreshold > receiverCount) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.receiverThreshold must not exceed receiverCount`,
+      `${name}.receiverThreshold`,
+    );
+  }
+  return {
+    version: normalizeAnonymousPgcVersion(source.version, `${name}.version`),
+    anonymity_set_root: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        anonymityRootAlias.value,
+        `${name}.anonymitySetRoot`,
+        32,
+      ),
+    ).toString("hex"),
+    tx_digest: Buffer.from(
+      normalizeNonZeroFixedBytes(txDigestAlias.value, `${name}.txDigest`, 32),
+    ).toString("hex"),
+    balance_commitments: normalizeAnonymousPgcCommitmentList(
+      balanceAlias.value,
+      `${name}.balanceCommitments`,
+      ANON_PGC_MAX_BALANCE_COMMITMENTS,
+    ).map((entry) => Buffer.from(entry).toString("hex")),
+    receiver_set_commitment: Buffer.from(
+      normalizeNonZeroFixedBytes(
+        receiverSetAlias.value,
+        `${name}.receiverSetCommitment`,
+        32,
+      ),
+    ).toString("hex"),
+    receiver_ciphertext_commitments: receiverCiphertextCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    receiver_threshold: receiverThreshold,
+    receiver_count: receiverCount,
+    link_tag: Buffer.from(
+      normalizeNonZeroFixedBytes(linkTagAlias.value, `${name}.linkTag`, 32),
+    ).toString("hex"),
+    range_commitments: normalizeAnonymousPgcCommitmentList(
+      rangeAlias.value,
+      `${name}.rangeCommitments`,
+      ANON_PGC_MAX_RANGE_COMMITMENTS,
+    ).map((entry) => Buffer.from(entry).toString("hex")),
+    chain_id: assertNonBlankString(chainAlias.value, `${name}.chainId`),
+    domain_separator: assertNonBlankString(
+      domainAlias.value,
+      `${name}.domainSeparator`,
+    ),
+  };
+}
+
+function normalizeAnonymousPgcProofParts(
+  source,
+  context,
+  { requireProofBytes = false } = {},
+) {
+  const backendAlias = readSingleAlias(
+    source,
+    ["backendTag", "backend_tag", "backend"],
+    `${context}.backendTag`,
+    "backend tag",
+  );
+  const circuitAlias = readSingleAlias(
+    source,
+    ["circuitId", "circuit_id"],
+    `${context}.circuitId`,
+    "circuit id",
+  );
+  const vkHashAlias = readSingleAlias(
+    source,
+    ["vkHash", "vk_hash", "verifierKeyHash", "verifyingKeyHash"],
+    `${context}.vkHash`,
+    "verifying key hash",
+  );
+  const proofAlias = readSingleAlias(
+    source,
+    ["proofBytes", "proof_bytes", "proof"],
+    `${context}.proofBytes`,
+    "proof bytes",
+  );
+  if (requireProofBytes && proofAlias.value === undefined) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.proofBytes is required`,
+      `${context}.proofBytes`,
+    );
+  }
+  const receiverSet = normalizeAnonymousPgcReceiverSetFromSource(source, context);
+  const anonymityRoot = normalizeNonZeroFixedBytes(
+    source.anonymitySetRoot ?? source.anonymity_set_root,
+    `${context}.anonymitySetRoot`,
+    32,
+  );
+  const txDigest = normalizeAnonymousPgcPayloadDigest(source, context);
+  const balanceCommitments = normalizeAnonymousPgcCommitmentList(
+    source.balanceCommitments ?? source.balance_commitments,
+    `${context}.balanceCommitments`,
+    ANON_PGC_MAX_BALANCE_COMMITMENTS,
+  );
+  const rangeCommitments = normalizeAnonymousPgcCommitmentList(
+    source.rangeCommitments ?? source.range_commitments,
+    `${context}.rangeCommitments`,
+    ANON_PGC_MAX_RANGE_COMMITMENTS,
+  );
+  const publicInputs = {
+    version: 1,
+    anonymity_set_root: Buffer.from(anonymityRoot).toString("hex"),
+    tx_digest: Buffer.from(txDigest).toString("hex"),
+    balance_commitments: balanceCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    receiver_set_commitment: Buffer.from(
+      receiverSet.receiver_set_commitment,
+    ).toString("hex"),
+    receiver_ciphertext_commitments: receiverSet.receivers.map((entry) =>
+      Buffer.from(entry.ciphertext_commitment).toString("hex"),
+    ),
+    receiver_threshold: receiverSet.threshold,
+    receiver_count: receiverSet.receiver_count,
+    link_tag: Buffer.from(
+      normalizeNonZeroFixedBytes(source.linkTag ?? source.link_tag, `${context}.linkTag`, 32),
+    ).toString("hex"),
+    range_commitments: rangeCommitments.map((entry) =>
+      Buffer.from(entry).toString("hex"),
+    ),
+    chain_id: assertNonBlankString(source.chainId ?? source.chain_id, `${context}.chainId`),
+    domain_separator: assertNonBlankString(
+      source.domainSeparator ?? source.domain_separator ?? ANON_PGC_DOMAIN_SEPARATOR,
+      `${context}.domainSeparator`,
+    ),
+  };
+  const publicInputBytes = Array.from(
+    Buffer.from(
+      canonicalJsonStringify(publicInputs, `${context}.publicInputs`),
+      "utf8",
+    ).values(),
+  );
+  return {
+    backend: normalizeAnonymousPgcBackend(
+      backendAlias.value,
+      `${context}.backendTag`,
+    ),
+    circuitId: normalizeAnonymousPgcCircuitId(
+      circuitAlias.value,
+      `${context}.circuitId`,
+    ),
+    vkHash: normalizeNonZeroFixedBytes(vkHashAlias.value, `${context}.vkHash`, 32),
+    receiverSet,
+    publicInputs,
+    publicInputBytes,
+    proofBytes:
+      proofAlias.value === undefined
+        ? null
+        : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
+            maxBytes: normalizePositiveU32(
+              source.maxProofBytes ??
+                source.max_proof_bytes ??
+                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+              `${context}.maxProofBytes`,
+            ),
+          }),
+    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
+    maxPublicInputBytes:
+      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+  };
+}
+
+function anonymousPgcDevProofBytes({ circuitId, vkHash, publicInputBytes }) {
+  const digest = createHash("sha256");
+  digest.update("iroha:anonymous-pgc:dev-fixture:v1", "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(circuitId, "utf8");
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(vkHash));
+  digest.update(Buffer.from([0]));
+  digest.update(Buffer.from(publicInputBytes));
+  return Array.from(
+    Buffer.concat([ANON_PGC_DEV_PROOF_PREFIX, digest.digest()]).values(),
+  );
+}
+
+function parseAnonymousPgcPublicInputs(bytes, name) {
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+  } catch (error) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must contain valid JSON public inputs`,
+      name,
+      error,
+    );
+  }
+  const normalized = normalizeAnonymousPgcPublicInputs(parsed, name);
+  const canonical = canonicalJsonStringify(normalized, name);
+  if (!Buffer.from(bytes).equals(Buffer.from(canonical, "utf8"))) {
+    fail(
+      ValidationErrorCode.INVALID_JSON_VALUE,
+      `${name} must use canonical JSON encoding`,
+      name,
+    );
+  }
+  return normalized;
+}
+
+function ensureAnonymousPgcVerificationExpectations(source, publicInputs, context) {
+  if (
+    hasPresentField(source, [
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+    ])
+  ) {
+    const expectedDigest = normalizeAnonymousPgcPayloadDigest(source, context);
+    if (Buffer.from(expectedDigest).toString("hex") !== publicInputs.tx_digest) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.txDigest must match the envelope public inputs`,
+        `${context}.txDigest`,
+      );
+    }
+  }
+  for (const [fields, path, normalize, actual] of [
+    [
+      ["anonymitySetRoot", "anonymity_set_root"],
+      "anonymitySetRoot",
+      (value) => Buffer.from(normalizeNonZeroFixedBytes(value, `${context}.anonymitySetRoot`, 32)).toString("hex"),
+      publicInputs.anonymity_set_root,
+    ],
+    [
+      ["linkTag", "link_tag"],
+      "linkTag",
+      (value) => Buffer.from(normalizeNonZeroFixedBytes(value, `${context}.linkTag`, 32)).toString("hex"),
+      publicInputs.link_tag,
+    ],
+  ]) {
+    const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
+    if (alias.value !== undefined && normalize(alias.value) !== actual) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${path} must match the envelope public inputs`,
+        `${context}.${path}`,
+      );
+    }
+  }
+  if (hasPresentField(source, ["receiverSet", "receiver_set", "receivers"])) {
+    const receiverSet = normalizeAnonymousPgcReceiverSetFromSource(source, context);
+    if (
+      Buffer.from(receiverSet.receiver_set_commitment).toString("hex") !==
+        publicInputs.receiver_set_commitment ||
+      receiverSet.threshold !== publicInputs.receiver_threshold ||
+      receiverSet.receiver_count !== publicInputs.receiver_count
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.receiverSet must match the envelope public inputs`,
+        `${context}.receiverSet`,
+      );
+    }
+    const ciphertextCommitments = receiverSet.receivers.map((entry) =>
+      Buffer.from(entry.ciphertext_commitment).toString("hex"),
+    );
+    if (
+      ciphertextCommitments.length !==
+        publicInputs.receiver_ciphertext_commitments.length ||
+      ciphertextCommitments.some(
+        (entry, index) => entry !== publicInputs.receiver_ciphertext_commitments[index],
+      )
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.receiverSet ciphertext commitments must match the envelope public inputs`,
+        `${context}.receiverSet`,
+      );
+    }
+  }
+  for (const [fields, path, maxItems, actual] of [
+    [
+      ["balanceCommitments", "balance_commitments"],
+      "balanceCommitments",
+      ANON_PGC_MAX_BALANCE_COMMITMENTS,
+      publicInputs.balance_commitments,
+    ],
+    [
+      ["rangeCommitments", "range_commitments"],
+      "rangeCommitments",
+      ANON_PGC_MAX_RANGE_COMMITMENTS,
+      publicInputs.range_commitments,
+    ],
+  ]) {
+    const alias = readSingleAlias(source, fields, `${context}.${path}`, path);
+    if (alias.value !== undefined) {
+      const expected = normalizeAnonymousPgcCommitmentList(
+        alias.value,
+        `${context}.${path}`,
+        maxItems,
+      ).map((entry) => Buffer.from(entry).toString("hex"));
+      if (
+        expected.length !== actual.length ||
+        expected.some((entry, index) => entry !== actual[index])
+      ) {
+        fail(
+          ValidationErrorCode.INVALID_OBJECT,
+          `${context}.${path} must match the envelope public inputs`,
+          `${context}.${path}`,
+        );
+      }
+    }
+  }
+  const chainAlias = readSingleAlias(
+    source,
+    ["chainId", "chain_id"],
+    `${context}.chainId`,
+    "chain id",
+  );
+  if (
+    chainAlias.value !== undefined &&
+    assertNonBlankString(chainAlias.value, `${context}.chainId`) !==
+      publicInputs.chain_id
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.chainId must match the envelope public inputs`,
+      `${context}.chainId`,
+    );
+  }
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  if (
+    domainAlias.value !== undefined &&
+    assertNonBlankString(domainAlias.value, `${context}.domainSeparator`) !==
+      publicInputs.domain_separator
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.domainSeparator must match the envelope public inputs`,
+      `${context}.domainSeparator`,
+    );
+  }
 }
 
 function normalizePrivacyVerifierKeyIdFromOptions(source, name) {
@@ -4563,6 +10815,3065 @@ export function buildRemoveSmartContractBytesInstruction(options) {
   }
   return {
     RemoveSmartContractBytes: payload,
+  };
+}
+
+/**
+ * Normalize a zkAt policy commitment descriptor.
+ *
+ * Supplying `policyJson`/`policyBytes` derives a deterministic dev commitment
+ * for SDK fixtures. Supplying only `policyCommitment` preserves an externally
+ * generated commitment without claiming production policy proving support.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkAtPolicyCommitment(options, context = "zkAtPolicyCommitment") {
+  const source = assertPlainObject(options, context);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "policySchema",
+      "policy_schema",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+    ]),
+    context,
+  );
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["policyCommitment", "policy_commitment", "commitment"],
+    `${context}.policyCommitment`,
+    "policy commitment",
+  );
+  const policyAlias = readSingleAlias(
+    source,
+    ["policy", "policyBytes", "policy_bytes", "policyJson", "policy_json"],
+    `${context}.policy`,
+    "policy",
+  );
+  const epochAlias = readSingleAlias(
+    source,
+    ["policyEpoch", "policy_epoch"],
+    `${context}.policyEpoch`,
+    "policy epoch",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  const schemaAlias = readSingleAlias(
+    source,
+    ["policySchema", "policy_schema"],
+    `${context}.policySchema`,
+    "policy schema",
+  );
+  const policyEpoch = normalizeZkAtPolicyEpoch(
+    epochAlias.value,
+    `${context}.policyEpoch`,
+  );
+  const domainSeparator = assertNonBlankString(
+    domainAlias.value ?? ZKAT_DOMAIN_SEPARATOR,
+    `${context}.domainSeparator`,
+  );
+  const policySchema = assertNonBlankString(
+    schemaAlias.value ?? "zkat-policy-json-v1",
+    `${context}.policySchema`,
+  );
+  const explicitCommitment =
+    commitmentAlias.value === undefined
+      ? null
+      : normalizeNonZeroFixedBytes(
+          commitmentAlias.value,
+          `${context}.policyCommitment`,
+          32,
+        );
+  const policyBytes =
+    policyAlias.value === undefined
+      ? null
+      : normalizeZkAtPolicyBytes(
+          policyAlias.value,
+          policyAlias.key,
+          context,
+          normalizePositiveU32(
+            source.maxPolicyBytes ?? source.max_policy_bytes ?? ZKAT_MAX_POLICY_BYTES,
+            `${context}.maxPolicyBytes`,
+          ),
+        );
+  if (explicitCommitment === null && policyBytes === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.policyCommitment or ${context}.policy is required`,
+      `${context}.policyCommitment`,
+    );
+  }
+  const derivedCommitment =
+    policyBytes === null
+      ? null
+      : zkatPolicyCommitmentBytes({
+          policyBytes,
+          policyEpoch,
+          domainSeparator,
+          policySchema,
+        });
+  if (
+    explicitCommitment !== null &&
+    derivedCommitment !== null &&
+    !fixedBytesEqual(explicitCommitment, derivedCommitment)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.policyCommitment must match the derived policy commitment`,
+      `${context}.policyCommitment`,
+    );
+  }
+  const policyCommitment = explicitCommitment ?? derivedCommitment;
+  return {
+    version: normalizeZkAtVersion(source.version, `${context}.version`),
+    policy_commitment: policyCommitment,
+    policy_epoch: policyEpoch,
+    domain_separator: domainSeparator,
+    policy_schema: policySchema,
+    commitment_kind: policyBytes === null ? "external" : "dev-sha256-policy-digest",
+    policy_digest:
+      policyBytes === null
+        ? null
+        : Array.from(createHash("sha256").update(Buffer.from(policyBytes)).digest().values()),
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared zkAt authenticator.
+ *
+ * This accepts externally generated proof bytes and binds them to normalized
+ * policy-private authorization public inputs.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkAtAuthenticatorEnvelope(options) {
+  const source = assertPlainObject(options, "zkAtAuthenticatorEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "policySchema",
+      "policy_schema",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "accountId",
+      "account_id",
+      "actionClass",
+      "action_class",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+      "version",
+    ]),
+    "zkAtAuthenticatorEnvelope",
+  );
+  const parts = normalizeZkAtAuthenticatorParts(
+    source,
+    "zkAtAuthenticatorEnvelope",
+  );
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic zkAt dev proof fixture bound to an OpenVerify envelope.
+ *
+ * This fixture is only for SDK/dev-verifier public-input binding tests. It is
+ * not a production zkAt proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkAtDevProofFixture(options) {
+  const source = assertPlainObject(options, "zkAtDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "policySchema",
+      "policy_schema",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "accountId",
+      "account_id",
+      "actionClass",
+      "action_class",
+      "domainSeparator",
+      "domain_separator",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+      "version",
+    ]),
+    "zkAtDevProofFixture",
+  );
+  const parts = normalizeZkAtAuthenticatorParts(
+    source,
+    "zkAtDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = zkatDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "zkat-dev-fixture-v1",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic zkAt dev proof fixture through OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used as
+ * production zkAt cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkAtAuthenticatorLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkAtAuthenticatorLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "policyCommitment",
+      "policy_commitment",
+      "commitment",
+      "policy",
+      "policyBytes",
+      "policy_bytes",
+      "policyJson",
+      "policy_json",
+      "policyEpoch",
+      "policy_epoch",
+      "policySchema",
+      "policy_schema",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "accountId",
+      "account_id",
+      "actionClass",
+      "action_class",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "maxPolicyBytes",
+      "max_policy_bytes",
+    ]),
+    "zkAtAuthenticatorLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkAtAuthenticatorLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkAtAuthenticatorLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAtAuthenticatorLocalVerification.envelope.backend must be Stark",
+      "zkAtAuthenticatorLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkAtCircuitId(
+    decoded.circuit_id,
+    "zkAtAuthenticatorLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkAtAuthenticatorLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkAtPublicInputs(
+    decoded.public_inputs,
+    "zkAtAuthenticatorLocalVerification.publicInputs",
+  );
+  ensureZkAtVerificationExpectations(
+    source,
+    publicInputs,
+    "zkAtAuthenticatorLocalVerification",
+  );
+  const expectedProofBytes = zkatDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAtAuthenticatorLocalVerification proof bytes are not a valid zkAt dev fixture",
+      "zkAtAuthenticatorLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "zkat-dev-fixture-v1",
+    backend: ZKAT_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    account_id: publicInputs.account_id,
+    action_class: publicInputs.action_class,
+    policy_epoch: publicInputs.policy_epoch,
+  };
+}
+
+/**
+ * Normalize a ZK-AMS recursive anonymous admission batch and derive its root.
+ *
+ * The batch root binds issuer root, admission nullifiers, anonymous account
+ * commitments, recursive proof digest, and domain separator. It does not submit
+ * chain state or claim production recursive proving support.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkAmsAdmissionBatch(options) {
+  const source = assertPlainObject(options, "zkAmsAdmissionBatch");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+    ]),
+    "zkAmsAdmissionBatch",
+  );
+  const batch = normalizeZkAmsAdmissionBatchParts(source, "zkAmsAdmissionBatch");
+  return {
+    version: batch.version,
+    issuer_root: batch.issuerRoot,
+    admission_batch_root: batch.admissionBatchRoot,
+    admission_nullifiers: batch.admissionNullifiers,
+    anonymous_account_commitments: batch.anonymousAccountCommitments,
+    recursive_proof_digest: batch.recursiveProofDigest,
+    domain_separator: batch.domainSeparator,
+    batch_size: batch.batchSize,
+    root_kind: "dev-sha256-admission-batch-root",
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared ZK-AMS admission proof.
+ *
+ * This accepts externally generated proof bytes and binds them to normalized
+ * recursive admission public inputs.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkAmsAdmissionProofEnvelope(options) {
+  const source = assertPlainObject(options, "zkAmsAdmissionProofEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkAmsAdmissionProofEnvelope",
+  );
+  const parts = normalizeZkAmsAdmissionProofParts(
+    source,
+    "zkAmsAdmissionProofEnvelope",
+  );
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic ZK-AMS dev proof fixture bound to an OpenVerify envelope.
+ *
+ * This fixture is only for SDK/dev-verifier public-input binding tests. It is
+ * not a production recursive admission proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkAmsAdmissionDevProofFixture(options) {
+  const source = assertPlainObject(options, "zkAmsAdmissionDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "aux",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkAmsAdmissionDevProofFixture",
+  );
+  const parts = normalizeZkAmsAdmissionProofParts(
+    source,
+    "zkAmsAdmissionDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = zkamDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "zk-ams-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    batch: {
+      version: parts.batch.version,
+      issuer_root: parts.batch.issuerRoot,
+      admission_batch_root: parts.batch.admissionBatchRoot,
+      admission_nullifiers: parts.batch.admissionNullifiers,
+      anonymous_account_commitments: parts.batch.anonymousAccountCommitments,
+      recursive_proof_digest: parts.batch.recursiveProofDigest,
+      domain_separator: parts.batch.domainSeparator,
+      batch_size: parts.batch.batchSize,
+    },
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic ZK-AMS dev proof fixture through OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used as
+ * production recursive admission cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkAmsAdmissionProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkAmsAdmissionLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "issuerRoot",
+      "issuer_root",
+      "admissionBatchRoot",
+      "admission_batch_root",
+      "batchRoot",
+      "batch_root",
+      "admissionNullifiers",
+      "admission_nullifiers",
+      "nullifiers",
+      "anonymousAccountCommitments",
+      "anonymous_account_commitments",
+      "accountCommitments",
+      "account_commitments",
+      "recursiveProofDigest",
+      "recursive_proof_digest",
+      "recursiveProof",
+      "recursiveProofBytes",
+      "recursive_proof",
+      "recursive_proof_bytes",
+      "domainSeparator",
+      "domain_separator",
+      "maxBatchSize",
+      "max_batch_size",
+      "maxRecursiveProofBytes",
+      "max_recursive_proof_bytes",
+    ]),
+    "zkAmsAdmissionLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkAmsAdmissionLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkAmsAdmissionLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAmsAdmissionLocalVerification.envelope.backend must be Stark",
+      "zkAmsAdmissionLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkAmsCircuitId(
+    decoded.circuit_id,
+    "zkAmsAdmissionLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkAmsAdmissionLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkAmsPublicInputs(
+    decoded.public_inputs,
+    "zkAmsAdmissionLocalVerification.publicInputs",
+  );
+  ensureZkAmsVerificationExpectations(
+    source,
+    publicInputs,
+    "zkAmsAdmissionLocalVerification",
+  );
+  const expectedProofBytes = zkamDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkAmsAdmissionLocalVerification proof bytes are not a valid ZK-AMS dev fixture",
+      "zkAmsAdmissionLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "zk-ams-dev-fixture-v0",
+    backend: ZK_AMS_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    admission_batch_root: publicInputs.admission_batch_root,
+    batch_size: publicInputs.admission_nullifiers.length,
+  };
+}
+
+/**
+ * Normalize a Vega credential predicate commitment descriptor.
+ *
+ * Supplying `predicateJson`/`predicateBytes` derives a deterministic dev
+ * commitment for SDK fixtures. Supplying only `predicateCommitment` preserves an
+ * externally generated commitment without claiming production Vega proving
+ * support.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildVegaCredentialPredicateCommitment(
+  options,
+  context = "vegaCredentialPredicateCommitment",
+) {
+  const source = assertPlainObject(options, context);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "domainSeparator",
+      "domain_separator",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+    ]),
+    context,
+  );
+  return normalizeVegaPredicateCommitmentFromSource(source, context);
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared Vega credential proof.
+ *
+ * This accepts externally generated proof bytes and binds them to normalized
+ * existing-credential public inputs.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildVegaCredentialProofEnvelope(options) {
+  const source = assertPlainObject(options, "vegaCredentialProofEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+      "expirationEpoch",
+      "expiration_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxIssuerBytes",
+      "max_issuer_bytes",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "vegaCredentialProofEnvelope",
+  );
+  const parts = normalizeVegaProofParts(source, "vegaCredentialProofEnvelope");
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic Vega dev proof fixture bound to an OpenVerify envelope.
+ *
+ * This fixture is only for SDK/dev-verifier public-input binding tests. It is
+ * not a production existing-credential proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildVegaCredentialDevProofFixture(options) {
+  const source = assertPlainObject(options, "vegaCredentialDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+      "expirationEpoch",
+      "expiration_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "aux",
+      "maxIssuerBytes",
+      "max_issuer_bytes",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "vegaCredentialDevProofFixture",
+  );
+  const parts = normalizeVegaProofParts(
+    source,
+    "vegaCredentialDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = vegaDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "vega-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic Vega dev proof fixture through OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used as
+ * production Vega credential cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyVegaCredentialProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "vegaCredentialLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "issuerCommitment",
+      "issuer_commitment",
+      "issuer",
+      "issuerBytes",
+      "issuer_bytes",
+      "issuerJson",
+      "issuer_json",
+      "predicateCommitment",
+      "predicate_commitment",
+      "commitment",
+      "predicate",
+      "predicateBytes",
+      "predicate_bytes",
+      "predicateJson",
+      "predicate_json",
+      "credentialSchema",
+      "credential_schema",
+      "subjectBinding",
+      "subject_binding",
+      "identityCommitment",
+      "identity_commitment",
+      "accountCommitment",
+      "account_commitment",
+      "accountId",
+      "account_id",
+      "subjectAccountId",
+      "subject_account_id",
+      "expirationEpoch",
+      "expiration_epoch",
+      "domainSeparator",
+      "domain_separator",
+      "maxIssuerBytes",
+      "max_issuer_bytes",
+      "maxPredicateBytes",
+      "max_predicate_bytes",
+    ]),
+    "vegaCredentialLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "vegaCredentialLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "vegaCredentialLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "vegaCredentialLocalVerification.envelope.backend must be Stark",
+      "vegaCredentialLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeVegaCircuitId(
+    decoded.circuit_id,
+    "vegaCredentialLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "vegaCredentialLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseVegaPublicInputs(
+    decoded.public_inputs,
+    "vegaCredentialLocalVerification.publicInputs",
+  );
+  ensureVegaVerificationExpectations(
+    source,
+    publicInputs,
+    "vegaCredentialLocalVerification",
+  );
+  const expectedProofBytes = vegaDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "vegaCredentialLocalVerification proof bytes are not a valid Vega dev fixture",
+      "vegaCredentialLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "vega-dev-fixture-v0",
+    backend: VEGA_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    credential_schema: publicInputs.credential_schema,
+    expiration_epoch: publicInputs.expiration_epoch,
+  };
+}
+
+const SILENT_THRESHOLD_COMMON_FIELDS = Object.freeze([
+  "version",
+  "issuerSetCommitment",
+  "issuer_set_commitment",
+  "issuerSet",
+  "issuer_set",
+  "issuerSetBytes",
+  "issuer_set_bytes",
+  "issuerSetJson",
+  "issuer_set_json",
+  "thresholdPolicyHash",
+  "threshold_policy_hash",
+  "thresholdPolicy",
+  "threshold_policy",
+  "thresholdPolicyBytes",
+  "threshold_policy_bytes",
+  "thresholdPolicyJson",
+  "threshold_policy_json",
+  "credentialShowingCommitment",
+  "credential_showing_commitment",
+  "showingCommitment",
+  "showing_commitment",
+  "credentialShowing",
+  "credential_showing",
+  "credentialShowingBytes",
+  "credential_showing_bytes",
+  "credentialShowingJson",
+  "credential_showing_json",
+  "showing",
+  "showingBytes",
+  "showing_bytes",
+  "showingJson",
+  "showing_json",
+  "showingNullifier",
+  "showing_nullifier",
+  "credentialShowingNullifier",
+  "credential_showing_nullifier",
+  "nullifier",
+  "verifierPolicyHash",
+  "verifier_policy_hash",
+  "verifierPolicy",
+  "verifier_policy",
+  "verifierPolicyBytes",
+  "verifier_policy_bytes",
+  "verifierPolicyJson",
+  "verifier_policy_json",
+  "domainSeparator",
+  "domain_separator",
+  "maxIssuerSetBytes",
+  "max_issuer_set_bytes",
+  "maxPolicyBytes",
+  "max_policy_bytes",
+  "maxShowingBytes",
+  "max_showing_bytes",
+]);
+
+/**
+ * Normalize silent-threshold anonymous credential commitment descriptors.
+ *
+ * Supplying structured issuer, policy, and showing material derives
+ * deterministic dev commitments and hashes. Supplying only explicit
+ * commitments preserves externally generated values without claiming
+ * production anonymous-credential proving support.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildSilentThresholdCredentialCommitments(options) {
+  const source = assertPlainObject(
+    options,
+    "silentThresholdCredentialCommitments",
+  );
+  assertAllowedFields(
+    source,
+    new Set(SILENT_THRESHOLD_COMMON_FIELDS),
+    "silentThresholdCredentialCommitments",
+  );
+  const parts = normalizeSilentThresholdCommitmentParts(
+    source,
+    "silentThresholdCredentialCommitments",
+  );
+  return {
+    version: parts.version,
+    issuer_set_commitment: parts.issuerSet.value,
+    threshold_policy_hash: parts.thresholdPolicy.value,
+    credential_showing_commitment: parts.showing.value,
+    showing_nullifier: parts.showingNullifier.value,
+    verifier_policy_hash: parts.verifierPolicy.value,
+    domain_separator: parts.domainSeparator,
+    commitment_kinds: {
+      issuer_set_commitment: parts.issuerSet.kind,
+      threshold_policy_hash: parts.thresholdPolicy.kind,
+      credential_showing_commitment: parts.showing.kind,
+      showing_nullifier: parts.showingNullifier.kind,
+      verifier_policy_hash: parts.verifierPolicy.kind,
+    },
+    source_digests: {
+      issuer_set: parts.issuerSet.digest,
+      threshold_policy: parts.thresholdPolicy.digest,
+      credential_showing: parts.showing.digest,
+      showing_nullifier: parts.showingNullifier.digest,
+      verifier_policy: parts.verifierPolicy.digest,
+    },
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared silent-threshold
+ * anonymous credential showing proof.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildSilentThresholdCredentialEnvelope(options) {
+  const source = assertPlainObject(
+    options,
+    "silentThresholdCredentialEnvelope",
+  );
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SILENT_THRESHOLD_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "silentThresholdCredentialEnvelope",
+  );
+  const parts = normalizeSilentThresholdProofParts(
+    source,
+    "silentThresholdCredentialEnvelope",
+  );
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic silent-threshold credential dev proof fixture.
+ *
+ * This fixture is only for SDK/dev-verifier public-input binding tests. It is
+ * not a production anonymous credential showing proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildSilentThresholdCredentialDevProofFixture(options) {
+  const source = assertPlainObject(
+    options,
+    "silentThresholdCredentialDevProofFixture",
+  );
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SILENT_THRESHOLD_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "silentThresholdCredentialDevProofFixture",
+  );
+  const parts = normalizeSilentThresholdProofParts(
+    source,
+    "silentThresholdCredentialDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = silentThresholdDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "silent-threshold-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    commitments: {
+      issuer_set_commitment: parts.commitments.issuerSet.value,
+      threshold_policy_hash: parts.commitments.thresholdPolicy.value,
+      credential_showing_commitment: parts.commitments.showing.value,
+      showing_nullifier: parts.commitments.showingNullifier.value,
+      verifier_policy_hash: parts.commitments.verifierPolicy.value,
+      domain_separator: parts.commitments.domainSeparator,
+    },
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic silent-threshold credential dev proof fixture through
+ * OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used as
+ * production anonymous credential cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifySilentThresholdCredentialProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "silentThresholdCredentialLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SILENT_THRESHOLD_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "silentThresholdCredentialLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "silentThresholdCredentialLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "silentThresholdCredentialLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "silentThresholdCredentialLocalVerification.envelope.backend must be Stark",
+      "silentThresholdCredentialLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeSilentThresholdCircuitId(
+    decoded.circuit_id,
+    "silentThresholdCredentialLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "silentThresholdCredentialLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseSilentThresholdPublicInputs(
+    decoded.public_inputs,
+    "silentThresholdCredentialLocalVerification.publicInputs",
+  );
+  ensureSilentThresholdVerificationExpectations(
+    source,
+    publicInputs,
+    "silentThresholdCredentialLocalVerification",
+  );
+  const expectedProofBytes = silentThresholdDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "silentThresholdCredentialLocalVerification proof bytes are not a valid silent-threshold dev fixture",
+      "silentThresholdCredentialLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "silent-threshold-dev-fixture-v0",
+    backend: SILENT_THRESHOLD_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    showing_nullifier: publicInputs.showing_nullifier,
+  };
+}
+
+const ZK_X509_COMMON_FIELDS = Object.freeze([
+  "version",
+  "caRootCommitment",
+  "ca_root_commitment",
+  "caRoot",
+  "ca_root",
+  "caRootBytes",
+  "ca_root_bytes",
+  "caRootJson",
+  "ca_root_json",
+  "trustRoot",
+  "trust_root",
+  "trustRootJson",
+  "trust_root_json",
+  "certificatePolicyHash",
+  "certificate_policy_hash",
+  "certificatePolicy",
+  "certificate_policy",
+  "certificatePolicyBytes",
+  "certificate_policy_bytes",
+  "certificatePolicyJson",
+  "certificate_policy_json",
+  "revocationRoot",
+  "revocation_root",
+  "revocationData",
+  "revocation_data",
+  "revocationBytes",
+  "revocation_bytes",
+  "revocationJson",
+  "revocation_json",
+  "revocationSet",
+  "revocation_set",
+  "revocationSetJson",
+  "revocation_set_json",
+  "revocationList",
+  "revocation_list",
+  "revocationListJson",
+  "revocation_list_json",
+  "subjectCommitment",
+  "subject_commitment",
+  "subject",
+  "subjectBytes",
+  "subject_bytes",
+  "subjectJson",
+  "subject_json",
+  "certificateSubject",
+  "certificate_subject",
+  "certificateSubjectJson",
+  "certificate_subject_json",
+  "addressBinding",
+  "address_binding",
+  "walletBinding",
+  "wallet_binding",
+  "accountId",
+  "account_id",
+  "walletAccountId",
+  "wallet_account_id",
+  "walletAddress",
+  "wallet_address",
+  "domainSeparator",
+  "domain_separator",
+  "maxCaRootBytes",
+  "max_ca_root_bytes",
+  "maxPolicyBytes",
+  "max_policy_bytes",
+  "maxRevocationBytes",
+  "max_revocation_bytes",
+  "maxSubjectBytes",
+  "max_subject_bytes",
+]);
+
+/**
+ * Normalize ZK-X.509 identity proof public-input commitments.
+ *
+ * Structured CA-root, certificate-policy, revocation, subject, and address
+ * material is hashed into deterministic dev commitments. Explicit commitments
+ * are preserved for externally generated proof systems.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkX509IdentityCommitments(options) {
+  const source = assertPlainObject(options, "zkX509IdentityCommitments");
+  assertAllowedFields(
+    source,
+    new Set(ZK_X509_COMMON_FIELDS),
+    "zkX509IdentityCommitments",
+  );
+  const parts = normalizeZkX509CommitmentParts(
+    source,
+    "zkX509IdentityCommitments",
+  );
+  return {
+    version: parts.version,
+    ca_root_commitment: parts.caRoot.value,
+    certificate_policy_hash: parts.certificatePolicy.value,
+    revocation_root: parts.revocationRoot.value,
+    subject_commitment: parts.subject.value,
+    address_binding: parts.addressBinding.value,
+    domain_separator: parts.domainSeparator,
+    commitment_kinds: {
+      ca_root_commitment: parts.caRoot.kind,
+      certificate_policy_hash: parts.certificatePolicy.kind,
+      revocation_root: parts.revocationRoot.kind,
+      subject_commitment: parts.subject.kind,
+      address_binding: parts.addressBinding.kind,
+    },
+    source_digests: {
+      ca_root: parts.caRoot.digest,
+      certificate_policy: parts.certificatePolicy.digest,
+      revocation: parts.revocationRoot.digest,
+      subject: parts.subject.digest,
+      address_binding: parts.addressBinding.digest,
+    },
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared ZK-X.509 identity
+ * proof.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildZkX509IdentityEnvelope(options) {
+  const source = assertPlainObject(options, "zkX509IdentityEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...ZK_X509_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkX509IdentityEnvelope",
+  );
+  const parts = normalizeZkX509ProofParts(source, "zkX509IdentityEnvelope");
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic ZK-X.509 identity dev proof fixture.
+ *
+ * This fixture is only for SDK/dev-verifier public-input binding tests. It is
+ * not a production X.509 certificate validity, revocation, or ownership proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildZkX509IdentityDevProofFixture(options) {
+  const source = assertPlainObject(options, "zkX509IdentityDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...ZK_X509_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "zkX509IdentityDevProofFixture",
+  );
+  const parts = normalizeZkX509ProofParts(
+    source,
+    "zkX509IdentityDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = zkX509DevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "zk-x509-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    commitments: {
+      ca_root_commitment: parts.commitments.caRoot.value,
+      certificate_policy_hash: parts.commitments.certificatePolicy.value,
+      revocation_root: parts.commitments.revocationRoot.value,
+      subject_commitment: parts.commitments.subject.value,
+      address_binding: parts.commitments.addressBinding.value,
+      domain_separator: parts.commitments.domainSeparator,
+    },
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic ZK-X.509 identity dev proof fixture through
+ * OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used
+ * as production X.509 certificate cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyZkX509IdentityProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "zkX509IdentityLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...ZK_X509_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "zkX509IdentityLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "zkX509IdentityLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "zkX509IdentityLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkX509IdentityLocalVerification.envelope.backend must be Stark",
+      "zkX509IdentityLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeZkX509CircuitId(
+    decoded.circuit_id,
+    "zkX509IdentityLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "zkX509IdentityLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseZkX509PublicInputs(
+    decoded.public_inputs,
+    "zkX509IdentityLocalVerification.publicInputs",
+  );
+  ensureZkX509VerificationExpectations(
+    source,
+    publicInputs,
+    "zkX509IdentityLocalVerification",
+  );
+  const expectedProofBytes = zkX509DevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "zkX509IdentityLocalVerification proof bytes are not a valid ZK-X.509 dev fixture",
+      "zkX509IdentityLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "zk-x509-dev-fixture-v0",
+    backend: ZK_X509_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    address_binding: publicInputs.address_binding,
+  };
+}
+
+const JINDO_COMMON_FIELDS = Object.freeze([
+  "version",
+  "commitment",
+  "polynomialCommitment",
+  "polynomial_commitment",
+  "polynomial",
+  "polynomialBytes",
+  "polynomial_bytes",
+  "polynomialJson",
+  "polynomial_json",
+  "commitmentMaterial",
+  "commitment_material",
+  "commitmentMaterialJson",
+  "commitment_material_json",
+  "openingClaimCommitment",
+  "opening_claim_commitment",
+  "openingClaimHash",
+  "opening_claim_hash",
+  "openingClaimDigest",
+  "opening_claim_digest",
+  "opening_claim",
+  "openingClaim",
+  "claim",
+  "claimBytes",
+  "claim_bytes",
+  "claimJson",
+  "claim_json",
+  "openingClaimBytes",
+  "opening_claim_bytes",
+  "openingClaimJson",
+  "opening_claim_json",
+  "evaluationClaim",
+  "evaluation_claim",
+  "evaluationClaimJson",
+  "evaluation_claim_json",
+  "querySetHash",
+  "query_set_hash",
+  "querySetRoot",
+  "query_set_root",
+  "querySet",
+  "query_set",
+  "querySetBytes",
+  "query_set_bytes",
+  "querySetJson",
+  "query_set_json",
+  "queries",
+  "queriesJson",
+  "queries_json",
+  "parameterHash",
+  "parameter_hash",
+  "paramsHash",
+  "params_hash",
+  "parameters",
+  "parametersBytes",
+  "parameters_bytes",
+  "parametersJson",
+  "parameters_json",
+  "parameterSet",
+  "parameter_set",
+  "parameterSetJson",
+  "parameter_set_json",
+  "params",
+  "paramsBytes",
+  "params_bytes",
+  "paramsJson",
+  "params_json",
+  "domainSeparator",
+  "domain_separator",
+  "maxPolynomialBytes",
+  "max_polynomial_bytes",
+  "maxOpeningClaimBytes",
+  "max_opening_claim_bytes",
+  "maxQuerySetBytes",
+  "max_query_set_bytes",
+  "maxParameterBytes",
+  "max_parameter_bytes",
+]);
+
+/**
+ * Normalize Jindo lattice PCS public inputs for SDK/dev-fixture use.
+ *
+ * This helper derives deterministic hashes from polynomial, opening claim,
+ * query-set, and parameter material. It does not implement a production Jindo
+ * lattice PCS prover or verifier.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildJindoLatticePublicInputs(options) {
+  const source = assertPlainObject(options, "jindoLatticePublicInputs");
+  assertAllowedFields(
+    source,
+    new Set(JINDO_COMMON_FIELDS),
+    "jindoLatticePublicInputs",
+  );
+  const parts = normalizeJindoPublicInputParts(source, "jindoLatticePublicInputs");
+  return {
+    version: parts.version,
+    commitment: parts.commitment.value,
+    opening_claim: parts.openingClaim.value,
+    query_set: parts.querySet.value,
+    parameter_hash: parts.parameterHash.value,
+    domain_separator: parts.domainSeparator,
+    commitment_kinds: {
+      commitment: parts.commitment.kind,
+      opening_claim: parts.openingClaim.kind,
+      query_set: parts.querySet.kind,
+      parameter_hash: parts.parameterHash.kind,
+    },
+    source_digests: {
+      polynomial: parts.commitment.digest,
+      opening_claim: parts.openingClaim.digest,
+      query_set: parts.querySet.digest,
+      parameters: parts.parameterHash.digest,
+    },
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared Jindo lattice PCS
+ * proof candidate.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildJindoLatticeProofEnvelope(options) {
+  const source = assertPlainObject(options, "jindoLatticeProofEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...JINDO_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "jindoLatticeProofEnvelope",
+  );
+  const parts = normalizeJindoProofParts(source, "jindoLatticeProofEnvelope");
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic Jindo lattice PCS dev proof fixture.
+ *
+ * This fixture is only for public-input binding and SDK packaging tests. It is
+ * not a production lattice polynomial-commitment proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildJindoLatticeDevProofFixture(options) {
+  const source = assertPlainObject(options, "jindoLatticeDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...JINDO_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "jindoLatticeDevProofFixture",
+  );
+  const parts = normalizeJindoProofParts(
+    source,
+    "jindoLatticeDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = jindoDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "jindo-lattice-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic Jindo lattice PCS dev proof fixture through
+ * OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used
+ * as production lattice polynomial-commitment cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyJindoLatticeProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "jindoLatticeLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...JINDO_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "jindoLatticeLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "jindoLatticeLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "jindoLatticeLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Unsupported") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "jindoLatticeLocalVerification.envelope.backend must be Unsupported until a production Jindo backend is registered",
+      "jindoLatticeLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeJindoCircuitId(
+    decoded.circuit_id,
+    "jindoLatticeLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "jindoLatticeLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseJindoPublicInputs(
+    decoded.public_inputs,
+    "jindoLatticeLocalVerification.publicInputs",
+  );
+  ensureJindoVerificationExpectations(
+    source,
+    publicInputs,
+    "jindoLatticeLocalVerification",
+  );
+  const expectedProofBytes = jindoDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "jindoLatticeLocalVerification proof bytes are not a valid Jindo dev fixture",
+      "jindoLatticeLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "jindo-lattice-dev-fixture-v0",
+    backend: JINDO_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    parameter_hash: publicInputs.parameter_hash,
+  };
+}
+
+const SIS_HINTS_COMMON_FIELDS = Object.freeze([
+  "version",
+  "issuerCommitment",
+  "issuer_commitment",
+  "issuerParameterCommitment",
+  "issuer_parameter_commitment",
+  "issuer",
+  "issuerBytes",
+  "issuer_bytes",
+  "issuerJson",
+  "issuer_json",
+  "issuerParameters",
+  "issuer_parameters",
+  "issuerParametersJson",
+  "issuer_parameters_json",
+  "credentialCommitment",
+  "credential_commitment",
+  "credentialShowingCommitment",
+  "credential_showing_commitment",
+  "credential",
+  "credentialBytes",
+  "credential_bytes",
+  "credentialJson",
+  "credential_json",
+  "credentialShowing",
+  "credential_showing",
+  "credentialShowingJson",
+  "credential_showing_json",
+  "showing",
+  "showingJson",
+  "showing_json",
+  "showingPolicyHash",
+  "showing_policy_hash",
+  "policyHash",
+  "policy_hash",
+  "verifierPolicyHash",
+  "verifier_policy_hash",
+  "showingPolicy",
+  "showing_policy",
+  "showingPolicyBytes",
+  "showing_policy_bytes",
+  "showingPolicyJson",
+  "showing_policy_json",
+  "policy",
+  "policyBytes",
+  "policy_bytes",
+  "policyJson",
+  "policy_json",
+  "verifierPolicy",
+  "verifier_policy",
+  "verifierPolicyJson",
+  "verifier_policy_json",
+  "parameterHash",
+  "parameter_hash",
+  "paramsHash",
+  "params_hash",
+  "parameters",
+  "parametersBytes",
+  "parameters_bytes",
+  "parametersJson",
+  "parameters_json",
+  "parameterSet",
+  "parameter_set",
+  "parameterSetJson",
+  "parameter_set_json",
+  "sisParameters",
+  "sis_parameters",
+  "sisParametersJson",
+  "sis_parameters_json",
+  "params",
+  "paramsJson",
+  "params_json",
+  "domainSeparator",
+  "domain_separator",
+  "maxIssuerBytes",
+  "max_issuer_bytes",
+  "maxCredentialBytes",
+  "max_credential_bytes",
+  "maxPolicyBytes",
+  "max_policy_bytes",
+  "maxParameterBytes",
+  "max_parameter_bytes",
+]);
+
+/**
+ * Normalize SIS-with-hints anonymous credential public-input commitments.
+ *
+ * This helper derives deterministic issuer, credential, showing-policy, and
+ * parameter hashes for SDK/dev fixtures. It does not implement production
+ * lattice anonymous credential proving.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildSisHintsCredentialCommitments(options) {
+  const source = assertPlainObject(options, "sisHintsCredentialCommitments");
+  assertAllowedFields(
+    source,
+    new Set(SIS_HINTS_COMMON_FIELDS),
+    "sisHintsCredentialCommitments",
+  );
+  const parts = normalizeSisHintsCommitmentParts(
+    source,
+    "sisHintsCredentialCommitments",
+  );
+  return {
+    version: parts.version,
+    issuer_commitment: parts.issuer.value,
+    credential_commitment: parts.credential.value,
+    showing_policy_hash: parts.showingPolicy.value,
+    parameter_hash: parts.parameterHash.value,
+    domain_separator: parts.domainSeparator,
+    commitment_kinds: {
+      issuer_commitment: parts.issuer.kind,
+      credential_commitment: parts.credential.kind,
+      showing_policy_hash: parts.showingPolicy.kind,
+      parameter_hash: parts.parameterHash.kind,
+    },
+    source_digests: {
+      issuer: parts.issuer.digest,
+      credential: parts.credential.digest,
+      showing_policy: parts.showingPolicy.digest,
+      parameters: parts.parameterHash.digest,
+    },
+  };
+}
+
+/**
+ * Build canonical OpenVerifyEnvelope bytes for a prepared SIS-with-hints
+ * credential proof candidate.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildSisHintsCredentialEnvelope(options) {
+  const source = assertPlainObject(options, "sisHintsCredentialEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SIS_HINTS_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "sisHintsCredentialEnvelope",
+  );
+  const parts = normalizeSisHintsProofParts(
+    source,
+    "sisHintsCredentialEnvelope",
+  );
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic SIS-with-hints credential dev proof fixture.
+ *
+ * This fixture is only for public-input binding and SDK packaging tests. It is
+ * not a production lattice anonymous credential proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildSisHintsCredentialDevProofFixture(options) {
+  const source = assertPlainObject(
+    options,
+    "sisHintsCredentialDevProofFixture",
+  );
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SIS_HINTS_COMMON_FIELDS,
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+    ]),
+    "sisHintsCredentialDevProofFixture",
+  );
+  const parts = normalizeSisHintsProofParts(
+    source,
+    "sisHintsCredentialDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = sisHintsDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "sis-hints-dev-fixture-v0",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    commitments: {
+      issuer_commitment: parts.commitments.issuer.value,
+      credential_commitment: parts.commitments.credential.value,
+      showing_policy_hash: parts.commitments.showingPolicy.value,
+      parameter_hash: parts.commitments.parameterHash.value,
+      domain_separator: parts.commitments.domainSeparator,
+    },
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic SIS-with-hints credential dev proof fixture through
+ * OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used
+ * as production lattice anonymous credential cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifySisHintsCredentialProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "sisHintsCredentialLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      ...SIS_HINTS_COMMON_FIELDS,
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+    ]),
+    "sisHintsCredentialLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "sisHintsCredentialLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "sisHintsCredentialLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Unsupported") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "sisHintsCredentialLocalVerification.envelope.backend must be Unsupported until a production SIS-with-hints backend is registered",
+      "sisHintsCredentialLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeSisHintsCircuitId(
+    decoded.circuit_id,
+    "sisHintsCredentialLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "sisHintsCredentialLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseSisHintsPublicInputs(
+    decoded.public_inputs,
+    "sisHintsCredentialLocalVerification.publicInputs",
+  );
+  ensureSisHintsVerificationExpectations(
+    source,
+    publicInputs,
+    "sisHintsCredentialLocalVerification",
+  );
+  const expectedProofBytes = sisHintsDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "sisHintsCredentialLocalVerification proof bytes are not a valid SIS-with-hints dev fixture",
+      "sisHintsCredentialLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "sis-hints-dev-fixture-v0",
+    backend: SIS_HINTS_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    parameter_hash: publicInputs.parameter_hash,
+  };
+}
+
+/**
+ * Normalize an Anonymous PGC receiver set and derive its deterministic set commitment.
+ *
+ * This helper binds receiver account commitments and receiver ciphertext
+ * commitments for SDK/dev-fixture use. It does not register receiver state on
+ * chain and does not create production Anonymous PGC ciphertexts.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildAnonymousPgcReceiverSet(options, context = "anonymousPgcReceiverSet") {
+  const source = assertPlainObject(options, context);
+  assertAllowedFields(
+    source,
+    new Set(["version", "threshold", "k", "receivers"]),
+    context,
+  );
+  const thresholdAlias = readSingleAlias(
+    source,
+    ["threshold", "k"],
+    `${context}.threshold`,
+    "receiver threshold",
+  );
+  if (!Array.isArray(source.receivers) || source.receivers.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.receivers must be a non-empty array`,
+      `${context}.receivers`,
+    );
+  }
+  if (source.receivers.length > ANON_PGC_MAX_RECEIVERS) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.receivers must contain at most ${ANON_PGC_MAX_RECEIVERS} entries`,
+      `${context}.receivers`,
+    );
+  }
+  const version = normalizeAnonymousPgcVersion(source.version, `${context}.version`);
+  const receivers = source.receivers.map((entry, index) =>
+    normalizeAnonymousPgcReceiverEntry(entry, `${context}.receivers[${index}]`),
+  );
+  const threshold = normalizePositiveU32(
+    thresholdAlias.value ?? receivers.length,
+    `${context}.threshold`,
+  );
+  if (threshold > receivers.length) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.threshold must not exceed receivers length`,
+      `${context}.threshold`,
+    );
+  }
+  const seenAccounts = new Set();
+  const seenCiphertexts = new Set();
+  for (const receiver of receivers) {
+    const accountHex = Buffer.from(receiver.account_commitment).toString("hex");
+    const ciphertextHex = Buffer.from(receiver.ciphertext_commitment).toString("hex");
+    if (seenAccounts.has(accountHex)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.receivers must not contain duplicate account commitments`,
+        `${context}.receivers`,
+      );
+    }
+    if (seenCiphertexts.has(ciphertextHex)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.receivers must not contain duplicate ciphertext commitments`,
+        `${context}.receivers`,
+      );
+    }
+    seenAccounts.add(accountHex);
+    seenCiphertexts.add(ciphertextHex);
+  }
+  const receiverSet = {
+    version,
+    threshold,
+    receiver_count: receivers.length,
+    receivers,
+  };
+  receiverSet.receiver_set_commitment = anonymousPgcReceiverSetCommitment(receiverSet);
+  return receiverSet;
+}
+
+/**
+ * Build a deterministic Anonymous PGC dev proof fixture bound to an OpenVerify envelope.
+ *
+ * This fixture exercises public-input binding for the SDK and future dev
+ * verifier. It is not a production Anonymous PGC proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildAnonymousPgcDevProofFixture(options) {
+  const source = assertPlainObject(options, "anonymousPgcDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "receiverSet",
+      "receiver_set",
+      "version",
+      "threshold",
+      "k",
+      "receivers",
+      "anonymitySetRoot",
+      "anonymity_set_root",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "balanceCommitments",
+      "balance_commitments",
+      "linkTag",
+      "link_tag",
+      "rangeCommitments",
+      "range_commitments",
+      "chainId",
+      "chain_id",
+      "domainSeparator",
+      "domain_separator",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    "anonymousPgcDevProofFixture",
+  );
+  const parts = normalizeAnonymousPgcProofParts(
+    source,
+    "anonymousPgcDevProofFixture",
+  );
+  const proofBytes = anonymousPgcDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "anonymous-pgc-dev-fixture-v1",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    receiver_set: parts.receiverSet,
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic Anonymous PGC dev proof fixture through OpenVerifyEnvelope bytes.
+ *
+ * This verifier only accepts the SDK dev-fixture format and must not be used
+ * as production Anonymous PGC cryptography.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyAnonymousPgcDevProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "anonymousPgcDevProofLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "receiverSet",
+      "receiver_set",
+      "version",
+      "threshold",
+      "k",
+      "receivers",
+      "anonymitySetRoot",
+      "anonymity_set_root",
+      "txDigest",
+      "tx_digest",
+      "payloadDigest",
+      "payload_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "balanceCommitments",
+      "balance_commitments",
+      "linkTag",
+      "link_tag",
+      "rangeCommitments",
+      "range_commitments",
+      "chainId",
+      "chain_id",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    "anonymousPgcDevProofLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "anonymousPgcDevProofLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "anonymousPgcDevProofLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcDevProofLocalVerification.envelope.backend must be Stark",
+      "anonymousPgcDevProofLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeAnonymousPgcCircuitId(
+    decoded.circuit_id,
+    "anonymousPgcDevProofLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "anonymousPgcDevProofLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseAnonymousPgcPublicInputs(
+    decoded.public_inputs,
+    "anonymousPgcDevProofLocalVerification.publicInputs",
+  );
+  ensureAnonymousPgcVerificationExpectations(
+    source,
+    publicInputs,
+    "anonymousPgcDevProofLocalVerification",
+  );
+  const expectedProofBytes = anonymousPgcDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "anonymousPgcDevProofLocalVerification proof bytes are not a valid Anonymous PGC dev fixture",
+      "anonymousPgcDevProofLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "anonymous-pgc-dev-fixture-v1",
+    backend: ANON_PGC_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
+    receiver_count: publicInputs.receiver_count,
+    receiver_threshold: publicInputs.receiver_threshold,
+  };
+}
+
+/**
+ * Normalize a prepared VeRange commitment descriptor.
+ *
+ * This builder does not create a cryptographic commitment; callers must pass
+ * a nonzero 32-byte commitment produced by their VeRange-compatible wallet.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildRangeCommitment(options, context = "rangeCommitment") {
+  const source = assertPlainObject(options, context);
+  assertAllowedFields(
+    source,
+    new Set([
+      "version",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    context,
+  );
+  const commitmentAlias = readSingleAlias(
+    source,
+    ["commitment", "rangeCommitment", "range_commitment", "valueCommitment", "value_commitment"],
+    `${context}.commitment`,
+    "commitment",
+  );
+  const bitLengthAlias = readSingleAlias(
+    source,
+    ["bitLength", "bit_length"],
+    `${context}.bitLength`,
+    "bit length",
+  );
+  const aggregationAlias = readSingleAlias(
+    source,
+    ["aggregationCount", "aggregation_count"],
+    `${context}.aggregationCount`,
+    "aggregation count",
+  );
+  const schemeAlias = readSingleAlias(
+    source,
+    ["commitmentScheme", "commitment_scheme"],
+    `${context}.commitmentScheme`,
+    "commitment scheme",
+  );
+  const domainAlias = readSingleAlias(
+    source,
+    ["domainSeparator", "domain_separator"],
+    `${context}.domainSeparator`,
+    "domain separator",
+  );
+  return {
+    version: normalizeVeRangeVersion(source.version, `${context}.version`),
+    commitment: normalizeNonZeroFixedBytes(
+      commitmentAlias.value,
+      `${context}.commitment`,
+      32,
+    ),
+    bit_length: normalizeVeRangeBitLength(
+      bitLengthAlias.value,
+      `${context}.bitLength`,
+    ),
+    aggregation_count: normalizeVeRangeAggregationCount(
+      aggregationAlias.value,
+      `${context}.aggregationCount`,
+    ),
+    commitment_scheme: normalizeVeRangeCommitmentScheme(
+      schemeAlias.value,
+      `${context}.commitmentScheme`,
+    ),
+    domain_separator: assertNonBlankString(
+      domainAlias.value ?? VERANGE_DOMAIN_SEPARATOR,
+      `${context}.domainSeparator`,
+    ),
+    payload_digest: normalizeVeRangePayloadDigest(source, context),
+  };
+}
+
+/**
+ * Build canonical Norito bytes for a prepared VeRange proof envelope.
+ *
+ * This accepts externally generated proof bytes and binds them to normalized
+ * range commitments. It intentionally does not expose a fake prover/verifier.
+ * @param {object} options
+ * @returns {Buffer}
+ */
+export function buildVeRangeProofEnvelope(options) {
+  const source = assertPlainObject(options, "veRangeProofEnvelope");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "proofBytes",
+      "proof_bytes",
+      "proof",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "version",
+    ]),
+    "veRangeProofEnvelope",
+  );
+  const parts = normalizeVeRangeProofEnvelopeParts(
+    source,
+    "veRangeProofEnvelope",
+  );
+  return buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes: parts.proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+}
+
+/**
+ * Build a deterministic VeRange dev proof fixture bound to an OpenVerify envelope.
+ *
+ * The returned proof bytes are only for SDK/validator fixture tests; they are
+ * not a VeRange production proof.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildVeRangeDevProofFixture(options) {
+  const source = assertPlainObject(options, "veRangeDevProofFixture");
+  assertAllowedFields(
+    source,
+    new Set([
+      "backend",
+      "backendTag",
+      "backend_tag",
+      "circuitId",
+      "circuit_id",
+      "vkHash",
+      "vk_hash",
+      "verifierKeyHash",
+      "verifyingKeyHash",
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "aux",
+      "maxProofBytes",
+      "max_proof_bytes",
+      "maxPublicInputBytes",
+      "max_public_input_bytes",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+      "version",
+    ]),
+    "veRangeDevProofFixture",
+  );
+  const parts = normalizeVeRangeProofEnvelopeParts(
+    source,
+    "veRangeDevProofFixture",
+    { requireProofBytes: false },
+  );
+  const proofBytes = veRangeDevProofBytes(parts);
+  const envelope = buildPrivacyProofEnvelope({
+    backend: parts.backend,
+    circuitId: parts.circuitId,
+    vkHash: parts.vkHash,
+    publicInputs: parts.publicInputBytes,
+    proofBytes,
+    aux: source.aux,
+    maxProofBytes: parts.maxProofBytes,
+    maxPublicInputBytes: parts.maxPublicInputBytes,
+  });
+  return {
+    kind: "verange-dev-fixture-v1",
+    production: false,
+    proof_bytes: proofBytes,
+    proofBytes: Buffer.from(proofBytes),
+    public_inputs: parts.publicInputs,
+    publicInputBytes: Buffer.from(parts.publicInputBytes),
+    envelope,
+  };
+}
+
+/**
+ * Verify a deterministic VeRange dev proof fixture through OpenVerifyEnvelope bytes.
+ *
+ * This verifier is intentionally limited to the SDK dev-fixture format and
+ * must not be treated as a production VeRange proof verifier.
+ * @param {object|Buffer|string} options
+ * @returns {object}
+ */
+export function verifyVeRangeProofLocally(options) {
+  const source =
+    options &&
+    typeof options === "object" &&
+    !Array.isArray(options) &&
+    !Buffer.isBuffer(options) &&
+    !ArrayBuffer.isView(options) &&
+    !(options instanceof ArrayBuffer)
+      ? assertPlainObject(options, "veRangeProofLocalVerification")
+      : { envelope: options };
+  assertAllowedFields(
+    source,
+    new Set([
+      "envelope",
+      "proofEnvelope",
+      "proof_envelope",
+      "bytes",
+      "payloadDigest",
+      "payload_digest",
+      "txDigest",
+      "tx_digest",
+      "payload",
+      "payloadBytes",
+      "payload_bytes",
+      "payloadJson",
+      "payload_json",
+      "commitments",
+      "rangeCommitments",
+      "range_commitments",
+      "commitment",
+      "rangeCommitment",
+      "range_commitment",
+      "valueCommitment",
+      "value_commitment",
+      "bitLength",
+      "bit_length",
+      "aggregationCount",
+      "aggregation_count",
+      "commitmentScheme",
+      "commitment_scheme",
+      "domainSeparator",
+      "domain_separator",
+      "maxPayloadBytes",
+      "max_payload_bytes",
+    ]),
+    "veRangeProofLocalVerification",
+  );
+  const envelopeAlias = readSingleAlias(
+    source,
+    ["envelope", "proofEnvelope", "proof_envelope", "bytes"],
+    "veRangeProofLocalVerification.envelope",
+    "proof envelope",
+  );
+  const decoded = decodeVeRangeEnvelope(
+    envelopeAlias.value,
+    "veRangeProofLocalVerification.envelope",
+  );
+  if (decoded.backend !== "Stark") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "veRangeProofLocalVerification.envelope.backend must be Stark",
+      "veRangeProofLocalVerification.envelope.backend",
+    );
+  }
+  const circuitId = normalizeVeRangeCircuitId(
+    decoded.circuit_id,
+    "veRangeProofLocalVerification.envelope.circuitId",
+  );
+  const vkHash = normalizeNonZeroFixedBytes(
+    decoded.vk_hash,
+    "veRangeProofLocalVerification.envelope.vkHash",
+    32,
+  );
+  const publicInputs = parseVeRangePublicInputs(
+    decoded.public_inputs,
+    "veRangeProofLocalVerification.publicInputs",
+  );
+  ensureVeRangeVerificationExpectations(
+    source,
+    publicInputs,
+    "veRangeProofLocalVerification",
+  );
+  const expectedProofBytes = veRangeDevProofBytes({
+    circuitId,
+    vkHash,
+    publicInputBytes: decoded.public_inputs,
+  });
+  if (!fixedBytesEqual(decoded.proof_bytes, expectedProofBytes)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "veRangeProofLocalVerification proof bytes are not a valid VeRange dev fixture",
+      "veRangeProofLocalVerification.proofBytes",
+    );
+  }
+  return {
+    ok: true,
+    production: false,
+    kind: "verange-dev-fixture-v1",
+    backend: VERANGE_BACKEND,
+    circuit_id: circuitId,
+    verifier_key_hash: Buffer.from(vkHash).toString("hex"),
+    public_inputs: publicInputs,
+    public_input_bytes: decoded.public_inputs.length,
+    proof_bytes: decoded.proof_bytes.length,
+    aux_bytes: decoded.aux.length,
   };
 }
 

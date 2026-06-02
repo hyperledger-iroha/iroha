@@ -38,18 +38,25 @@ public final class KagemushaRecursiveAggregationProofBundleProver {
     return detectNativeAvailability(
         () -> System.loadLibrary(LIBRARY_NAME),
         () ->
-            nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                new byte[0], new byte[0]));
+            expectIllegalArgumentProbe(
+                () ->
+                    nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                        new byte[0], new byte[0])));
   }
 
   static boolean detectNativeAvailability(
-      final NativeProbe loadLibrary, final NativeProbe probeSymbol) {
+      final NativeProbe loadLibrary, final NativeSymbolProbe probeSymbol) {
     try {
       loadLibrary.run();
-      probeSymbol.run();
-      return true;
     } catch (final IllegalArgumentException error) {
-      return true;
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    try {
+      return probeSymbol.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
@@ -57,6 +64,19 @@ public final class KagemushaRecursiveAggregationProofBundleProver {
 
   interface NativeProbe {
     void run();
+  }
+
+  interface NativeSymbolProbe {
+    boolean run();
+  }
+
+  static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
+    try {
+      probe.run();
+      return false;
+    } catch (final IllegalArgumentException expected) {
+      return true;
+    }
   }
 
   private static native byte[]

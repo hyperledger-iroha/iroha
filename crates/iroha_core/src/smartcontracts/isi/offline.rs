@@ -349,6 +349,13 @@ pub mod isi {
             )
             .into());
         };
+        if commitment == [0u8; 32] {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha transfer proof must publish a non-zero asset-bound verifier-key commitment",
+            )
+            .into());
+        }
         if commitment != binding.commitment {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -512,6 +519,13 @@ pub mod isi {
             )
             .into());
         }
+        if envelope.vk_hash == [0u8; 32] {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "Kagemusha transfer proof envelope verifier-key hash must be non-zero",
+            )
+            .into());
+        }
         if envelope.vk_hash != binding.commitment {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -575,6 +589,13 @@ pub mod isi {
             )
             .into());
         };
+        if commitment == [0u8; 32] {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem proof must publish a non-zero asset-bound verifier-key commitment",
+            )
+            .into());
+        }
         if commitment != binding.commitment {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
@@ -665,6 +686,13 @@ pub mod isi {
                     "recursive Kagemusha redeem proof must be an OpenVerifyEnvelope",
                 )
             })?;
+        if envelope.vk_hash == [0u8; 32] {
+            return Err(labeled_invariant(
+                "verifier_key_invalid",
+                "recursive Kagemusha redeem proof envelope verifier-key hash must be non-zero",
+            )
+            .into());
+        }
         if envelope.backend != BackendTag::Halo2IpaPasta
             || envelope.circuit_id != record.circuit_id
             || envelope.vk_hash != record.commitment
@@ -795,6 +823,61 @@ pub mod isi {
             }
         }
         Ok(())
+    }
+
+    fn ensure_kagemusha_recursive_lineage_verifier_records_match_registered<'record>(
+        witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+        mut registered_record: impl FnMut(&VerifyingKeyId) -> Option<&'record VerifyingKeyRecord>,
+    ) -> Result<(), String> {
+        let mut required = BTreeSet::new();
+        for step in &witness.record_bundle.bundle.steps {
+            required.insert(step.attachment.vk_ref.clone());
+        }
+        let mut supplied = BTreeSet::new();
+        for entry in &witness.record_bundle.verifier_records {
+            if !required.contains(&entry.id) {
+                return Err(format!(
+                    "recursive Kagemusha lineage verifier record `{}`/`{}` is not referenced by any hop",
+                    entry.id.backend, entry.id.name
+                ));
+            }
+            if !supplied.insert(entry.id.clone()) {
+                return Err(format!(
+                    "recursive Kagemusha lineage verifier record `{}`/`{}` is duplicated",
+                    entry.id.backend, entry.id.name
+                ));
+            }
+            let Some(registered) = registered_record(&entry.id) else {
+                return Err(format!(
+                    "recursive Kagemusha lineage verifier record `{}`/`{}` is not registered",
+                    entry.id.backend, entry.id.name
+                ));
+            };
+            if registered != &entry.record {
+                return Err(format!(
+                    "recursive Kagemusha lineage verifier record `{}`/`{}` does not match the registered record",
+                    entry.id.backend, entry.id.name
+                ));
+            }
+        }
+        for id in required {
+            if !supplied.contains(&id) {
+                return Err(format!(
+                    "recursive Kagemusha lineage verifier record `{}`/`{}` is missing",
+                    id.backend, id.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_recursive_lineage_verifier_records_registered(
+        witness: &iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), String> {
+        ensure_kagemusha_recursive_lineage_verifier_records_match_registered(witness, |id| {
+            state_transaction.world.verifying_keys.get(id)
+        })
     }
 
     fn offline_note_public_instances_from_envelope(
@@ -1007,6 +1090,13 @@ pub mod isi {
             return Err(labeled_invariant(
                 "invalid_proof",
                 "offline recursive proof circuit id mismatch",
+            )
+            .into());
+        }
+        if envelope.vk_hash == [0u8; 32] {
+            return Err(labeled_invariant(
+                "invalid_proof",
+                "offline recursive proof verifier-key hash must be non-zero",
             )
             .into());
         }
@@ -2295,16 +2385,6 @@ pub mod isi {
             .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
             state_transaction
                 .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
-            if !crate::zk::verify_kagemusha_recursive_spend_bundle_with_record(
-                &self.bundle,
-                &recursive_record,
-            ) {
-                return Err(labeled_invariant(
-                    "invalid_recursive_bundle",
-                    "recursive Kagemusha spend proof verification failed",
-                )
-                .into());
-            }
 
             let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
                 &def_id,
@@ -2316,6 +2396,34 @@ pub mod isi {
                 state_transaction,
                 &redeem_record,
             )?;
+            if let Some(lineage_witness) = &self.lineage_witness {
+                ensure_kagemusha_recursive_lineage_verifier_records_registered(
+                    lineage_witness,
+                    state_transaction,
+                )
+                .map_err(|err| labeled_invariant("invalid_recursive_lineage", err))?;
+                crate::zk::verify_kagemusha_recursive_spend_lineage_witness_with_record(
+                    &self.bundle,
+                    lineage_witness,
+                    &recursive_record,
+                )
+                .map_err(|err| labeled_invariant("invalid_recursive_lineage", err))?;
+            } else {
+                crate::zk::ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(
+                    &self.bundle,
+                )
+                .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+            }
+            if !crate::zk::verify_kagemusha_recursive_spend_bundle_with_record(
+                &self.bundle,
+                &recursive_record,
+            ) {
+                return Err(labeled_invariant(
+                    "invalid_recursive_bundle",
+                    "recursive Kagemusha spend proof verification failed",
+                )
+                .into());
+            }
             state_transaction.register_nullifiers(redeem_nullifiers.len())?;
             state_transaction.register_confidential_proof(self.redeem_proof.proof.bytes.len())?;
             let report = crate::zk::verify_backend_with_timing_checked(
@@ -2357,7 +2465,10 @@ pub mod isi {
 
     #[cfg(test)]
     mod tests {
-        use std::{collections::BTreeSet, sync::Arc};
+        use std::{
+            collections::{BTreeMap, BTreeSet},
+            sync::Arc,
+        };
 
         use super::*;
         use crate::{
@@ -2396,6 +2507,139 @@ pub mod isi {
 
         fn fixed_bytes(label: &[u8]) -> [u8; 32] {
             Hash::new(label).into()
+        }
+
+        fn lineage_record_match_test_witness(
+            vk_id: VerifyingKeyId,
+            record: VerifyingKeyRecord,
+        ) -> iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+            let chain_id: iroha_data_model::ChainId =
+                "lineage-record-match-chain".parse().expect("chain id");
+            let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+            let asset = AssetDefinitionId::new(
+                domain_id,
+                "lineage".parse().expect("asset definition name"),
+            );
+            let step = iroha_data_model::offline::KagemushaVerifiedFoldStep {
+                root_before: fixed_bytes(b"lineage-record-root-before"),
+                input_nullifiers: vec![fixed_bytes(b"lineage-record-input")],
+                output_commitments: vec![fixed_bytes(b"lineage-record-output")],
+                root_after: fixed_bytes(b"lineage-record-root-after"),
+                attachment: ProofAttachment::new_ref(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                    ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xA1]),
+                    vk_id.clone(),
+                ),
+                verifier_key: VerifyingKeyBox::new(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                    vec![0xA2],
+                ),
+            };
+            iroha_data_model::offline::KagemushaRecursiveSpendLineageWitnessV1 {
+                record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle {
+                    bundle: iroha_data_model::offline::KagemushaVerifiedFoldBundle {
+                        chain_id,
+                        asset,
+                        steps: vec![step],
+                    },
+                    verifier_records: vec![
+                        iroha_data_model::offline::KagemushaVerifiedFoldVerifierRecord {
+                            id: vk_id,
+                            record,
+                        },
+                    ],
+                },
+                pallas_open_envelopes_archive: vec![0xA3],
+                current_notes: vec![
+                    iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1 {
+                        note_commitment: fixed_bytes(b"lineage-record-output"),
+                        spend_nullifier: fixed_bytes(b"lineage-record-current-nullifier"),
+                        amount: Numeric::new(7, 0),
+                    },
+                ],
+                previous_recursive_proofs: Vec::new(),
+            }
+        }
+
+        #[test]
+        fn kagemusha_recursive_lineage_records_must_match_registered_records() {
+            let vk_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "kagemusha-lineage-hop-record-match",
+            );
+            let mut record = VerifyingKeyRecord::new(
+                1,
+                "lineage-record-match-circuit",
+                BackendTag::Halo2IpaPasta,
+                "pasta",
+                fixed_bytes(b"lineage-record-match-schema"),
+                fixed_bytes(b"lineage-record-match-commitment"),
+            );
+            record.status = ConfidentialStatus::Active;
+            let witness = lineage_record_match_test_witness(vk_id.clone(), record.clone());
+
+            let registered = BTreeMap::from([(vk_id.clone(), record.clone())]);
+            ensure_kagemusha_recursive_lineage_verifier_records_match_registered(&witness, |id| {
+                registered.get(id)
+            })
+            .expect("matching registered lineage records are accepted");
+
+            let missing_records = BTreeMap::<VerifyingKeyId, VerifyingKeyRecord>::new();
+            let err = ensure_kagemusha_recursive_lineage_verifier_records_match_registered(
+                &witness,
+                |id| missing_records.get(id),
+            )
+            .expect_err("missing registered lineage record must reject");
+            assert!(err.contains("not registered"), "unexpected error: {err}");
+
+            let mut changed_record = record.clone();
+            changed_record.version = 2;
+            let changed_records = BTreeMap::from([(vk_id.clone(), changed_record)]);
+            let err = ensure_kagemusha_recursive_lineage_verifier_records_match_registered(
+                &witness,
+                |id| changed_records.get(id),
+            )
+            .expect_err("stale lineage record snapshot must reject");
+            assert!(
+                err.contains("does not match the registered record"),
+                "unexpected error: {err}"
+            );
+
+            let mut missing_witness = witness.clone();
+            missing_witness.record_bundle.verifier_records.clear();
+            let err = ensure_kagemusha_recursive_lineage_verifier_records_match_registered(
+                &missing_witness,
+                |id| registered.get(id),
+            )
+            .expect_err("missing lineage witness record must reject");
+            assert!(err.contains("is missing"), "unexpected error: {err}");
+
+            let mut duplicate_witness = witness.clone();
+            let duplicate = duplicate_witness.record_bundle.verifier_records[0].clone();
+            duplicate_witness
+                .record_bundle
+                .verifier_records
+                .push(duplicate);
+            let err = ensure_kagemusha_recursive_lineage_verifier_records_match_registered(
+                &duplicate_witness,
+                |id| registered.get(id),
+            )
+            .expect_err("duplicate lineage witness record must reject");
+            assert!(err.contains("is duplicated"), "unexpected error: {err}");
+
+            let mut extra_witness = witness;
+            let mut extra = extra_witness.record_bundle.verifier_records[0].clone();
+            extra.id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                "unused-kagemusha-lineage-hop-record",
+            );
+            extra_witness.record_bundle.verifier_records.push(extra);
+            let err = ensure_kagemusha_recursive_lineage_verifier_records_match_registered(
+                &extra_witness,
+                |id| registered.get(id),
+            )
+            .expect_err("unreferenced lineage witness record must reject");
+            assert!(err.contains("not referenced"), "unexpected error: {err}");
         }
 
         fn sample_certificate() -> OfflineNoteKeyCertificate {
@@ -3199,6 +3443,169 @@ pub mod isi {
             proof.proof.bytes = encoded;
         }
 
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn append_test_zk1_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+            buf.extend_from_slice(tag);
+            buf.extend_from_slice(
+                &u32::try_from(payload.len())
+                    .expect("test TLV payload length fits u32")
+                    .to_le_bytes(),
+            );
+            buf.extend_from_slice(payload);
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn reserved_lineage_spend_vk_box_for_tests() -> VerifyingKeyBox {
+            let semantic_vk = crate::zk::kagemusha_recursive_aggregation_proof_vk_box()
+                .expect("recursive aggregation verifier key");
+            let mut bytes = b"ZK1\0".to_vec();
+            let mut cursor = 4usize;
+            let mut replaced_cid = false;
+            while cursor < semantic_vk.bytes.len() {
+                assert!(
+                    semantic_vk.bytes.len() - cursor >= 8,
+                    "verifier-key TLV header must be complete"
+                );
+                let tag = [
+                    semantic_vk.bytes[cursor],
+                    semantic_vk.bytes[cursor + 1],
+                    semantic_vk.bytes[cursor + 2],
+                    semantic_vk.bytes[cursor + 3],
+                ];
+                cursor += 4;
+                let len = usize::try_from(u32::from_le_bytes([
+                    semantic_vk.bytes[cursor],
+                    semantic_vk.bytes[cursor + 1],
+                    semantic_vk.bytes[cursor + 2],
+                    semantic_vk.bytes[cursor + 3],
+                ]))
+                .expect("verifier-key TLV length fits usize");
+                cursor += 4;
+                let end = cursor
+                    .checked_add(len)
+                    .expect("verifier-key TLV end does not overflow");
+                assert!(
+                    end <= semantic_vk.bytes.len(),
+                    "verifier-key TLV payload must be complete"
+                );
+                let payload = &semantic_vk.bytes[cursor..end];
+                cursor = end;
+                if &tag == b"CID1" {
+                    append_test_zk1_tlv(
+                        &mut bytes,
+                        b"CID1",
+                        crate::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.as_bytes(),
+                    );
+                    replaced_cid = true;
+                } else {
+                    append_test_zk1_tlv(&mut bytes, &tag, payload);
+                }
+            }
+            assert!(
+                replaced_cid,
+                "recursive aggregation verifier key must carry CID1"
+            );
+            VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn reserved_lineage_spend_vk_record_for_tests(
+            vk_box: &VerifyingKeyBox,
+        ) -> VerifyingKeyRecord {
+            let commitment = crate::zk::hash_vk(vk_box);
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                crate::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                None,
+                crate::zk::KAGEMUSHA_VERIFIER_NAMESPACE,
+                BackendTag::Halo2IpaPasta,
+                "pasta",
+                iroha_data_model::offline::kagemusha_recursive_aggregation_proof_public_inputs_schema_hash(),
+                commitment,
+            );
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box.clone());
+            record.max_proof_bytes = 64 * 1024;
+            record.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("test verifier-key length fits u32");
+            record
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn recursive_spend_public_inputs_for_tests(
+            bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
+        ) -> Vec<[u8; 32]> {
+            crate::zk::kagemusha_recursive_spend_bundle_instance_values(bundle)
+                .expect("recursive spend instance values")
+                .public_instance_columns()
+                .into_iter()
+                .map(|column| {
+                    let [value]: [[u8; 32]; 1] =
+                        column.try_into().expect("single-row public instance");
+                    value
+                })
+                .collect()
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn install_reserved_lineage_spend_profile_for_tests(
+            state: &mut State,
+            instruction: &mut RedeemKagemushaRecursive,
+        ) {
+            let vk_box = reserved_lineage_spend_vk_box_for_tests();
+            let vk_hash = crate::zk::hash_vk(&vk_box);
+            let verifier_key_id = VerifyingKeyId::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA,
+                crate::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+            );
+            instruction.bundle.recursive_proof.verifier_key_id = verifier_key_id.clone();
+            instruction
+                .bundle
+                .recursive_proof
+                .public_inputs
+                .recursive_verifier_scalar_projection_digest =
+                fixed_bytes(b"recursive-redeem-lineage-scalar-projection");
+            instruction.bundle.recursive_proof.public_inputs_hash = instruction
+                .bundle
+                .recursive_proof
+                .public_inputs
+                .public_inputs_hash()
+                .expect("reserved lineage public-input hash");
+
+            let public_inputs = recursive_spend_public_inputs_for_tests(&instruction.bundle);
+            let mut proof_bytes = b"ZK1\0".to_vec();
+            append_test_zk1_tlv(&mut proof_bytes, b"PROF", &[0xB1; 64]);
+            let mut instance_payload = Vec::with_capacity(8 + public_inputs.len() * 32);
+            instance_payload.extend_from_slice(
+                &u32::try_from(public_inputs.len())
+                    .expect("reserved lineage instance column count fits u32")
+                    .to_le_bytes(),
+            );
+            instance_payload.extend_from_slice(&1u32.to_le_bytes());
+            for value in public_inputs {
+                instance_payload.extend_from_slice(&value);
+            }
+            append_test_zk1_tlv(&mut proof_bytes, b"I10P", &instance_payload);
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Halo2IpaPasta,
+                circuit_id: crate::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID.to_owned(),
+                vk_hash,
+                public_inputs:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA
+                        .to_vec(),
+                proof_bytes,
+                aux: Vec::new(),
+            };
+            instruction.bundle.recursive_proof.proof = ProofBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                norito::to_bytes(&envelope).expect("reserved lineage OpenVerifyEnvelope encode"),
+            );
+            state.world.verifying_keys.insert(
+                verifier_key_id,
+                reserved_lineage_spend_vk_record_for_tests(&vk_box),
+            );
+        }
+
         fn assert_kagemusha_transfer_record_mutation_rejects(
             mutate: impl for<'block, 'state> FnOnce(
                 &mut StateTransaction<'block, 'state>,
@@ -3240,7 +3647,7 @@ pub mod isi {
 
         #[test]
         fn kagemusha_transfer_rejects_confidential_v2_envelope_mismatches() {
-            let cases: [(&str, &str, fn(&mut OpenVerifyEnvelope)); 6] = [
+            let cases: [(&str, &str, fn(&mut OpenVerifyEnvelope)); 7] = [
                 ("verifier_key_invalid", "backend", |envelope| {
                     envelope.backend = BackendTag::Stark;
                 }),
@@ -3260,6 +3667,9 @@ pub mod isi {
                 }),
                 ("verifier_key_invalid", "verifier-key hash", |envelope| {
                     envelope.vk_hash = [0xA5; 32];
+                }),
+                ("verifier_key_invalid", "non-zero", |envelope| {
+                    envelope.vk_hash = [0u8; 32];
                 }),
                 ("invalid_proof", "auxiliary bytes", |envelope| {
                     envelope.aux = b"kagemusha-forged-chain-aux".to_vec();
@@ -3339,6 +3749,25 @@ pub mod isi {
                 err,
                 "verifier_key_invalid",
                 "must publish the asset-bound verifier-key commitment",
+            );
+        }
+
+        #[test]
+        fn kagemusha_transfer_rejects_zero_verifier_key_commitment_metadata() {
+            let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
+                real_kagemusha_test_state();
+            transfer.proof.vk_commitment = Some([0u8; 32]);
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+
+            let err = transfer
+                .execute(&authority, &mut transaction)
+                .expect_err("zero Kagemusha verifier-key commitment must reject");
+            assert_offline_rejection(
+                err,
+                "verifier_key_invalid",
+                "non-zero asset-bound verifier-key commitment",
             );
         }
 
@@ -3710,6 +4139,64 @@ pub mod isi {
                         || message.contains("invalid_proof")
                         || message.contains("OpenVerifyEnvelope")),
                 "unexpected redeem error after topup commitment anchor: {message}"
+            );
+        }
+
+        #[test]
+        fn redeem_rejects_forged_source_commitment_even_when_claim_key_is_anchored() {
+            let (state, asset_id, account_id, _definition_id) =
+                distinct_escrow_test_state(Numeric::new(100, 0), 0x7C);
+            let account_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
+            let input_certificate = signed_sample_certificate(
+                &account_keypair,
+                account_id.clone(),
+                0x7A,
+                "topup-input-key",
+            );
+            let issue = iroha_data_model::offline::OfflineNoteIssue {
+                note_commitment: Hash::new(b"offline-redeem-topup-note"),
+                key_certificate: input_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            };
+            let mut redemption = sample_redemption_for_issue(&issue, account_id.clone());
+            redemption.source_note_commitment = Hash::new(b"offline-redeem-forged-source-note");
+            let public_inputs_hash = redemption
+                .public_inputs_hash()
+                .expect("forged redemption public-input hash");
+            redemption.recursive_proof = placeholder_recursive_proof(public_inputs_hash);
+            let forged_claim_hash = offline_note_issued_claim_hash(
+                OfflineNoteIssuedClaim::from_redemption(&redemption)
+                    .expect("forged redemption claim"),
+            )
+            .expect("forged redemption claim hash");
+            let forged_claim_key = offline_note_issued_claim_key(&forged_claim_hash);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.world.account_permissions.insert(
+                account_id.clone(),
+                BTreeSet::from([Permission::new(
+                    CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                    Json::new(()),
+                )]),
+            );
+            IssueOfflineNote::new(issue)
+                .execute(&account_id, &mut transaction)
+                .expect("online-to-offline topup should issue the original source commitment");
+            transaction
+                .world
+                .offline_note_replay_keys
+                .insert(forged_claim_key, ());
+
+            let err = RedeemOfflineNote::new(redemption)
+                .execute(&account_id, &mut transaction)
+                .expect_err("redeem must require the source commitment topup anchor");
+            assert_offline_rejection(
+                err,
+                "note_not_issued",
+                "source note commitment was not issued",
             );
         }
 
@@ -4329,7 +4816,7 @@ pub mod isi {
         #[test]
         fn offline_note_rejects_recursive_envelope_unbound_metadata() {
             let cases: [(&str, fn(&mut OpenVerifyEnvelope)); 2] = [
-                ("verifier commitment mismatch", |envelope| {
+                ("non-zero", |envelope| {
                     envelope.vk_hash = [0u8; 32];
                 }),
                 ("empty auxiliary bytes", |envelope| {
@@ -4708,7 +5195,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
-        fn kagemusha_recursive_redeem_executes_after_three_offline_hops() {
+        fn kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint() {
             let (state, authority, recipient, definition_id, instruction) =
                 real_recursive_kagemusha_redeem_test_state();
             let spend_nullifier = instruction.bundle.accumulator.current_note.spend_nullifier;
@@ -4722,9 +5209,10 @@ pub mod isi {
             let mut block = state.block(header);
             let mut transaction = block.transaction();
 
-            instruction
+            let err = instruction
                 .execute(&authority, &mut transaction)
-                .expect("recursive Kagemusha redeem should execute");
+                .expect_err("semantic recursive Kagemusha spend proof must not mint");
+            assert_offline_rejection(err, "invalid_recursive_bundle", "private-hop lineage");
 
             let shielded_state = transaction
                 .world
@@ -4732,13 +5220,13 @@ pub mod isi {
                 .get(&definition_id)
                 .expect("recursive redeem keeps shielded asset state");
             assert!(
-                shielded_state.nullifiers.contains(&spend_nullifier),
-                "recursive redeem must consume the final spendable note nullifier"
+                !shielded_state.nullifiers.contains(&spend_nullifier),
+                "rejected recursive redeem must not consume the final spendable note nullifier"
             );
             for nullifier in topup_anchor_nullifiers {
                 assert!(
-                    shielded_state.nullifiers.contains(&nullifier),
-                    "recursive redeem must consume the top-up anchor nullifier"
+                    !shielded_state.nullifiers.contains(&nullifier),
+                    "rejected recursive redeem must not consume the top-up anchor nullifier"
                 );
             }
             let balance = transaction
@@ -4747,7 +5235,79 @@ pub mod isi {
                 .get(&recipient_asset_id)
                 .map(|asset| asset.as_ref().clone())
                 .unwrap_or_else(Numeric::zero);
-            assert_eq!(balance, Numeric::new(42, 0));
+            assert_eq!(balance, Numeric::zero());
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_reserved_lineage_profile_fails_closed_before_mint() {
+            run_recursive_kagemusha_redeem_large_stack(|| {
+                let (mut state, authority, recipient, definition_id, mut instruction) =
+                    real_recursive_kagemusha_redeem_test_state();
+                install_reserved_lineage_spend_profile_for_tests(&mut state, &mut instruction);
+                let spend_nullifier = instruction.bundle.accumulator.current_note.spend_nullifier;
+                let topup_anchor_nullifiers = instruction
+                    .bundle
+                    .accumulator
+                    .topup_anchor_nullifiers
+                    .clone();
+                let recipient_asset_id = AssetId::new(definition_id.clone(), recipient);
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+
+                let err = instruction
+                    .execute(&authority, &mut transaction)
+                    .expect_err("reserved lineage recursive Kagemusha spend proof must not mint");
+                assert_offline_rejection(err, "invalid_recursive_bundle", "one-hop verifier-slice");
+
+                let shielded_state = transaction
+                    .world
+                    .zk_assets
+                    .get(&definition_id)
+                    .expect("recursive redeem keeps shielded asset state");
+                assert!(
+                    !shielded_state.nullifiers.contains(&spend_nullifier),
+                    "rejected lineage recursive redeem must not consume the final spendable note nullifier"
+                );
+                for nullifier in topup_anchor_nullifiers {
+                    assert!(
+                        !shielded_state.nullifiers.contains(&nullifier),
+                        "rejected lineage recursive redeem must not consume the top-up anchor nullifier"
+                    );
+                }
+                let balance = transaction
+                    .world
+                    .assets
+                    .get(&recipient_asset_id)
+                    .map(|asset| asset.as_ref().clone())
+                    .unwrap_or_else(Numeric::zero);
+                assert_eq!(balance, Numeric::zero());
+            });
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn kagemusha_recursive_redeem_reserved_lineage_checks_final_proof_before_gate() {
+            run_recursive_kagemusha_redeem_large_stack(|| {
+                let (mut state, authority, _, _, mut instruction) =
+                    real_recursive_kagemusha_redeem_test_state();
+                install_reserved_lineage_spend_profile_for_tests(&mut state, &mut instruction);
+                mutate_proof_attachment_envelope(&mut instruction.redeem_proof, |envelope| {
+                    *envelope
+                        .proof_bytes
+                        .last_mut()
+                        .expect("recursive redeem proof public instances") ^= 0x01;
+                });
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+
+                let err = instruction
+                    .execute(&authority, &mut transaction)
+                    .expect_err("reserved lineage profile must still validate final proof binding");
+                assert_offline_rejection(err, "final_commitment_mismatch", "final spendable note");
+            });
         }
 
         #[cfg(feature = "zk-halo2-ipa")]
@@ -4755,18 +5315,25 @@ pub mod isi {
         fn kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots() {
             let (state, authority, _recipient, definition_id, instruction) =
                 real_recursive_kagemusha_redeem_test_state();
+            let spend_nullifier = instruction.bundle.accumulator.current_note.spend_nullifier;
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
+            {
+                let mut mutation = block.transaction();
+                mutation
+                    .world_mut_for_testing()
+                    .zk_assets_mut_for_testing()
+                    .get_mut(&definition_id)
+                    .expect("recursive Kagemusha shielded state")
+                    .nullifiers
+                    .insert(spend_nullifier);
+                mutation.apply();
+            }
             let mut transaction = block.transaction();
-
-            instruction
-                .clone()
-                .execute(&authority, &mut transaction)
-                .expect("first recursive Kagemusha redeem should execute");
             let err = instruction
                 .execute(&authority, &mut transaction)
-                .expect_err("recursive Kagemusha redeem must reject double spend");
-            assert_offline_rejection(err, "duplicate_nullifier", "already spent");
+                .expect_err("recursive Kagemusha redeem must reject spent final note");
+            assert_offline_rejection(err, "duplicate_nullifier", "current note");
 
             let (mut disabled_state, disabled_authority, _, _, disabled_instruction) =
                 real_recursive_kagemusha_redeem_test_state();
@@ -4790,7 +5357,7 @@ pub mod isi {
                 .expect_err("legacy-forced recursive Kagemusha must reject");
             assert_offline_rejection(err, "kagemusha_legacy_forced", "legacy fallback");
 
-            let (stale_state, stale_authority, _, _, stale_instruction) =
+            let (stale_state, stale_authority, _, stale_definition_id, stale_instruction) =
                 real_recursive_kagemusha_redeem_test_state();
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = stale_state.block(header);
@@ -4799,7 +5366,7 @@ pub mod isi {
                 mutation
                     .world_mut_for_testing()
                     .zk_assets_mut_for_testing()
-                    .get_mut(&definition_id)
+                    .get_mut(&stale_definition_id)
                     .expect("recursive Kagemusha shielded state")
                     .root_history
                     .clear();
@@ -5225,6 +5792,22 @@ pub mod isi {
                     .expect_err("mutated recursive Kagemusha redeem public inputs must reject");
                 assert_offline_rejection(err, "final_commitment_mismatch", "final spendable note");
 
+                let (state, authority, _, _, mut zero_redeem_vk_hash) =
+                    real_recursive_kagemusha_redeem_test_state();
+                mutate_proof_attachment_envelope(
+                    &mut zero_redeem_vk_hash.redeem_proof,
+                    |envelope| {
+                        envelope.vk_hash = [0u8; 32];
+                    },
+                );
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let mut transaction = block.transaction();
+                let err = zero_redeem_vk_hash
+                    .execute(&authority, &mut transaction)
+                    .expect_err("zero recursive Kagemusha redeem verifier hash must reject");
+                assert_offline_rejection(err, "verifier_key_invalid", "non-zero");
+
                 let (state, authority, _, _, mut tampered_redeem_proof) =
                     real_recursive_kagemusha_redeem_test_state();
                 *tampered_redeem_proof
@@ -5241,6 +5824,54 @@ pub mod isi {
                     .expect_err("tampered recursive Kagemusha redeem proof must reject");
                 assert_offline_rejection(err, "invalid_proof", "OpenVerifyEnvelope");
             });
+        }
+
+        #[test]
+        fn kagemusha_recursive_redeem_resolver_rejects_missing_or_zero_vk_commitment_metadata() {
+            fn assert_rejects(commitment: Option<[u8; 32]>, detail: &str) {
+                let domain_id = DomainId::try_new("offline", "universal").expect("domain id");
+                let definition_id = AssetDefinitionId::new(
+                    domain_id,
+                    "kgmr".parse().expect("asset definition name"),
+                );
+                let vk_id = VerifyingKeyId::new(
+                    crate::zk::ZK_BACKEND_HALO2_IPA,
+                    "recursive-kagemusha-unshield-v2",
+                );
+                let binding_commitment = fixed_bytes(b"recursive-redeem-unshield-vk-binding");
+                assert_ne!(binding_commitment, [0u8; 32]);
+                let mut world = World::default();
+                world.zk_assets.insert(definition_id.clone(), {
+                    let mut zk_state = ZkAssetState::default();
+                    zk_state.vk_unshield = Some(ZkAssetVerifierBinding {
+                        id: vk_id.clone(),
+                        commitment: binding_commitment,
+                    });
+                    zk_state
+                });
+                let kura = Kura::blank_kura_for_testing();
+                let query = LiveQueryStore::start_test();
+                let state = State::new(world, Arc::clone(&kura), query);
+                let mut proof = ProofAttachment::new_ref(
+                    crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                    ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), vec![0xC0]),
+                    vk_id,
+                );
+                proof.vk_commitment = commitment;
+                let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+                let mut block = state.block(header);
+                let transaction = block.transaction();
+
+                let err = resolve_kagemusha_unshield_verifier(&definition_id, &proof, &transaction)
+                    .expect_err("malformed verifier-key commitment metadata must reject");
+                assert_offline_rejection(err, "verifier_key_invalid", detail);
+            }
+
+            assert_rejects(None, "must publish the asset-bound verifier-key commitment");
+            assert_rejects(
+                Some([0u8; 32]),
+                "non-zero asset-bound verifier-key commitment",
+            );
         }
 
         #[test]

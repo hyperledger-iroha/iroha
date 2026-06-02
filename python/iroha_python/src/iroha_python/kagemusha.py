@@ -15,6 +15,13 @@ KagemushaOfflineSpendMode = Literal["recursive_spend_v1", "checked_prefold_v1"]
 
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"
+KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
+KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 = (
+    "kagemusha-recursive-aggregation-v1"
+)
+KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 = (
+    "kagemusha-recursive-spend-lineage-v1"
+)
 
 _COMPACT_TOKEN_METHOD = "kagemusha_prove_verified_compact_payment_token_with_records"
 _RECURSIVE_AGGREGATION_METHOD = (
@@ -25,6 +32,9 @@ _RECURSIVE_AGGREGATION_METHOD = (
 __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KagemushaOfflineSpendMode",
     "is_kagemusha_compact_payment_token_prover_available",
     "is_kagemusha_recursive_aggregation_proof_bundle_prover_available",
@@ -34,6 +44,8 @@ __all__ = [
     _RECURSIVE_AGGREGATION_METHOD,
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
+    "kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "kagemusha_recursive_spend_lineage_witness_append_result",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
 ]
@@ -41,9 +53,12 @@ __all__ = [
 _NATIVE_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
+    "kagemusha_recursive_spend_lineage_witness_from_init_result",
+    "kagemusha_recursive_spend_lineage_witness_append_result",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
 )
+_RECURSIVE_SPEND_ABI_VERSION_METHOD = "kagemusha_recursive_spend_bridge_abi_version"
 
 
 def _archive_bytes(request_archive: BytesLike) -> bytes:
@@ -79,6 +94,51 @@ def _is_native_method_available(name: str) -> bool:
     return callable(getattr(module, name, None))
 
 
+def _recursive_spend_abi_version(module: object) -> int | None:
+    method = getattr(module, _RECURSIVE_SPEND_ABI_VERSION_METHOD, None)
+    if not callable(method):
+        return None
+    try:
+        version = int(method())
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return None
+    except Exception:
+        return None
+    return version
+
+
+def _has_recursive_spend_abi(module: object) -> bool:
+    version = _recursive_spend_abi_version(module)
+    return (
+        version is not None
+        and version >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION
+    )
+
+
+def _missing_recursive_spend_methods(module: object) -> tuple[str, ...]:
+    return tuple(
+        name
+        for name in _NATIVE_METHODS
+        if not callable(getattr(module, name, None))
+    )
+
+
+def _require_complete_recursive_spend_surface(module: object) -> None:
+    if not _has_recursive_spend_abi(module):
+        raise RuntimeError(
+            "recursive Kagemusha support requires native bridge ABI "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION}"
+        )
+    missing = _missing_recursive_spend_methods(module)
+    if missing:
+        missing_list = ", ".join(missing)
+        raise RuntimeError(
+            "recursive Kagemusha support requires the complete native bridge ABI "
+            f"{KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION} surface; "
+            f"missing: {missing_list}"
+        )
+
+
 def is_kagemusha_compact_payment_token_prover_available() -> bool:
     return _is_native_method_available(_COMPACT_TOKEN_METHOD)
 
@@ -92,7 +152,9 @@ def is_kagemusha_recursive_spend_available() -> bool:
         module = load_crypto_extension()
     except RuntimeError:
         return False
-    return all(callable(getattr(module, name, None)) for name in _NATIVE_METHODS)
+    return _has_recursive_spend_abi(module) and not _missing_recursive_spend_methods(
+        module
+    )
 
 
 def preferred_kagemusha_offline_spend_mode(
@@ -149,6 +211,30 @@ def kagemusha_recursive_spend_append(request_archive: BytesLike) -> bytes:
     return _call_recursive_spend_method("kagemusha_recursive_spend_append", request_archive)
 
 
+def kagemusha_recursive_spend_lineage_witness_from_init_result(
+    request_archive: BytesLike,
+    bundle_archive: BytesLike,
+) -> bytes:
+    return _call_recursive_spend_multi_archive_method(
+        "kagemusha_recursive_spend_lineage_witness_from_init_result",
+        _archive_bytes_named(request_archive, "request_archive"),
+        _archive_bytes_named(bundle_archive, "bundle_archive"),
+    )
+
+
+def kagemusha_recursive_spend_lineage_witness_append_result(
+    previous_witness_archive: BytesLike,
+    request_archive: BytesLike,
+    bundle_archive: BytesLike,
+) -> bytes:
+    return _call_recursive_spend_multi_archive_method(
+        "kagemusha_recursive_spend_lineage_witness_append_result",
+        _archive_bytes_named(previous_witness_archive, "previous_witness_archive"),
+        _archive_bytes_named(request_archive, "request_archive"),
+        _archive_bytes_named(bundle_archive, "bundle_archive"),
+    )
+
+
 def kagemusha_recursive_spend_verify(request_archive: BytesLike) -> bytes:
     return _call_recursive_spend_method("kagemusha_recursive_spend_verify", request_archive)
 
@@ -158,4 +244,37 @@ def kagemusha_recursive_spend_redeem(request_archive: BytesLike) -> bytes:
 
 
 def _call_recursive_spend_method(name: str, request_archive: BytesLike) -> bytes:
-    return _call_native_archive_method(name, _archive_bytes(request_archive))
+    request = _archive_bytes(request_archive)
+    module = load_crypto_extension()
+    _require_complete_recursive_spend_surface(module)
+    method = getattr(module, name, None)
+    if method is None:
+        raise RuntimeError(
+            f"{name} requires a compiled iroha_python._crypto extension "
+            "with recursive Kagemusha support"
+        )
+    result = method(request)
+    if result is None:
+        raise RuntimeError(f"{name} returned no output")
+    output = bytes(result)
+    if not output:
+        raise RuntimeError(f"{name} returned empty output")
+    return output
+
+
+def _call_recursive_spend_multi_archive_method(name: str, *archives: bytes) -> bytes:
+    module = load_crypto_extension()
+    _require_complete_recursive_spend_surface(module)
+    method = getattr(module, name, None)
+    if method is None:
+        raise RuntimeError(
+            f"{name} requires a compiled iroha_python._crypto extension "
+            "with recursive Kagemusha support"
+        )
+    result = method(*archives)
+    if result is None:
+        raise RuntimeError(f"{name} returned no output")
+    output = bytes(result)
+    if not output:
+        raise RuntimeError(f"{name} returned empty output")
+    return output

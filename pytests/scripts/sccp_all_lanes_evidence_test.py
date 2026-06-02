@@ -1033,7 +1033,9 @@ def destination_rollout(module, profile, material, seed):
         record["_comment_evm_proof_family_hash"] = (
             "0x" + evm_module.evm_proof_family_hash().hex()
         )
-        record["destination_network_id"] = hex32(seed + 23)
+        record["destination_network_id"] = (
+            "0x" + evm_module.evm_mainnet_network_id_for_domain(profile.domain).hex()
+        )
         record["destination_bridge_address"] = hex20(seed + 24)
         record["destination_binding_hash"] = "0x" + evm_module.evm_destination_binding_hash(
             network_id=raw_hex(record["destination_network_id"]),

@@ -640,6 +640,7 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     source = account_address(0x61)
     destination = account_address(0x62)
+    zk_ace_verifier = "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0"
     proof = {
         "backend": "halo2/ipa",
         "proof_bytes": b"proof-bytes",
@@ -679,11 +680,45 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
             outputs=["ee" * 32],
             root_hint="ff" * 32,
         ),
+        Instruction.register_zk_ace_identity_commitment(
+            asset_definition_id,
+            "11" * 32,
+            "22" * 32,
+            [source],
+            zk_ace_verifier,
+        ),
+        Instruction.rotate_zk_ace_identity_commitment(
+            asset_definition_id,
+            "11" * 32,
+            "12" * 32,
+            "22" * 32,
+            [source],
+            zk_ace_verifier,
+        ),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
     assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+
+    alternate_source = account_address(0x63)
+    alternate_register = Instruction.register_zk_ace_identity_commitment(
+        asset_definition_id,
+        "11" * 32,
+        "22" * 32,
+        [alternate_source],
+        zk_ace_verifier,
+    )
+    alternate_rotate = Instruction.rotate_zk_ace_identity_commitment(
+        asset_definition_id,
+        "11" * 32,
+        "12" * 32,
+        "22" * 32,
+        [alternate_source],
+        zk_ace_verifier,
+    )
+    assert alternate_register.to_json() != instructions[-2].to_json()
+    assert alternate_rotate.to_json() != instructions[-1].to_json()
 
 
 def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
@@ -1052,6 +1087,54 @@ def test_zk_instruction_helpers_reject_invalid_prepared_proof() -> None:
             ValueError,
             "allowed_accounts.*non-empty",
             id="zk-ace-register-empty-allowlist",
+        ),
+        pytest.param(
+            lambda asset, _source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "22" * 32,
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            TypeError,
+            "allowed_accounts",
+            id="zk-ace-register-requires-allowlist",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "22" * 32,
+                [source, source],
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "duplicates",
+            id="zk-ace-register-duplicate-allowlist",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.register_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "22" * 32,
+                [source] * 17,
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "at most 16",
+            id="zk-ace-register-oversized-allowlist",
+        ),
+        pytest.param(
+            lambda asset, source, _destination, _proof: Instruction.rotate_zk_ace_identity_commitment(
+                asset,
+                "11" * 32,
+                "12" * 32,
+                "22" * 32,
+                [source] * 17,
+                "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+            ),
+            ValueError,
+            "at most 16",
+            id="zk-ace-rotate-oversized-allowlist",
         ),
     ],
 )

@@ -102,6 +102,15 @@ RbcStates == {
   "Withheld"
 }
 
+RbcInitializedStates ==
+  {"Init", "Chunking", "ChunksComplete", "ReadyPartial", "ReadyQuorum", "Delivered"}
+
+RbcChunkCoveredStates ==
+  {"ChunksComplete", "ReadyPartial", "ReadyQuorum", "Delivered"}
+
+RbcReadyQuorumStates ==
+  {"ReadyQuorum", "Delivered"}
+
 CanCommit(vh, vb, stake, rbc) ==
   /\ vh + vb >= CommitQuorum
   /\ stake >= StakeQuorum
@@ -674,6 +683,15 @@ DeliverImpliesEvidence ==
     /\ headerSeen
     /\ digestValid
 
+RbcProgressEvidenceMatchesState ==
+  /\ (rbcState \in RbcInitializedStates =>
+        /\ headerSeen
+        /\ digestValid)
+  /\ (rbcState \in RbcChunkCoveredStates =>
+        chunkCount >= MaxChunks)
+  /\ (rbcState \in RbcReadyQuorumStates =>
+        readyVotes >= CommitQuorum)
+
 EventuallyCommit ==
   [] (gst => <> committed)
 
@@ -724,5 +742,8 @@ CommitEvidenceNeverLost ==
 
 RbcDeliveryNeverLost ==
   [] (rbcState = "Delivered" => [] (rbcState = "Delivered"))
+
+RbcProgressEvidenceNeverDiverges ==
+  [] RbcProgressEvidenceMatchesState
 
 ====

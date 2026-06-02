@@ -721,10 +721,18 @@ export function deriveConfidentialNullifierV2(input) {
 }
 
 function hasKagemushaRecursiveSpendNative(native) {
+  const abiVersion =
+    typeof native?.connectNoritoBridgeAbiVersion === "function"
+      ? Number(native.connectNoritoBridgeAbiVersion())
+      : 0;
   return (
     native &&
+    Number.isInteger(abiVersion) &&
+    abiVersion >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION &&
     typeof native.kagemushaRecursiveSpendInit === "function" &&
     typeof native.kagemushaRecursiveSpendAppend === "function" &&
+    typeof native.kagemushaRecursiveSpendLineageWitnessFromInitResult === "function" &&
+    typeof native.kagemushaRecursiveSpendLineageWitnessAppendResult === "function" &&
     typeof native.kagemushaRecursiveSpendVerify === "function" &&
     typeof native.kagemushaRecursiveSpendRedeem === "function"
   );
@@ -732,6 +740,11 @@ function hasKagemushaRecursiveSpendNative(native) {
 
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-aggregation-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-v1";
 
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
@@ -787,6 +800,80 @@ export function kagemushaRecursiveSpendAppend(requestArchive) {
     "kagemushaRecursiveSpendAppend",
     requestArchive,
   );
+}
+
+export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
+  requestArchive,
+  bundleArchive,
+) {
+  const request = toBuffer(requestArchive, "requestArchive");
+  if (request.length === 0) {
+    throw new Error("requestArchive must not be empty");
+  }
+  const bundle = toBuffer(bundleArchive, "bundleArchive");
+  if (bundle.length === 0) {
+    throw new Error("bundleArchive must not be empty");
+  }
+  const native = ensureKagemushaRecursiveSpendNative(
+    resolveNativeBinding(),
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+  );
+  const result = native.kagemushaRecursiveSpendLineageWitnessFromInitResult(
+    request,
+    bundle,
+  );
+  if (result === undefined || result === null) {
+    throw new Error(
+      "native kagemushaRecursiveSpendLineageWitnessFromInitResult returned no output",
+    );
+  }
+  const output = Buffer.from(result);
+  if (output.length === 0) {
+    throw new Error(
+      "native kagemushaRecursiveSpendLineageWitnessFromInitResult returned empty output",
+    );
+  }
+  return output;
+}
+
+export function kagemushaRecursiveSpendLineageWitnessAppendResult(
+  previousWitnessArchive,
+  requestArchive,
+  bundleArchive,
+) {
+  const previousWitness = toBuffer(previousWitnessArchive, "previousWitnessArchive");
+  if (previousWitness.length === 0) {
+    throw new Error("previousWitnessArchive must not be empty");
+  }
+  const request = toBuffer(requestArchive, "requestArchive");
+  if (request.length === 0) {
+    throw new Error("requestArchive must not be empty");
+  }
+  const bundle = toBuffer(bundleArchive, "bundleArchive");
+  if (bundle.length === 0) {
+    throw new Error("bundleArchive must not be empty");
+  }
+  const native = ensureKagemushaRecursiveSpendNative(
+    resolveNativeBinding(),
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+  );
+  const result = native.kagemushaRecursiveSpendLineageWitnessAppendResult(
+    previousWitness,
+    request,
+    bundle,
+  );
+  if (result === undefined || result === null) {
+    throw new Error(
+      "native kagemushaRecursiveSpendLineageWitnessAppendResult returned no output",
+    );
+  }
+  const output = Buffer.from(result);
+  if (output.length === 0) {
+    throw new Error(
+      "native kagemushaRecursiveSpendLineageWitnessAppendResult returned empty output",
+    );
+  }
+  return output;
 }
 
 export function kagemushaRecursiveSpendVerify(requestArchive) {

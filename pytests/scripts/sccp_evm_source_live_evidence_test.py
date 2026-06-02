@@ -396,6 +396,54 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     assert module._source_bridge_deployment_receipt_is_verified(source_bridge) is False
 
 
+def test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags():
+    module = load_live_module()
+
+    assert module.parse_block_tag("latest") == "latest"
+    assert module.parse_block_tag("safe") == "safe"
+    assert module.parse_block_tag("finalized") == "finalized"
+    assert module.parse_block_tag("0x1234") == "0x1234"
+
+    for value in (
+        "pending",
+        "earliest",
+        " 0x1234",
+        "0x01234",
+        "0X1234",
+        "1234",
+        "0x0",
+    ):
+        try:
+            module.parse_block_tag(value)
+        except module.argparse.ArgumentTypeError as exc:
+            assert "block-tag" in str(exc)
+        else:
+            raise AssertionError(
+                f"unstable/noncanonical block tag {value!r} was accepted"
+            )
+
+
+def test_evm_source_live_direct_collector_rejects_unstable_block_tag_before_rpc():
+    module = load_live_module()
+
+    def opener(_request, _timeout):
+        raise AssertionError("collector should reject block tag before JSON-RPC")
+
+    try:
+        module.collect_source_bridge_evidence(
+            "https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address="0x" + "11" * 20,
+            block_tag="pending",
+            opener=opener,
+            timeout=1.0,
+        )
+    except module.argparse.ArgumentTypeError as exc:
+        assert "block-tag" in str(exc)
+    else:
+        raise AssertionError("unstable direct collector block tag was accepted")
+
+
 def test_evm_source_live_evidence_collects_source_records_and_toml():
     module = load_live_module()
     fake = fake_opener_for(module)

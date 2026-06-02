@@ -235,6 +235,17 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, evidence_payload
 
 
+def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
+    """The release-readiness script must advertise the Ethereum launch lane."""
+
+    report = load_report_module()
+
+    assert report.ACTIVE_LAUNCH_DOMAIN == 1
+    assert report.ACTIVE_LAUNCH_CHAIN == "eth"
+    assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
+    assert report.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+
+
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
     """Write only the active launch-lane evidence records."""
 
@@ -1636,6 +1647,65 @@ def test_release_readiness_report_requires_bsc_browser_no_wasm_marker(
     assert (
         "production corridor phase js-sdk evidence artifact is missing "
         f"expected phase-block success marker: {bsc_no_wasm_marker}"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_requires_ethereum_browser_no_wasm_marker(
+    tmp_path: Path,
+) -> None:
+    """The JS phase evidence must prove the browser Ethereum path stayed native JS."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    ethereum_no_wasm_marker = (
+        "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned"
+    )
+    assert ethereum_no_wasm_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != ethereum_no_wasm_marker
+    ]
+    corridor_log = tmp_path / "js-sdk-without-ethereum-no-wasm-marker.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "js-sdk=passed",
+            "--phase-evidence",
+            f"js-sdk={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {ethereum_no_wasm_marker}"
     ) in completed.stdout
 
 

@@ -3,6 +3,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { blake3 } from "@noble/hashes/blake3";
 import { sha256 } from "@noble/hashes/sha256";
 import { keccak_256 } from "@noble/hashes/sha3";
+import { AccountAddress } from "./address.js";
 
 export const SCCP_DOMAIN_SORA = 0;
 export const SCCP_DOMAIN_ETH = 1;
@@ -125,7 +126,7 @@ export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1 =
 export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1 =
   "sccp-substrate-runtime-storage-v1";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1 =
-  "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes32,bytes32,address,uint256)";
+  "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1 =
   "burnToTaira(bytes32,bytes32,bytes,uint256)";
 
@@ -265,8 +266,6 @@ const SCCP_TRON_ROUTE_CANARY_EVIDENCE_LABEL_V3 =
   "iroha:sccp:tron-route-canary-evidence:v3";
 const SCCP_ROUTE_ALLOWLIST_LABEL_V1 = "sccp:route-allowlist:lane-evidence:v1";
 const SCCP_TRON_ROUTE_ALLOWLIST_ID_V1 = "sccp:tron:route-allowlist:tron-mainnet:v1";
-const SCCP_TAIRA_XOR_TRANSFER_PAYLOAD_LABEL_V1 =
-  "iroha:sccp:taira-xor:transfer-payload:v1";
 const SCCP_TAIRA_XOR_BURN_SOURCE_EVENT_LABEL_V1 =
   "iroha:sccp:taira-xor:burn-source-event:v1";
 const SCCP_SOLANA_BASIS_POINTS_PER_UNIT = 10_000n;
@@ -567,6 +566,7 @@ const SCCP_GROTH16_BN254_SIGNAL_LABELS_V1 = [
 ];
 
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8", { fatal: true });
 
 const normalizeHexInput = (value, label, byteLength = null) => {
   if (typeof value !== "string") {
@@ -1202,6 +1202,17 @@ const writeU128Le = (target, value) => {
   return concatBytes(target, out);
 };
 
+const readU128LeAt = (bytes, offset, label) => {
+  if (offset + 16 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  let value = 0n;
+  for (let index = 15; index >= 0; index -= 1) {
+    value = (value << 8n) | BigInt(bytes[offset + index]);
+  }
+  return value;
+};
+
 const writeBytes = (target, value) => {
   const bytes = toBytes(value, "bytes");
   return concatBytes(writeU32Le(target, bytes.length), bytes);
@@ -1727,16 +1738,103 @@ const normalizeCanonicalTextBytes = (value, label) => {
   return textEncoder.encode(text);
 };
 
+const normalizeCanonicalTairaAccountId = (value, label) => {
+  const text = normalizeNonEmptyString(value, label);
+  if (text !== value) {
+    throw new TypeError(`${label} must be canonical text`);
+  }
+  try {
+    const address = AccountAddress.fromAccountId(text, SCCP_TAIRA_NETWORK_PREFIX_V1);
+    if (address.toI105(SCCP_TAIRA_NETWORK_PREFIX_V1) !== text) {
+      throw new TypeError(`${label} must use canonical TAIRA I105 account id form`);
+    }
+    return text;
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw error;
+    }
+    throw new TypeError(`${label} must be a canonical TAIRA I105 account id`);
+  }
+};
+
+const validateCanonicalEvmHexAddress = (text, label) => {
+  if (!/^0x[0-9a-fA-F]{40}$/u.test(text)) {
+    throw new TypeError(`${label} must be a 0x-prefixed 20-byte EVM address`);
+  }
+  const payload = text.slice(2);
+  const lowercasePayload = payload.toLowerCase();
+  const checksum = keccak_256(textEncoder.encode(lowercasePayload));
+  for (let index = 0; index < payload.length; index += 1) {
+    const char = payload[index];
+    if (/[0-9]/u.test(char)) continue;
+    const checksumByte = checksum[Math.floor(index / 2)];
+    const checksumNibble = index % 2 === 0 ? checksumByte >> 4 : checksumByte & 0x0f;
+    const shouldBeUppercase = checksumNibble >= 8;
+    if (shouldBeUppercase ? char !== char.toUpperCase() : char !== char.toLowerCase()) {
+      throw new TypeError(`${label} must be a canonical EIP-55 EVM address`);
+    }
+  }
+};
+
+const decodeSolanaBase58FixedAllowZero = (value, label, byteLength) => {
+  const text = normalizeNonEmptyString(value, label);
+  if (text.length < 32 || text.length > 44) {
+    throw new TypeError(`${label} must be a canonical 32-byte Solana base58 address`);
+  }
+  const bytes = decodeSolanaBase58(text, label);
+  if (bytes.length !== byteLength) {
+    throw new TypeError(`${label} must decode to ${byteLength} bytes`);
+  }
+  return bytes;
+};
+
+const validateCanonicalTonRawAddress = (text, label) => {
+  const [workchain, accountHex, extra] = text.split(":");
+  if (extra !== undefined || accountHex === undefined) {
+    throw new TypeError(`${label} must be workchain:account_hex`);
+  }
+  if (
+    workchain === "" ||
+    workchain.startsWith("+") ||
+    (workchain.startsWith("-") && (workchain.length === 1 || workchain.slice(1) === "0")) ||
+    (/^-?0[0-9]/u.test(workchain))
+  ) {
+    throw new TypeError(`${label} workchain must be canonical i32`);
+  }
+  normalizeSignedI32(workchain, `${label} workchain`);
+  if (accountHex.length !== 64 || /[^0-9a-f]/u.test(accountHex)) {
+    throw new TypeError(`${label} account must be lowercase 32-byte hex`);
+  }
+};
+
 const normalizeSccpCodecValueBytes = (value, codec, label) => {
   switch (codec) {
     case SCCP_CODEC_TEXT_UTF8:
       return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_EVM_HEX:
-      return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_SOLANA_BASE58:
-      return normalizeCanonicalTextBytes(value, label);
-    case SCCP_CODEC_TON_RAW:
-      return normalizeCanonicalTextBytes(value, label);
+    case SCCP_CODEC_EVM_HEX: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      validateCanonicalEvmHexAddress(text, label);
+      return textEncoder.encode(text);
+    }
+    case SCCP_CODEC_SOLANA_BASE58: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      decodeSolanaBase58FixedAllowZero(text, label, 32);
+      return textEncoder.encode(text);
+    }
+    case SCCP_CODEC_TON_RAW: {
+      const text = normalizeNonEmptyString(value, label);
+      if (text !== value) {
+        throw new TypeError(`${label} must be canonical text`);
+      }
+      validateCanonicalTonRawAddress(text, label);
+      return textEncoder.encode(text);
+    }
     case SCCP_CODEC_TRON_BASE58CHECK: {
       const text = normalizeNonEmptyString(value, label);
       if (text !== value) {
@@ -1754,6 +1852,212 @@ const normalizeSccpCodecValueBytes = (value, codec, label) => {
     }
     default:
       throw new RangeError(`${label} codec is unsupported`);
+  }
+};
+
+const readCanonicalSccpVec = (payload, offset, label) => {
+  const length = readU32LeAt(payload, offset, `${label}.length`);
+  const valueOffset = offset + 4;
+  if (valueOffset + length > payload.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return {
+    bytes: payload.subarray(valueOffset, valueOffset + length),
+    nextOffset: valueOffset + length,
+  };
+};
+
+const decodeCanonicalUtf8Bytes = (bytes, label) => {
+  let text;
+  try {
+    text = textDecoder.decode(bytes);
+  } catch (_error) {
+    throw new TypeError(`${label} must be valid UTF-8`);
+  }
+  if (!bytesEqual(textEncoder.encode(text), bytes)) {
+    throw new TypeError(`${label} must be canonical UTF-8`);
+  }
+  return text;
+};
+
+const parseTairaXorCanonicalTransferPayloadBytes = (value) => {
+  const payload = toBytes(value, "canonicalPayloadBytes");
+  if (payload.length === 0) {
+    throw new TypeError("canonicalPayloadBytes must not be empty");
+  }
+  let offset = 0;
+  const version = readU8At(payload, offset, "canonicalPayloadBytes.version");
+  if (version !== 1) {
+    throw new TypeError("canonicalPayloadBytes.version must be 1");
+  }
+  offset += 1;
+
+  const sourceDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.source_domain");
+  if (sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("canonicalPayloadBytes.source_domain must be SORA");
+  }
+  offset += 4;
+
+  const destDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.dest_domain");
+  if (destDomain !== SCCP_DOMAIN_TRON) {
+    throw new TypeError("canonicalPayloadBytes.dest_domain must be TRON");
+  }
+  offset += 4;
+
+  const nonce = readU64LeAt(payload, offset, "canonicalPayloadBytes.nonce");
+  offset += 8;
+
+  const assetHomeDomain = readU32LeAt(payload, offset, "canonicalPayloadBytes.asset_home_domain");
+  if (assetHomeDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("canonicalPayloadBytes.asset_home_domain must be SORA");
+  }
+  offset += 4;
+
+  const assetIdCodec = readU8At(payload, offset, "canonicalPayloadBytes.asset_id_codec");
+  if (assetIdCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.asset_id_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  let valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.asset_id");
+  offset = valueRange.nextOffset;
+  const assetId = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.asset_id");
+  if (assetId !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("canonicalPayloadBytes.asset_id must be xor");
+  }
+
+  const amount = readU128LeAt(payload, offset, "canonicalPayloadBytes.amount");
+  if (amount === 0n) {
+    throw new RangeError("canonicalPayloadBytes.amount must be greater than zero");
+  }
+  offset += 16;
+
+  const senderCodec = readU8At(payload, offset, "canonicalPayloadBytes.sender_codec");
+  if (senderCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.sender_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.sender");
+  offset = valueRange.nextOffset;
+  const sender = normalizeCanonicalTairaAccountId(
+    decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.sender"),
+    "canonicalPayloadBytes.sender",
+  );
+
+  const recipientCodec = readU8At(payload, offset, "canonicalPayloadBytes.recipient_codec");
+  if (recipientCodec !== SCCP_CODEC_TRON_BASE58CHECK) {
+    throw new TypeError("canonicalPayloadBytes.recipient_codec must be TRON_BASE58CHECK");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.recipient");
+  offset = valueRange.nextOffset;
+  const recipient = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.recipient");
+  decodeTronBase58CheckPayload(recipient, "canonicalPayloadBytes.recipient");
+
+  const routeIdCodec = readU8At(payload, offset, "canonicalPayloadBytes.route_id_codec");
+  if (routeIdCodec !== SCCP_CODEC_TEXT_UTF8) {
+    throw new TypeError("canonicalPayloadBytes.route_id_codec must be TEXT_UTF8");
+  }
+  offset += 1;
+  valueRange = readCanonicalSccpVec(payload, offset, "canonicalPayloadBytes.route_id");
+  offset = valueRange.nextOffset;
+  const routeId = decodeCanonicalUtf8Bytes(valueRange.bytes, "canonicalPayloadBytes.route_id");
+  if (routeId !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("canonicalPayloadBytes.route_id must be taira_tron_xor");
+  }
+  if (offset !== payload.length) {
+    throw new TypeError("canonicalPayloadBytes must not contain trailing bytes");
+  }
+
+  return Object.freeze({
+    version,
+    source_domain: sourceDomain,
+    dest_domain: destDomain,
+    nonce,
+    asset_home_domain: assetHomeDomain,
+    asset_id_codec: assetIdCodec,
+    asset_id: assetId,
+    amount,
+    sender_codec: senderCodec,
+    sender,
+    recipient_codec: recipientCodec,
+    recipient,
+    route_id_codec: routeIdCodec,
+    route_id: routeId,
+  });
+};
+
+const requireOptionalTairaXorPayloadInputMatches = (input, parsedPayload) => {
+  const routeId = strictOptionalResultField(input, "routeId", "routeId", "route_id");
+  if (
+    routeId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeTairaXorRouteIdInput({ routeId }) !== parsedPayload.route_id
+  ) {
+    throw new TypeError("routeId must match canonicalPayloadBytes");
+  }
+
+  const assetKey = strictOptionalResultField(
+    input,
+    "assetKey",
+    "assetKey",
+    "asset_key",
+    "assetId",
+    "asset_id",
+  );
+  if (
+    assetKey !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeTairaXorAssetKeyInput({ assetKey }) !== parsedPayload.asset_id
+  ) {
+    throw new TypeError("assetKey must match canonicalPayloadBytes");
+  }
+
+  const sender = strictOptionalResultField(
+    input,
+    "sender",
+    "sender",
+    "tairaSender",
+    "taira_sender",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (
+    sender !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeCanonicalTairaAccountId(sender, "sender") !== parsedPayload.sender
+  ) {
+    throw new TypeError("sender must match canonicalPayloadBytes");
+  }
+
+  const recipient = strictOptionalResultField(
+    input,
+    "recipientAddress",
+    "recipientAddress",
+    "recipient_address",
+    "recipient",
+  );
+  if (recipient !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const normalizedRecipient = normalizeNonEmptyString(recipient, "recipientAddress");
+    if (normalizedRecipient !== recipient) {
+      throw new TypeError("recipientAddress must be canonical text");
+    }
+    decodeTronBase58CheckPayload(normalizedRecipient, "recipientAddress");
+    if (normalizedRecipient !== parsedPayload.recipient) {
+      throw new TypeError("recipientAddress must match canonicalPayloadBytes");
+    }
+  }
+
+  const amount = strictOptionalResultField(input, "amount", "amount");
+  if (
+    amount !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(amount, "amount", SCCP_U128_MAX, "u128") !== parsedPayload.amount
+  ) {
+    throw new TypeError("amount must match canonicalPayloadBytes");
+  }
+
+  const nonce = strictOptionalResultField(input, "nonce", "nonce");
+  if (
+    nonce !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(nonce, "nonce", SCCP_U64_MAX, "u64") !== parsedPayload.nonce
+  ) {
+    throw new TypeError("nonce must match canonicalPayloadBytes");
   }
 };
 
@@ -1895,7 +2199,7 @@ export const buildTairaXorTransferPayload = (input) => {
   }
   const routeId = normalizeTairaXorRouteIdInput(input);
   const assetKey = normalizeTairaXorAssetKeyInput(input);
-  const sender = normalizeNonEmptyString(
+  const sender = normalizeCanonicalTairaAccountId(
     strictResultField(
       input,
       "sender",
@@ -1966,6 +2270,88 @@ export const tairaXorCanonicalTransferPayloadBytes = (input) =>
 
 export const tairaXorTransferMessageId = (input, options = {}) =>
   sccpTransferMessageId(buildTairaXorTransferPayload(input), options);
+
+export const buildTairaXorTronToTairaTransferPayload = (input) => {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR TRON-source transfer payload input must be an object");
+  }
+  const routeId = normalizeTairaXorRouteIdInput(input);
+  const assetKey = normalizeTairaXorAssetKeyInput(input);
+  const sender = normalizeNonEmptyString(
+    strictResultField(
+      input,
+      "tronSender",
+      "tronSender",
+      "tron_sender",
+      "sender",
+      "senderAddress",
+      "sender_address",
+    ),
+    "tronSender",
+  );
+  const rawSender = strictResultField(
+    input,
+    "tronSender",
+    "tronSender",
+    "tron_sender",
+    "sender",
+    "senderAddress",
+    "sender_address",
+  );
+  if (sender !== rawSender) {
+    throw new TypeError("tronSender must be canonical text");
+  }
+  decodeTronBase58CheckPayload(sender, "tronSender");
+  const recipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const nonce = normalizeUnsignedBigIntMax(
+    strictResultField(input, "nonce", "nonce"),
+    "nonce",
+    SCCP_U64_MAX,
+    "u64",
+  );
+  return Object.freeze({
+    version: 1,
+    source_domain: SCCP_DOMAIN_TRON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: assetKey,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TRON_BASE58CHECK,
+    sender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  });
+};
+
+export const tairaXorTronToTairaCanonicalTransferPayloadBytes = (input) =>
+  canonicalSccpTransferPayloadBytes(buildTairaXorTronToTairaTransferPayload(input));
+
+export const tairaXorTronToTairaTransferMessageId = (input, options = {}) =>
+  sccpTransferMessageId(buildTairaXorTronToTairaTransferPayload(input), options);
 
 export const buildTairaXorSccpRecordDescriptor = (input) => {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
@@ -2156,7 +2542,7 @@ const normalizeTairaXorBurnRecordAuthority = (input, sender) => {
   if (authority === SCCP_OPTIONAL_FIELD_MISSING || authority == null) {
     return sender;
   }
-  const normalized = normalizeNonEmptyString(authority, "authority");
+  const normalized = normalizeCanonicalTairaAccountId(authority, "authority");
   if (normalized !== sender) {
     throw new TypeError("authority must match the TAIRA XOR record sender");
   }
@@ -6592,12 +6978,11 @@ const normalizeEthereumMainnetChainId = (chainId) => {
     return BigInt(chainId);
   }
   if (typeof chainId === "string") {
-    const trimmed = chainId.trim();
-    if (/^0x(?:0|[1-9a-f][0-9a-f]*)$/iu.test(trimmed)) {
-      return BigInt(trimmed);
+    if (/^0x(?:0|[1-9a-f][0-9a-f]*)$/u.test(chainId)) {
+      return BigInt(chainId);
     }
-    if (/^(?:0|[1-9][0-9]*)$/u.test(trimmed)) {
-      return BigInt(trimmed);
+    if (/^(?:0|[1-9][0-9]*)$/u.test(chainId)) {
+      return BigInt(chainId);
     }
   }
   throw new TypeError("eth_chainId must be a hex, decimal, number, or bigint chain id");
@@ -23429,7 +23814,7 @@ const normalizeTairaRecipientHash = (input) => {
     if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
     return bytesToHex(keccak_256(bytes));
   }
-  const text = normalizeNonEmptyString(recipient, "tairaRecipient");
+  const text = normalizeCanonicalTairaAccountId(recipient, "tairaRecipient");
   return bytesToHex(keccak_256(textEncoder.encode(text)));
 };
 
@@ -23459,7 +23844,7 @@ const normalizeTairaRecipientBytes = (input) => {
       if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
       return bytes;
     }
-    return textEncoder.encode(normalizeNonEmptyString(recipient, "tairaRecipient"));
+    return textEncoder.encode(normalizeCanonicalTairaAccountId(recipient, "tairaRecipient"));
   }
   const bytes = toBytes(recipient, "tairaRecipient");
   if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
@@ -23474,35 +23859,11 @@ export function tairaXorAssetKeyHash(assetKey = SCCP_TAIRA_XOR_ASSET_KEY_V1) {
   return textHash32(assetKey, "assetKey");
 }
 
-export function tairaXorTransferPayloadHash(input) {
+export function tairaXorTransferPayloadHash(input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError("TAIRA XOR transfer payload input must be an object");
   }
-  const routeIdHash = normalizeTairaXorRouteIdHash(input);
-  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
-  const bridgeAddress = strictResultField(
-    input,
-    "bridgeAddress",
-    "bridgeAddress",
-    "bridge_address",
-  );
-  const recipientAddress = strictResultField(
-    input,
-    "recipientAddress",
-    "recipientAddress",
-    "recipient_address",
-    "recipient",
-  );
-  const amount = strictResultField(input, "amount", "amount");
-  const payload = concatBytes(
-    keccak_256(textEncoder.encode(SCCP_TAIRA_XOR_TRANSFER_PAYLOAD_LABEL_V1)),
-    hexToBytes(routeIdHash, "routeIdHash", 32),
-    hexToBytes(assetKeyHash, "assetKeyHash", 32),
-    tronAddressAbiWord(bridgeAddress, "bridgeAddress"),
-    tronAddressAbiWord(recipientAddress, "recipientAddress"),
-    abiWordU256(amount, "amount"),
-  );
-  return bytesToHex(keccak_256(payload));
+  return sccpPayloadHash(tairaXorCanonicalTransferPayloadBytes(input), options);
 }
 
 export function tairaXorBurnSourceEventDigest(input) {
@@ -23552,33 +23913,53 @@ export function tairaXorFinalizeFromTairaCallData(input) {
   const publicInputs = normalizeSccpMessageTransparentPublicInputs(
     strictResultField(input, "publicInputs", "publicInputs", "public_inputs"),
   );
+  if (publicInputs.targetDomain !== SCCP_DOMAIN_TRON) {
+    throw new TypeError("publicInputs.targetDomain must be TRON");
+  }
   const publicInputWords = sccpMessageTransparentPublicInputAbiWords(publicInputs);
   const statementHash = normalizeNonZeroHex32(
     strictResultField(input, "statementHash", "statementHash", "statement_hash"),
     "statementHash",
   );
-  const routeIdHash = normalizeTairaXorRouteIdHash(input);
-  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
-  const recipientAddress = strictResultField(
+  const canonicalPayloadInput = strictOptionalResultField(
     input,
-    "recipientAddress",
-    "recipientAddress",
-    "recipient_address",
-    "recipient",
+    "canonicalPayloadBytes",
+    "canonicalPayloadBytes",
+    "canonical_payload_bytes",
+    "canonicalPayloadHex",
+    "canonical_payload_hex",
+    "payloadBytes",
+    "payload_bytes",
   );
-  const amount = strictResultField(input, "amount", "amount");
-  const proofBytesOffset = 12 * 32;
+  const canonicalPayloadBytes =
+    canonicalPayloadInput === SCCP_OPTIONAL_FIELD_MISSING
+      ? tairaXorCanonicalTransferPayloadBytes(input)
+      : toBytes(canonicalPayloadInput, "canonicalPayloadBytes");
+  const parsedPayload = parseTairaXorCanonicalTransferPayloadBytes(canonicalPayloadBytes);
+  requireOptionalTairaXorPayloadInputMatches(input, parsedPayload);
+  const expectedMessageId = bytesToHex(
+    prefixedKeccak(SCCP_MSG_PREFIX_TRANSFER_V1, canonicalPayloadBytes),
+  );
+  if (publicInputs.messageId !== expectedMessageId) {
+    throw new TypeError("publicInputs.messageId must match canonicalPayloadBytes");
+  }
+  const expectedPayloadHash = sccpPayloadHash(canonicalPayloadBytes);
+  if (publicInputs.payloadHash !== expectedPayloadHash) {
+    throw new TypeError("publicInputs.payloadHash must match canonicalPayloadBytes");
+  }
+  const proofBytesTail = abiDynamicBytes(proofBytes, "proofBytes");
+  const canonicalPayloadTail = abiDynamicBytes(canonicalPayloadBytes, "canonicalPayloadBytes");
+  const proofBytesOffset = 9 * 32;
+  const canonicalPayloadBytesOffset = proofBytesOffset + proofBytesTail.length;
   return bytesToHex(
     concatBytes(
       TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_BYTES_V1,
       abiWordU256(proofBytesOffset, "proofBytes.offset"),
       ...publicInputWords,
       hexToBytes(statementHash, "statementHash", 32),
-      hexToBytes(routeIdHash, "routeIdHash", 32),
-      hexToBytes(assetKeyHash, "assetKeyHash", 32),
-      tronAddressAbiWord(recipientAddress, "recipientAddress"),
-      abiWordU256(amount, "amount"),
-      abiDynamicBytes(proofBytes, "proofBytes"),
+      abiWordU256(canonicalPayloadBytesOffset, "canonicalPayloadBytes.offset"),
+      proofBytesTail,
+      canonicalPayloadTail,
     ),
   );
 }
@@ -23602,6 +23983,342 @@ export function tairaXorBurnToTairaCallData(input) {
       abiDynamicBytes(tairaRecipient, "tairaRecipient"),
     ),
   );
+}
+
+const requirePlainObject = (value, label) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`${label} must be an object`);
+  }
+  return value;
+};
+
+const optionalStringAlias = (record, label, ...names) => {
+  const value = strictOptionalResultField(record, label, ...names);
+  if (value === SCCP_OPTIONAL_FIELD_MISSING || value === undefined || value === null) {
+    return "";
+  }
+  return normalizeNonEmptyString(value, label);
+};
+
+const normalizeTairaXorTronTxId = (value, label) =>
+  normalizeHex32(value, label).slice(2);
+
+const requireTransferCodec = (transfer, key, expected, label) => {
+  const value = strictOptionalResultField(transfer, label, key);
+  if (value === SCCP_OPTIONAL_FIELD_MISSING || value === undefined || value === null) {
+    return;
+  }
+  const normalized = normalizeSccpCodecId(value, label);
+  if (normalized !== expected) {
+    throw new TypeError(`${label} must match the TAIRA XOR TRON-source route`);
+  }
+};
+
+const requireTransferDomain = (transfer, key, expected, label) => {
+  const actual = normalizeSccpDomainId(
+    strictResultField(transfer, label, key),
+    label,
+  );
+  if (actual !== expected) {
+    throw new TypeError(`${label} must match the TAIRA XOR TRON-source route`);
+  }
+};
+
+const readTairaXorTextValue = (value, label) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TextUtf8") {
+      throw new TypeError(`${label} must be a TextUtf8 SCCP codec value`);
+    }
+    return normalizeNonEmptyString(
+      strictResultField(value, `${label}.value`, "value"),
+      `${label}.value`,
+    );
+  }
+  return normalizeNonEmptyString(value, label);
+};
+
+const readTairaXorTronAddressPayload = (value, label) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const kind = strictResultField(value, `${label}.kind`, "kind");
+    if (kind !== "TronBase58Check") {
+      throw new TypeError(`${label} must be a TronBase58Check SCCP codec value`);
+    }
+    const payload = strictOptionalResultField(value, `${label}.payload`, "payload");
+    if (payload !== SCCP_OPTIONAL_FIELD_MISSING) {
+      return bytesToHex(normalizeTronAddressPayload(payload, `${label}.payload`));
+    }
+    return bytesToHex(
+      normalizeTronAddressPayload(
+        strictResultField(value, `${label}.value`, "value"),
+        `${label}.value`,
+      ),
+    );
+  }
+  return bytesToHex(normalizeTronAddressPayload(value, label));
+};
+
+export function bindTairaXorTronToTairaSourceProofPackage(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR TRON-source proof package input must be an object");
+  }
+  const proofPackage = requirePlainObject(
+    strictResultField(input, "proofPackage", "proofPackage", "proof_package"),
+    "proofPackage",
+  );
+  const messageBundle = requirePlainObject(
+    strictResultField(proofPackage, "proofPackage.messageBundle", "messageBundle", "message_bundle"),
+    "proofPackage.messageBundle",
+  );
+  const settlementInput = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.settlement",
+    "settlement",
+  );
+  const settlementDefaultsInput = strictOptionalResultField(
+    input,
+    "settlementDefaults",
+    "settlementDefaults",
+    "settlement_defaults",
+  );
+  const settlementDefaults =
+    settlementDefaultsInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    settlementDefaultsInput === undefined ||
+    settlementDefaultsInput === null
+      ? {}
+      : requirePlainObject(settlementDefaultsInput, "settlementDefaults");
+  const settlement =
+    settlementInput === SCCP_OPTIONAL_FIELD_MISSING ||
+    settlementInput === undefined ||
+    settlementInput === null
+      ? {}
+      : requirePlainObject(settlementInput, "proofPackage.settlement");
+
+  const expectedTxId = normalizeTairaXorTronTxId(
+    strictResultField(input, "txId", "txId", "txID", "transactionId", "transaction_id"),
+    "txId",
+  );
+  const packageTxId = normalizeTairaXorTronTxId(
+    strictResultField(
+      proofPackage,
+      "proofPackage.txId",
+      "txId",
+      "txID",
+      "transactionId",
+      "transaction_id",
+    ),
+    "proofPackage.txId",
+  );
+  if (packageTxId !== expectedTxId) {
+    throw new TypeError("proofPackage.txId must match txId");
+  }
+
+  const normalizedCommitment = normalizeMessageBundleCommitment(messageBundle.commitment);
+  const commitmentMessageId = normalizeHex32(
+    normalizedCommitment.message_id,
+    "messageBundle.commitment.message_id",
+  );
+  const commitmentPayloadHash = normalizeHex32(
+    normalizedCommitment.payload_hash,
+    "messageBundle.commitment.payload_hash",
+  );
+  const commitmentTargetDomain = normalizeSccpDomainId(
+    normalizedCommitment.target_domain,
+    "messageBundle.commitment.target_domain",
+  );
+  if (commitmentTargetDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("messageBundle must target TAIRA/SORA");
+  }
+
+  const payloadEnvelope = normalizeSccpPayloadEnvelope(messageBundle.payload);
+  if (payloadEnvelope.kind !== "Transfer") {
+    throw new TypeError("messageBundle payload must be a Transfer");
+  }
+  const transfer = payloadEnvelope.value;
+  requireV1Version(strictResultField(transfer, "payload.version", "version"), "payload.version");
+  requireTransferDomain(transfer, "source_domain", SCCP_DOMAIN_TRON, "payload.source_domain");
+  requireTransferDomain(transfer, "dest_domain", SCCP_DOMAIN_SORA, "payload.dest_domain");
+  requireTransferDomain(
+    transfer,
+    "asset_home_domain",
+    SCCP_DOMAIN_SORA,
+    "payload.asset_home_domain",
+  );
+  requireTransferCodec(transfer, "asset_id_codec", SCCP_CODEC_TEXT_UTF8, "payload.asset_id_codec");
+  requireTransferCodec(
+    transfer,
+    "sender_codec",
+    SCCP_CODEC_TRON_BASE58CHECK,
+    "payload.sender_codec",
+  );
+  requireTransferCodec(
+    transfer,
+    "recipient_codec",
+    SCCP_CODEC_TEXT_UTF8,
+    "payload.recipient_codec",
+  );
+  requireTransferCodec(transfer, "route_id_codec", SCCP_CODEC_TEXT_UTF8, "payload.route_id_codec");
+
+  const amount = normalizeUnsignedBigIntMax(
+    strictResultField(input, "amount", "amount"),
+    "amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("amount must be greater than zero");
+  }
+  const transferAmount = normalizeUnsignedBigIntMax(
+    strictResultField(transfer, "payload.amount", "amount"),
+    "payload.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (transferAmount !== amount) {
+    throw new TypeError("payload.amount must match amount");
+  }
+
+  const tronSender = strictResultField(input, "tronSender", "tronSender", "tron_sender", "sender");
+  const expectedSenderPayload = bytesToHex(
+    normalizeTronAddressPayload(tronSender, "tronSender"),
+  );
+  if (readTairaXorTronAddressPayload(transfer.sender, "payload.sender") !== expectedSenderPayload) {
+    throw new TypeError("payload.sender must match tronSender");
+  }
+  const tairaRecipient = normalizeCanonicalTairaAccountId(
+    strictResultField(
+      input,
+      "tairaRecipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "recipient",
+      "tairaAccountId",
+      "taira_account_id",
+    ),
+    "tairaRecipient",
+  );
+  if (readTairaXorTextValue(transfer.recipient, "payload.recipient") !== tairaRecipient) {
+    throw new TypeError("payload.recipient must match tairaRecipient");
+  }
+  if (readTairaXorTextValue(transfer.asset_id, "payload.asset_id") !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("payload.asset_id must be xor");
+  }
+  if (readTairaXorTextValue(transfer.route_id, "payload.route_id") !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("payload.route_id must be taira_tron_xor");
+  }
+
+  const transferNonce = strictResultField(transfer, "payload.nonce", "nonce");
+  const expectedPayload = buildTairaXorTronToTairaTransferPayload({
+    tronSender,
+    tairaRecipient,
+    amount,
+    nonce: transferNonce,
+  });
+  const expectedPayloadHash = sccpPayloadHash(canonicalSccpTransferPayloadBytes(expectedPayload));
+  if (commitmentPayloadHash !== expectedPayloadHash) {
+    throw new TypeError("messageBundle commitment payload hash must match the TAIRA XOR payload");
+  }
+  const expectedMessageId = sccpTransferMessageId(expectedPayload);
+  if (commitmentMessageId !== expectedMessageId) {
+    throw new TypeError("messageBundle commitment message id must match the TAIRA XOR payload");
+  }
+
+  const bundleCommitmentRoot = normalizeHex32(
+    strictResultField(
+      messageBundle,
+      "messageBundle.commitmentRoot",
+      "commitmentRoot",
+      "commitment_root",
+    ),
+    "messageBundle.commitmentRoot",
+  );
+  const packageMessageId = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.messageId",
+    "messageId",
+    "message_id",
+  );
+  if (
+    packageMessageId !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageMessageId, "proofPackage.messageId") !== commitmentMessageId
+  ) {
+    throw new TypeError("proofPackage.messageId must match the message bundle");
+  }
+  const packageCommitmentRoot = strictOptionalResultField(
+    proofPackage,
+    "proofPackage.commitmentRoot",
+    "commitmentRoot",
+    "commitment_root",
+  );
+  if (
+    packageCommitmentRoot !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeHex32(packageCommitmentRoot, "proofPackage.commitmentRoot") !== bundleCommitmentRoot
+  ) {
+    throw new TypeError("proofPackage.commitmentRoot must match the message bundle");
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    strictResultField(
+      proofPackage,
+      "proofPackage.sourceEventDigest",
+      "sourceEventDigest",
+      "source_event_digest",
+    ),
+    "proofPackage.sourceEventDigest",
+  );
+  const bridgeAddress = strictOptionalResultField(
+    input,
+    "bridgeAddress",
+    "bridgeAddress",
+    "bridge_address",
+    "tronBridgeAddress",
+    "tron_bridge_address",
+  );
+  if (bridgeAddress !== SCCP_OPTIONAL_FIELD_MISSING) {
+    const expectedSourceEventDigest = tairaXorBurnSourceEventDigest({
+      bridgeAddress,
+      burnerAddress: tronSender,
+      tairaRecipient,
+      amount,
+      nonce: transferNonce,
+    });
+    if (sourceEventDigest !== expectedSourceEventDigest) {
+      throw new TypeError(
+        "proofPackage.sourceEventDigest must match the TAIRA XOR burn source event digest",
+      );
+    }
+  }
+
+  const settlementEntrypoint = optionalStringAlias(settlement, "settlement.entrypoint", "entrypoint");
+  if (settlementEntrypoint && settlementEntrypoint !== "finalize_inbound") {
+    throw new TypeError("settlement.entrypoint must be finalize_inbound");
+  }
+  const settlementRoute = optionalStringAlias(settlement, "settlement.route", "route", "route_id");
+  if (settlementRoute && settlementRoute !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("settlement.route must be taira_tron_xor");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadJson")
+  ) {
+    throw new TypeError("settlement payload must be generated by Torii");
+  }
+
+  canonicalSccpMessageProofBundleBytes(messageBundle);
+  return Object.freeze({
+    messageBundle,
+    settlement: Object.freeze({
+      ...settlementDefaults,
+      ...settlement,
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+    }),
+    sourceEventDigest,
+    txId: expectedTxId,
+    messageId: commitmentMessageId,
+    commitmentRoot: bundleCommitmentRoot,
+    amount: amount.toString(),
+  });
 }
 
 const normalizeBridgeProofSubmitPayloadBase = (input, context) => {

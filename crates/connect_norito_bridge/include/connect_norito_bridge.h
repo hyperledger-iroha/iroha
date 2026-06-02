@@ -198,6 +198,34 @@ int32_t connect_norito_kagemusha_recursive_spend_append(
     uint8_t** out_bundle_ptr,
     unsigned long* out_bundle_len);
 
+// Build the initial recursive spend lineage witness.
+// Inputs: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`
+// and the resulting `KagemushaRecursiveSpendBundleV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendLineageWitnessV1`.
+int32_t connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    uint8_t** out_witness_ptr,
+    unsigned long* out_witness_len);
+
+// Append one hop of recursive spend lineage witness material.
+// Inputs: Norito-archive bytes of the previous
+// `KagemushaRecursiveSpendLineageWitnessV1`, the
+// `KagemushaRecursiveSpendAppendRequestV1`, and the resulting
+// `KagemushaRecursiveSpendBundleV1`.
+// Output: Norito-archive bytes of the appended lineage witness.
+int32_t connect_norito_kagemusha_recursive_spend_lineage_witness_append_result(
+    const uint8_t* previous_witness_norito_ptr,
+    unsigned long previous_witness_norito_len,
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    uint8_t** out_witness_ptr,
+    unsigned long* out_witness_len);
+
 // Verify production recursive Kagemusha spendable offline cash.
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendVerifyRequestV1`.
 // Output: Norito-archive bytes of `KagemushaRecursiveSpendVerifyResultV1`.

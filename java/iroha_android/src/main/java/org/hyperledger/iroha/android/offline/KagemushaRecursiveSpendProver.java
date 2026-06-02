@@ -2,6 +2,12 @@ package org.hyperledger.iroha.android.offline;
 
 /** Native recursive Kagemusha spend init/append/verify/redeem bridge. */
 public final class KagemushaRecursiveSpendProver {
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 6;
+  public static final String RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
+      "kagemusha-recursive-aggregation-v1";
+  public static final String RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
+      "kagemusha-recursive-spend-lineage-v1";
+
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -42,6 +48,27 @@ public final class KagemushaRecursiveSpendProver {
     return call("append", requestArchive, KagemushaRecursiveSpendProver::nativeAppendSpend);
   }
 
+  public static byte[] lineageWitnessFromInitResult(
+      final byte[] requestArchive, final byte[] bundleArchive) {
+    return call(
+        "lineage witness from init result",
+        requestArchive,
+        bundleArchive,
+        KagemushaRecursiveSpendProver::nativeLineageWitnessFromInitResult);
+  }
+
+  public static byte[] lineageWitnessAppendResult(
+      final byte[] previousWitnessArchive,
+      final byte[] requestArchive,
+      final byte[] bundleArchive) {
+    return call(
+        "lineage witness append result",
+        previousWitnessArchive,
+        requestArchive,
+        bundleArchive,
+        KagemushaRecursiveSpendProver::nativeLineageWitnessAppendResult);
+  }
+
   public static byte[] verifySpend(final byte[] requestArchive) {
     return call("verify", requestArchive, KagemushaRecursiveSpendProver::nativeVerifySpend);
   }
@@ -59,6 +86,42 @@ public final class KagemushaRecursiveSpendProver {
     return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native " + label);
   }
 
+  private static byte[] call(
+      final String label,
+      final byte[] requestArchive,
+      final byte[] bundleArchive,
+      final NativePairCall call) {
+    if (requestArchive == null || requestArchive.length == 0) {
+      throw new IllegalArgumentException("requestArchive must not be empty");
+    }
+    if (bundleArchive == null || bundleArchive.length == 0) {
+      throw new IllegalArgumentException("bundleArchive must not be empty");
+    }
+    requireNative();
+    final byte[] output = call.run(requestArchive, bundleArchive);
+    return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native " + label);
+  }
+
+  private static byte[] call(
+      final String label,
+      final byte[] previousWitnessArchive,
+      final byte[] requestArchive,
+      final byte[] bundleArchive,
+      final NativeTripleCall call) {
+    if (previousWitnessArchive == null || previousWitnessArchive.length == 0) {
+      throw new IllegalArgumentException("previousWitnessArchive must not be empty");
+    }
+    if (requestArchive == null || requestArchive.length == 0) {
+      throw new IllegalArgumentException("requestArchive must not be empty");
+    }
+    if (bundleArchive == null || bundleArchive.length == 0) {
+      throw new IllegalArgumentException("bundleArchive must not be empty");
+    }
+    requireNative();
+    final byte[] output = call.run(previousWitnessArchive, requestArchive, bundleArchive);
+    return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native " + label);
+  }
+
   private static void requireNative() {
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException(LIBRARY_NAME + " is not available in this runtime");
@@ -66,17 +129,102 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static boolean loadLibrary() {
-    return KagemushaRecursiveAggregationProofBundleProver.detectNativeAvailability(
-        () -> System.loadLibrary(LIBRARY_NAME), () -> nativeVerifySpend(new byte[0]));
+    return detectNativeAvailability(
+        () -> System.loadLibrary(LIBRARY_NAME),
+        KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
+        KagemushaRecursiveSpendProver::probeRequiredNativeSymbols);
+  }
+
+  private static boolean probeRequiredNativeSymbols() {
+    boolean available = true;
+    available &= expectIllegalArgumentProbe(() -> nativeInitSpend(new byte[0]));
+    available &= expectIllegalArgumentProbe(() -> nativeAppendSpend(new byte[0]));
+    available &= expectIllegalArgumentProbe(() -> nativeVerifySpend(new byte[0]));
+    available &=
+        expectIllegalArgumentProbe(
+        () -> nativeLineageWitnessFromInitResult(new byte[0], new byte[] {0x01}));
+    available &=
+        expectIllegalArgumentProbe(
+        () -> nativeLineageWitnessAppendResult(new byte[0], new byte[] {0x01}, new byte[] {0x02}));
+    available &= expectIllegalArgumentProbe(() -> nativeRedeemSpend(new byte[0]));
+    return available;
+  }
+
+  static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
+    try {
+      probe.run();
+      return false;
+    } catch (final IllegalArgumentException expected) {
+      return true;
+    }
+  }
+
+  static boolean detectNativeAvailability(
+      final NativeProbe loadLibrary,
+      final NativeAbiVersionProbe bridgeAbiVersion,
+      final NativeSymbolProbe probeSymbol) {
+    try {
+      loadLibrary.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    final int abiVersion;
+    try {
+      abiVersion = bridgeAbiVersion.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
+    if (abiVersion < REQUIRED_BRIDGE_ABI_VERSION) {
+      return false;
+    }
+    try {
+      return probeSymbol.run();
+    } catch (final IllegalArgumentException error) {
+      return false;
+    } catch (final UnsatisfiedLinkError | SecurityException error) {
+      return false;
+    }
   }
 
   private interface NativeCall {
     byte[] run(byte[] requestArchive);
   }
 
+  private interface NativePairCall {
+    byte[] run(byte[] requestArchive, byte[] bundleArchive);
+  }
+
+  private interface NativeTripleCall {
+    byte[] run(byte[] previousWitnessArchive, byte[] requestArchive, byte[] bundleArchive);
+  }
+
+  interface NativeProbe {
+    void run();
+  }
+
+  interface NativeSymbolProbe {
+    boolean run();
+  }
+
+  interface NativeAbiVersionProbe {
+    int run();
+  }
+
+  private static native int nativeBridgeAbiVersion();
+
   private static native byte[] nativeInitSpend(byte[] requestArchive);
 
   private static native byte[] nativeAppendSpend(byte[] requestArchive);
+
+  private static native byte[] nativeLineageWitnessFromInitResult(
+      byte[] requestArchive, byte[] bundleArchive);
+
+  private static native byte[] nativeLineageWitnessAppendResult(
+      byte[] previousWitnessArchive, byte[] requestArchive, byte[] bundleArchive);
 
   private static native byte[] nativeVerifySpend(byte[] requestArchive);
 

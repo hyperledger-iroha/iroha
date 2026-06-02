@@ -84,7 +84,6 @@ def account_query_envelope(
     )
     return envelope.to_dict()
 
-
 def asset_definitions_query_envelope(
     *,
     filter: Optional[FilterExpr | Mapping[str, Any]] = None,
@@ -172,27 +171,6 @@ def rwa_query_envelope(
         pagination=Pagination(limit=limit, offset=offset),
         fetch_size=fetch_size,
         count_mode=count_mode,
-        query_name=query_name,
-    )
-    return envelope.to_dict()
-
-
-def rwa_query_envelope(
-    *,
-    filter: Optional[FilterExpr | Mapping[str, Any]] = None,
-    sort: Optional[Iterable[Mapping[str, Any]]] = None,
-    limit: Optional[int] = None,
-    offset: int = 0,
-    fetch_size: Optional[int] = None,
-    query_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Build an envelope for POST `/v1/rwas/query`."""
-
-    envelope = QueryEnvelope(
-        filter=ensure_filter(filter),
-        sort=list(sort) if sort is not None else [],
-        pagination=Pagination(limit=limit, offset=offset),
-        fetch_size=fetch_size,
         query_name=query_name,
     )
     return envelope.to_dict()

@@ -3431,8 +3431,8 @@ pub enum SccpAnchorGovernanceV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpLaunchModeV1 {
     AllLanesAtOnce,
-    #[default]
     EthereumMainnetLane,
+    #[default]
     BscMainnetLane,
 }
 
@@ -3568,7 +3568,7 @@ impl Default for SccpProductionPolicyV1 {
     fn default() -> Self {
         Self {
             version: 1,
-            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
+            launch_mode: SccpLaunchModeV1::BscMainnetLane,
             proof_submitter_policy: SccpProofSubmitterPolicyV1::Permissionless,
             route_activation_policy: SccpRouteActivationPolicyV1::GovernanceAllowlist,
             per_message_human_approval_required: false,
@@ -54628,9 +54628,13 @@ mod tests {
     }
 
     #[test]
-    fn production_policy_uses_ethereum_mainnet_lane_launch() {
+    fn production_policy_uses_bsc_mainnet_lane_launch() {
+        assert_eq!(
+            SccpLaunchModeV1::default(),
+            SccpLaunchModeV1::BscMainnetLane
+        );
         let policy = sccp_production_policy_v1();
-        assert_eq!(policy.launch_mode, SccpLaunchModeV1::EthereumMainnetLane);
+        assert_eq!(policy.launch_mode, SccpLaunchModeV1::BscMainnetLane);
         assert_eq!(
             policy.proof_submitter_policy,
             SccpProofSubmitterPolicyV1::Permissionless
@@ -54641,7 +54645,7 @@ mod tests {
         );
         assert!(!policy.per_message_human_approval_required);
         assert!(!sccp_all_lanes_launch_ready_v1());
-        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_BSC));
+        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_ETH));
     }
 
     #[test]

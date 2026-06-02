@@ -703,9 +703,23 @@ pub struct TradfiRailProfile {
     pub rail: TradfiRail,
     /// Policy for embedded XMLDSig/XAdES blocks.
     pub embedded_signature_policy: EmbeddedSignaturePolicy,
-    /// Accepted SHA-256 pins of raw XMLDSig P-256 public keys.
+    /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
+    pub signature_public_key_sha256_pins: Vec<String>,
+    /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
+    pub x509_trust_anchor_sha256_pins: Vec<String>,
+    /// Certificate-policy OIDs required on accepted X.509 signer certificates.
+    pub x509_required_certificate_policy_oids: Vec<String>,
+    /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
+    pub x509_require_crl_revocation_check: bool,
+    /// Base64 DER CRLs accepted as rail-profile revocation material.
+    pub x509_crl_der_base64: Vec<String>,
+    /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
+    pub x509_require_ocsp_revocation_check: bool,
+    /// Base64 DER OCSP responses accepted as rail-profile revocation material.
+    pub x509_ocsp_response_der_base64: Vec<String>,
+    /// Backward-compatible accepted SHA-256 pins of raw XMLDSig P-256 public keys.
     pub trusted_public_key_sha256: Vec<String>,
-    /// Accepted SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
+    /// Backward-compatible accepted SHA-256 pins of DER-encoded XMLDSig X.509 trust anchors.
     pub trusted_certificate_sha256: Vec<String>,
     /// Denied SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
     pub revoked_certificate_sha256: Vec<String>,
@@ -738,7 +752,10 @@ impl TradfiRailProfile {
     /// Returns `true` when this profile has at least one configured XMLDSig trust pin.
     #[must_use]
     pub fn has_xml_signature_trust_anchors(&self) -> bool {
-        !self.trusted_public_key_sha256.is_empty() || !self.trusted_certificate_sha256.is_empty()
+        !self.signature_public_key_sha256_pins.is_empty()
+            || !self.x509_trust_anchor_sha256_pins.is_empty()
+            || !self.trusted_public_key_sha256.is_empty()
+            || !self.trusted_certificate_sha256.is_empty()
     }
 
     /// Returns `true` when the verified XMLDSig key material matches this profile's pins.
@@ -755,14 +772,30 @@ impl TradfiRailProfile {
         }) {
             return false;
         }
-        self.trusted_public_key_sha256
+        self.signature_public_key_sha256_pins
             .iter()
             .any(|pin| pin == public_key_sha256)
+            || self
+                .trusted_public_key_sha256
+                .iter()
+                .any(|pin| pin == public_key_sha256)
             || certificate_sha256.iter().any(|digest| {
-                self.trusted_certificate_sha256
+                self.x509_trust_anchor_sha256_pins
                     .iter()
                     .any(|pin| pin == digest)
+                    || self
+                        .trusted_certificate_sha256
+                        .iter()
+                        .any(|pin| pin == digest)
             })
+    }
+}
+
+fn append_unique_sha256_pins(target: &mut Vec<String>, aliases: &[String]) {
+    for alias in aliases {
+        if !target.iter().any(|existing| existing == alias) {
+            target.push(alias.clone());
+        }
     }
 }
 
@@ -827,6 +860,27 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
                 .ok_or_else(|| format!("profile `{id}` has unknown reference dataset `{raw}`"))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut signature_public_key_sha256_pins =
+        optional_sha256_pin_array(obj, "signature_public_key_sha256_pins", id)?;
+    append_unique_sha256_pins(
+        &mut signature_public_key_sha256_pins,
+        &trusted_public_key_sha256,
+    );
+    let mut x509_trust_anchor_sha256_pins =
+        optional_sha256_pin_array(obj, "x509_trust_anchor_sha256_pins", id)?;
+    append_unique_sha256_pins(
+        &mut x509_trust_anchor_sha256_pins,
+        &trusted_certificate_sha256,
+    );
+    let x509_required_certificate_policy_oids =
+        optional_oid_array(obj, "x509_required_certificate_policy_oids", id)?;
+    let x509_require_crl_revocation_check =
+        optional_bool(obj, "x509_require_crl_revocation_check")?.unwrap_or(false);
+    let x509_crl_der_base64 = optional_string_array(obj, "x509_crl_der_base64")?;
+    let x509_require_ocsp_revocation_check =
+        optional_bool(obj, "x509_require_ocsp_revocation_check")?.unwrap_or(false);
+    let x509_ocsp_response_der_base64 =
+        optional_string_array(obj, "x509_ocsp_response_der_base64")?;
     let message_values = obj
         .get("message_profiles")
         .and_then(Value::as_array)
@@ -839,6 +893,13 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         id: id.to_owned(),
         rail,
         embedded_signature_policy,
+        signature_public_key_sha256_pins,
+        x509_trust_anchor_sha256_pins,
+        x509_required_certificate_policy_oids,
+        x509_require_crl_revocation_check,
+        x509_crl_der_base64,
+        x509_require_ocsp_revocation_check,
+        x509_ocsp_response_der_base64,
         trusted_public_key_sha256,
         trusted_certificate_sha256,
         revoked_certificate_sha256,
@@ -954,6 +1015,76 @@ fn optional_string_array(obj: &BTreeMap<String, Value>, key: &str) -> Result<Vec
                 .ok_or_else(|| format!("field `{key}` entries must be strings"))
         })
         .collect()
+}
+
+fn optional_sha256_pin_array(
+    obj: &BTreeMap<String, Value>,
+    key: &str,
+    profile_id: &str,
+) -> Result<Vec<String>, String> {
+    optional_string_array(obj, key)?
+        .into_iter()
+        .map(|pin| {
+            let normalized = pin.trim().to_ascii_lowercase();
+            if normalized.len() != 64 || !normalized.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Err(format!(
+                    "profile `{profile_id}` field `{key}` entries must be 64-character SHA-256 hex pins"
+                ));
+            }
+            if normalized.chars().all(|ch| ch == '0') {
+                return Err(format!(
+                    "profile `{profile_id}` field `{key}` must not contain the all-zero placeholder"
+                ));
+            }
+            Ok(normalized)
+        })
+        .collect()
+}
+
+fn optional_oid_array(
+    obj: &BTreeMap<String, Value>,
+    key: &str,
+    profile_id: &str,
+) -> Result<Vec<String>, String> {
+    optional_string_array(obj, key)?
+        .into_iter()
+        .map(|oid| {
+            let normalized = oid.trim().to_owned();
+            if !is_valid_oid_literal(&normalized) {
+                return Err(format!(
+                    "profile `{profile_id}` field `{key}` entries must be dotted numeric OIDs"
+                ));
+            }
+            Ok(normalized)
+        })
+        .collect()
+}
+
+fn is_valid_oid_literal(value: &str) -> bool {
+    let mut parts = value.split('.');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    if first.is_empty()
+        || second.is_empty()
+        || !first.chars().all(|ch| ch.is_ascii_digit())
+        || !second.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return false;
+    }
+    if !parts.all(|part| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_digit())) {
+        return false;
+    }
+    let Ok(first_arc) = first.parse::<u32>() else {
+        return false;
+    };
+    let Ok(second_arc) = second.parse::<u32>() else {
+        return false;
+    };
+    first_arc <= 2 && (first_arc == 2 || second_arc <= 39)
 }
 
 fn optional_bool(obj: &BTreeMap<String, Value>, key: &str) -> Result<Option<bool>, String> {

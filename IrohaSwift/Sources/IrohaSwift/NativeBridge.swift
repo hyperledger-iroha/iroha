@@ -1611,6 +1611,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaRecursiveSpendLineageWitnessFromInitResultFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias KagemushaRecursiveSpendLineageWitnessAppendResultFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias EncodeOfflineNoteTxFn = @convention(c) (
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
@@ -1779,6 +1790,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: KagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn? = nil
     private var kagemushaRecursiveSpendInitFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendAppendFn: KagemushaRecursiveSpendArchiveFn? = nil
+    private var kagemushaRecursiveSpendLineageWitnessFromInitResultFn: KagemushaRecursiveSpendLineageWitnessFromInitResultFn? = nil
+    private var kagemushaRecursiveSpendLineageWitnessAppendResultFn: KagemushaRecursiveSpendLineageWitnessAppendResultFn? = nil
     private var kagemushaRecursiveSpendVerifyFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var kagemushaRecursiveSpendRedeemFn: KagemushaRecursiveSpendArchiveFn? = nil
     private var encodeIssueOfflineNoteFn: EncodeOfflineNoteTxFn? = nil
@@ -1892,6 +1905,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn: Any? = nil
     private let kagemushaRecursiveSpendInitFn: Any? = nil
     private let kagemushaRecursiveSpendAppendFn: Any? = nil
+    private let kagemushaRecursiveSpendLineageWitnessFromInitResultFn: Any? = nil
+    private let kagemushaRecursiveSpendLineageWitnessAppendResultFn: Any? = nil
     private let kagemushaRecursiveSpendVerifyFn: Any? = nil
     private let kagemushaRecursiveSpendRedeemFn: Any? = nil
     private let encodeIssueOfflineNoteFn: Any? = nil
@@ -1975,6 +1990,26 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             )
         } else {
             self.kagemushaRecursiveSpendAppendFn = nil
+        }
+        if let kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result")
+        }) {
+            self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = unsafeBitCast(
+                kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol,
+                to: KagemushaRecursiveSpendLineageWitnessFromInitResultFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = nil
+        }
+        if let kagemushaRecursiveSpendLineageWitnessAppendResultSymbol = staticHandle.flatMap({
+            dlsym($0, "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result")
+        }) {
+            self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = unsafeBitCast(
+                kagemushaRecursiveSpendLineageWitnessAppendResultSymbol,
+                to: KagemushaRecursiveSpendLineageWitnessAppendResultFn.self
+            )
+        } else {
+            self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
         }
         if let kagemushaRecursiveSpendVerifySymbol = staticHandle.flatMap({
             dlsym($0, "connect_norito_kagemusha_recursive_spend_verify")
@@ -2593,6 +2628,28 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.kagemushaRecursiveSpendAppendFn = nil
             }
+            if let kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result"
+            ) {
+                self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = unsafeBitCast(
+                    kagemushaRecursiveSpendLineageWitnessFromInitResultSymbol,
+                    to: KagemushaRecursiveSpendLineageWitnessFromInitResultFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = nil
+            }
+            if let kagemushaRecursiveSpendLineageWitnessAppendResultSymbol = dlsym(
+                handle,
+                "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result"
+            ) {
+                self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = unsafeBitCast(
+                    kagemushaRecursiveSpendLineageWitnessAppendResultSymbol,
+                    to: KagemushaRecursiveSpendLineageWitnessAppendResultFn.self
+                )
+            } else {
+                self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
+            }
             if let kagemushaRecursiveSpendVerifySymbol = dlsym(
                 handle,
                 "connect_norito_kagemusha_recursive_spend_verify"
@@ -2749,6 +2806,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopesFn = nil
             self.kagemushaRecursiveSpendInitFn = nil
             self.kagemushaRecursiveSpendAppendFn = nil
+            self.kagemushaRecursiveSpendLineageWitnessFromInitResultFn = nil
+            self.kagemushaRecursiveSpendLineageWitnessAppendResultFn = nil
             self.kagemushaRecursiveSpendVerifyFn = nil
             self.kagemushaRecursiveSpendRedeemFn = nil
             self.encodeConfidentialPayloadFn = nil
@@ -2867,6 +2926,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         guard bridgeEnabledForRuntime else { return false }
         return kagemushaRecursiveSpendInitFn != nil
             && kagemushaRecursiveSpendAppendFn != nil
+            && kagemushaRecursiveSpendLineageWitnessFromInitResultFn != nil
+            && kagemushaRecursiveSpendLineageWitnessAppendResultFn != nil
             && kagemushaRecursiveSpendVerifyFn != nil
             && kagemushaRecursiveSpendRedeemFn != nil
             && freeFn != nil
@@ -5774,6 +5835,96 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    private func callKagemushaRecursiveSpendLineageWitnessFromInitResult(
+        requestArchive: Data,
+        bundleArchive: Data,
+        function: KagemushaRecursiveSpendLineageWitnessFromInitResultFn?
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = requestArchive.withUnsafeBytes { requestBuffer -> Int32 in
+            let requestBaseAddress = requestBuffer.bindMemory(to: UInt8.self).baseAddress
+            return bundleArchive.withUnsafeBytes { bundleBuffer -> Int32 in
+                let bundleBaseAddress = bundleBuffer.bindMemory(to: UInt8.self).baseAddress
+                return function(
+                    requestBaseAddress,
+                    CUnsignedLong(requestBuffer.count),
+                    bundleBaseAddress,
+                    CUnsignedLong(bundleBuffer.count),
+                    &outPtr,
+                    &outLen
+                )
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
+    private func callKagemushaRecursiveSpendLineageWitnessAppendResult(
+        previousWitnessArchive: Data,
+        requestArchive: Data,
+        bundleArchive: Data,
+        function: KagemushaRecursiveSpendLineageWitnessAppendResultFn?
+    ) throws -> Data? {
+        #if canImport(Darwin)
+        guard let function, let freeFn else {
+            return nil
+        }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = previousWitnessArchive.withUnsafeBytes { witnessBuffer -> Int32 in
+            let witnessBaseAddress = witnessBuffer.bindMemory(to: UInt8.self).baseAddress
+            return requestArchive.withUnsafeBytes { requestBuffer -> Int32 in
+                let requestBaseAddress = requestBuffer.bindMemory(to: UInt8.self).baseAddress
+                return bundleArchive.withUnsafeBytes { bundleBuffer -> Int32 in
+                    let bundleBaseAddress = bundleBuffer.bindMemory(to: UInt8.self).baseAddress
+                    return function(
+                        witnessBaseAddress,
+                        CUnsignedLong(witnessBuffer.count),
+                        requestBaseAddress,
+                        CUnsignedLong(requestBuffer.count),
+                        bundleBaseAddress,
+                        CUnsignedLong(bundleBuffer.count),
+                        &outPtr,
+                        &outLen
+                    )
+                }
+            }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let outPtr {
+                freeFn(outPtr)
+            }
+            throw error
+        }
+        guard let outPtr else {
+            throw NativeBridgeError.nullPointer
+        }
+        let data = Data(bytes: outPtr, count: Int(outLen))
+        freeFn(outPtr)
+        return data
+        #else
+        return nil
+        #endif
+    }
+
     func kagemushaRecursiveSpendInit(requestArchive: Data) throws -> Data? {
         try callKagemushaRecursiveSpend(
             requestArchive: requestArchive,
@@ -5785,6 +5936,30 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         try callKagemushaRecursiveSpend(
             requestArchive: requestArchive,
             function: kagemushaRecursiveSpendAppendFn
+        )
+    }
+
+    func kagemushaRecursiveSpendLineageWitnessFromInitResult(
+        requestArchive: Data,
+        bundleArchive: Data
+    ) throws -> Data? {
+        try callKagemushaRecursiveSpendLineageWitnessFromInitResult(
+            requestArchive: requestArchive,
+            bundleArchive: bundleArchive,
+            function: kagemushaRecursiveSpendLineageWitnessFromInitResultFn
+        )
+    }
+
+    func kagemushaRecursiveSpendLineageWitnessAppendResult(
+        previousWitnessArchive: Data,
+        requestArchive: Data,
+        bundleArchive: Data
+    ) throws -> Data? {
+        try callKagemushaRecursiveSpendLineageWitnessAppendResult(
+            previousWitnessArchive: previousWitnessArchive,
+            requestArchive: requestArchive,
+            bundleArchive: bundleArchive,
+            function: kagemushaRecursiveSpendLineageWitnessAppendResultFn
         )
     }
 

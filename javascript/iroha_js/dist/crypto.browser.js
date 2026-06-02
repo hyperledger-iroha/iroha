@@ -269,6 +269,10 @@ export function buildKaigiRosterJoinProof() {
   return unsupported("buildKaigiRosterJoinProof");
 }
 
+export function buildZkAceTransferAuthorizationV1() {
+  return unsupported("buildZkAceTransferAuthorizationV1");
+}
+
 export function deriveConfidentialKeyset() {
   return unsupported("deriveConfidentialKeyset");
 }
@@ -295,6 +299,37 @@ export function deriveConfidentialNoteV2() {
 
 export function deriveConfidentialNullifierV2() {
   return unsupported("deriveConfidentialNullifierV2");
+}
+
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
+export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1";
+
+export function preferredKagemushaOfflineSpendMode(
+  recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
+) {
+  return recursiveSpendAvailable
+    ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
+    : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+}
+
+export function isKagemushaRecursiveSpendNativeAvailable() {
+  return false;
+}
+
+export function kagemushaRecursiveSpendInit() {
+  return unsupported("kagemushaRecursiveSpendInit");
+}
+
+export function kagemushaRecursiveSpendAppend() {
+  return unsupported("kagemushaRecursiveSpendAppend");
+}
+
+export function kagemushaRecursiveSpendVerify() {
+  return unsupported("kagemushaRecursiveSpendVerify");
+}
+
+export function kagemushaRecursiveSpendRedeem() {
+  return unsupported("kagemushaRecursiveSpendRedeem");
 }
 
 export function sm2FixtureFromSeed() {
