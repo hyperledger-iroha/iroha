@@ -8,13 +8,41 @@ import {
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1,
+  SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+  SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
+  SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+  buildEthereumMainnetSccpLocalAdmissionSubmission,
   ethereumMainnetSccpDestinationBinding,
+  evmSccpReceiptProofHash,
+  evmSccpSourceEventTopic,
   wrapEvmSccpProofResult,
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
+const SOURCE_EVENT_DIGEST = hex32("34");
+const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
+const sampleReceiptProof = {
+  sourceDomain: SCCP_DOMAIN_ETH,
+  sourceEventDigest: SOURCE_EVENT_DIGEST,
+  beaconSlot: "64",
+  executionBlockNumber: "4660",
+  executionBlockHash: BLOCK_HASH,
+  executionReceiptsRoot: hex32("cc"),
+  beaconFinalizedRoot: hex32("dd"),
+  syncCommitteeRoot: hex32("ee"),
+  receiptRootIndex: "0",
+  receiptTrieProofNodes: [[0xe4, 0x82, 0x20, 0x80, ...new Array(32).fill(0xbb)]],
+  inclusionBranch: [hex32("f1")],
+};
+
+const sourceEventLog = (overrides = {}) => ({
+  address: SOURCE_BRIDGE_ADDRESS,
+  topics: [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST],
+  data: "0x",
+  ...overrides,
+});
 
 const samplePublicInputs = {
   messageId: hex32("11"),
@@ -33,10 +61,12 @@ const sampleDestinationBindingInput = (overrides = {}) => ({
   ...overrides,
 });
 
-const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_ETH) => ({
+const sampleOutboundInput = (targetDomain = SCCP_DOMAIN_ETH, destinationBindingOverrides = {}) => ({
   publicInputs: { ...samplePublicInputs, targetDomain },
   bundleBytes: [1, 2, 3],
-  destinationBinding: ethereumMainnetSccpDestinationBinding(sampleDestinationBindingInput()),
+  destinationBinding: ethereumMainnetSccpDestinationBinding(
+    sampleDestinationBindingInput(destinationBindingOverrides),
+  ),
   sourceDomain: SCCP_DOMAIN_SORA,
   statementHash: hex32("66"),
 });
@@ -210,12 +240,13 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
       proveCalls += 1;
       assert.equal(evidence.transactionHash, TX_HASH);
       assert.equal(evidence.beaconFinality.executionBlockHash, BLOCK_HASH);
+      assert.equal(evidence.receiptProofHash, evmSccpReceiptProofHash(sampleReceiptProof));
       return [1, 2, 3];
     },
   });
 
   assert.deepEqual(
-    await sdk.proveInboundToSora({ transactionHash: TX_HASH }),
+    await sdk.proveInboundToSora({ transactionHash: TX_HASH, receiptProof: sampleReceiptProof }),
     new Uint8Array([1, 2, 3]),
   );
   assert.equal(proveCalls, 1);
@@ -231,6 +262,27 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
     /requires a receipt, receiptProof, receiptProofHash, or transactionHash/u,
   );
   assert.equal(proveCalls, 1);
+
+  const receiptProofHash = evmSccpReceiptProofHash(sampleReceiptProof);
+  const receiptProofEvidence = await new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+    receiptProof: sampleReceiptProof,
+    receiptProofHash,
+  });
+  assert.equal(receiptProofEvidence.receiptProofHash, receiptProofHash);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        receiptProof: sampleReceiptProof,
+        receiptProofHash: hex32("99"),
+      }),
+    /receiptProofHash must match receiptProof/u,
+  );
+
+  await assert.rejects(
+    () => new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
+    /executionProvider is required/u,
+  );
 
   await assert.rejects(
     () =>
@@ -249,6 +301,58 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
       }),
     /requires beaconFinality/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProofHash: evmSccpReceiptProofHash(sampleReceiptProof),
+      }),
+    /requires receiptProof/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: { ...sampleReceiptProof, executionReceiptsRoot: hex32("99") },
+      }),
+    /receiptProof\.executionReceiptsRoot/u,
   );
   assert.equal(proveCalls, 1);
 });
@@ -442,6 +546,86 @@ test("EthereumMainnetSccp rejects failed or drifted receipt evidence before prov
   );
 });
 
+test("EthereumMainnetSccp validates source bridge logs in receipt evidence", async () => {
+  const receipt = {
+    transactionHash: TX_HASH,
+    blockHash: BLOCK_HASH,
+    blockNumber: "0x1234",
+    status: "0x1",
+    logs: [
+      {
+        address: `0x${"00".repeat(20)}`,
+        topics: [hex32("00")],
+        data: "0x1234",
+      },
+      sourceEventLog(),
+    ],
+  };
+  const block = { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") };
+  const sdk = new EthereumMainnetSccp({
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+  });
+
+  const evidence = await sdk.collectInboundEvidenceFromReceipt({ receipt, block });
+  assert.equal(evidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
+  assert.equal(evidence.sourceBridgeEmitterAddress, SOURCE_BRIDGE_ADDRESS);
+
+  const explicitEvidence = await sdk.collectInboundEvidenceFromReceipt({
+    receipt,
+    block,
+    sourceEventDigest: SOURCE_EVENT_DIGEST,
+  });
+  assert.equal(explicitEvidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        receipt,
+        block,
+        sourceEventDigest: SOURCE_EVENT_DIGEST,
+      }),
+    /sourceBridgeEmitterAddress is required/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        sourceBridgeEmitterAddress: `0x${"45".repeat(20)}`,
+      }).collectInboundEvidenceFromReceipt({ receipt, block }),
+    /expected SCCP source event/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: {
+          ...receipt,
+          logs: [sourceEventLog({ topics: [hex32("99"), SOURCE_EVENT_DIGEST] })],
+        },
+        block,
+      }),
+    /expected SCCP source event/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog(), sourceEventLog()] },
+        block,
+      }),
+    /exactly one matching/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog({ removed: true })] },
+        block,
+      }),
+    /removed logs/u,
+  );
+});
+
 test("EthereumMainnetSccp keeps the easy outbound path Ethereum-only", () => {
   const sdk = new EthereumMainnetSccp();
   const ethRequest = sdk.buildOutboundProofRequest(sampleOutboundInput());
@@ -486,6 +670,131 @@ test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof res
         },
       }),
     /chain id 1|destinationBinding/u,
+  );
+});
+
+test("EthereumMainnetSccp outbound provider path derives target from wrapped proof result", async () => {
+  const submittedTxs = [];
+  const provider = {
+    async request({ method, params }) {
+      if (method === "eth_chainId") return "0x1";
+      if (method === "eth_sendTransaction") {
+        submittedTxs.push(params[0]);
+        return `0xeth${submittedTxs.length}`;
+      }
+      throw new Error(`unexpected RPC method ${method}`);
+    },
+  };
+  const sdk = new EthereumMainnetSccp({ executionProvider: provider });
+  const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
+  const proofResult = wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+
+  assert.equal(await sdk.submitOutboundToEthereum({ proofResult }), "0xeth1");
+  assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[0].data, sdk.buildEthereumCalldata({ proofResult }).callDataHex);
+
+  const { destinationBinding, ...proofResultWithoutBinding } = proofResult;
+  const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = destinationBinding;
+  const snakeProofResult = {
+    ...proofResultWithoutBinding,
+    destination_binding: {
+      ...bindingWithoutBridge,
+      bridge_address: destinationBinding.bridgeAddress,
+    },
+  };
+  assert.equal(await sdk.submitOutboundToEthereum({ proof_result: snakeProofResult }), "0xeth2");
+  assert.equal(submittedTxs[1].to, request.destinationBinding.bridgeAddress);
+
+  assert.equal(
+    await sdk.submitOutboundToEthereum({
+      proofResult,
+      to: request.destinationBinding.bridgeAddress.toUpperCase(),
+    }),
+    "0xeth3",
+  );
+  assert.equal(submittedTxs[2].to, request.destinationBinding.bridgeAddress);
+
+  await assert.rejects(
+    () => sdk.submitOutboundToEthereum({ proofResult, to: `0x${"77".repeat(20)}` }),
+    /to address must match proofResult\.destinationBinding\.bridgeAddress/u,
+  );
+  assert.equal(submittedTxs.length, 3);
+});
+
+test("EthereumMainnetSccp builds ETH -> SORA local-admission submissions", () => {
+  const input = {
+    sourceDomain: SCCP_DOMAIN_ETH,
+    targetDomain: SCCP_DOMAIN_SORA,
+    proofBytes: [1, 2, 3],
+    publicInputsBytes: [4, 5, 6],
+    bundleBytes: [7, 8, 9],
+    envelopeBytes: [10, 11, 12],
+    statementHash: hex32("66"),
+    sourceVerifierMaterialHash: hex32("77"),
+    sourceAdapterEngineDeploymentHash: hex32("88"),
+  };
+  const submission = buildEthereumMainnetSccpLocalAdmissionSubmission(input);
+  const facadeSubmission = new EthereumMainnetSccp().buildLocalAdmissionSubmission(input);
+
+  assert.equal(submission.platformPayload, SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1);
+  assert.equal(submission.envelopeEncoding, SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1);
+  assert.equal(submission.verifierEntrypoint, SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1);
+  assert.equal(submission.sourceDomain, SCCP_DOMAIN_ETH);
+  assert.equal(submission.targetDomain, SCCP_DOMAIN_SORA);
+  assert.deepEqual([...submission.arguments], []);
+  assert.deepEqual([...submission.proofBytes], [1, 2, 3]);
+  assert.deepEqual([...submission.publicInputsBytes], [4, 5, 6]);
+  assert.deepEqual([...submission.bundleBytes], [7, 8, 9]);
+  assert.deepEqual([...submission.envelopeBytes], [10, 11, 12]);
+  assert.deepEqual([...submission.localAdmission.proofBytes], [1, 2, 3]);
+  assert.equal(facadeSubmission.envelopeHex, submission.envelopeHex);
+
+  input.proofBytes[0] = 99;
+  assert.deepEqual([...submission.proofBytes], [1, 2, 3]);
+
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, sourceDomain: SCCP_DOMAIN_BSC }),
+    /ETH -> SORA/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, proofBytes: [0, 0] }),
+    /proofBytes must not be all zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, publicInputsBytes: [0, 0] }),
+    /publicInputsBytes must not be all zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, bundleBytes: [0, 0] }),
+    /bundleBytes must not be all zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, envelopeBytes: [] }),
+    /envelopeBytes must not be empty/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, envelopeBytes: [0, 0] }),
+    /envelopeBytes must not be all zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, statementHash: hex32("00") }),
+    /statementHash must not be zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, sourceVerifierMaterialHash: hex32("00") }),
+    /sourceVerifierMaterialHash must not be zero/u,
+  );
+  assert.throws(
+    () => buildEthereumMainnetSccpLocalAdmissionSubmission({ ...input, sourceAdapterEngineDeploymentHash: hex32("00") }),
+    /sourceAdapterEngineDeploymentHash must not be zero/u,
+  );
+  assert.throws(
+    () =>
+      buildEthereumMainnetSccpLocalAdmissionSubmission({
+        ...input,
+        envelopeEncoding: "abi_tuple_v1",
+      }),
+    /metadata is not canonical/u,
   );
 });
 

@@ -16,7 +16,9 @@ public final class EvmSccpProverTests {
     rejectsMalformedGroth16ProofTuple();
     buildsContractCallSubmission();
     bscMainnetFacadeRequiresChainId56AndBscTarget();
+    bscMainnetFacadeBuildsLocalAdmissionSubmission();
     ethereumMainnetFacadeRequiresChainId1AndEthTarget();
+    ethereumMainnetFacadeBuildsLocalAdmissionSubmission();
     bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift();
     mainnetFacadesSnapshotWitnessProviderInputs();
     System.out.println("[IrohaAndroid] EVM-family SCCP prover tests passed.");
@@ -889,9 +891,157 @@ public final class EvmSccpProverTests {
     assert threw : "BSC request helper must reject ETH public inputs";
   }
 
+  private static void bscMainnetFacadeBuildsLocalAdmissionSubmission() {
+    final BscMainnetSccp.LocalAdmissionSubmissionInput input =
+        new BscMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32));
+    final BscMainnetSccp.LocalAdmissionSubmission submission =
+        BscMainnetSccp.buildLocalAdmissionSubmission(input);
+    final BscMainnetSccp.LocalAdmissionSubmission facadeSubmission =
+        new BscMainnetSccp().buildLocalAdmission(input);
+
+    assert BscMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1.equals(submission.platformPayload())
+        : "BSC local admission platform payload must be local_admission";
+    assert BscMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.equals(submission.envelopeEncoding())
+        : "BSC local admission must use the Norito envelope";
+    assert BscMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1.equals(submission.verifierEntrypoint())
+        : "BSC local admission must target SubmitBridgeProof";
+    assert submission.sourceDomain() == EvmSccpProver.DOMAIN_BSC
+        : "BSC local admission source must be BSC";
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_SORA
+        : "BSC local admission target must be SORA";
+    assert submission.arguments().isEmpty() : "BSC local admission must not add call arguments";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC local admission must copy proof bytes";
+    assert Arrays.equals(new byte[] {4, 5, 6}, submission.publicInputsBytes())
+        : "BSC local admission must copy public input bytes";
+    assert Arrays.equals(new byte[] {7, 8, 9}, submission.bundleBytes())
+        : "BSC local admission must copy bundle bytes";
+    assert Arrays.equals(new byte[] {10, 11, 12}, submission.envelopeBytes())
+        : "BSC local admission must copy envelope bytes";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.localAdmission().proofBytes())
+        : "BSC local admission payload must carry proof bytes";
+    assert submission.envelopeHex().equals(facadeSubmission.envelopeHex())
+        : "facade local admission helper must match static helper";
+
+    input.proofBytes()[0] = 99;
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "BSC local admission must not expose mutable proof storage";
+
+    boolean threw = false;
+    try {
+      BscMainnetSccp.buildLocalAdmissionSubmission(
+          new BscMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              BscMainnetSccp.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("BSC -> SORA");
+    }
+    assert threw : "BSC local admission must reject wrong source domains";
+
+    threw = false;
+    try {
+      BscMainnetSccp.buildLocalAdmissionSubmission(
+          new BscMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {0, 0},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be all zero");
+    }
+    assert threw : "BSC local admission must reject all-zero proof bytes";
+
+    threw = false;
+    try {
+      BscMainnetSccp.buildLocalAdmissionSubmission(
+          new BscMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[0],
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeBytes must not be empty");
+    }
+    assert threw : "BSC local admission must reject empty envelope bytes";
+
+    threw = false;
+    try {
+      BscMainnetSccp.buildLocalAdmissionSubmission(
+          new BscMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              BscMainnetSccp.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              "abi_tuple_v1",
+              BscMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeEncoding");
+    }
+    assert threw : "BSC local admission must reject stale metadata";
+
+    threw = false;
+    try {
+      BscMainnetSccp.buildLocalAdmissionSubmission(
+          new BscMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              "debug-proof-family",
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              BscMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofFamily");
+    }
+    assert threw : "BSC local admission must reject stale proof families";
+  }
+
   private static void ethereumMainnetFacadeRequiresChainId1AndEthTarget() {
     final byte[] proofBytes = sampleGroth16ProofBytes();
     EthereumMainnetSccp.requireMainnetChainId(1L);
+    assert "0x577b41c65ffbce226de59f224b464797257063747891b88ebec1bcd57af82727"
+            .equals(EthereumMainnetSccp.sourceEventTopic())
+        : "Ethereum source-event topic must bind SccpSourceEvent(bytes32)";
     boolean threw = false;
     try {
       EthereumMainnetSccp.requireMainnetChainId(56L);
@@ -1022,11 +1172,23 @@ public final class EvmSccpProverTests {
 
     final String txHash = "0x" + repeat("aa", 32);
     final String blockHash = "0x" + repeat("bb", 32);
+    final String sourceEventDigest = "0x" + repeat("ee", 32);
+    final String sourceBridgeEmitterAddress = "0x" + repeat("12", 20);
+    final Map<String, Object> unrelatedLog = linkedMap(
+        "address", "0x" + repeat("00", 20),
+        "topics", Arrays.asList("0x" + repeat("00", 32)),
+        "data", "0x1234");
+    final Map<String, Object> sourceEventLog = linkedMap(
+        "address", sourceBridgeEmitterAddress,
+        "topics", Arrays.asList(EthereumMainnetSccp.sourceEventTopic(), sourceEventDigest),
+        "data", "0x");
     final Map<String, Object> receipt = linkedMap(
         "transactionHash", txHash,
         "blockHash", blockHash,
         "blockNumber", "0x1234",
         "status", "0x1");
+    final Map<String, Object> receiptWithSourceEvent = new LinkedHashMap<>(receipt);
+    receiptWithSourceEvent.put("logs", Arrays.asList(unrelatedLog, sourceEventLog));
     final Map<String, Object> block = linkedMap(
         "hash", blockHash,
         "number", "0x1234",
@@ -1038,6 +1200,33 @@ public final class EvmSccpProverTests {
             "0x" + repeat("cc", 32),
             linkedMap("finalizedHeaderRoot", "0x" + repeat("dd", 32)));
     final Map<String, Object> beaconFinality = beaconFinalityEvidence.toMap();
+    final EthereumMainnetSccp.ReceiptProof receiptProof =
+        new EthereumMainnetSccp.ReceiptProof(
+            sourceEventDigest,
+            "32",
+            "4660",
+            blockHash,
+            "0x" + repeat("cc", 32),
+            "0x" + repeat("dd", 32),
+            "0x" + repeat("aa", 32),
+            "3",
+            Arrays.asList(new byte[] {1}, new byte[] {2, 3}),
+            Arrays.asList(hexWord(repeat("11", 32))));
+    final String receiptProofHash =
+        SourceSccpProofs.evmReceiptProofHash(
+            receiptProof.sourceEventDigest(),
+            receiptProof.beaconSlot(),
+            receiptProof.executionBlockNumber(),
+            receiptProof.executionBlockHash(),
+            receiptProof.executionReceiptsRoot(),
+            receiptProof.beaconFinalizedRoot(),
+            receiptProof.syncCommitteeRoot(),
+            receiptProof.receiptRootIndex(),
+            receiptProof.receiptTrieProofNodes(),
+            receiptProof.inclusionBranch());
+    assert "0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0"
+            .equals(receiptProofHash)
+        : "Ethereum receipt-proof vector must match the shared native hash";
     final ArrayList<String> calls = new ArrayList<>();
     final int[] consensusCalls = new int[1];
     final EthereumMainnetSccp sdk =
@@ -1082,6 +1271,10 @@ public final class EvmSccpProverTests {
                   : "inbound evidence must carry normalized finality block number";
               assert blockHash.equals(evidence.beaconFinality().get("executionBlockHash"))
                   : "inbound evidence must carry finality block hash";
+              assert receiptProofHash.equals(evidence.receiptProofHash())
+                  : "inbound evidence must carry receipt proof hash";
+              assert receiptProof.sourceEventDigest().equals(evidence.receiptProof().sourceEventDigest())
+                  : "inbound evidence must carry receipt proof material";
               return new byte[] {1, 2, 3};
             },
             proof -> {
@@ -1109,10 +1302,122 @@ public final class EvmSccpProverTests {
     assert consensusCalls[0] == 1 : "consensus provider must be called once";
     assert calls.equals(Arrays.asList("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"))
         : "inbound collection must validate mainnet and fetch receipt/block";
-    assert Arrays.equals(new byte[] {1, 2, 3}, sdk.proveInboundToSora(evidence))
-        : "inbound prover must receive validated evidence";
     assert "submitted".equals(sdk.submitInboundToIroha(new byte[] {1, 2, 3}))
         : "inbound submitter must return caller result";
+
+    final EthereumMainnetSccp.InboundEvidence sourceEventEvidence =
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                receiptWithSourceEvent,
+                block,
+                beaconFinality,
+                null,
+                null,
+                sourceBridgeEmitterAddress));
+    assert sourceEventDigest.equals(sourceEventEvidence.sourceEventDigest())
+        : "source-event validation must derive the receipt event digest";
+    assert sourceBridgeEmitterAddress.equals(sourceEventEvidence.sourceBridgeEmitterAddress())
+        : "source-event validation must retain the normalized bridge emitter";
+    final EthereumMainnetSccp.InboundEvidence explicitSourceEventEvidence =
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                receiptWithSourceEvent,
+                block,
+                beaconFinality,
+                null,
+                sourceEventDigest,
+                sourceBridgeEmitterAddress));
+    assert sourceEventDigest.equals(explicitSourceEventEvidence.sourceEventDigest())
+        : "source-event validation must accept the expected digest";
+
+    final EthereumMainnetSccp.InboundEvidence receiptProofEvidence =
+        new EthereumMainnetSccp()
+            .collectInboundEvidenceFromReceipt(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    null,
+                    null,
+                    null,
+                    receiptProof,
+                    receiptProofHash,
+                    null,
+                    null));
+    assert receiptProofHash.equals(receiptProofEvidence.receiptProofHash())
+        : "Ethereum inbound collection must derive receiptProofHash from receiptProof";
+    assert receiptProof == receiptProofEvidence.receiptProof()
+        : "Ethereum inbound collection must retain app-collected receiptProof";
+    assert Arrays.equals(
+            new byte[] {1, 2, 3},
+            sdk.proveInboundToSora(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    evidence.transactionHash(),
+                    evidence.receipt(),
+                    evidence.block(),
+                    evidence.beaconFinality(),
+                    receiptProof,
+                    receiptProofHash,
+                    null,
+                    null)))
+        : "inbound prover must receive receipt-proof-backed validated evidence";
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  null,
+                  null,
+                  null,
+                  receiptProof,
+                  "0x" + repeat("99", 32),
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProofHash must match receiptProof");
+    }
+    assert threw : "Ethereum inbound collection must reject conflicting receiptProofHash";
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  null,
+                  null,
+                  null,
+                  new EthereumMainnetSccp.ReceiptProof(
+                      EvmSccpProver.DOMAIN_BSC,
+                      receiptProof.sourceEventDigest(),
+                      receiptProof.beaconSlot(),
+                      receiptProof.executionBlockNumber(),
+                      receiptProof.executionBlockHash(),
+                      receiptProof.executionReceiptsRoot(),
+                      receiptProof.beaconFinalizedRoot(),
+                      receiptProof.syncCommitteeRoot(),
+                      receiptProof.receiptRootIndex(),
+                      receiptProof.receiptTrieProofNodes(),
+                      receiptProof.inclusionBranch()),
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProof.sourceDomain");
+    }
+    assert threw : "Ethereum inbound collection must reject cross-lane receiptProof transcripts";
 
     assert Arrays.equals(
             new byte[] {7, 8, 9},
@@ -1138,7 +1443,8 @@ public final class EvmSccpProverTests {
                         receipt,
                         block,
                         beaconFinalityEvidence,
-                        null)))
+                        receiptProof,
+                        receiptProofHash)))
         : "typed beacon finality evidence must feed inbound proof collection";
 
     final ArrayList<String> perCallProviderCalls = new ArrayList<>();
@@ -1166,6 +1472,9 @@ public final class EvmSccpProverTests {
                     txHash,
                     null,
                     null,
+                    null,
+                    receiptProof,
+                    receiptProofHash,
                     null,
                     null),
                 (method, params) -> {
@@ -1220,6 +1529,92 @@ public final class EvmSccpProverTests {
     assert threw : "Ethereum inbound proving must reject missing beacon finality";
     assert missingFinalityProverCalls[0] == 0
         : "Ethereum inbound prover must not run without beacon finality";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              null,
+              null,
+              null,
+              evidenceWithoutReceiptProof -> {
+                missingFinalityProverCalls[0]++;
+                return new byte[] {1, 2, 3};
+              },
+              null)
+          .proveInboundToSora(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  block,
+                  beaconFinality,
+                  receiptProofHash));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProof");
+    }
+    assert threw : "Ethereum inbound proving must reject hash-only receipt proof evidence";
+    assert missingFinalityProverCalls[0] == 0
+        : "Ethereum inbound prover must not run without receipt proof material";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              null,
+              null,
+              null,
+              driftedReceiptProofEvidence -> {
+                missingFinalityProverCalls[0]++;
+                return new byte[] {1, 2, 3};
+              },
+              null)
+          .proveInboundToSora(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  block,
+                  beaconFinality,
+                  new EthereumMainnetSccp.ReceiptProof(
+                      receiptProof.sourceEventDigest(),
+                      receiptProof.beaconSlot(),
+                      receiptProof.executionBlockNumber(),
+                      receiptProof.executionBlockHash(),
+                      "0x" + repeat("99", 32),
+                      receiptProof.beaconFinalizedRoot(),
+                      receiptProof.syncCommitteeRoot(),
+                      receiptProof.receiptRootIndex(),
+                      receiptProof.receiptTrieProofNodes(),
+                      receiptProof.inclusionBranch()),
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProof.executionReceiptsRoot");
+    }
+    assert threw : "Ethereum inbound proving must reject drifted receipt proof transcripts";
+    assert missingFinalityProverCalls[0] == 0
+        : "Ethereum inbound prover must not run with drifted receipt proof material";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  txHash,
+                  null,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalStateException ex) {
+      threw = ex.getMessage().contains("execution provider");
+    }
+    assert threw : "Ethereum inbound collection by transaction hash must require a provider";
 
     threw = false;
     try {
@@ -1449,11 +1844,362 @@ public final class EvmSccpProverTests {
 
     threw = false;
     try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receiptWithSourceEvent,
+              block,
+              beaconFinality,
+              null,
+              sourceEventDigest,
+              null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceBridgeEmitterAddress");
+    }
+    assert threw : "Ethereum source-event validation must require the source bridge emitter";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.logs");
+    }
+    assert threw : "Ethereum source-event validation must require receipt logs";
+
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              receiptWithSourceEvent,
+              block,
+              beaconFinality,
+              null,
+              null,
+              "0x" + repeat("13", 20)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("expected SCCP source event");
+    }
+    assert threw : "Ethereum source-event validation must reject a wrong bridge emitter";
+
+    final Map<String, Object> wrongTopicLog = new LinkedHashMap<>(sourceEventLog);
+    wrongTopicLog.put("topics", Arrays.asList("0x" + repeat("ab", 32), sourceEventDigest));
+    final Map<String, Object> wrongTopicReceipt = new LinkedHashMap<>(receipt);
+    wrongTopicReceipt.put("logs", Arrays.asList(wrongTopicLog));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              wrongTopicReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("expected SCCP source event");
+    }
+    assert threw : "Ethereum source-event validation must reject a wrong event topic";
+
+    final Map<String, Object> duplicateReceipt = new LinkedHashMap<>(receipt);
+    duplicateReceipt.put("logs", Arrays.asList(sourceEventLog, sourceEventLog));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              duplicateReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("exactly one");
+    }
+    assert threw : "Ethereum source-event validation must reject duplicate matching events";
+
+    final Map<String, Object> removedLog = new LinkedHashMap<>(sourceEventLog);
+    removedLog.put("removed", Boolean.TRUE);
+    final Map<String, Object> removedReceipt = new LinkedHashMap<>(receipt);
+    removedReceipt.put("logs", Arrays.asList(removedLog));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              removedReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("removed logs");
+    }
+    assert threw : "Ethereum source-event validation must reject removed logs";
+
+    threw = false;
+    try {
       sdk.submitInboundToIroha(new byte[] {0, 0});
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage().contains("all zero");
     }
     assert threw : "Ethereum inbound submitter must reject zero proof bytes";
+  }
+
+  private static void ethereumMainnetFacadeBuildsLocalAdmissionSubmission() {
+    final EthereumMainnetSccp.LocalAdmissionSubmissionInput input =
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32));
+    final EthereumMainnetSccp.LocalAdmissionSubmission submission =
+        EthereumMainnetSccp.buildLocalAdmissionSubmission(input);
+    final EthereumMainnetSccp.LocalAdmissionSubmission facadeSubmission =
+        new EthereumMainnetSccp().buildLocalAdmission(input);
+
+    assert EthereumMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1.equals(
+            submission.platformPayload())
+        : "Ethereum local admission platform payload must be local_admission";
+    assert EthereumMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1.equals(
+            submission.envelopeEncoding())
+        : "Ethereum local admission must use the Norito envelope";
+    assert EthereumMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1.equals(
+            submission.verifierEntrypoint())
+        : "Ethereum local admission must target SubmitBridgeProof";
+    assert submission.sourceDomain() == EvmSccpProver.DOMAIN_ETH
+        : "Ethereum local admission source must be ETH";
+    assert submission.targetDomain() == EvmSccpProver.DOMAIN_SORA
+        : "Ethereum local admission target must be SORA";
+    assert submission.arguments().isEmpty() : "Ethereum local admission must not add call arguments";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "Ethereum local admission must copy proof bytes";
+    assert Arrays.equals(new byte[] {4, 5, 6}, submission.publicInputsBytes())
+        : "Ethereum local admission must copy public input bytes";
+    assert Arrays.equals(new byte[] {7, 8, 9}, submission.bundleBytes())
+        : "Ethereum local admission must copy bundle bytes";
+    assert Arrays.equals(new byte[] {10, 11, 12}, submission.envelopeBytes())
+        : "Ethereum local admission must copy envelope bytes";
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.localAdmission().proofBytes())
+        : "Ethereum local admission payload must carry proof bytes";
+    assert submission.envelopeHex().equals(facadeSubmission.envelopeHex())
+        : "facade local admission helper must match static helper";
+
+    input.proofBytes()[0] = 99;
+    assert Arrays.equals(new byte[] {1, 2, 3}, submission.proofBytes())
+        : "Ethereum local admission must not expose mutable proof storage";
+
+    boolean threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(
+          new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_BSC,
+              EvmSccpProver.DOMAIN_SORA,
+              EthereumMainnetSccp.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("ETH -> SORA");
+    }
+    assert threw : "Ethereum local admission must reject wrong source domains";
+
+    threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(
+          new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {0, 0},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be all zero");
+    }
+    assert threw : "Ethereum local admission must reject all-zero proof bytes";
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {0, 0},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32)),
+        "publicInputsBytes must not be all zero",
+        "Ethereum local admission must reject all-zero public input bytes");
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {0, 0},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32)),
+        "bundleBytes must not be all zero",
+        "Ethereum local admission must reject all-zero bundle bytes");
+
+    threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(
+          new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[0],
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeBytes must not be empty");
+    }
+    assert threw : "Ethereum local admission must reject empty envelope bytes";
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {0, 0},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32)),
+        "envelopeBytes must not be all zero",
+        "Ethereum local admission must reject all-zero envelope bytes");
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("00", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("88", 32)),
+        "statementHash must not be zero",
+        "Ethereum local admission must reject zero statement hashes");
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("00", 32),
+            "0x" + repeat("88", 32)),
+        "sourceVerifierMaterialHash must not be zero",
+        "Ethereum local admission must reject zero source material hashes");
+
+    assertEthereumLocalAdmissionRejected(
+        new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+            new byte[] {1, 2, 3},
+            new byte[] {4, 5, 6},
+            new byte[] {7, 8, 9},
+            new byte[] {10, 11, 12},
+            "0x" + repeat("66", 32),
+            "0x" + repeat("77", 32),
+            "0x" + repeat("00", 32)),
+        "sourceAdapterEngineDeploymentHash must not be zero",
+        "Ethereum local admission must reject zero source adapter deployment hashes");
+
+    threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(
+          new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              EthereumMainnetSccp.STARK_FRI_PROOF_FAMILY_V1,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              "abi_tuple_v1",
+              EthereumMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("envelopeEncoding");
+    }
+    assert threw : "Ethereum local admission must reject stale metadata";
+
+    threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(
+          new EthereumMainnetSccp.LocalAdmissionSubmissionInput(
+              new byte[] {1, 2, 3},
+              new byte[] {4, 5, 6},
+              new byte[] {7, 8, 9},
+              new byte[] {10, 11, 12},
+              "0x" + repeat("66", 32),
+              "0x" + repeat("77", 32),
+              "0x" + repeat("88", 32),
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              "debug-proof-family",
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+              EthereumMainnetSccp.LOCAL_ADMISSION_ENTRYPOINT_V1));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofFamily");
+    }
+    assert threw : "Ethereum local admission must reject stale proof families";
+  }
+
+  private static void assertEthereumLocalAdmissionRejected(
+      final EthereumMainnetSccp.LocalAdmissionSubmissionInput input,
+      final String expectedMessagePart,
+      final String assertionMessage) {
+    boolean threw = false;
+    try {
+      EthereumMainnetSccp.buildLocalAdmissionSubmission(input);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains(expectedMessagePart);
+    }
+    assert threw : assertionMessage;
   }
 
   private static void bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift() {

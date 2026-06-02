@@ -44,6 +44,9 @@ SCCP_SOLANA_BANK_FORK_CHOICE_OPEN_VERIFY_CIRCUIT_ID_V1 = (
 )
 SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1 = "evm-groth16-bn254-v1"
 SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1 = "abi_tuple_v1"
+SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1 = "norito:sccp-local-admission:v1"
+SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1 = "local_admission"
+SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1 = "SubmitBridgeProof"
 SCCP_TON_CONTRACT_PROOF_BACKEND_V1 = "ton-contract-v1"
 SCCP_TON_MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1"
 SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1 = (
@@ -167,6 +170,7 @@ SCCP_ZERO_HASH_V1 = "0x" + "00" * 32
 SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN = 141
 
 _SCCP_EVM_RECEIPT_PROOF_PREFIX_V1 = b"sccp:evm:receipt-proof:v1"
+_SCCP_EVM_SOURCE_EVENT_ABI_V1 = b"SccpSourceEvent(bytes32)"
 _SCCP_EVM_GROTH16_PROOF_REQUEST_PREFIX_V1 = b"sccp:evm:groth16-proof-request:v1"
 _SCCP_EVM_GROTH16_PROOF_ENVELOPE_PREFIX_V1 = b"sccp:evm:groth16-proof-envelope:v1"
 _SCCP_EVM_DESTINATION_BINDING_LABEL_V1 = b"iroha:sccp:evm-destination-binding:v1"
@@ -532,6 +536,12 @@ _SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES = 96
 _SCCP_ETH_MAX_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 96
 _SCCP_ETH_MAX_SYNC_COMMITTEE_POP_BYTES = 256
 _SCCP_ETH_MAX_SYNC_COMMITTEE_SIGNATURE_BYTES = 192
+SCCP_ETH_MAINNET_SLOTS_PER_EPOCH = 32
+SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD = 256
+SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD = (
+    SCCP_ETH_MAINNET_SLOTS_PER_EPOCH
+    * SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD
+)
 _SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES = (
     1
     + 4
@@ -7882,6 +7892,28 @@ def evm_sccp_receipt_proof_hash(input_value: Any) -> str:
     )
 
 
+def eth_mainnet_sync_committee_period_for_slot(slot: Any) -> int:
+    """Return the Ethereum mainnet sync-committee period for a beacon slot."""
+
+    return (
+        _normalize_u64(slot, "beaconSlot")
+        // SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD
+    )
+
+
+def _require_eth_mainnet_transition_periods(
+    from_sync_period: int,
+    to_sync_period: int,
+    transition_slot: int,
+) -> None:
+    if transition_slot == 0:
+        raise ValueError("transitionSlot must not be zero")
+    if from_sync_period + 1 != to_sync_period:
+        raise ValueError("toSyncPeriod must equal fromSyncPeriod + 1")
+    if eth_mainnet_sync_committee_period_for_slot(transition_slot) != from_sync_period:
+        raise ValueError("transitionSlot must belong to fromSyncPeriod")
+
+
 def _normalize_eth_sync_committee_parts(input_value: Any) -> Dict[str, Sequence[Any]]:
     value = _require_mapping(input_value, "ETH sync committee input")
     public_keys = _mapping_value_without_aliases(
@@ -8113,6 +8145,23 @@ def canonical_eth_sync_committee_transition_message_bytes(input_value: Any) -> b
     """Return canonical ETH sync-committee transition message bytes."""
 
     value = _require_mapping(input_value, "ETH sync-committee transition message input")
+    from_sync_period = _normalize_u64(
+        _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+        "fromSyncPeriod",
+    )
+    to_sync_period = _normalize_u64(
+        _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+        "toSyncPeriod",
+    )
+    transition_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
+        "transitionSlot",
+    )
+    _require_eth_mainnet_transition_periods(
+        from_sync_period,
+        to_sync_period,
+        transition_slot,
+    )
     out = bytearray()
     out.extend(_write_u8(1))
     source_domain = _normalize_u32(
@@ -8122,30 +8171,9 @@ def canonical_eth_sync_committee_transition_message_bytes(input_value: Any) -> b
     if source_domain != SCCP_DOMAIN_ETH:
         raise ValueError("sourceDomain must be ETH")
     out.extend(_write_u32_le(source_domain))
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
-                "fromSyncPeriod",
-            )
-        )
-    )
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
-                "toSyncPeriod",
-            )
-        )
-    )
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
-                "transitionSlot",
-            )
-        )
-    )
+    out.extend(_write_u64_le(from_sync_period))
+    out.extend(_write_u64_le(to_sync_period))
+    out.extend(_write_u64_le(transition_slot))
     out.extend(
         _hex_to_bytes(
             _mapping_value_without_aliases(value, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
@@ -8355,30 +8383,26 @@ def canonical_eth_sync_committee_transition_signature_bytes(input_value: Any) ->
     if source_domain != SCCP_DOMAIN_ETH:
         raise ValueError("sourceDomain must be ETH")
     out.extend(_write_u32_le(source_domain))
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
-                "fromSyncPeriod",
-            )
-        )
+    from_sync_period = _normalize_u64(
+        _mapping_value_without_aliases(value, "fromSyncPeriod", "fromSyncPeriod", "from_sync_period"),
+        "fromSyncPeriod",
     )
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
-                "toSyncPeriod",
-            )
-        )
+    to_sync_period = _normalize_u64(
+        _mapping_value_without_aliases(value, "toSyncPeriod", "toSyncPeriod", "to_sync_period"),
+        "toSyncPeriod",
     )
-    out.extend(
-        _write_u64_le(
-            _normalize_u64(
-                _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
-                "transitionSlot",
-            )
-        )
+    transition_slot = _normalize_u64(
+        _mapping_value_without_aliases(value, "transitionSlot", "transitionSlot", "transition_slot"),
+        "transitionSlot",
     )
+    _require_eth_mainnet_transition_periods(
+        from_sync_period,
+        to_sync_period,
+        transition_slot,
+    )
+    out.extend(_write_u64_le(from_sync_period))
+    out.extend(_write_u64_le(to_sync_period))
+    out.extend(_write_u64_le(transition_slot))
     out.extend(
         _hex_to_bytes(
             _mapping_value_without_aliases(value, "finalizedBeaconRoot", "finalizedBeaconRoot", "finalized_beacon_root"),
@@ -18694,6 +18718,178 @@ def _normalize_evm_rpc_hex(
     return "0x" + text
 
 
+def evm_sccp_source_event_topic() -> str:
+    """Return the EVM SCCP source-event topic for `SccpSourceEvent(bytes32)`."""
+
+    return _bytes_to_hex(_keccak_256(_SCCP_EVM_SOURCE_EVENT_ABI_V1))
+
+
+def _normalize_ethereum_mainnet_source_bridge_material(
+    input_value: Any,
+    label: str,
+) -> Optional[Mapping[str, Any]]:
+    if input_value is None:
+        return None
+    material = normalize_sccp_source_verifier_material(input_value)
+    if material["source_domain"] != SCCP_DOMAIN_ETH:
+        raise ValueError(f"{label}.sourceDomain must be ETH")
+    return material
+
+
+def _source_bridge_emitter_address_input(value: Mapping[str, Any], label: str) -> Any:
+    return _strict_optional_mapping_value(
+        value,
+        label,
+        "sourceBridgeEmitterAddress",
+        "source_bridge_emitter_address",
+        "expectedSourceBridgeEmitterAddress",
+        "expected_source_bridge_emitter_address",
+        "bridgeAddress",
+        "bridge_address",
+    )
+
+
+def _ethereum_mainnet_receipt_source_event_options(
+    value: Mapping[str, Any],
+    options: Mapping[str, Any],
+    *,
+    default_source_verifier_material: Any = None,
+    default_source_bridge_emitter_address: Any = None,
+) -> Dict[str, Optional[str]]:
+    source_event_digest_input = _strict_optional_mapping_value(
+        value,
+        "sourceEventDigest",
+        "sourceEventDigest",
+        "source_event_digest",
+    )
+    source_event_digest = (
+        None
+        if source_event_digest_input is None
+        else _normalize_nonzero_hex32(source_event_digest_input, "sourceEventDigest")
+    )
+    input_material = _normalize_ethereum_mainnet_source_bridge_material(
+        _strict_optional_mapping_value(
+            value,
+            "sourceVerifierMaterial",
+            "sourceVerifierMaterial",
+            "source_verifier_material",
+        ),
+        "sourceVerifierMaterial",
+    )
+    option_material = _normalize_ethereum_mainnet_source_bridge_material(
+        _strict_optional_mapping_value(
+            options,
+            "sourceVerifierMaterial",
+            "sourceVerifierMaterial",
+            "source_verifier_material",
+        ),
+        "sourceVerifierMaterial",
+    )
+    default_material = _normalize_ethereum_mainnet_source_bridge_material(
+        default_source_verifier_material,
+        "sourceVerifierMaterial",
+    )
+
+    supplied_addresses = [
+        _source_bridge_emitter_address_input(value, "sourceBridgeEmitterAddress"),
+        _source_bridge_emitter_address_input(options, "sourceBridgeEmitterAddress"),
+        default_source_bridge_emitter_address,
+        None if input_material is None else input_material["source_bridge_emitter_address"],
+        None if option_material is None else option_material["source_bridge_emitter_address"],
+        None if default_material is None else default_material["source_bridge_emitter_address"],
+    ]
+    source_bridge_emitter_address = None
+    for supplied_address in supplied_addresses:
+        if supplied_address is None:
+            continue
+        normalized_address = _normalize_evm_rpc_hex(
+            supplied_address,
+            "sourceBridgeEmitterAddress",
+            20,
+        )
+        if (
+            source_bridge_emitter_address is not None
+            and source_bridge_emitter_address != normalized_address
+        ):
+            raise ValueError("sourceBridgeEmitterAddress values must match")
+        source_bridge_emitter_address = normalized_address
+
+    return {
+        "source_event_digest": source_event_digest,
+        "source_bridge_emitter_address": source_bridge_emitter_address,
+    }
+
+
+def _ethereum_mainnet_receipt_log_source_event_digest(
+    receipt: Mapping[str, Any],
+    *,
+    source_event_digest: Optional[str],
+    source_bridge_emitter_address: Optional[str],
+) -> Dict[str, str]:
+    if source_event_digest is None and source_bridge_emitter_address is None:
+        return {}
+    if source_bridge_emitter_address is None:
+        raise TypeError(
+            "sourceBridgeEmitterAddress is required when validating sourceEventDigest"
+        )
+    logs = receipt.get("logs")
+    if not isinstance(logs, Sequence) or isinstance(logs, (str, bytes, bytearray)):
+        raise TypeError("receipt.logs is required for SCCP source event validation")
+    source_event_topic = evm_sccp_source_event_topic()
+    matched_digest = None
+    for index, log in enumerate(logs):
+        if not isinstance(log, Mapping):
+            raise TypeError(f"receipt.logs[{index}] must be an object")
+        if log.get("removed") is True:
+            raise TypeError("receipt.logs must not contain removed logs")
+        log_address = _normalize_evm_rpc_hex(
+            log.get("address"),
+            f"receipt.logs[{index}].address",
+            20,
+            nonzero=False,
+        )
+        topics = log.get("topics")
+        if not isinstance(topics, Sequence) or isinstance(topics, (str, bytes, bytearray)):
+            raise TypeError(f"receipt.logs[{index}].topics must be an array")
+        if len(topics) > 4:
+            raise ValueError(f"receipt.logs[{index}].topics must contain at most 4 entries")
+        normalized_topics = [
+            _normalize_evm_rpc_hex(
+                topic,
+                f"receipt.logs[{index}].topics[{topic_index}]",
+                32,
+                nonzero=False,
+            )
+            for topic_index, topic in enumerate(topics)
+        ]
+        if (
+            log_address == source_bridge_emitter_address
+            and len(normalized_topics) == 2
+            and normalized_topics[0] == source_event_topic
+        ):
+            candidate_digest = normalized_topics[1]
+            if (
+                not any(bytes.fromhex(candidate_digest.removeprefix("0x")))
+                or (
+                    source_event_digest is not None
+                    and candidate_digest != source_event_digest
+                )
+                or log.get("data", "0x") != "0x"
+            ):
+                continue
+            if matched_digest is not None:
+                raise TypeError(
+                    "receipt.logs must contain exactly one matching SCCP source event"
+                )
+            matched_digest = candidate_digest
+    if matched_digest is None:
+        raise TypeError("receipt.logs must contain the expected SCCP source event")
+    return {
+        "source_event_digest": matched_digest,
+        "source_bridge_emitter_address": source_bridge_emitter_address,
+    }
+
+
 def _require_mapping_input(value: Any, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError(f"{label} must be an object")
@@ -18838,6 +19034,107 @@ def _normalize_ethereum_mainnet_beacon_finality(
         }
     )
     return normalized
+
+
+def _require_ethereum_mainnet_receipt_proof_matches_evidence(
+    receipt_proof: Optional[Mapping[str, Any]],
+    *,
+    block_hash: Optional[str],
+    receipt_block_number: Optional[str],
+    block_receipts_root: Optional[str],
+    beacon_finality: Optional[Mapping[str, Any]],
+    source_event_digest: Optional[str],
+) -> None:
+    if receipt_proof is None:
+        return
+    proof = _require_mapping_input(receipt_proof, "receiptProof")
+    proof_block_number = _normalize_u64(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.executionBlockNumber",
+            "executionBlockNumber",
+            "execution_block_number",
+            "finalityHeight",
+            "finality_height",
+        ),
+        "receiptProof.executionBlockNumber",
+    )
+    if receipt_block_number is not None and proof_block_number != int(
+        _normalize_evm_rpc_quantity(receipt_block_number, "block.number"),
+        16,
+    ):
+        raise ValueError("receiptProof.executionBlockNumber must match block.number")
+    if beacon_finality is not None:
+        finality_block_number = _normalize_u64(
+            _mapping_value_without_aliases(
+                beacon_finality,
+                "beaconFinality.executionBlockNumber",
+                "executionBlockNumber",
+                "execution_block_number",
+            ),
+            "beaconFinality.executionBlockNumber",
+        )
+        if proof_block_number != finality_block_number:
+            raise ValueError(
+                "receiptProof.executionBlockNumber must match beaconFinality.executionBlockNumber"
+            )
+    proof_block_hash = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.executionBlockHash",
+            "executionBlockHash",
+            "execution_block_hash",
+            "finalityBlockHash",
+            "finality_block_hash",
+        ),
+        "receiptProof.executionBlockHash",
+        32,
+    )
+    if block_hash is not None and proof_block_hash != block_hash:
+        raise ValueError("receiptProof.executionBlockHash must match block.hash")
+    if (
+        beacon_finality is not None
+        and proof_block_hash != beacon_finality["execution_block_hash"]
+    ):
+        raise ValueError(
+            "receiptProof.executionBlockHash must match beaconFinality.executionBlockHash"
+        )
+    proof_receipts_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.executionReceiptsRoot",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+            "receiptsRoot",
+            "receipts_root",
+            "receiptOrMessageRoot",
+            "receipt_or_message_root",
+        ),
+        "receiptProof.executionReceiptsRoot",
+        32,
+    )
+    if block_receipts_root is not None and proof_receipts_root != block_receipts_root:
+        raise ValueError("receiptProof.executionReceiptsRoot must match block.receiptsRoot")
+    if (
+        beacon_finality is not None
+        and proof_receipts_root != beacon_finality["execution_receipts_root"]
+    ):
+        raise ValueError(
+            "receiptProof.executionReceiptsRoot must match beaconFinality.executionReceiptsRoot"
+        )
+    if source_event_digest is not None:
+        proof_source_event_digest = _normalize_evm_rpc_hex(
+            _mapping_value_without_aliases(
+                proof,
+                "receiptProof.sourceEventDigest",
+                "sourceEventDigest",
+                "source_event_digest",
+            ),
+            "receiptProof.sourceEventDigest",
+            32,
+        )
+        if proof_source_event_digest != source_event_digest:
+            raise ValueError("receiptProof.sourceEventDigest must match receipt source event")
 
 
 def _normalize_bsc_mainnet_parlia_finality(
@@ -25193,6 +25490,342 @@ def build_bsc_mainnet_sccp_destination_submission(input_value: Any) -> Mapping[s
     return submission
 
 
+def _local_admission_input_field(
+    value: Mapping[str, Any],
+    proof_result: Optional[Mapping[str, Any]],
+    submission_package: Optional[Mapping[str, Any]],
+    label: str,
+    *keys: str,
+) -> Any:
+    selected = _mapping_optional_value_without_aliases(value, label, *keys)
+    if selected is not _MISSING:
+        return selected
+    if proof_result is not None:
+        selected = _mapping_optional_value_without_aliases(
+            proof_result,
+            f"proofResult.{label}",
+            *keys,
+        )
+        if selected is not _MISSING:
+            return selected
+    if submission_package is not None:
+        selected = _mapping_optional_value_without_aliases(
+            submission_package,
+            f"submissionPackage.{label}",
+            *keys,
+        )
+        if selected is not _MISSING:
+            return selected
+        payload = _mapping_optional_value_without_aliases(
+            submission_package,
+            "submissionPackage.platformPayload",
+            "localAdmission",
+            "local_admission",
+            "payload",
+        )
+        if isinstance(payload, Mapping):
+            selected = _mapping_optional_value_without_aliases(
+                payload,
+                f"localAdmission.{label}",
+                *keys,
+            )
+            if selected is not _MISSING:
+                return selected
+    return None
+
+
+def _local_admission_string_field(
+    value: Mapping[str, Any],
+    proof_result: Optional[Mapping[str, Any]],
+    submission_package: Optional[Mapping[str, Any]],
+    label: str,
+    fallback: str,
+    *keys: str,
+) -> str:
+    selected = _local_admission_input_field(
+        value,
+        proof_result,
+        submission_package,
+        label,
+        *keys,
+    )
+    if selected is None:
+        return fallback
+    return _normalize_non_empty_string(selected, label)
+
+
+def _build_evm_family_mainnet_sccp_local_admission_submission(
+    input_value: Any,
+    *,
+    label: str,
+    expected_source_domain: int,
+    source_domain_label: str,
+) -> Mapping[str, Any]:
+    value = _require_mapping(input_value, f"{label} local-admission submission input")
+    proof_result_value = _mapping_optional_value_without_aliases(
+        value,
+        "proofResult",
+        "proofResult",
+        "proof_result",
+    )
+    proof_result = (
+        None
+        if proof_result_value is _MISSING
+        else _require_mapping(proof_result_value, "proofResult")
+    )
+    submission_package_value = _mapping_optional_value_without_aliases(
+        value,
+        "submissionPackage",
+        "submissionPackage",
+        "submission_package",
+    )
+    if submission_package_value is _MISSING and proof_result is not None:
+        submission_package_value = _mapping_optional_value_without_aliases(
+            proof_result,
+            "proofResult.submissionPackage",
+            "submissionPackage",
+            "submission_package",
+        )
+    submission_package = (
+        None
+        if submission_package_value is _MISSING
+        else _require_mapping(submission_package_value, "submissionPackage")
+    )
+
+    source_domain_input = _local_admission_input_field(
+        value,
+        proof_result,
+        submission_package,
+        "sourceDomain",
+        "sourceDomain",
+        "source_domain",
+    )
+    target_domain_input = _local_admission_input_field(
+        value,
+        proof_result,
+        submission_package,
+        "targetDomain",
+        "targetDomain",
+        "target_domain",
+    )
+    source_domain = _normalize_u32(
+        expected_source_domain if source_domain_input is None else source_domain_input,
+        "sourceDomain",
+    )
+    target_domain = _normalize_u32(
+        SCCP_DOMAIN_SORA if target_domain_input is None else target_domain_input,
+        "targetDomain",
+    )
+    if source_domain != expected_source_domain or target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError(
+            f"{label} local-admission submissions must route {source_domain_label} -> SORA"
+        )
+
+    proof_bytes = _to_bytes(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "proofBytes",
+            "proofBytes",
+            "proof_bytes",
+            "proof",
+        ),
+        "proofBytes",
+    )
+    _require_native_recursive_proof_bytes(proof_bytes, "proofBytes")
+    public_inputs_bytes = _to_bytes(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "publicInputsBytes",
+            "publicInputsBytes",
+            "public_inputs_bytes",
+        ),
+        "publicInputsBytes",
+    )
+    _require_native_recursive_proof_bytes(public_inputs_bytes, "publicInputsBytes")
+    bundle_bytes = _to_bytes(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "bundleBytes",
+            "bundleBytes",
+            "bundle_bytes",
+        ),
+        "bundleBytes",
+    )
+    _require_native_recursive_proof_bytes(bundle_bytes, "bundleBytes")
+    envelope_bytes = _to_bytes(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "envelopeBytes",
+            "envelopeBytes",
+            "envelope_bytes",
+        ),
+        "envelopeBytes",
+    )
+    _require_native_recursive_proof_bytes(envelope_bytes, "envelopeBytes")
+    statement_hash = _normalize_nonzero_hex32(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "statementHash",
+            "statementHash",
+            "statement_hash",
+        ),
+        "statementHash",
+    )
+    source_verifier_material_hash = _normalize_nonzero_hex32(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "sourceVerifierMaterialHash",
+            "sourceVerifierMaterialHash",
+            "source_verifier_material_hash",
+        ),
+        "sourceVerifierMaterialHash",
+    )
+    source_adapter_engine_deployment_hash = _normalize_nonzero_hex32(
+        _local_admission_input_field(
+            value,
+            proof_result,
+            submission_package,
+            "sourceAdapterEngineDeploymentHash",
+            "sourceAdapterEngineDeploymentHash",
+            "source_adapter_engine_deployment_hash",
+        ),
+        "sourceAdapterEngineDeploymentHash",
+    )
+    proof_family = _local_admission_string_field(
+        value,
+        proof_result,
+        submission_package,
+        "proofFamily",
+        SCCP_STARK_FRI_PROOF_FAMILY_V1,
+        "proofFamily",
+        "proof_family",
+    )
+    verifier_backend = _local_admission_string_field(
+        value,
+        proof_result,
+        submission_package,
+        "verifierBackend",
+        SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+        "verifierBackend",
+        "verifier_backend",
+    )
+    envelope_encoding = _local_admission_string_field(
+        value,
+        proof_result,
+        submission_package,
+        "envelopeEncoding",
+        SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+        "envelopeEncoding",
+        "envelope_encoding",
+    )
+    submission_kind = _local_admission_string_field(
+        value,
+        proof_result,
+        submission_package,
+        "submissionKind",
+        SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+        "submissionKind",
+        "submission_kind",
+    )
+    verifier_entrypoint = _local_admission_string_field(
+        value,
+        proof_result,
+        submission_package,
+        "verifierEntrypoint",
+        SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
+        "verifierEntrypoint",
+        "verifier_entrypoint",
+    )
+    if (
+        proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        or verifier_backend != SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1
+        or
+        envelope_encoding != SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1
+        or submission_kind != SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1
+        or verifier_entrypoint != SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1
+    ):
+        raise TypeError(f"{label} local-admission submission metadata is not canonical")
+
+    local_admission = _immutable_prover_envelope(
+        {
+            "version": 1,
+            "proof_bytes": proof_bytes,
+            "proof_bytes_hex": _bytes_to_hex(proof_bytes),
+            "public_inputs_bytes": public_inputs_bytes,
+            "public_inputs_bytes_hex": _bytes_to_hex(public_inputs_bytes),
+            "bundle_bytes": bundle_bytes,
+            "bundle_bytes_hex": _bytes_to_hex(bundle_bytes),
+            "statement_hash": statement_hash,
+            "source_verifier_material_hash": source_verifier_material_hash,
+            "source_adapter_engine_deployment_hash": source_adapter_engine_deployment_hash,
+        }
+    )
+    return _immutable_prover_envelope(
+        {
+            "version": 1,
+            "proof_family": proof_family,
+            "verifier_backend": verifier_backend,
+            "platform_payload": SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
+            "envelope_encoding": envelope_encoding,
+            "submission_kind": submission_kind,
+            "verifier_entrypoint": verifier_entrypoint,
+            "source_domain": source_domain,
+            "target_domain": target_domain,
+            "statement_hash": statement_hash,
+            "source_verifier_material_hash": source_verifier_material_hash,
+            "source_adapter_engine_deployment_hash": source_adapter_engine_deployment_hash,
+            "arguments": (),
+            "local_admission": local_admission,
+            "proof_bytes": proof_bytes,
+            "proof_bytes_hex": _bytes_to_hex(proof_bytes),
+            "public_inputs_bytes": public_inputs_bytes,
+            "public_inputs_bytes_hex": _bytes_to_hex(public_inputs_bytes),
+            "bundle_bytes": bundle_bytes,
+            "bundle_bytes_hex": _bytes_to_hex(bundle_bytes),
+            "envelope_bytes": envelope_bytes,
+            "envelope_hex": _bytes_to_hex(envelope_bytes),
+        }
+    )
+
+
+def build_ethereum_mainnet_sccp_local_admission_submission(
+    input_value: Any,
+) -> Mapping[str, Any]:
+    """Build an Ethereum mainnet -> SORA local-admission package from native verifier output."""
+
+    return _build_evm_family_mainnet_sccp_local_admission_submission(
+        input_value,
+        label="Ethereum mainnet",
+        expected_source_domain=SCCP_DOMAIN_ETH,
+        source_domain_label="ETH",
+    )
+
+
+def build_bsc_mainnet_sccp_local_admission_submission(
+    input_value: Any,
+) -> Mapping[str, Any]:
+    """Build a BSC -> SORA local-admission package from native verifier output."""
+
+    return _build_evm_family_mainnet_sccp_local_admission_submission(
+        input_value,
+        label="BSC mainnet",
+        expected_source_domain=SCCP_DOMAIN_BSC,
+        source_domain_label="BSC",
+    )
+
+
 def build_tron_sccp_submission(input_value: Any) -> Mapping[str, Any]:
     """Build TRON verifier-contract calldata for a local SCCP proof."""
 
@@ -25837,6 +26470,8 @@ class EthereumMainnetSccp:
                 Union[BytesLike, Awaitable[BytesLike]],
             ]
         ] = None,
+        source_verifier_material: Optional[Mapping[str, Any]] = None,
+        source_bridge_emitter_address: Optional[Any] = None,
         submit_inbound_to_iroha: Optional[
             Callable[[bytes, Mapping[str, Any]], Union[Any, Awaitable[Any]]]
         ] = None,
@@ -25849,6 +26484,8 @@ class EthereumMainnetSccp:
         self.execution_provider = execution_provider
         self.consensus_provider = consensus_provider
         self.inbound_prove_fn = prove_inbound
+        self.source_verifier_material = source_verifier_material
+        self.source_bridge_emitter_address = source_bridge_emitter_address
         self.inbound_submit_fn = submit_inbound_to_iroha
         self.outbound_submit_fn = submit_outbound_to_ethereum
 
@@ -25905,6 +26542,11 @@ class EthereumMainnetSccp:
         """Build Ethereum mainnet verifier calldata from a wrapped proof result."""
 
         return build_ethereum_mainnet_sccp_destination_submission(input_value)
+
+    def build_local_admission_submission(self, input_value: Any) -> Mapping[str, Any]:
+        """Build an Ethereum mainnet -> SORA local-admission package from native verifier output."""
+
+        return build_ethereum_mainnet_sccp_local_admission_submission(input_value)
 
     async def submit_outbound_to_ethereum(
         self,
@@ -26005,7 +26647,12 @@ class EthereumMainnetSccp:
             else _normalize_evm_rpc_hex(transaction_hash_input, "transactionHash", 32)
         )
         receipt = _strict_optional_mapping_value(value, "receipt", "receipt")
-        if receipt is None and transaction_hash is not None and provider is not None:
+        if receipt is None and transaction_hash is not None:
+            if provider is None:
+                raise TypeError(
+                    "Ethereum mainnet SCCP execution provider is required when "
+                    "collecting receipt evidence from transactionHash"
+                )
             receipt = await _evm_facade_provider_request(
                 provider,
                 "eth_getTransactionReceipt",
@@ -26057,6 +26704,7 @@ class EthereumMainnetSccp:
         )
         receipt_block_number = None
         normalized_receipt = None
+        source_event: Dict[str, str] = {}
         if receipt is not None:
             receipt_mapping = _require_mapping_input(receipt, "receipt")
             if receipt_mapping.get("status") != "0x1":
@@ -26107,6 +26755,15 @@ class EthereumMainnetSccp:
             if receipt_block_number == "0x0":
                 raise ValueError("receipt.blockNumber must be positive")
             normalized_receipt = dict(receipt_mapping)
+            source_event = _ethereum_mainnet_receipt_log_source_event_digest(
+                normalized_receipt,
+                **_ethereum_mainnet_receipt_source_event_options(
+                    value,
+                    options,
+                    default_source_verifier_material=self.source_verifier_material,
+                    default_source_bridge_emitter_address=self.source_bridge_emitter_address,
+                ),
+            )
 
         block = _strict_optional_mapping_value(value, "block", "block")
         if block is None and block_hash is not None and provider is not None:
@@ -26205,12 +26862,14 @@ class EthereumMainnetSccp:
             evidence["receipt"] = normalized_receipt
         if normalized_block is not None:
             evidence["block"] = normalized_block
+        if source_event:
+            evidence.update(source_event)
+        if receipt_proof is not None:
+            evidence["receipt_proof"] = _immutable_prover_envelope_value(receipt_proof)
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
 
         if supplied_finality is not None:
-            if isinstance(supplied_finality, Mapping) and not supplied_finality:
-                return evidence
             evidence["beacon_finality"] = _normalize_ethereum_mainnet_beacon_finality(
                 supplied_finality,
                 expected_block_hash=block_hash,
@@ -26238,6 +26897,14 @@ class EthereumMainnetSccp:
                         expected_receipts_root=block_receipts_root,
                     )
                 )
+        _require_ethereum_mainnet_receipt_proof_matches_evidence(
+            receipt_proof,
+            block_hash=block_hash,
+            receipt_block_number=receipt_block_number,
+            block_receipts_root=block_receipts_root,
+            beacon_finality=evidence.get("beacon_finality"),
+            source_event_digest=evidence.get("source_event_digest"),
+        )
         return evidence
 
     async def prove_inbound_to_sora(
@@ -26258,6 +26925,10 @@ class EthereumMainnetSccp:
         if evidence.get("beacon_finality") is None:
             raise TypeError(
                 "Ethereum mainnet SCCP inbound proof requires beaconFinality"
+            )
+        if evidence.get("receipt_proof") is None:
+            raise TypeError(
+                "Ethereum mainnet SCCP inbound proof requires receiptProof"
             )
         proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
@@ -26355,6 +27026,11 @@ class BscMainnetSccp:
         """Build BSC mainnet verifier calldata from a wrapped proof result."""
 
         return build_bsc_mainnet_sccp_destination_submission(input_value)
+
+    def build_local_admission_submission(self, input_value: Any) -> Mapping[str, Any]:
+        """Build a BSC -> SORA local-admission package from native verifier output."""
+
+        return build_bsc_mainnet_sccp_local_admission_submission(input_value)
 
     async def submit_outbound_to_bsc(
         self,

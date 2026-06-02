@@ -1177,6 +1177,232 @@ mod model {
         pub output_claims: Vec<OfflineNoteIssuedClaim>,
     }
 
+    /// V2 compact CA-issued certificate for an Offline one-use note key.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteKeyCertificateV2 {
+        /// Certificate format marker.
+        pub version: u16,
+        /// Platform class, for example `ios-appattest` or `android-keymint`.
+        pub platform: String,
+        /// Issuer-scoped one-use key identifier.
+        pub key_id: String,
+        /// Device identifier bound by the offline CA.
+        pub device_id: String,
+        /// Account authorized to control the note key.
+        pub account_id: AccountId,
+        /// Ed25519 public key bytes for local note/proof signatures.
+        pub public_key: Vec<u8>,
+        /// Hardware assertion scheme bound to this note key.
+        pub assertion_scheme: String,
+        /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
+        pub assertion_key_algorithm: String,
+        /// Hardware assertion public key bytes, for example SEC1 P-256.
+        pub assertion_public_key: Vec<u8>,
+        /// Hardware one-use limit when the platform exposes it.
+        pub assertion_usage_count_limit: Option<u32>,
+        /// True when the issuer verified hardware one-use semantics.
+        pub one_use: bool,
+        /// Offline CA signature over the compact certificate payload.
+        pub issuer_signature: Signature,
+    }
+
+    /// V2 canonical payload signed by Offline key-certificate issuers.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteKeyCertificatePayloadV2 {
+        /// Domain separator for the signed payload.
+        pub domain: String,
+        /// Certificate format marker.
+        pub version: u16,
+        /// Platform class, for example `ios-appattest` or `android-keymint`.
+        pub platform: String,
+        /// Issuer-scoped one-use key identifier.
+        pub key_id: String,
+        /// Device identifier bound by the offline CA.
+        pub device_id: String,
+        /// Account authorized to control the note key.
+        pub account_id: AccountId,
+        /// Ed25519 public key bytes for local note/proof signatures.
+        pub public_key: Vec<u8>,
+        /// Hardware assertion scheme bound to this note key.
+        pub assertion_scheme: String,
+        /// Hardware assertion key algorithm, for example `ecdsa-p256-sha256`.
+        pub assertion_key_algorithm: String,
+        /// Hardware assertion public key bytes, for example SEC1 P-256.
+        pub assertion_public_key: Vec<u8>,
+        /// Hardware one-use limit when the platform exposes it.
+        pub assertion_usage_count_limit: Option<u32>,
+        /// True when the issuer verified hardware one-use semantics.
+        pub one_use: bool,
+    }
+
+    /// V2 verifier-key-backed recursive proof carried by Offline note tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteRecursiveProofV2 {
+        /// Stable verifier key identifier selected by the operator and stored in WSV.
+        pub verifier_key_id: VerifyingKeyId,
+        /// Public input commitment hash.
+        pub public_inputs_hash: Hash,
+        /// Compact recursive proof payload encoded as an `OpenVerifyEnvelope`.
+        pub proof: ProofBox,
+    }
+
+    /// V2 issuer-side note issuance record for online load/consolidation fixtures.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteIssueV2 {
+        /// Deterministic note commitment.
+        pub note_commitment: Hash,
+        /// Owner key certificate for this note.
+        pub key_certificate: OfflineNoteKeyCertificateV2,
+        /// Asset held by the note.
+        pub asset: AssetId,
+        /// Note amount.
+        pub amount: Numeric,
+    }
+
+    /// V2 ledger-recognized note claim bound to one compact Offline note certificate.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteIssuedClaimV2 {
+        /// Domain separator for the issued-note claim.
+        pub domain: String,
+        /// Deterministic note commitment recorded at issuance.
+        pub note_commitment: Hash,
+        /// Certificate payload hash identifying the one-use note key.
+        pub key_certificate_payload_hash: Hash,
+        /// Asset held by the issued note.
+        pub asset: AssetId,
+        /// Note amount reserved into offline escrow.
+        pub amount: Numeric,
+    }
+
+    /// V2 redeemable note output observed during Offline audit.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditOutputClaimV2 {
+        /// Deterministic note commitment created by the audited transfer.
+        pub note_commitment: Hash,
+        /// Owner key certificate for this output note.
+        pub key_certificate: OfflineNoteKeyCertificateV2,
+        /// Asset held by this output note.
+        pub asset: AssetId,
+        /// Output amount reserved in offline escrow.
+        pub amount: Numeric,
+    }
+
+    /// V2 redemption payload submitted online when defunding a bearer note.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteRedeemV2 {
+        /// Ledger-recognized note commitment consumed by this redemption.
+        pub source_note_commitment: Hash,
+        /// Nullifiers consumed by the redeeming token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Compact certificate for the one-use note key that signed the proof.
+        pub sender_key_certificate: OfflineNoteKeyCertificateV2,
+        /// Recipient account credited online.
+        pub recipient: AccountId,
+        /// Asset being redeemed.
+        pub asset: AssetId,
+        /// Redeemed amount.
+        pub amount: Numeric,
+        /// Compact recursive proof for the final note state.
+        pub recursive_proof: OfflineNoteRecursiveProofV2,
+    }
+
+    /// V2 public inputs bound by an Offline redemption proof.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteRedeemPublicInputsV2 {
+        /// Domain separator for the redemption public inputs.
+        pub domain: String,
+        /// Ledger-recognized note commitment consumed by this redemption.
+        pub source_note_commitment: Hash,
+        /// Nullifiers consumed by the redeeming token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Certificate payload hash identifying the one-use note key.
+        pub key_certificate_payload_hash: Hash,
+        /// Recipient account credited online.
+        pub recipient: AccountId,
+        /// Asset being redeemed.
+        pub asset: AssetId,
+        /// Redeemed amount.
+        pub amount: Numeric,
+    }
+
+    /// V2 audit bundle for Offline P2P bearer lineage fixtures.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditBundleV2 {
+        /// Payment token identifier.
+        pub token_id: Hash,
+        /// Compact certificate for the one-use note key that signed the proof.
+        pub sender_key_certificate: OfflineNoteKeyCertificateV2,
+        /// Input nullifiers observed in the token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Issued input claims consumed by the token.
+        pub input_claims: Vec<OfflineNoteIssuedClaimV2>,
+        /// Output note commitments created by the token.
+        pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteAuditOutputClaimV2>,
+        /// Optional recursive proof for audit/replay checks.
+        pub recursive_proof: OfflineNoteRecursiveProofV2,
+    }
+
+    /// V2 public inputs bound by an Offline optional audit proof.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineNoteAuditPublicInputsV2 {
+        /// Domain separator for the audit public inputs.
+        pub domain: String,
+        /// Payment token identifier.
+        pub token_id: Hash,
+        /// Certificate payload hash identifying the one-use note key.
+        pub key_certificate_payload_hash: Hash,
+        /// Input nullifiers observed in the token.
+        pub input_nullifiers: Vec<Hash>,
+        /// Issued input claims consumed by the token.
+        pub input_claims: Vec<OfflineNoteIssuedClaimV2>,
+        /// Output note commitments created by the token.
+        pub output_commitments: Vec<Hash>,
+        /// Redeemable output claims created by the token.
+        pub output_claims: Vec<OfflineNoteIssuedClaimV2>,
+    }
+
     /// Origin of a wallet-derived Offline Note note commitment.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1903,6 +2129,13 @@ const OFFLINE_NOTE_KEY_CERTIFICATE_PAYLOAD_DOMAIN: &str =
 const OFFLINE_NOTE_ISSUED_CLAIM_DOMAIN: &str = "iroha:offline-note:issued-claim";
 const OFFLINE_NOTE_REDEEM_PUBLIC_INPUTS_DOMAIN: &str = "iroha:offline-note:redeem-public-inputs";
 const OFFLINE_NOTE_AUDIT_PUBLIC_INPUTS_DOMAIN: &str = "iroha:offline-note:audit-public-inputs";
+const OFFLINE_NOTE_V2_KEY_CERTIFICATE_PAYLOAD_DOMAIN: &str =
+    "iroha:offline-note-v2:key-certificate-payload:v1";
+const OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN: &str = "iroha:offline-note-v2:issued-claim:v1";
+const OFFLINE_NOTE_V2_REDEEM_PUBLIC_INPUTS_DOMAIN: &str =
+    "iroha:offline-note-v2:redeem-public-inputs:v1";
+const OFFLINE_NOTE_V2_AUDIT_PUBLIC_INPUTS_DOMAIN: &str =
+    "iroha:offline-note-v2:audit-public-inputs:v1";
 const KAGEMUSHA_FOLD_STEP_DIGEST_DOMAIN: &str = "iroha:kagemusha:v1:fold-step";
 const KAGEMUSHA_FOLD_NULLIFIER_DIGEST_DOMAIN: &str = "iroha:kagemusha:v1:nullifiers";
 const KAGEMUSHA_FOLD_OUTPUT_DIGEST_DOMAIN: &str = "iroha:kagemusha:v1:outputs";
@@ -2219,6 +2452,187 @@ impl OfflineNoteRedeem {
     /// Returns an error when the public-input payload cannot be serialized with Norito.
     pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
         OfflineNoteRedeemPublicInputs::from_redemption(self)?.public_inputs_hash()
+    }
+}
+
+impl From<&OfflineNoteKeyCertificateV2> for OfflineNoteKeyCertificatePayloadV2 {
+    fn from(certificate: &OfflineNoteKeyCertificateV2) -> Self {
+        Self {
+            domain: OFFLINE_NOTE_V2_KEY_CERTIFICATE_PAYLOAD_DOMAIN.to_owned(),
+            version: certificate.version,
+            platform: certificate.platform.clone(),
+            key_id: certificate.key_id.clone(),
+            device_id: certificate.device_id.clone(),
+            account_id: certificate.account_id.clone(),
+            public_key: certificate.public_key.clone(),
+            assertion_scheme: certificate.assertion_scheme.clone(),
+            assertion_key_algorithm: certificate.assertion_key_algorithm.clone(),
+            assertion_public_key: certificate.assertion_public_key.clone(),
+            assertion_usage_count_limit: certificate.assertion_usage_count_limit,
+            one_use: certificate.one_use,
+        }
+    }
+}
+
+impl OfflineNoteKeyCertificateV2 {
+    /// Canonical V2 payload bytes signed by the Offline certificate issuer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, norito::Error> {
+        let payload = OfflineNoteKeyCertificatePayloadV2::from(self);
+        to_bytes(&payload)
+    }
+
+    /// Deterministic hash of the canonical V2 certificate payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the payload cannot be serialized with Norito.
+    pub fn payload_hash(&self) -> Result<Hash, norito::Error> {
+        self.signing_bytes().map(Hash::new)
+    }
+}
+
+impl OfflineNoteIssuedClaimV2 {
+    /// Build the V2 claim recorded when an Offline note is issued.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_issue(issue: &OfflineNoteIssueV2) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN.to_owned(),
+            note_commitment: issue.note_commitment,
+            key_certificate_payload_hash: issue.key_certificate.payload_hash()?,
+            asset: issue.asset.clone(),
+            amount: issue.amount.clone(),
+        })
+    }
+
+    /// Build the V2 claim expected when an Offline note is redeemed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_redemption(redemption: &OfflineNoteRedeemV2) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN.to_owned(),
+            note_commitment: redemption.source_note_commitment,
+            key_certificate_payload_hash: redemption.sender_key_certificate.payload_hash()?,
+            asset: redemption.asset.clone(),
+            amount: redemption.amount.clone(),
+        })
+    }
+
+    /// Build the V2 claim recorded when an Offline audited output is accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_audit_output(
+        output: &OfflineNoteAuditOutputClaimV2,
+    ) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_ISSUED_CLAIM_DOMAIN.to_owned(),
+            note_commitment: output.note_commitment,
+            key_certificate_payload_hash: output.key_certificate.payload_hash()?,
+            asset: output.asset.clone(),
+            amount: output.amount.clone(),
+        })
+    }
+
+    /// Deterministic hash of the V2 issued-note claim.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the claim cannot be serialized with Norito.
+    pub fn claim_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineNoteRedeemPublicInputsV2 {
+    /// Build the V2 public inputs committed by an Offline redemption proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_redemption(redemption: &OfflineNoteRedeemV2) -> Result<Self, norito::Error> {
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_REDEEM_PUBLIC_INPUTS_DOMAIN.to_owned(),
+            source_note_commitment: redemption.source_note_commitment,
+            input_nullifiers: redemption.input_nullifiers.clone(),
+            key_certificate_payload_hash: redemption.sender_key_certificate.payload_hash()?,
+            recipient: redemption.recipient.clone(),
+            asset: redemption.asset.clone(),
+            amount: redemption.amount.clone(),
+        })
+    }
+
+    /// Deterministic hash of the V2 redemption public inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public inputs cannot be serialized with Norito.
+    pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineNoteAuditPublicInputsV2 {
+    /// Build the V2 public inputs committed by an Offline optional audit proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the certificate payload cannot be serialized.
+    pub fn from_audit(audit: &OfflineNoteAuditBundleV2) -> Result<Self, norito::Error> {
+        let output_claims = audit
+            .output_claims
+            .iter()
+            .map(OfflineNoteIssuedClaimV2::from_audit_output)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            domain: OFFLINE_NOTE_V2_AUDIT_PUBLIC_INPUTS_DOMAIN.to_owned(),
+            token_id: audit.token_id,
+            key_certificate_payload_hash: audit.sender_key_certificate.payload_hash()?,
+            input_nullifiers: audit.input_nullifiers.clone(),
+            input_claims: audit.input_claims.clone(),
+            output_commitments: audit.output_commitments.clone(),
+            output_claims,
+        })
+    }
+
+    /// Deterministic hash of the V2 audit public inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public inputs cannot be serialized with Norito.
+    pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
+        to_bytes(self).map(Hash::new)
+    }
+}
+
+impl OfflineNoteAuditBundleV2 {
+    /// Deterministic V2 hash that the optional audit proof must expose as public inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public-input payload cannot be serialized with Norito.
+    pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
+        OfflineNoteAuditPublicInputsV2::from_audit(self)?.public_inputs_hash()
+    }
+}
+
+impl OfflineNoteRedeemV2 {
+    /// Deterministic V2 hash that the recursive proof must expose as public inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the public-input payload cannot be serialized with Norito.
+    pub fn public_inputs_hash(&self) -> Result<Hash, norito::Error> {
+        OfflineNoteRedeemPublicInputsV2::from_redemption(self)?.public_inputs_hash()
     }
 }
 

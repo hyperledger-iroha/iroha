@@ -144,3 +144,8 @@ required-features = ["test-fixtures"]
 name = "offline_vectors"
 path = "src/bin/offline_vectors.rs"
 required-features = ["test-fixtures", "transparent_api"]
+
+[[bin]]
+name = "offline_v2_vectors"
+path = "src/bin/offline_v2_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]

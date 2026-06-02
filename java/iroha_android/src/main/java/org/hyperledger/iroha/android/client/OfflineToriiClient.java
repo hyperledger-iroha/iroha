@@ -11,18 +11,20 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
-import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineReadiness;
+import org.hyperledger.iroha.android.offline.OfflineToriiException;
+import org.hyperledger.iroha.android.offline.OfflineV2Readiness;
 
 /**
  * Lightweight HTTP client for the maintained Torii Offline endpoint.
  *
  * <p>The legacy offline HTTP routes have been
- * removed from Torii. This client exposes only {@code /v1/offline/readiness}.
+ * removed from Torii. This client exposes the maintained offline readiness endpoints.
  */
 public final class OfflineToriiClient {
 
   private static final String OFFLINE_READINESS_PATH = "/v1/offline/readiness";
+  private static final String OFFLINE_V2_READINESS_PATH = "/v1/offline/v2/readiness";
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -46,6 +48,11 @@ public final class OfflineToriiClient {
   /** Fetch Torii's Offline readiness flags. */
   public CompletableFuture<OfflineReadiness> getOfflineReadiness() {
     return executeGet(OFFLINE_READINESS_PATH, OfflineJsonParser::parseOfflineReadiness);
+  }
+
+  /** Fetch Torii's Offline V2 readiness flags. */
+  public CompletableFuture<OfflineV2Readiness> getOfflineV2Readiness() {
+    return executeGet(OFFLINE_V2_READINESS_PATH, OfflineJsonParser::parseOfflineV2Readiness);
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */

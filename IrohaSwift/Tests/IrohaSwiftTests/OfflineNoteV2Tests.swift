@@ -132,16 +132,16 @@ final class OfflineNoteV2Tests: XCTestCase {
         let fixture = try Self.loadFixture()
         let publicInputsHash = try Self.hex(fixture.chainVectors.audit.publicInputsHash)
 
-        let trimmedProof = try OfflineNoteProofBox(
+        let trimmedProof = try OfflineNoteProofBoxV2(
             backend: "  \(OfflineNoteV2Constants.recursiveBackend)  ",
             bytes: Data([0x01])
         )
         XCTAssertEqual(trimmedProof.backend, OfflineNoteV2Constants.recursiveBackend)
 
-        XCTAssertThrowsError(try OfflineNoteProofBox(backend: " \n ", bytes: Data([0x01]))) { error in
+        XCTAssertThrowsError(try OfflineNoteProofBoxV2(backend: " \n ", bytes: Data([0x01]))) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBackend)
         }
-        XCTAssertThrowsError(try OfflineNoteProofBox(backend: "halo2/ipa", bytes: Data())) { error in
+        XCTAssertThrowsError(try OfflineNoteProofBoxV2(backend: "halo2/ipa", bytes: Data())) { error in
             XCTAssertEqual(error as? OfflineNoteV2Error, .emptyProofBytes)
         }
         XCTAssertThrowsError(try OfflineNoteRecursiveProofV2(

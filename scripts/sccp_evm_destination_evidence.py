@@ -2,10 +2,12 @@
 """Render SCCP EVM-family destination rollout evidence.
 
 This helper is offline by design. Operators pass the live ETH or BSC
-destination verifier deployment material, bridge wrapper address, and network
-id to recompute the EVM Groth16 destination binding hash. With independently
-pinned destination binding and source record hashes, the script also validates
-the governed route allowlist hash and can render the matching
+destination verifier deployment material and bridge wrapper address; the
+script defaults the EVM network id to the selected domain's canonical mainnet
+EIP-155 chain id and rejects mismatched overrides while recomputing the EVM
+Groth16 destination binding hash. With independently pinned destination binding
+and source record hashes, the script also validates the governed route
+allowlist hash and can render the matching
 `zk.sccp_destination_rollouts` and `zk.sccp_route_allowlists` TOML records.
 """
 
@@ -35,17 +37,21 @@ SCCP_PROOF_FAMILY_STARK_FRI = "stark-fri-v1"
 EVM_DESTINATION_BINDING_LABEL = b"iroha:sccp:evm-destination-binding:v1"
 SCCP_ROUTE_ALLOWLIST_LABEL = b"sccp:route-allowlist:lane-evidence:v1"
 EVM_ROUTE_CANARY_EVIDENCE_LABEL = b"iroha:sccp:evm-route-canary-evidence:v3"
+ETH_MAINNET_NETWORK_ID = (1).to_bytes(32, "big")
+BSC_MAINNET_NETWORK_ID = (56).to_bytes(32, "big")
 
 DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
         "chain": "eth",
         "rpc_chain_id": "1",
+        "network_id": ETH_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
         "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
     },
     SCCP_DOMAIN_BSC: {
         "chain": "bsc",
         "rpc_chain_id": "56",
+        "network_id": BSC_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:bsc:destination-anchor:bsc-mainnet:v1",
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
     },
@@ -138,6 +144,30 @@ def parse_destination_domain(value: str) -> int:
         return aliases[normalized]
     except KeyError as exc:
         raise argparse.ArgumentTypeError("domain must be eth or bsc") from exc
+
+
+def evm_mainnet_network_id_for_domain(domain: int) -> bytes:
+    """Return the canonical bytes32 EIP-155 network id for an EVM SCCP domain."""
+
+    try:
+        return bytes(DOMAIN_PROFILES[domain]["network_id"])
+    except KeyError as exc:
+        raise ValueError("domain must be ETH or BSC") from exc
+
+
+def _require_domain_network_id(domain: int, network_id: bytes | None) -> bytes:
+    network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
+    profile = DOMAIN_PROFILES.get(domain)
+    if profile is None:
+        raise ValueError("domain must be ETH or BSC")
+    expected = bytes(profile["network_id"])
+    if network_id != expected:
+        raise ValueError(
+            "network_id must match "
+            f"{profile['chain'].upper()} mainnet EIP-155 chain id "
+            f"{profile['rpc_chain_id']}: expected {_hex(expected)}, got {_hex(network_id)}"
+        )
+    return network_id
 
 
 def parse_u32_decimal(value: str, *, label: str) -> int:
@@ -434,7 +464,7 @@ def evm_destination_binding_hash(
     if proof_family != SCCP_PROOF_FAMILY_STARK_FRI:
         raise ValueError(f"proof_family must be {SCCP_PROOF_FAMILY_STARK_FRI}")
 
-    network_id = _require_fixed_bytes(network_id, label="network_id", byte_length=32)
+    network_id = _require_domain_network_id(target_domain, network_id)
     verifier_address = _require_fixed_bytes(
         verifier_address,
         label="verifier_address",
@@ -703,11 +733,7 @@ def evm_route_canary_transaction_evidence_hash(
         label="proof_family_hash",
         byte_length=32,
     )
-    network_id = _require_fixed_bytes(
-        network_id,
-        label="network_id",
-        byte_length=32,
-    )
+    network_id = _require_domain_network_id(target_domain, network_id)
     _require_distinct_hash_roles(
         (
             ("transaction_hash", transaction_hash),
@@ -1276,6 +1302,15 @@ def _destination_binding_key_from_args(args: argparse.Namespace) -> str:
     )
 
 
+def apply_canonical_network_id(args: argparse.Namespace) -> None:
+    """Default or validate the EVM mainnet network id for the selected domain."""
+
+    if getattr(args, "network_id", None) is None:
+        args.network_id = evm_mainnet_network_id_for_domain(args.domain)
+        return
+    args.network_id = _require_domain_network_id(args.domain, args.network_id)
+
+
 def _route_allowlist_hash_from_args(
     args: argparse.Namespace,
     destination_binding_hash: bytes,
@@ -1553,9 +1588,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--network-id",
-        required=True,
         type=lambda value: parse_hex_bytes(value, label="network id", byte_length=32),
-        help="EVM chain/network id as a non-zero bytes32 hex value.",
+        help=(
+            "Optional EVM chain/network id override as a non-zero bytes32 hex "
+            "value. Defaults to the selected domain's canonical mainnet EIP-155 "
+            "chain id and rejects any mismatch."
+        ),
     )
     parser.add_argument(
         "--verifier-address",
@@ -1849,6 +1887,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        apply_canonical_network_id(args)
         apply_runtime_bytecode_hash(args)
         apply_bridge_runtime_bytecode_hash(args)
         destination_binding_hash = _destination_binding_hash_from_args(args)

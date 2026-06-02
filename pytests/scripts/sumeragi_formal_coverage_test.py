@@ -211,6 +211,7 @@ def test_formal_artifact_conflict_marker_scan_uses_tla_cfg_inventory(
     module = load_coverage_module()
     cfg = tmp_path / "Sumeragi.cfg"
     tla = tmp_path / "Sumeragi.tla"
+    nested_tla = tmp_path / "nested" / "Hidden.tla"
     readme = tmp_path / "README.md"
     cfg.write_text("INIT Init\n", encoding="utf-8")
     tla.write_text(
@@ -223,14 +224,26 @@ def test_formal_artifact_conflict_marker_scan_uses_tla_cfg_inventory(
         ),
         encoding="utf-8",
     )
+    nested_tla.parent.mkdir()
+    nested_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Hidden ----",
+                "=======",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
     readme.write_text("<<<<<<< HEAD\n", encoding="utf-8")
 
     paths = module.formal_artifact_paths(tmp_path)
 
-    assert paths == (cfg, tla)
-    assert module.conflict_marker_errors(paths) == [
-        f"{tla}:2 contains merge conflict marker: <<<<<<< HEAD"
-    ]
+    assert set(paths) == {cfg, nested_tla, tla}
+    assert set(module.conflict_marker_errors(paths)) == {
+        f"{nested_tla}:2 contains merge conflict marker: =======",
+        f"{tla}:2 contains merge conflict marker: <<<<<<< HEAD",
+    }
 
 
 def test_command_mode_duplicates_are_visible_to_guard(tmp_path: Path) -> None:
@@ -750,6 +763,59 @@ def test_mutation_cfg_equivalence_rejects_unexpected_tlc_cfg() -> None:
     ]
 
 
+def test_mutation_cfg_name_errors_accepts_matching_cfg_fragments() -> None:
+    module = load_coverage_module()
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiFrontier_bug_${cfg_bug_name}.cfg"\n',
+            10,
+        ),
+        "rbc-bug-duplicate-ready": module.RunnerCase(
+            "rbc-bug-duplicate-ready",
+            '\n    cfg_file="$spec_dir/SumeragiRbcDeliverQuorum_bug_duplicate_ready_count.cfg"\n',
+            20,
+        ),
+        "commit-roots-bug-*": module.RunnerCase(
+            "commit-roots-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiCommitRootConsistency_tlc_bug_${cfg_bug_name}.cfg"\n',
+            30,
+        ),
+    }
+
+    assert (
+        module.mutation_cfg_name_errors(
+            {
+                "frontier-bug-stale-owner",
+                "rbc-bug-duplicate-ready",
+                "commit-roots-bug-under-quorum-accept",
+            },
+            cases,
+            "TLC",
+        )
+        == []
+    )
+
+
+def test_mutation_cfg_name_errors_rejects_mismatched_cfg_fragment() -> None:
+    module = load_coverage_module()
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiFrontier_bug_other_case.cfg"\n',
+            10,
+        )
+    }
+    cfg = module.display_path(module.SPEC_DIR / "SumeragiFrontier_bug_other_case.cfg")
+
+    assert module.mutation_cfg_name_errors(
+        {"frontier-bug-stale-owner"}, cases, "Apalache"
+    ) == [
+        f"frontier-bug-stale-owner: Apalache cfg {cfg} does not contain "
+        "expected mutation fragment _bug_stale_owner"
+    ]
+
+
 def test_module_identity_allows_matching_specs_and_tlc_only_modes() -> None:
     module = load_coverage_module()
     apalache_cases = {
@@ -856,6 +922,13 @@ def test_referenced_files_rejects_malformed_proof_input_assignments() -> None:
                     '    cfg_file="$spec_dir/SumeragiFrontier_fast.cfg"',
                     "    cfg_file=$spec_dir/SumeragiOther_fast.cfg",
                     '    spec_file="$other_dir/SumeragiOther.tla"',
+                    '    cfg_file+="$spec_dir/SumeragiMutated_fast.cfg"',
+                    '    readonly spec_file="$spec_dir/SumeragiReadonly.tla"',
+                    '    cfg_file[0]="$spec_dir/SumeragiArray_fast.cfg"',
+                    '    printf -v spec_file "%s" "$spec_dir/SumeragiPrintf.tla"',
+                    "    read -r cfg_file",
+                    "    unset spec_file",
+                    "    eval 'cfg_file=$spec_dir/SumeragiEval_fast.cfg'",
                 ]
             ),
             20,
@@ -872,6 +945,25 @@ def test_referenced_files_rejects_malformed_proof_input_assignments() -> None:
             "frontier-fast: runner case 'frontier-fast' line 23 "
             "has malformed proof-input assignment: "
             'spec_file="$other_dir/SumeragiOther.tla"',
+            "frontier-fast: runner case 'frontier-fast' line 24 "
+            "has malformed proof-input assignment: "
+            'cfg_file+="$spec_dir/SumeragiMutated_fast.cfg"',
+            "frontier-fast: runner case 'frontier-fast' line 25 "
+            "has malformed proof-input assignment: "
+            'readonly spec_file="$spec_dir/SumeragiReadonly.tla"',
+            "frontier-fast: runner case 'frontier-fast' line 26 "
+            "has malformed proof-input assignment: "
+            'cfg_file[0]="$spec_dir/SumeragiArray_fast.cfg"',
+            "frontier-fast: runner case 'frontier-fast' line 27 "
+            "has malformed proof-input assignment: "
+            'printf -v spec_file "%s" "$spec_dir/SumeragiPrintf.tla"',
+            "frontier-fast: runner case 'frontier-fast' line 28 "
+            "has malformed proof-input assignment: read -r cfg_file",
+            "frontier-fast: runner case 'frontier-fast' line 29 "
+            "has malformed proof-input assignment: unset spec_file",
+            "frontier-fast: runner case 'frontier-fast' line 30 "
+            "has malformed proof-input assignment: "
+            "eval 'cfg_file=$spec_dir/SumeragiEval_fast.cfg'",
         ],
     )
 
@@ -982,6 +1074,12 @@ def test_tlc_module_files_rejects_malformed_module_assignments() -> None:
                 [
                     '    module="SumeragiFrontier"',
                     '    module = "SumeragiOther"',
+                    '    module+="SumeragiMutated"',
+                    '    export module="SumeragiExported"',
+                    '    module[0]="SumeragiArray"',
+                    '    printf -v module "%s" SumeragiPrintf',
+                    "    unset module",
+                    "    eval 'module=SumeragiEval'",
                 ]
             ),
             20,
@@ -990,7 +1088,19 @@ def test_tlc_module_files_rejects_malformed_module_assignments() -> None:
         [module.SPEC_DIR / "SumeragiFrontier.tla"],
         [
             "frontier-fast: TLC runner case 'frontier-fast' line 21 "
-            'has malformed module assignment: module = "SumeragiOther"'
+            'has malformed module assignment: module = "SumeragiOther"',
+            "frontier-fast: TLC runner case 'frontier-fast' line 22 "
+            'has malformed module assignment: module+="SumeragiMutated"',
+            "frontier-fast: TLC runner case 'frontier-fast' line 23 "
+            'has malformed module assignment: export module="SumeragiExported"',
+            "frontier-fast: TLC runner case 'frontier-fast' line 24 "
+            'has malformed module assignment: module[0]="SumeragiArray"',
+            "frontier-fast: TLC runner case 'frontier-fast' line 25 "
+            'has malformed module assignment: printf -v module "%s" SumeragiPrintf',
+            "frontier-fast: TLC runner case 'frontier-fast' line 26 "
+            "has malformed module assignment: unset module",
+            "frontier-fast: TLC runner case 'frontier-fast' line 27 "
+            "has malformed module assignment: eval 'module=SumeragiEval'",
         ],
     )
 
@@ -1096,6 +1206,12 @@ def test_tlc_runner_constraint_errors_rejects_malformed_assignments(
                 [
                     '    tlc_constraint="DefinedConstraint"',
                     "    tlc_constraint = OtherConstraint",
+                    '    tlc_constraint+="AppendedConstraint"',
+                    '    readonly tlc_constraint="ReadonlyConstraint"',
+                    '    tlc_constraint[0]="ArrayConstraint"',
+                    '    printf -v tlc_constraint "%s" OtherConstraint',
+                    "    unset tlc_constraint",
+                    "    eval 'tlc_constraint=EvalConstraint'",
                 ]
             ),
             30,
@@ -1104,7 +1220,134 @@ def test_tlc_runner_constraint_errors_rejects_malformed_assignments(
     ) == [
         "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 31 "
         "has malformed tlc_constraint assignment: "
-        "tlc_constraint = OtherConstraint"
+        "tlc_constraint = OtherConstraint",
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 32 "
+        "has malformed tlc_constraint assignment: "
+        'tlc_constraint+="AppendedConstraint"',
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 33 "
+        "has malformed tlc_constraint assignment: "
+        'readonly tlc_constraint="ReadonlyConstraint"',
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 34 "
+        "has malformed tlc_constraint assignment: "
+        'tlc_constraint[0]="ArrayConstraint"',
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 35 "
+        "has malformed tlc_constraint assignment: "
+        'printf -v tlc_constraint "%s" OtherConstraint',
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 36 "
+        "has malformed tlc_constraint assignment: unset tlc_constraint",
+        "certified-fetch-fast: TLC runner case 'certified-fetch-fast' line 37 "
+        "has malformed tlc_constraint assignment: "
+        "eval 'tlc_constraint=EvalConstraint'",
+    ]
+
+
+def test_tlc_runner_constraint_errors_rejects_trivial_constraints(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "TypeInvariant == TRUE",
+                "BoundConstraint == counter \\in 0..1",
+                "DirectFalse == FALSE",
+                "DirectType == TypeInvariant",
+                "AliasFalse == DirectFalse",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="BoundConstraint"\n',
+            7,
+        ),
+        tla,
+    ) == []
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="DirectFalse"\n',
+            7,
+        ),
+        tla,
+    ) == [
+        f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
+        f"appends CONSTRAINT DirectFalse, but {tla}:4 defines it as literal FALSE"
+    ]
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="DirectType"\n',
+            7,
+        ),
+        tla,
+    ) == [
+        f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
+        f"appends CONSTRAINT DirectType, but {tla}:5 aliases "
+        "TypeInvariant directly"
+    ]
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="AliasFalse"\n',
+            7,
+        ),
+        tla,
+    ) == [
+        f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
+        f"appends CONSTRAINT AliasFalse, but AliasFalse@{tla}:6 -> "
+        f"DirectFalse@{tla}:4 resolves to literal FALSE"
+    ]
+
+
+def test_tlc_runner_constraint_errors_rejects_parameterized_constraint(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "BoundConstraint == counter \\in 0..1",
+                "ParameterizedConstraint(value) == value \\in 0..1",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="BoundConstraint"\n',
+            7,
+        ),
+        tla,
+    ) == []
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            '\n    tlc_constraint="ParameterizedConstraint"\n',
+            7,
+        ),
+        tla,
+    ) == [
+        f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
+        f"appends CONSTRAINT ParameterizedConstraint, but {tla}:3 defines it "
+        "with arity 1; TLC runner constraints must target zero-arity operators"
     ]
 
 
@@ -1144,13 +1387,31 @@ def test_apalache_length_errors_rejects_malformed_assignments() -> None:
                 [
                     "    apalache_length=2",
                     "    apalache_length = 3",
+                    "    apalache_length+=4",
+                    "    declare apalache_length=5",
+                    "    apalache_length[0]=6",
+                    '    printf -v apalache_length "%s" 7',
+                    "    unset apalache_length",
+                    "    eval 'apalache_length=8'",
                 ]
             ),
             40,
         ),
     ) == [
         "frontier-fast: runner case 'frontier-fast' line 41 "
-        "has malformed apalache_length assignment: apalache_length = 3"
+        "has malformed apalache_length assignment: apalache_length = 3",
+        "frontier-fast: runner case 'frontier-fast' line 42 "
+        "has malformed apalache_length assignment: apalache_length+=4",
+        "frontier-fast: runner case 'frontier-fast' line 43 "
+        "has malformed apalache_length assignment: declare apalache_length=5",
+        "frontier-fast: runner case 'frontier-fast' line 44 "
+        "has malformed apalache_length assignment: apalache_length[0]=6",
+        "frontier-fast: runner case 'frontier-fast' line 45 "
+        'has malformed apalache_length assignment: printf -v apalache_length "%s" 7',
+        "frontier-fast: runner case 'frontier-fast' line 46 "
+        "has malformed apalache_length assignment: unset apalache_length",
+        "frontier-fast: runner case 'frontier-fast' line 47 "
+        "has malformed apalache_length assignment: eval 'apalache_length=8'",
     ]
 
 
@@ -1184,6 +1445,8 @@ def test_tla_module_header_errors_validate_declared_module(tmp_path: Path) -> No
     no_end = tmp_path / "SumeragiNoEnd.tla"
     duplicate_end = tmp_path / "SumeragiDuplicateEnd.tla"
     trailing_end = tmp_path / "SumeragiTrailingEnd.tla"
+    invalid_identifier = tmp_path / "SumeragiInvalidIdentifier.tla"
+    reserved_header = tmp_path / "TRUE.tla"
     matching.write_text("---- MODULE SumeragiFrontier ----\n====\n", encoding="utf-8")
     mismatched.write_text("---- MODULE Different ----\n====\n", encoding="utf-8")
     missing.write_text("EXTENDS Naturals\n", encoding="utf-8")
@@ -1210,6 +1473,8 @@ def test_tla_module_header_errors_validate_declared_module(tmp_path: Path) -> No
         "---- MODULE SumeragiTrailingEnd ----\n====\nTrailing == TRUE\n",
         encoding="utf-8",
     )
+    invalid_identifier.write_text("---- MODULE 123Bad ----\n====\n", encoding="utf-8")
+    reserved_header.write_text("---- MODULE TRUE ----\n====\n", encoding="utf-8")
 
     assert module.tla_module_header_errors("frontier-fast", [matching]) == []
     assert module.tla_module_header_errors(
@@ -1222,6 +1487,8 @@ def test_tla_module_header_errors_validate_declared_module(tmp_path: Path) -> No
             no_end,
             duplicate_end,
             trailing_end,
+            invalid_identifier,
+            reserved_header,
         ],
     ) == [
         f"frontier-fast: {mismatched} declares MODULE Different, expected SumeragiQuorum",
@@ -1231,6 +1498,8 @@ def test_tla_module_header_errors_validate_declared_module(tmp_path: Path) -> No
         f"frontier-fast: {no_end} declares TLA terminator 0 times",
         f"frontier-fast: {duplicate_end} declares TLA terminator 2 times",
         f"frontier-fast: {trailing_end}:2 has content after TLA terminator",
+        f"frontier-fast: {invalid_identifier} has no TLA MODULE declaration",
+        f"frontier-fast: {reserved_header}:1 declares reserved TLA MODULE name TRUE",
     ]
 
 
@@ -1331,7 +1600,7 @@ def test_cfg_shape_errors_rejects_incomplete_configs(tmp_path: Path) -> None:
     ]
 
 
-def test_cfg_shape_errors_ignores_indented_continuations_as_directives(
+def test_cfg_shape_errors_rejects_indented_directive_spoofing(
     tmp_path: Path,
 ) -> None:
     module = load_coverage_module()
@@ -1362,7 +1631,9 @@ def test_cfg_shape_errors_ignores_indented_continuations_as_directives(
     assert module.cfg_shape_errors(
         "frontier-fast", [missing_next, missing_check]
     ) == [
+        f"frontier-fast: {missing_next}:3 indented CFG directive NEXT must be top-level",
         f"frontier-fast: {missing_next} must define SPECIFICATION or both INIT and NEXT",
+        f"frontier-fast: {missing_check}:4 indented CFG directive INVARIANT must be top-level",
         f"frontier-fast: {missing_check} has no invariant or property checks",
     ]
 
@@ -1408,11 +1679,13 @@ def test_cfg_operator_references_reject_malformed_operator_names(
         "\n".join(
             [
                 "SPECIFICATION Spec!",
+                "NEXT THEOREM",
+                "PROPERTY WF_vars",
                 "INVARIANTS Safety Good",
-                "INVARIANTS Safety Bad-Name",
+                "INVARIANTS Safety Bad-Name TRUE",
                 "PROPERTIES",
                 "  Eventually Extra",
-                "  Bad-Name",
+                "  FALSE",
                 "  EventuallyRecovers",
             ]
         ),
@@ -1421,16 +1694,110 @@ def test_cfg_operator_references_reject_malformed_operator_names(
 
     assert module.cfg_operator_references(cfg) == (
         [
-            (2, "INVARIANTS", "Safety"),
-            (2, "INVARIANTS", "Good"),
-            (3, "INVARIANTS", "Safety"),
-            (7, "PROPERTIES", "EventuallyRecovers"),
+            (4, "INVARIANTS", "Safety"),
+            (4, "INVARIANTS", "Good"),
+            (5, "INVARIANTS", "Safety"),
+            (9, "PROPERTIES", "EventuallyRecovers"),
         ],
         [
             f"{cfg}:1 directive SPECIFICATION must reference a static TLA operator: Spec!",
-            f"{cfg}:3 directive INVARIANTS must reference static TLA operators: Bad-Name",
-            f"{cfg}:5 PROPERTIES block line must reference exactly one static TLA operator",
-            f"{cfg}:6 PROPERTIES block line must reference exactly one static TLA operator",
+            f"{cfg}:2 directive NEXT must reference a static TLA operator: THEOREM",
+            f"{cfg}:3 directive PROPERTY must reference a static TLA operator: WF_vars",
+            f"{cfg}:5 directive INVARIANTS must reference static TLA operators: Bad-Name",
+            f"{cfg}:5 directive INVARIANTS must reference static TLA operators: TRUE",
+            f"{cfg}:7 PROPERTIES block line must reference exactly one static TLA operator",
+            f"{cfg}:8 PROPERTIES block line must reference exactly one static TLA operator",
+        ],
+    )
+
+
+def test_cfg_operator_references_reject_vars_tuple_as_operator_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "VarsTarget.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT vars",
+                "INVARIANTS Safety vars",
+                "PROPERTIES",
+                "  EventuallyRecovers",
+                "  vars",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_references(cfg) == (
+        [
+            (1, "INIT", "Init"),
+            (3, "INVARIANTS", "Safety"),
+            (5, "PROPERTIES", "EventuallyRecovers"),
+        ],
+        [
+            f"{cfg}:2 directive NEXT must reference a TLA operator other than "
+            "vars tuple",
+            f"{cfg}:3 directive INVARIANTS must reference TLA operators other "
+            "than vars tuple",
+            f"{cfg}:6 PROPERTIES block line must reference a TLA operator "
+            "other than vars tuple",
+        ],
+    )
+
+
+def test_cfg_operator_references_reject_indented_directive_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "IndentedDirective.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANTS",
+                "  NEXT",
+                "PROPERTIES",
+                "  CHECK_DEADLOCK",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_references(cfg) == (
+        [],
+        [
+            f"{cfg}:2 indented CFG directive NEXT must be top-level",
+            f"{cfg}:4 indented CFG directive CHECK_DEADLOCK must be top-level",
+        ],
+    )
+
+
+def test_cfg_operator_references_reject_empty_multiline_check_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "EmptyBlocks.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "INVARIANTS",
+                "PROPERTIES",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_references(cfg) == (
+        [
+            (1, "SPECIFICATION", "Spec"),
+            (4, "INVARIANT", "TypeInvariant"),
+        ],
+        [
+            f"{cfg}:2 INVARIANTS block must reference at least one static TLA operator",
+            f"{cfg}:3 PROPERTIES block must reference at least one static TLA operator",
         ],
     )
 
@@ -1449,6 +1816,8 @@ def test_tla_operator_definitions_parse_plain_local_and_parameterized(
                 "  ScopedLetHelper ==",
                 "TypeInvariant ==",
                 "RECURSIVE RecursiveOne(_), RecursiveTwo(_, _)",
+                "RecursiveOne(value) == TRUE",
+                "RecursiveTwo(left, right) == TRUE",
                 "====",
             ]
         ),
@@ -1462,6 +1831,238 @@ def test_tla_operator_definitions_parse_plain_local_and_parameterized(
         "RecursiveTwo",
         "TypeInvariant",
     }
+
+
+def test_tla_duplicate_operator_definition_errors_rejects_malformed_signatures(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Good(value) == TRUE",
+                "Bad(, value) == TRUE",
+                "Empty() == TRUE",
+                "Broken(value == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_operator_definition_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:3 TLA operator definition must use static "
+        "parameters: Bad(, value) == TRUE",
+        f"frontier-fast: {tla}:4 TLA operator definition must use static "
+        "parameters: Empty() == TRUE",
+        f"frontier-fast: {tla}:5 TLA operator definition must use a static "
+        "signature: Broken(value == TRUE",
+    ]
+    assert module.tla_operator_definitions(tla) == {"Good"}
+
+
+def test_tla_duplicate_operator_definition_errors_rejects_reserved_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "THEOREM == TRUE",
+                "SF_Action == TRUE",
+                "ReservedParam(THEOREM) == TRUE",
+                "RECURSIVE INSTANCE, RecursiveBad(TRUE), RecursiveOk(_)",
+                "RecursiveOk(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_operator_definition_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:5 RECURSIVE declaration must list static "
+        "operator declarations: INSTANCE, RecursiveBad(TRUE)",
+        f"frontier-fast: {tla}:3 TLA operator definition must use a "
+        "non-reserved static name: SF_Action == TRUE",
+        f"frontier-fast: {tla}:4 TLA operator definition must use static "
+        "parameters: ReservedParam(THEOREM) == TRUE",
+    ]
+    assert module.tla_operator_definitions(tla) == {"RecursiveOk"}
+
+
+def test_tla_operator_definitions_ignore_named_instance_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "RealOperator == TRUE",
+                "Alias == INSTANCE Named",
+                "Configured == INSTANCE WithConfig WITH Foo <- Bar",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_operator_definitions(tla) == {"RealOperator"}
+
+
+def test_tla_literal_operator_definitions_parse_top_level_literals(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "LiteralTrue == TRUE",
+                "LiteralFalse(_) == FALSE \\* comment",
+                "LOCAL LocalLiteral == TRUE",
+                "Multiline ==",
+                "  TRUE",
+                "UsesLet ==",
+                "  LET scoped == FALSE",
+                "  IN scoped",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_literal_operator_definitions(tla) == {
+        "LiteralTrue": (2, "TRUE"),
+        "LiteralFalse": (3, "FALSE"),
+        "LocalLiteral": (4, "TRUE"),
+        "Multiline": (6, "TRUE"),
+    }
+
+
+def test_tla_type_invariant_alias_definitions_parse_top_level_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "InlineAlias == TypeInvariant",
+                "MultilineAlias ==",
+                "  TypeInvariant",
+                "NotAlias == TypeInvariant /\\ TRUE",
+                "UsesLet ==",
+                "  LET scoped == TypeInvariant",
+                "  IN scoped",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_type_invariant_alias_definitions(tla) == {
+        "InlineAlias": (2, "TypeInvariant"),
+        "MultilineAlias": (4, "TypeInvariant"),
+    }
+
+
+def test_tla_static_boolean_literal_evaluates_obvious_wrappers() -> None:
+    module = load_coverage_module()
+
+    assert module.tla_static_boolean_literal("TRUE /\\ TRUE") == "TRUE"
+    assert module.tla_static_boolean_literal("(FALSE \\/ FALSE)") == "FALSE"
+    assert module.tla_static_boolean_literal("~FALSE") == "TRUE"
+    assert module.tla_static_boolean_literal("/\\ TRUE") == "TRUE"
+    assert module.tla_static_boolean_literal("counter = 0") is None
+    assert module.tla_static_boolean_literal("TRUE /\\ Safety") is None
+
+
+def test_tla_trivial_operator_chains_parse_transitive_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "LiteralHelper == TRUE",
+                "AliasToLiteral == LiteralHelper",
+                "TypeHelper == TypeInvariant",
+                "AliasToType ==",
+                "  TypeHelper",
+                "RealCheck == AliasToLiteral /\\ TypeInvariant",
+                "CycleA == CycleB",
+                "CycleB == CycleA",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    chains = module.tla_trivial_operator_chains(tla)
+
+    assert chains["AliasToLiteral"] == [
+        ("AliasToLiteral", 3, "LiteralHelper"),
+        ("LiteralHelper", 2, "TRUE"),
+    ]
+    assert chains["AliasToType"] == [
+        ("AliasToType", 6, "TypeHelper"),
+        ("TypeHelper", 4, "TypeInvariant"),
+    ]
+    assert "RealCheck" not in chains
+    assert "CycleA" not in chains
+
+
+def test_tla_trivial_operator_chains_parse_boolean_literal_expressions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "WrappedLiteral == (TRUE)",
+                "ConjLiteral == TRUE /\\ TRUE",
+                "FalseList ==",
+                "  \\/ FALSE",
+                "  \\/ FALSE",
+                "AliasToWrapped == (WrappedLiteral)",
+                "AliasToFalseList == FalseList",
+                "RealCheck == TRUE /\\ Safety",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    chains = module.tla_trivial_operator_chains(tla)
+
+    assert chains["WrappedLiteral"] == [("WrappedLiteral", 2, "TRUE")]
+    assert chains["ConjLiteral"] == [("ConjLiteral", 3, "TRUE")]
+    assert chains["AliasToWrapped"] == [
+        ("AliasToWrapped", 7, "WrappedLiteral"),
+        ("WrappedLiteral", 2, "TRUE"),
+    ]
+    assert chains["FalseList"] == [("FalseList", 5, "FALSE")]
+    assert chains["AliasToFalseList"] == [
+        ("AliasToFalseList", 8, "FalseList"),
+        ("FalseList", 5, "FALSE"),
+    ]
+    assert "RealCheck" not in chains
 
 
 def test_tla_duplicate_operator_definition_errors_rejects_repeated_top_level_entries(
@@ -1478,6 +2079,7 @@ def test_tla_duplicate_operator_definition_errors_rejects_repeated_top_level_ent
                 "Helper ==",
                 "  FALSE",
                 "RECURSIVE Recur(_), Recur(_)",
+                "Recur(value) == TRUE",
                 "UsesLet ==",
                 "  LET scoped == TRUE",
                 "      scoped == FALSE",
@@ -1498,6 +2100,65 @@ def test_tla_duplicate_operator_definition_errors_rejects_repeated_top_level_ent
     ]
 
 
+def test_tla_duplicate_operator_definition_errors_require_recursive_definitions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "RECURSIVE Missing(_), Mismatch(_, _), Good(_)",
+                "Mismatch(value) == TRUE",
+                "Good(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_operator_definition_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:2 declares TLA RECURSIVE operator Missing, "
+        "but no top-level definition exists",
+        f"frontier-fast: {tla}:2 declares TLA RECURSIVE operator Mismatch "
+        "with arity 2, but definition at line 3 has arity 1",
+    ]
+
+
+def test_tla_duplicate_operator_definition_errors_rejects_malformed_recursive(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "RECURSIVE Good(_), Bad(, _)",
+                "RECURSIVE Good(_),, Hidden(_)",
+                "RECURSIVE Broken(_, Hidden",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_operator_definition_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:2 RECURSIVE declaration must list static "
+        "operator declarations: Bad(, _)",
+        f"frontier-fast: {tla}:3 RECURSIVE declaration must list static "
+        "operator declarations: empty recursive declaration entry",
+        f"frontier-fast: {tla}:4 RECURSIVE declaration must list static "
+        "operator declarations: unbalanced parentheses",
+    ]
+    assert module.tla_recursive_declaration_entries(tla) == []
+
+
 def test_tla_module_dependency_references_parse_extends_and_instances(
     tmp_path: Path,
 ) -> None:
@@ -1510,6 +2171,7 @@ def test_tla_module_dependency_references_parse_extends_and_instances(
                 "EXTENDS Naturals, LocalHelpers \\* comment",
                 "LOCAL INSTANCE Imported",
                 "Alias == INSTANCE Named",
+                "Configured == INSTANCE WithConfig WITH Foo <- Bar",
                 "====",
             ]
         ),
@@ -1522,8 +2184,82 @@ def test_tla_module_dependency_references_parse_extends_and_instances(
             (2, "EXTENDS", "LocalHelpers"),
             (3, "INSTANCE", "Imported"),
             (4, "INSTANCE", "Named"),
+            (5, "INSTANCE", "WithConfig"),
         ],
         [],
+    )
+
+
+def test_tla_module_dependency_references_rejects_malformed_extends(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "EXTENDS Naturals,,FiniteSets",
+                "EXTENDS Naturals + Hidden",
+                "EXTENDS Naturals,",
+                "EXTENDS TRUE",
+                "INSTANCE Imported",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_module_dependency_references(tla) == (
+        [(6, "INSTANCE", "Imported")],
+        [
+            f"{tla}:2 EXTENDS must list static module identifiers: Naturals,,FiniteSets",
+            f"{tla}:3 EXTENDS must list static module identifiers: Naturals + Hidden",
+            f"{tla}:4 EXTENDS must list static module identifiers: Naturals,",
+            f"{tla}:5 EXTENDS must list non-reserved static module identifiers: TRUE",
+        ],
+    )
+
+
+def test_tla_module_dependency_references_rejects_malformed_instances(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "INSTANCE 123Bad",
+                "Alias == INSTANCE Named + Hidden",
+                "LOCAL INSTANCE",
+                "INSTANCE TRUE",
+                "Alias == INSTANCE WF_Module",
+                "TRUE == INSTANCE Imported",
+                "WF_Alias == INSTANCE Imported",
+                "INSTANCE Imported",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_module_dependency_references(tla) == (
+        [(9, "INSTANCE", "Imported")],
+        [
+            f"{tla}:2 INSTANCE must reference a static module identifier: INSTANCE 123Bad",
+            f"{tla}:3 INSTANCE must reference a static module identifier: "
+            "Alias == INSTANCE Named + Hidden",
+            f"{tla}:4 INSTANCE must reference a static module identifier: LOCAL INSTANCE",
+            f"{tla}:5 INSTANCE must reference a non-reserved static module "
+            "identifier: INSTANCE TRUE",
+            f"{tla}:6 INSTANCE must reference a non-reserved static module "
+            "identifier: Alias == INSTANCE WF_Module",
+            f"{tla}:7 INSTANCE alias must be a non-reserved static identifier: "
+            "TRUE == INSTANCE Imported",
+            f"{tla}:8 INSTANCE alias must be a non-reserved static identifier: "
+            "WF_Alias == INSTANCE Imported",
+        ],
     )
 
 
@@ -1551,6 +2287,45 @@ def test_tla_module_dependency_errors_rejects_missing_local_module(
         f"but neither TLA standard module nor {tmp_path / 'MissingHelpers.tla'} exists",
         f"frontier-fast: {tla}:3 references INSTANCE module MissingInstance, "
         f"but neither TLA standard module nor {tmp_path / 'MissingInstance.tla'} exists",
+    ]
+
+
+def test_tla_forbidden_directive_errors_rejects_top_level_assumptions_and_proofs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "ASSUME FALSE",
+                "ASSUMPTION TRUE",
+                "AXIOM TypeInvariant",
+                "THEOREM TypeInvariant",
+                "PROOF OMITTED",
+                "QED",
+                "  ASSUME LocalHelper",
+                "  THEOREM LocalHelper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_forbidden_directive_errors("frontier-fast", tla) == [
+        f"frontier-fast: {tla}:2 uses top-level ASSUME directive; "
+        "Sumeragi formal modules must be assumption-free",
+        f"frontier-fast: {tla}:3 uses top-level ASSUMPTION directive; "
+        "Sumeragi formal modules must be assumption-free",
+        f"frontier-fast: {tla}:4 uses top-level AXIOM directive; "
+        "Sumeragi formal modules must be assumption-free",
+        f"frontier-fast: {tla}:5 uses top-level THEOREM directive; "
+        "Sumeragi formal modules must be proof-free",
+        f"frontier-fast: {tla}:6 uses top-level PROOF directive; "
+        "Sumeragi formal modules must be proof-free",
+        f"frontier-fast: {tla}:7 uses top-level QED directive; "
+        "Sumeragi formal modules must be proof-free",
     ]
 
 
@@ -1598,7 +2373,109 @@ def test_cfg_constant_bindings_rejects_malformed_block_line(
 
     assert module.cfg_constant_bindings(cfg) == (
         [(2, "MaxView"), (4, "Toggle")],
-        [f"{cfg}:3 CONSTANTS block line must bind a constant"],
+        [f"{cfg}:3 CONSTANTS block line must bind exactly one constant"],
+    )
+
+
+def test_cfg_constant_bindings_rejects_ambiguous_inline_binding(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Model.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT Bug = \"none\" Hidden = TRUE",
+                "CONSTANT MissingBinding",
+                "INIT Init",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_bindings(cfg) == (
+        [],
+        [
+            f"{cfg}:1 directive CONSTANT contains nested binding-looking token Hidden",
+            f"{cfg}:2 directive CONSTANT must bind exactly one constant",
+        ],
+    )
+
+
+def test_cfg_constant_bindings_rejects_reserved_binding_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Model.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT TRUE = Bool",
+                "CONSTANTS",
+                "  WF_guard = 1",
+                "  MaxView = 2",
+                "INIT Init",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_bindings(cfg) == (
+        [(4, "MaxView")],
+        [
+            f"{cfg}:1 directive CONSTANT must bind a non-reserved static constant: TRUE",
+            f"{cfg}:3 CONSTANTS block line must bind a non-reserved static constant: WF_guard",
+        ],
+    )
+
+
+def test_cfg_constant_bindings_rejects_empty_constant_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Model.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "INIT Init",
+                "CONSTANT",
+                "",
+                "NEXT Next",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_bindings(cfg) == (
+        [],
+        [
+            f"{cfg}:1 CONSTANTS block must bind at least one constant",
+            f"{cfg}:3 CONSTANTS block must bind at least one constant",
+        ],
+    )
+
+
+def test_cfg_constant_bindings_rejects_indented_directive_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Model.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  MaxView = 2",
+                "  INVARIANT = TypeInvariant",
+                "  Toggle <- Bool",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_bindings(cfg) == (
+        [(2, "MaxView")],
+        [f"{cfg}:3 indented CFG directive INVARIANT must be top-level"],
     )
 
 
@@ -1659,6 +2536,94 @@ def test_tla_duplicate_constant_declaration_errors_rejects_repeated_constants(
     ]
 
 
+def test_tla_duplicate_constant_declaration_errors_rejects_empty_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "CONSTANTS",
+                "VARIABLE checked",
+                "CONSTANT",
+                "",
+                "vars == <<checked>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_constant_declaration_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:2 CONSTANTS block must declare at least one identifier",
+        f"frontier-fast: {tla}:4 CONSTANTS block must declare at least one identifier",
+    ]
+
+
+def test_tla_duplicate_constant_declaration_errors_rejects_malformed_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "CONSTANTS Good, , Bad",
+                "CONSTANTS",
+                "  MaxView,",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_constant_declaration_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:2 CONSTANTS declaration line must list static "
+        "identifiers: Good, , Bad",
+        f"frontier-fast: {tla}:4 CONSTANTS declaration block ends with "
+        "trailing comma",
+    ]
+
+
+def test_tla_duplicate_constant_declaration_errors_rejects_reserved_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "CONSTANTS TRUE",
+                "CONSTANTS",
+                "  WF_guard",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_duplicate_constant_declaration_errors(
+        "frontier-fast", tla
+    ) == [
+        f"frontier-fast: {tla}:2 CONSTANTS declaration line must list "
+        "non-reserved static identifiers: TRUE",
+        f"frontier-fast: {tla}:4 CONSTANTS declaration line must list "
+        "non-reserved static identifiers: WF_guard",
+    ]
+
+
 def test_tla_variable_surface_errors_accepts_matching_multiline_vars_tuple(
     tmp_path: Path,
 ) -> None:
@@ -1682,6 +2647,88 @@ def test_tla_variable_surface_errors_accepts_matching_multiline_vars_tuple(
     )
 
     assert module.tla_variable_surface_errors("frontier-fast", tla) == []
+
+
+def test_tla_variable_surface_errors_rejects_empty_variable_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "VARIABLES",
+                "CONSTANT MaxView",
+                "VARIABLE",
+                "",
+                "vars == <<>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_variable_surface_errors("frontier-fast", tla) == [
+        f"frontier-fast: {tla}:2 VARIABLES block must declare at least one identifier",
+        f"frontier-fast: {tla}:4 VARIABLES block must declare at least one identifier",
+        f"frontier-fast: {tla}:6 vars must list static variables",
+    ]
+
+
+def test_tla_variable_surface_errors_rejects_malformed_declaration_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "VARIABLES",
+                "  checked",
+                "  bad-token",
+                "vars == <<checked>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_variable_surface_errors("frontier-fast", tla) == [
+        f"frontier-fast: {tla}:4 VARIABLES declaration line must list static "
+        "identifiers: bad-token",
+    ]
+
+
+def test_tla_variable_surface_errors_rejects_reserved_declarations_and_vars(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "VARIABLE TRUE",
+                "VARIABLES",
+                "  WF_state",
+                "  checked",
+                "vars == <<checked, FALSE, SF_step>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_variable_surface_errors("frontier-fast", tla) == [
+        f"frontier-fast: {tla}:2 VARIABLES declaration line must list "
+        "non-reserved static identifiers: TRUE",
+        f"frontier-fast: {tla}:4 VARIABLES declaration line must list "
+        "non-reserved static identifiers: WF_state",
+        f"frontier-fast: {tla}:6 vars must list non-reserved static variables: FALSE",
+        f"frontier-fast: {tla}:6 vars must list non-reserved static variables: SF_step",
+    ]
 
 
 def test_tla_variable_surface_errors_rejects_duplicates_and_tuple_drift(
@@ -1726,6 +2773,29 @@ def test_tla_variable_surface_errors_rejects_dynamic_vars_tuple(
                 "---- MODULE Model ----",
                 "VARIABLE checked",
                 "vars == DynamicVars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_variable_surface_errors("frontier-fast", tla) == [
+        f"frontier-fast: {tla}:3 vars must be a static tuple",
+        f"frontier-fast: {tla} declares variable checked but vars does not include it",
+    ]
+
+
+def test_tla_variable_surface_errors_rejects_wrapped_vars_tuple_expression(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "VARIABLE checked",
+                "vars == IF TRUE THEN <<checked>> ELSE <<checked>>",
                 "====",
             ]
         ),
@@ -1905,6 +2975,226 @@ def test_cfg_operator_reference_errors_rejects_missing_module_operator(
     ]
 
 
+def test_cfg_operator_reference_errors_rejects_instance_alias_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Imported == INSTANCE ImportedModel",
+                "Safety == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANTS TypeInvariant Imported Safety",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_reference_errors("frontier-fast", tla, cfg) == [
+        f"frontier-fast: {cfg}:3 references INVARIANTS operator Imported, "
+        f"but {tla} does not define it",
+    ]
+
+
+def test_cfg_operator_reference_errors_rejects_parameterized_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init(value) == TRUE",
+                "Next(value) == TRUE",
+                "BoundConstraint(value) == TRUE",
+                "Safety(value) == TRUE",
+                "Eventually(value) == TRUE",
+                "RECURSIVE RecursiveSafety(_)",
+                "RecursiveSafety(value) == TRUE",
+                "Good == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTRAINT BoundConstraint",
+                "INVARIANTS Safety Good RecursiveSafety",
+                "PROPERTY Eventually",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_reference_errors("frontier-fast", tla, cfg) == [
+        f"frontier-fast: {cfg}:1 references INIT operator Init, but {tla}:2 "
+        "defines it with arity 1; CFG references must target zero-arity operators",
+        f"frontier-fast: {cfg}:2 references NEXT operator Next, but {tla}:3 "
+        "defines it with arity 1; CFG references must target zero-arity operators",
+        f"frontier-fast: {cfg}:3 references CONSTRAINT operator "
+        f"BoundConstraint, but {tla}:4 defines it with arity 1; CFG references "
+        "must target zero-arity operators",
+        f"frontier-fast: {cfg}:4 references INVARIANTS operator Safety, but "
+        f"{tla}:5 defines it with arity 1; CFG references must target "
+        "zero-arity operators",
+        f"frontier-fast: {cfg}:4 references INVARIANTS operator "
+        f"RecursiveSafety, but {tla}:8 defines it with arity 1; CFG references "
+        "must target zero-arity operators",
+        f"frontier-fast: {cfg}:5 references PROPERTY operator Eventually, but "
+        f"{tla}:6 defines it with arity 1; CFG references must target "
+        "zero-arity operators",
+    ]
+
+
+def test_cfg_trivial_check_operator_errors_rejects_trivial_semantic_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SafetyInvariant == TRUE",
+                "EventuallyRecovers == FALSE",
+                "LiteralHelper == TRUE",
+                "AliasToLiteral == LiteralHelper",
+                "TypeHelper == TypeInvariant",
+                "AliasCheck == TypeInvariant",
+                "AliasToType ==",
+                "  TypeHelper",
+                "RealCheck ==",
+                "  TypeInvariant /\\ AliasCheck",
+                "BooleanSafety == TRUE /\\ TRUE",
+                "WrappedFalse == (FALSE)",
+                "MultilineBoolean ==",
+                "  /\\ TRUE",
+                "  /\\ TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANTS TypeInvariant SafetyInvariant AliasCheck AliasToLiteral AliasToType RealCheck BooleanSafety WrappedFalse MultilineBoolean",
+                "PROPERTY EventuallyRecovers",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_trivial_check_operator_errors(
+        "frontier-fast", tla, cfg, "Apalache"
+    ) == [
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"SafetyInvariant, but {tla}:5 defines it as literal TRUE",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"AliasCheck, but {tla}:10 aliases TypeInvariant directly",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"AliasToLiteral, but AliasToLiteral@{tla}:8 -> LiteralHelper@{tla}:7 "
+        "resolves to literal TRUE",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"AliasToType, but AliasToType@{tla}:12 -> TypeHelper@{tla}:9 "
+        "resolves to TypeInvariant",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"BooleanSafety, but {tla}:15 defines it as literal TRUE",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"WrappedFalse, but {tla}:16 defines it as literal FALSE",
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"MultilineBoolean, but {tla}:18 defines it as literal TRUE",
+        f"frontier-fast: Apalache cfg {cfg}:4 references PROPERTY check "
+        f"EventuallyRecovers, but {tla}:6 defines it as literal FALSE",
+    ]
+
+
+def test_cfg_trivial_check_operator_errors_rejects_trivial_constraints(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "BoundConstraint == counter \\in 0..1",
+                "FalseConstraint == FALSE",
+                "AliasConstraint == FalseConstraint",
+                "WrappedFalseConstraint == (FALSE \\/ FALSE)",
+                "MultilineFalseConstraint ==",
+                "  /\\ FALSE",
+                "  /\\ FALSE",
+                "Safety == counter >= 0",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTRAINT BoundConstraint",
+                "CONSTRAINT FalseConstraint",
+                "CONSTRAINT AliasConstraint",
+                "CONSTRAINT WrappedFalseConstraint",
+                "CONSTRAINT MultilineFalseConstraint",
+                "INVARIANT TypeInvariant",
+                "INVARIANT Safety",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_trivial_check_operator_errors(
+        "frontier-fast", tla, cfg, "TLC"
+    ) == [
+        f"frontier-fast: TLC cfg {cfg}:4 references CONSTRAINT operator "
+        f"FalseConstraint, but {tla}:6 defines it as literal FALSE",
+        f"frontier-fast: TLC cfg {cfg}:5 references CONSTRAINT operator "
+        f"AliasConstraint, but AliasConstraint@{tla}:7 -> "
+        f"FalseConstraint@{tla}:6 resolves to literal FALSE",
+        f"frontier-fast: TLC cfg {cfg}:6 references CONSTRAINT operator "
+        f"WrappedFalseConstraint, but {tla}:8 defines it as literal FALSE",
+        f"frontier-fast: TLC cfg {cfg}:7 references CONSTRAINT operator "
+        f"MultilineFalseConstraint, but {tla}:10 defines it as literal FALSE",
+    ]
+
+
 def test_cfg_duplicate_operator_reference_errors_accepts_unique_checks(
     tmp_path: Path,
 ) -> None:
@@ -1915,6 +3205,7 @@ def test_cfg_duplicate_operator_reference_errors_accepts_unique_checks(
             [
                 "INIT Init",
                 "NEXT Next",
+                "CONSTRAINT BoundState",
                 "INVARIANT TypeInvariant",
                 "INVARIANTS Safety LivenessBridge",
                 "PROPERTY EventuallyCommit",
@@ -1924,6 +3215,31 @@ def test_cfg_duplicate_operator_reference_errors_accepts_unique_checks(
     )
 
     assert module.cfg_duplicate_operator_reference_errors("frontier-fast", cfg) == []
+
+
+def test_cfg_duplicate_operator_reference_errors_rejects_repeated_constraint(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "DuplicateConstraint.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTRAINT BoundState",
+                "CONSTRAINT NarrowState",
+                "INVARIANT Safety",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_duplicate_operator_reference_errors(
+        "frontier-fast", cfg
+    ) == [
+        f"frontier-fast: {cfg}:4 repeats CONSTRAINT directive first declared at line 3",
+    ]
 
 
 def test_cfg_duplicate_operator_reference_errors_rejects_repeated_entries(
@@ -1937,6 +3253,8 @@ def test_cfg_duplicate_operator_reference_errors_rejects_repeated_entries(
                 "INIT Init",
                 "NEXT Next",
                 "NEXT NextAgain",
+                "CONSTRAINT BoundState",
+                "CONSTRAINT NarrowState",
                 "INVARIANT TypeInvariant",
                 "INVARIANTS TypeInvariant Safety",
                 "PROPERTIES EventuallyCommit EventuallyCommit",
@@ -1949,8 +3267,9 @@ def test_cfg_duplicate_operator_reference_errors_rejects_repeated_entries(
         "frontier-fast", cfg
     ) == [
         f"frontier-fast: {cfg}:3 repeats NEXT behavior directive first declared at line 2",
-        f"frontier-fast: {cfg}:5 repeats INVARIANT check TypeInvariant first declared at line 4",
-        f"frontier-fast: {cfg}:6 repeats PROPERTY check EventuallyCommit first declared at line 6",
+        f"frontier-fast: {cfg}:5 repeats CONSTRAINT directive first declared at line 4",
+        f"frontier-fast: {cfg}:7 repeats INVARIANT check TypeInvariant first declared at line 6",
+        f"frontier-fast: {cfg}:8 repeats PROPERTY check EventuallyCommit first declared at line 8",
     ]
 
 
@@ -1994,7 +3313,9 @@ def test_unreferenced_formal_file_errors_require_inventory_reachability(
     used_cfg = tmp_path / "Used.cfg"
     orphan_tla = tmp_path / "Orphan.tla"
     orphan_cfg = tmp_path / "Orphan.cfg"
-    for path in (used_tla, used_cfg, orphan_tla, orphan_cfg):
+    nested_orphan = tmp_path / "nested" / "Hidden.tla"
+    nested_orphan.parent.mkdir()
+    for path in (used_tla, used_cfg, orphan_tla, orphan_cfg, nested_orphan):
         path.write_text("", encoding="utf-8")
     module.SPEC_DIR = tmp_path
 
@@ -2003,9 +3324,11 @@ def test_unreferenced_formal_file_errors_require_inventory_reachability(
         "Sumeragi formal mode",
         f"{orphan_tla} is not referenced by any checked or documented "
         "Sumeragi formal mode",
+        f"{nested_orphan} is not referenced by any checked or documented "
+        "Sumeragi formal mode",
     ]
     assert module.unreferenced_formal_file_errors(
-        {used_tla, used_cfg, orphan_tla, orphan_cfg}
+        {used_tla, used_cfg, orphan_tla, orphan_cfg, nested_orphan}
     ) == []
 
 

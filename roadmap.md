@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -27,11 +27,71 @@ and completed history lives in [`status.md`](./status.md).
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
   the engineering backlog for official XMLDSig/XAdES trust-anchor packages,
-  revocation/expiry policy fixtures, and official MDR/XSD fixtures.
+  CRL/OCSP or rail revocation-feed fixtures, complete canonical XML coverage,
+  and official MDR/XSD fixtures.
   `require-verified` profiles now require profile-specific public-key,
   leaf-certificate, or linked certificate-chain DER SHA-256 pins before a
   P-256/SHA-256 enveloped signature can pass, with deterministic leaf/issuer
-  extension checks for X.509 chains.
+  distinguished-name binding, non-CA leaf enforcement, critical leaf
+  `keyUsage`/`digitalSignature`, critical issuer CA basicConstraints, critical
+  issuer `keyUsage`/`keyCertSign`, issuer path-length constraint enforcement,
+  bounded duplicate-free `X509Data` chains, certificate-chain
+  ECDSA-with-SHA256/secp256r1 enforcement with uncompressed P-256 SEC1 SPKI
+  bytes, unsupported-critical-extension rejection, and validity-at-signing checks
+  for X.509 chains, explicit certificate revocation pins, low-S
+  fixed-width P-256 `r || s` or low-S DER ECDSA signature-value decoding, and a
+  deterministic supported canonical XML subset that expands empty elements,
+  normalizes attribute quotes, and sorts namespace
+  declarations plus unprefixed, declared prefixed, and implicit `xml:` namespace
+  attributes while omitting the fixed legal `xmlns:xml` declaration from
+  canonical output, decoding predefined/numeric XML character references and
+  applying root namespace declarations inherited from an enclosing XMLDSig `Signature`
+  according to the declared C14N mode: all inherited root declarations for
+  inclusive C14N and only visibly used inherited root declarations for exclusive
+  C14N. Non-empty same-document payload References must strictly enclose the
+  verified signature carrier so partial subtree signatures cannot authenticate
+  unsigned payment fields. Payload References may now add one final supported C14N transform after
+  the required enveloped-signature transform to drive digest canonicalization.
+  XMLDSig method and transform elements remain parameter-free and fail closed on
+  non-whitespace child content such as `InclusiveNamespaces`, XPath, HMAC, or
+  digest parameters; critical method elements must appear exactly once, Reference
+  transforms must be enclosed in exactly one attribute-free `Transforms` wrapper,
+  only implemented ordinary attributes are accepted (`Algorithm`, payload
+  Reference `URI`, and XAdES Reference `URI`/`Type`), those policy attributes
+  are read by exact XML attribute name only, and supported Reference
+  children must remain ordered as `Transforms`, `DigestMethod`, then
+  `DigestValue`; top-level `Signature` and `SignedInfo` children must also stay
+  in the supported XMLDSig order. Payloads may contain exactly one supported
+  signature carrier: either a bare XMLDSig `Signature` or an ISO `Sgntr` wrapper
+  with exactly one direct XMLDSig `Signature` child. Any additional
+  `Signature`/`Sgntr` element outside the verified carrier fails closed.
+  Prefixed XMLDSig structural elements must
+  resolve to the XMLDSig namespace across the supported Signature, SignedInfo,
+  Reference, digest/transform, and KeyInfo subtrees, and supported XML element
+  spans require exact qualified-name matches between opening and closing tags.
+  Selected structural QNames must also pass the supported XML name policy, so
+  malformed local-name matches such as double-colon XMLDSig tags fail closed
+  before namespace, child-shape, digest, or signature handling continues.
+  Unprefixed XMLDSig/XAdES structural elements reject explicit default
+  namespaces that conflict with the supported XMLDSig or XAdES namespace.
+  Required base64 values are singleton attribute-free text leaves without nested
+  markup or comments; `PublicKey`/`X509Certificate` credential leaves follow the
+  same no-markup rule. Public-key material cannot be mixed with
+  `X509Certificate` material in one `KeyInfo`; key material must be scoped to
+  exactly one structured `KeyInfo` using either `KeyValue/ECKeyValue` with
+  P-256 `NamedCurve` whose `PublicKey` bytes parse as an uncompressed P-256
+  SEC1 point, or one bounded duplicate-free `X509Data` wrapper, with
+  unsupported direct child elements, unsupported ordinary attributes, and
+  non-whitespace wrapper text rejected. The XAdES `SigningCertificateV2` subset
+  uses a non-empty,
+  duplicate-free ordered prefix of the verified certificate-chain digests with
+  attribute-free direct `Cert`/`CertDigest` wrappers, `DigestMethod` with only
+  `Algorithm`, and singleton attribute-free signed `SigningTime` text; prefixed
+  XAdES structural elements must resolve to the ETSI XAdES v1.3.2 namespace.
+  It still fails closed for inherited namespace context beyond root
+  declarations, unbound prefixed attributes, reserved namespace rebindings,
+  DTD/general/custom entity expansion, and all other XML outside the
+  implemented subset.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
   aliases; the current TON shard-state source-state path rejects duplicate
   camelCase/snake_case names inside nested validator-set transition proofs,
@@ -58,7 +118,8 @@ and completed history lives in [`status.md`](./status.md).
   does not match the validated execution receipt/block. The JavaScript
   Ethereum `proveInboundToSora` path now runs that collection and binding step
   before invoking app-owned prover callbacks, including inputs that already
-  carry a precomputed `receiptProofHash`, and JavaScript/native Ethereum
+  carry a typed `receiptProof` or a precomputed `receiptProofHash`, and
+  JavaScript/native Ethereum
   inbound proving rejects missing beacon finality before app-owned prover
   callbacks can run. Python now matches that Ethereum-mainnet inbound shape
   with execution/consensus provider injection, receipt/block collection,
@@ -83,7 +144,10 @@ and completed history lives in [`status.md`](./status.md).
   also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
   Android, and .NET facade sources for missing files or forbidden
   WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
-  paths native or local-prover owned. The Python, Swift,
+  paths native or local-prover owned. Release-readiness and strict
+  release-bundle verifier helper inventories now require the native typed
+  Ethereum receipt-proof evidence helpers for Swift, Kotlin/JVM, Java Android,
+  and .NET. The Python, Swift,
   Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
   now also require wrapped proof results carrying the chain-id-1 destination
   binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
@@ -132,7 +196,16 @@ and completed history lives in [`status.md`](./status.md).
 - Keep Ethereum mainnet source-adapter transition chains period-contiguous:
   sync-committee updates now advance exactly one mainnet period at a time, using
   the consensus `32 * 256` slot period geometry, so skipped-period transition
-  evidence cannot satisfy the ETH source proof verifier.
+  evidence cannot satisfy the ETH source proof verifier. The Rust helper API now
+  exposes Ethereum-mainnet-specific source-adapter deployment and
+  deployment-bound source-proof verification helpers so the first-lane
+  ETH -> SORA path does not rely on generic EVM-family plumbing.
+- Keep Ethereum mainnet SDK local-admission packaging first-class across every
+  user prover surface: JavaScript/browser, Python, Swift, Kotlin/JVM, Java
+  Android, and .NET now expose ETH -> SORA local-admission builders that bind
+  the Ethereum source domain, SORA target domain, canonical `SubmitBridgeProof`
+  metadata, normalized verifier/deployment hashes, and copied native verifier
+  artifact bytes without WASM or remote-prover fallback.
 - Keep EVM route-canary live evidence bound to the receipt block: the live
   helper now checks receipt block number/hash against `eth_getBlockByNumber`,
   requires a non-zero block `receiptsRoot`, rejects duplicate matching
@@ -168,19 +241,18 @@ and completed history lives in [`status.md`](./status.md).
   command lines instead of phase output. The verifier owns its required phase
   and phase transcript inventories independently of the report generator, with
   parity tests preventing drift.
-- Keep core-admission SCCP tests aligned with the first-release BSC-mainnet
-  lane launch policy; non-BSC source proofs may recognize configured
+- Keep core-admission SCCP tests aligned with the first-release Ethereum
+  mainnet lane launch policy; non-ETH source proofs may recognize configured
   source-adapter evidence but must stop at lane launch before route-canary,
   route-allowlist, or destination-rollout drift checks.
-- Keep BSC mainnet inbound admission on an explicit local-admission proof path:
+- Keep BSC mainnet inbound source-proof support on an explicit local-admission proof path:
   core now has a Parlia receipt/validator fixture proving configured source
   verifier material plus source-adapter deployment binding, including replayed
-  deployment-receipt rejection before public-input extraction, and the positive
-  BSC -> SORA `SubmitBridgeProof` path now uses the local-admission package
-  instead of outbound EVM Groth16 destination packaging. The full
-  `core-admission` corridor now passes against the active BSC policy; remaining
-  release work is broader non-core corridor evidence and live deployment
-  artifacts.
+  deployment-receipt rejection before public-input extraction. Under the
+  current Ethereum-first launch policy, configured BSC proofs still wait for
+  the BSC lane policy to open instead of bypassing launch gating through
+  outbound EVM Groth16 destination packaging. Remaining release work is broader
+  non-core corridor evidence and live deployment artifacts.
 - Keep Python SCCP package-root exports aligned with the public user-prover
   rows; release-readiness tests now import `iroha_torii_client` and require
   every non-callback Python helper/class to be exposed through `__all__`.
@@ -251,8 +323,18 @@ and completed history lives in [`status.md`](./status.md).
   readiness Markdown, and release-note attachments as structured bundle
   failures instead of raising out of the verifier.
 - Keep extending the Sumeragi formal corridor with independent TLC
-  cross-checks; the current local TLC slice covers fast canonical frontier
-  recovery, small exhaustive frontier recovery,
+  cross-checks; the current local TLC slice covers the top-level commit-path
+  fast model under the fairness-backed `Spec`, including finality and
+  committed-phase terminality, committed-view witness stability,
+  prepare-quorum commit gating, commit-certificate evidence stability,
+  commit-certificate vote/stake traceability,
+  live stake-accounting traceability,
+  honest commit-support preservation,
+  live vote/stake quorum preservation,
+  RBC finality evidence preservation,
+  post-finality progress-action quiescence,
+  honest/fault roster-budgeted vote counters, RBC delivery stability, fast
+  canonical frontier recovery, small exhaustive frontier recovery,
   validation redrive labels, raw QC signer-bitmap population counting, and
   signer-index normalization, precommit vote-progress counting, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
@@ -1725,7 +1807,7 @@ operator-provided rollout bundles.
   cannot be normalized after review; chain-specific metadata comment aliases
   that map to the same internal field also fail instead of overwriting earlier
   reviewed values. Strict release-bundle verification also keeps complete
-  cryptographic-evidence row checks scoped to the active BSC launch lane
+  cryptographic-evidence row checks scoped to the active Ethereum launch lane
   while retaining future-lane rows as diagnostic evidence until their launch
   policies open. When
   both real
@@ -2139,9 +2221,9 @@ operator-provided rollout bundles.
   default
   production path remains closed on the placeholder catalog when no complete
   configured lane material is present, and configured bridge-proof admission
-  now uses BSC mainnet as the first production lane. BSC can open with complete
-  source material, source-adapter deployment, destination rollout, route
-  allowlist, and route-canary evidence while other advertised remote SCCP
+  now uses Ethereum mainnet as the first production lane. ETH can open with
+  complete source material, source-adapter deployment, destination rollout,
+  route allowlist, and route-canary evidence while other advertised remote SCCP
   domains remain behind their future lane policies. The all-lanes gate remains
   available as the diagnostic release check when operators need to prove every
   advertised lane at once. TRON source material and deployment
@@ -4865,33 +4947,48 @@ validation.
 - Keep the Sumeragi formal coverage guard in CI so runner modes, CI commands,
   workflow entrypoints, Apalache version pins, README commands,
   conflict-marker-free formal wiring and TLA+/CFG artifact files,
+  the TLC-routed top-level commit-path fairness check,
   well-formed runner case blocks,
   length-table-derived bidirectional documented TLC fast-mode coverage,
   duplicate-free and shadow-free
   runner case labels, duplicate-free Apalache command lists including
   scheduled/manual workflow commands, exact Apalache runner-mode CI reachability,
   unused runner-branch rejection, documented mutation-mode expected-failure
-  coverage, TLC mutation-mode expected-failure runner routing, Apalache/TLC
-  mutation CFG equivalence, expected-failure counterexample semantics,
-  baseline expected-failure marker rejection, well-formed single-assignment
-  runner proof inputs and scalar runner assignments, flat direct-child formal
-  path and suffix containment, runner command shape, runner invocation
-  proof-input binding, TLC constraint operator binding,
-  non-type-only CFG checks, top-level-only CFG behavior/check detection,
+  coverage, TLC mutation-mode expected-failure runner routing,
+  mutation-mode CFG name fragments, Apalache/TLC mutation CFG equivalence,
+  expected-failure counterexample semantics,
+  baseline expected-failure marker rejection, well-formed
+  non-append/non-declaration/non-array/shell-builtin-mutation-free
+  single-assignment runner proof inputs and scalar runner assignments, flat
+  direct-child formal path and suffix
+  containment, runner command shape, runner invocation proof-input binding, TLC
+  constraint operator binding, zero-arity and
+  nontrivial CFG/TLC runner constraints,
+  non-type-only CFG checks, nontrivial CFG-referenced semantic checks,
+  top-level-only CFG behavior/check detection, indented CFG directive rejection,
+  non-empty multi-line CFG check blocks,
   TLC module identifier and module-file reachability,
-  Apalache/TLC TLA module identity, TLA dependency resolution, Apalache length
-  declarations, well-formed purpose-bearing duplicate-free README length rows,
-  and README length table agreement, single top-of-file TLA module-header
-  consistency, single terminating TLA `====` markers,
-  duplicate-free TLA constant and top-level operator declarations, TLA
+  Apalache/TLC TLA module identity, non-reserved static TLA dependency
+  resolution, assumption/proof-free TLA modules, Apalache length declarations,
+  well-formed purpose-bearing duplicate-free README length rows, and README length table
+  agreement, single static top-of-file TLA module-header consistency, single
+  terminating TLA `====` markers, duplicate-free TLA constant and static
+  recursive/top-level operator declarations, matched recursive operator
+  definitions, non-reserved static non-empty TLA declaration blocks, exact TLA
   variable/`vars` tuple consistency, CFG/module
   filename ownership, supported CFG directive validation, CFG behavior/check
-  declarations, static CFG operator-name syntax, CFG-referenced top-level
-  behavior/check operator definitions, complete CFG constant bindings,
-  fail-closed CFG constant block binding shape, duplicate-free CFG
-  `CHECK_DEADLOCK` directives, duplicate-free CFG constant/check targets,
-  complete TLA+/CFG inventory reachability, and referenced TLA+/CFG files stay
-  synchronized as new gates land.
+  declarations, non-reserved static non-`vars` CFG operator-name syntax,
+  zero-arity CFG proof targets, CFG-referenced top-level behavior/check
+  operator definitions,
+  named `INSTANCE` aliases excluded from proof targets, complete non-reserved
+  CFG constant bindings, fail-closed one-binding-per-line CFG constant shape,
+  non-empty CFG constant blocks,
+  duplicate-free CFG
+  `CHECK_DEADLOCK` directives, duplicate-free CFG constant/constraint/check
+  targets, single-line and multi-line boolean-wrapper-free vacuity checks for
+  semantic checks and constraints, complete recursive TLA+/CFG inventory
+  reachability, and referenced TLA+/CFG files stay synchronized as new gates
+  land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Keep hardware acceleration paths feature-gated with deterministic scalar

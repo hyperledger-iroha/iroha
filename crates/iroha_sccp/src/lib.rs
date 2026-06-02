@@ -64,6 +64,8 @@ pub const SCCP_DOMAIN_TRON: u32 = 5;
 pub const SCCP_DOMAIN_SORA_KUSAMA: u32 = 6;
 pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
 pub const SCCP_DOMAIN_SORA2: u32 = 8;
+/// Ethereum mainnet EIP-155 chain id.
+pub const SCCP_ETH_MAINNET_EVM_CHAIN_ID: u64 = 1;
 /// BNB Smart Chain mainnet EVM chain id.
 pub const SCCP_BSC_MAINNET_EVM_CHAIN_ID: u64 = 56;
 pub const SCCP_STARK_FRI_PROOF_FAMILY_V1: &str = "stark-fri-v1";
@@ -661,6 +663,13 @@ pub const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD: u64 = 256;
 /// Ethereum mainnet slots per sync committee period.
 pub const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: u64 =
     SCCP_ETH_MAINNET_SLOTS_PER_EPOCH * SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD;
+/// Return the Ethereum mainnet sync committee period for a beacon slot.
+///
+/// This follows the consensus-spec rule
+/// `compute_epoch_at_slot(slot) // EPOCHS_PER_SYNC_COMMITTEE_PERIOD`.
+pub const fn sccp_eth_mainnet_sync_committee_period_for_slot(slot: u64) -> u64 {
+    slot / SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD
+}
 const SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES: usize = 1
     + 4
     + SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
@@ -3422,8 +3431,8 @@ pub enum SccpAnchorGovernanceV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpLaunchModeV1 {
     AllLanesAtOnce,
-    EthereumMainnetLane,
     #[default]
+    EthereumMainnetLane,
     BscMainnetLane,
 }
 
@@ -3559,7 +3568,7 @@ impl Default for SccpProductionPolicyV1 {
     fn default() -> Self {
         Self {
             version: 1,
-            launch_mode: SccpLaunchModeV1::BscMainnetLane,
+            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
             proof_submitter_policy: SccpProofSubmitterPolicyV1::Permissionless,
             route_activation_policy: SccpRouteActivationPolicyV1::GovernanceAllowlist,
             per_message_human_approval_required: false,
@@ -5018,6 +5027,9 @@ pub fn sccp_evm_mainnet_destination_rollout_with_binding_v1(
         Some(verifier_key_hash),
     )?;
     let network_id = decode_fixed_hex_bytes::<32>(&destination_network_id)?;
+    if sccp_evm_mainnet_network_id_word_for_domain(domain).as_ref() != Some(&network_id) {
+        return None;
+    }
     let bridge_address = decode_fixed_hex_bytes::<20>(&destination_bridge_address)?;
     let verifier_address =
         decode_evm_hex_address(rollout.verifier_identity.as_deref()?.as_bytes())?;
@@ -5353,6 +5365,12 @@ fn sccp_evm_destination_rollout_binding_metadata_is_ready(
     else {
         return false;
     };
+    let Some(expected_network_id) = sccp_evm_mainnet_network_id_word_for_domain(domain) else {
+        return false;
+    };
+    if network_id != expected_network_id {
+        return false;
+    }
     let Some(bridge_address) =
         required_hex_string_is_nonzero::<20>(rollout.destination_bridge_address.as_deref())
     else {
@@ -12342,6 +12360,25 @@ pub fn sccp_source_adapter_engine_deployment_from_material_v1(
     )
 }
 
+/// Build the Ethereum mainnet source-adapter deployment descriptor from governed material.
+pub fn build_sccp_eth_mainnet_source_adapter_deployment_v1(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    if material.source_domain != SCCP_DOMAIN_ETH {
+        return None;
+    }
+    sccp_source_adapter_engine_deployment_from_material_v1(material, deployment_receipt_hash)
+}
+
+/// Alias for the current Ethereum mainnet source-adapter deployment descriptor format.
+pub fn build_sccp_eth_mainnet_source_adapter_deployment(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment_receipt_hash: H256,
+) -> Option<SccpSourceAdapterEngineDeploymentV1> {
+    build_sccp_eth_mainnet_source_adapter_deployment_v1(material, deployment_receipt_hash)
+}
+
 /// Build the BSC mainnet source-adapter deployment descriptor from governed material.
 pub fn build_sccp_bsc_mainnet_source_adapter_deployment_v1(
     material: &SccpSourceVerifierMaterialV1,
@@ -16429,9 +16466,22 @@ pub fn build_sccp_evm_destination_binding(
     })
 }
 
+/// Return the ABI word used as the Ethereum mainnet network id in EVM destination bindings.
+pub fn sccp_eth_mainnet_network_id_word_v1() -> H256 {
+    abi_word_u64(SCCP_ETH_MAINNET_EVM_CHAIN_ID)
+}
+
 /// Return the ABI word used as the BSC mainnet network id in EVM destination bindings.
 pub fn sccp_bsc_mainnet_network_id_word_v1() -> H256 {
     abi_word_u64(SCCP_BSC_MAINNET_EVM_CHAIN_ID)
+}
+
+fn sccp_evm_mainnet_network_id_word_for_domain(domain: u32) -> Option<H256> {
+    match domain {
+        SCCP_DOMAIN_ETH => Some(sccp_eth_mainnet_network_id_word_v1()),
+        SCCP_DOMAIN_BSC => Some(sccp_bsc_mainnet_network_id_word_v1()),
+        _ => None,
+    }
 }
 
 fn sccp_bsc_mainnet_destination_binding_is_deployment_bound(
@@ -19176,133 +19226,123 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     {
         return false;
     }
-    sccp_message_transparent_public_inputs_internal_with_deployment(
+    let Some(expected) = sccp_message_transparent_public_inputs_internal_with_deployment(
         &proof.bundle,
         source_material,
         source_deployment,
-    )
-    .is_some_and(|expected| {
-            let proof_body_is_valid = if sccp_local_admission_is_allowed(
+    ) else {
+        return false;
+    };
+    let local_admission_is_allowed = sccp_local_admission_is_allowed(
+        &manifest,
+        &proof.public_inputs,
+        &proof.bundle,
+        source_material,
+        source_deployment,
+    );
+    let proof_body_is_valid = if local_admission_is_allowed {
+        verify_sccp_message_transparent_inner_proof_bytes_internal(
+            &proof.proof_bytes,
+            &proof.bundle,
+            &manifest,
+            &proof.public_inputs,
+            source_material,
+            source_deployment,
+        )
+    } else if manifest.verifier_target == SccpProofVerifierTargetV1::EvmContract
+        && manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::EvmGroth16Bn254
+    {
+        verify_sccp_evm_groth16_bn254_proof_binding(
+            &manifest,
+            &proof.public_inputs,
+            &proof.proof_bytes,
+        )
+    } else if manifest.verifier_target == SccpProofVerifierTargetV1::TronContract
+        && manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::TronGroth16Bn254
+    {
+        verify_sccp_tron_groth16_bn254_proof_binding(
+            &manifest,
+            &proof.public_inputs,
+            &proof.proof_bytes,
+        )
+    } else {
+        verify_sccp_message_transparent_inner_proof_bytes_internal(
+            &proof.proof_bytes,
+            &proof.bundle,
+            &manifest,
+            &proof.public_inputs,
+            source_material,
+            source_deployment,
+        )
+    };
+
+    let submission_package_is_valid = if local_admission_is_allowed {
+        verify_sccp_local_admission_submission_package_internal(
+            &manifest,
+            proof,
+            source_material,
+            source_deployment,
+        )
+    } else {
+        match manifest.verifier_target {
+            SccpProofVerifierTargetV1::EvmContract => verify_sccp_evm_submission_package_internal(
                 &manifest,
-                &proof.public_inputs,
-                &proof.bundle,
+                proof,
                 source_material,
                 source_deployment,
-            ) {
-                verify_sccp_message_transparent_inner_proof_bytes_internal(
-                    &proof.proof_bytes,
-                    &proof.bundle,
+            ),
+            SccpProofVerifierTargetV1::TronContract => {
+                verify_sccp_tron_submission_package_internal(
                     &manifest,
-                    &proof.public_inputs,
+                    proof,
                     source_material,
                     source_deployment,
                 )
-            } else if manifest.verifier_target
-                == SccpProofVerifierTargetV1::EvmContract
-                && manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::EvmGroth16Bn254
-            {
-                verify_sccp_evm_groth16_bn254_proof_binding(
-                    &manifest,
-                    &proof.public_inputs,
-                    &proof.proof_bytes,
-                )
-            } else if manifest.verifier_target == SccpProofVerifierTargetV1::TronContract
-                && manifest.verifier_backend.family == SccpVerifierBackendFamilyV1::TronGroth16Bn254
-            {
-                verify_sccp_tron_groth16_bn254_proof_binding(
-                    &manifest,
-                    &proof.public_inputs,
-                    &proof.proof_bytes,
-                )
-            } else {
-                verify_sccp_message_transparent_inner_proof_bytes_internal(
-                    &proof.proof_bytes,
-                    &proof.bundle,
-                    &manifest,
-                    &proof.public_inputs,
-                    source_material,
-                    source_deployment,
-                )
-            };
-
-            expected == proof.public_inputs
-                && match manifest.verifier_target {
-                    SccpProofVerifierTargetV1::EvmContract => {
-                        if sccp_local_admission_is_allowed(
-                            &manifest,
-                            &proof.public_inputs,
-                            &proof.bundle,
-                            source_material,
-                            source_deployment,
-                        ) {
-                            verify_sccp_local_admission_submission_package_internal(
-                                &manifest,
-                                proof,
-                                source_material,
-                                source_deployment,
-                            )
-                        } else {
-                            verify_sccp_evm_submission_package_internal(
-                                &manifest,
-                                proof,
-                                source_material,
-                                source_deployment,
-                            )
-                        }
-                    }
-                    SccpProofVerifierTargetV1::TronContract => {
-                        verify_sccp_tron_submission_package_internal(
-                            &manifest,
-                            proof,
-                            source_material,
-                            source_deployment,
-                        )
-                    }
-                    _ => build_sccp_counterparty_submission_package(
+            }
+            _ => build_sccp_counterparty_submission_package(
+                &proof.bundle,
+                &manifest,
+                &proof.proof_bytes,
+            )
+            .or_else(|| {
+                allow_unready_manifest.then(|| {
+                    build_sccp_counterparty_submission_package_allow_unready(
                         &proof.bundle,
                         &manifest,
                         &proof.proof_bytes,
+                        true,
                     )
-                    .or_else(|| {
-                        allow_unready_manifest.then(|| {
-                            build_sccp_counterparty_submission_package_allow_unready(
-                                &proof.bundle,
-                                &manifest,
-                                &proof.proof_bytes,
-                                true,
-                            )
-                        })?
-                    })
-                    .or_else(|| {
-                        match (source_material, source_deployment) {
-                            (Some(material), Some(deployment)) => {
-                                build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
-                                    &proof.bundle,
-                                    &manifest,
-                                    &proof.proof_bytes,
-                                    material,
-                                    deployment,
-                                    allow_unready_manifest,
-                                )
-                            }
-                            (Some(material), None) => {
-                                build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
-                                    &proof.bundle,
-                                    &manifest,
-                                    &proof.proof_bytes,
-                                    material,
-                                    allow_unready_manifest,
-                                )
-                            }
-                            _ => None,
-                        }
-                    })
-                    .is_some_and(|expected_submission_package| {
-                        expected_submission_package == proof.submission_package
-                    }),
+                })?
+            })
+            .or_else(|| match (source_material, source_deployment) {
+                (Some(material), Some(deployment)) => {
+                    build_sccp_counterparty_submission_package_with_source_verifier_material_and_deployment_allow_unready(
+                        &proof.bundle,
+                        &manifest,
+                        &proof.proof_bytes,
+                        material,
+                        deployment,
+                        allow_unready_manifest,
+                    )
                 }
-                && proof_body_is_valid
-        })
+                (Some(material), None) => {
+                    build_sccp_counterparty_submission_package_with_source_verifier_material_allow_unready(
+                        &proof.bundle,
+                        &manifest,
+                        &proof.proof_bytes,
+                        material,
+                        allow_unready_manifest,
+                    )
+                }
+                _ => None,
+            })
+            .is_some_and(|expected_submission_package| {
+                expected_submission_package == proof.submission_package
+            }),
+        }
+    };
+
+    expected == proof.public_inputs && submission_package_is_valid && proof_body_is_valid
 }
 
 fn decode_ascii_hex_nibble(byte: u8) -> Option<u8> {
@@ -31598,6 +31638,7 @@ fn verify_sccp_eth_sync_committee_transition_chain(
         return false;
     }
 
+    let adapter_sync_period = sccp_eth_mainnet_sync_committee_period_for_slot(adapter.beacon_slot);
     let mut expected_parent = source_trust_anchor_hash;
     let mut expected_from_period = None;
     for transition in &adapter.sync_committee_transition_proofs {
@@ -31613,7 +31654,8 @@ fn verify_sccp_eth_sync_committee_transition_chain(
         expected_from_period = Some(transition.to_sync_period);
     }
 
-    expected_parent == adapter.sync_committee_root
+    expected_from_period == Some(adapter_sync_period)
+        && expected_parent == adapter.sync_committee_root
 }
 
 #[cfg(feature = "bls")]
@@ -31627,6 +31669,8 @@ fn verify_sccp_eth_sync_committee_transition_step(
         || transition.source_domain != SCCP_DOMAIN_ETH
         || transition.source_domain != adapter.source_domain
         || transition.from_sync_period.checked_add(1) != Some(transition.to_sync_period)
+        || sccp_eth_mainnet_sync_committee_period_for_slot(transition.transition_slot)
+            != transition.from_sync_period
         || expected_from_period.is_some_and(|period| transition.from_sync_period != period)
         || transition.transition_slot == 0
         || transition.transition_slot > adapter.beacon_slot
@@ -34444,6 +34488,41 @@ pub fn verified_sccp_message_source_chain_proof_envelope_for_production_with_mat
         deployment,
     )
     .then_some(source_proof)
+}
+
+/// Decode and verify an Ethereum mainnet -> SORA source proof against governed deployment material.
+pub fn verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+    bundle: &NexusSccpMessageProofV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<SccpSourceChainProofEnvelopeV1> {
+    if sccp_message_source_domain(&bundle.payload) != SCCP_DOMAIN_ETH
+        || sccp_message_target_domain(&bundle.payload) != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_ETH
+        || deployment.source_domain != SCCP_DOMAIN_ETH
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+    {
+        return None;
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        bundle, material, deployment,
+    )
+}
+
+/// Verify a decoded Ethereum mainnet -> SORA source proof against governed deployment material.
+pub fn verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    proof.source_domain == SCCP_DOMAIN_ETH
+        && proof.target_domain == SCCP_DOMAIN_SORA
+        && material.source_domain == SCCP_DOMAIN_ETH
+        && deployment.source_domain == SCCP_DOMAIN_ETH
+        && deployment.target_domain == SCCP_DOMAIN_SORA
+        && verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+            proof, material, deployment,
+        )
 }
 
 /// Decode and verify a BSC mainnet -> SORA source proof against governed deployment material.
@@ -44687,12 +44766,26 @@ mod tests {
         adapter.sync_committee_signature_hash =
             sccp_eth_sync_committee_aggregate_hash(&adapter.sync_committee_proof)
                 .expect("active ETH sync committee aggregate hash");
+        let active_sync_period =
+            sccp_eth_mainnet_sync_committee_period_for_slot(adapter.beacon_slot);
+        assert!(
+            active_sync_period > 0,
+            "fixture beacon slot must allow a parent sync-committee transition"
+        );
+        let parent_sync_period = active_sync_period - 1;
+        let parent_period_transition_slot = parent_sync_period
+            .saturating_mul(SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD)
+            + SCCP_ETH_MAINNET_SLOTS_PER_EPOCH;
+        assert_eq!(
+            sccp_eth_mainnet_sync_committee_period_for_slot(parent_period_transition_slot),
+            parent_sync_period
+        );
         adapter.sync_committee_transition_proofs =
             vec![sample_eth_sync_committee_transition_proof(
                 &parent_signers,
-                10,
-                11,
-                adapter.beacon_slot - 32,
+                parent_sync_period,
+                active_sync_period,
+                parent_period_transition_slot,
                 adapter.beacon_finalized_root,
                 parent_sync_committee_hash,
                 active_sync_committee_payload.clone(),
@@ -44771,6 +44864,30 @@ mod tests {
         skipped_period.sync_committee_transition_proofs[0].to_sync_period += 1;
         assert!(!verify_sccp_eth_beacon_sync_committee_proof(
             &skipped_period,
+            &valid,
+            &material,
+        ));
+
+        let mut wrong_transition_slot_period = adapter.clone();
+        wrong_transition_slot_period.sync_committee_transition_proofs =
+            vec![sample_eth_sync_committee_transition_proof(
+                &parent_signers,
+                parent_sync_period,
+                active_sync_period,
+                adapter.beacon_slot,
+                adapter.beacon_finalized_root,
+                parent_sync_committee_hash,
+                active_sync_committee_payload,
+                [0xBE; 32],
+            )];
+        assert_eq!(
+            sccp_eth_mainnet_sync_committee_period_for_slot(
+                wrong_transition_slot_period.sync_committee_transition_proofs[0].transition_slot
+            ),
+            active_sync_period
+        );
+        assert!(!verify_sccp_eth_beacon_sync_committee_proof(
+            &wrong_transition_slot_period,
             &valid,
             &material,
         ));
@@ -49725,6 +49842,41 @@ mod tests {
             &failed_status_receipt_value,
             source_event_digest,
         ));
+        let failed_status_with_valid_source_event_receipt_value = sample_eth_rlp_list(&[
+            sample_eth_rlp_string(&[]),
+            sample_eth_rlp_u64(21_000),
+            sample_eth_rlp_string(&[0u8; 256]),
+            sample_eth_rlp_list(&[sample_eth_rlp_list(&[
+                sample_eth_rlp_string(&message_emitter_address),
+                sample_eth_rlp_list(&[
+                    sample_eth_rlp_string(&event_topic),
+                    sample_eth_rlp_string(&source_event_digest),
+                ]),
+                sample_eth_rlp_string(&[]),
+            ])]),
+        ]);
+        assert!(
+            !sccp_evm_receipt_value_contains_source_event_digest(
+                &failed_status_with_valid_source_event_receipt_value,
+                source_event_digest,
+            ),
+            "EVM source receipts must reject status-0 receipts even when the SCCP log is otherwise valid"
+        );
+        let (failed_status_receipts_root, failed_status_receipt_trie_proof_nodes) =
+            sample_tron_receipt_mpt_proof_with_value(
+                receipt_root_index,
+                &failed_status_with_valid_source_event_receipt_value,
+            );
+        assert!(
+            !verify_sccp_evm_receipt_mpt_event_value_with_emitter(
+                failed_status_receipts_root,
+                receipt_root_index,
+                &failed_status_receipt_trie_proof_nodes,
+                source_event_digest,
+                Some(message_emitter_address),
+            ),
+            "EVM source receipt MPT verification must keep failed receipts inadmissible"
+        );
         let bad_bloom_receipt_value = sample_eth_rlp_list(&[
             sample_eth_rlp_string(&[1]),
             sample_eth_rlp_u64(21_000),
@@ -54476,9 +54628,9 @@ mod tests {
     }
 
     #[test]
-    fn production_policy_uses_bsc_mainnet_lane_launch() {
+    fn production_policy_uses_ethereum_mainnet_lane_launch() {
         let policy = sccp_production_policy_v1();
-        assert_eq!(policy.launch_mode, SccpLaunchModeV1::BscMainnetLane);
+        assert_eq!(policy.launch_mode, SccpLaunchModeV1::EthereumMainnetLane);
         assert_eq!(
             policy.proof_submitter_policy,
             SccpProofSubmitterPolicyV1::Permissionless
@@ -54859,7 +55011,7 @@ mod tests {
             "0x1111111111111111111111111111111111111111".to_owned(),
             format!("0x{}", "22".repeat(32)),
             format!("0x{}", "23".repeat(32)),
-            format!("0x{}", "24".repeat(32)),
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
             format!("0x{}", "25".repeat(20)),
         )
         .expect("ETH destination rollout");
@@ -55438,7 +55590,7 @@ mod tests {
             "0x1111111111111111111111111111111111111111".to_owned(),
             format!("0x{}", "22".repeat(32)),
             format!("0x{}", "23".repeat(32)),
-            format!("0x{}", "24".repeat(32)),
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
             format!("0x{}", "25".repeat(20)),
         )
         .expect("eth destination rollout");
@@ -55673,7 +55825,7 @@ mod tests {
             "0x2222222222222222222222222222222222222222".to_owned(),
             format!("0x{}", "44".repeat(32)),
             format!("0x{}", "45".repeat(32)),
-            format!("0x{}", "46".repeat(32)),
+            encode_0x_lower_hex(&sccp_bsc_mainnet_network_id_word_v1()),
             format!("0x{}", "47".repeat(20)),
         )
         .expect("bsc destination rollout");
@@ -57855,7 +58007,7 @@ mod tests {
             "0x1111111111111111111111111111111111111111".to_owned(),
             format!("0x{}", "22".repeat(32)),
             format!("0x{}", "23".repeat(32)),
-            format!("0x{}", "24".repeat(32)),
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
             format!("0x{}", "25".repeat(20)),
         )
         .expect("ETH destination rollout profile");
@@ -57880,6 +58032,37 @@ mod tests {
         assert!(
             !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &missing_network_id),
             "EVM destination rollout records must carry the destination network id"
+        );
+        assert!(
+            sccp_evm_mainnet_destination_rollout_with_binding_v1(
+                SCCP_DOMAIN_ETH,
+                "0x1111111111111111111111111111111111111111".to_owned(),
+                format!("0x{}", "22".repeat(32)),
+                format!("0x{}", "23".repeat(32)),
+                format!("0x{}", "24".repeat(32)),
+                format!("0x{}", "25".repeat(20)),
+            )
+            .is_none(),
+            "Ethereum mainnet destination rollout construction must reject non-mainnet network ids"
+        );
+        let wrong_network_id = [0x24; 32];
+        let wrong_network_binding = build_sccp_evm_destination_binding(
+            &sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH manifest"),
+            wrong_network_id,
+            [0x11; 20],
+            [0x25; 20],
+            [0x22; 32],
+            [0x23; 32],
+        )
+        .expect("internally consistent wrong-network binding");
+        let mut wrong_network_rollout = rollout.clone();
+        wrong_network_rollout.destination_network_id = Some(encode_0x_lower_hex(&wrong_network_id));
+        wrong_network_rollout.destination_binding_key = Some(wrong_network_binding.key);
+        wrong_network_rollout.destination_binding_hash =
+            Some(encode_0x_lower_hex(&wrong_network_binding.binding_hash));
+        assert!(
+            !sccp_destination_rollout_is_production_ready(SCCP_DOMAIN_ETH, &wrong_network_rollout),
+            "Ethereum rollout readiness must reject even a recomputed binding on a non-mainnet network id"
         );
 
         let mut wrong_binding_hash = rollout.clone();
@@ -58025,7 +58208,7 @@ mod tests {
                 " 0x1111111111111111111111111111111111111111 ".to_owned(),
                 format!("0x{}", "22".repeat(32)),
                 format!("0x{}", "23".repeat(32)),
-                format!("0x{}", "24".repeat(32)),
+                encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
                 format!("0x{}", "25".repeat(20)),
             )
             .is_none(),
@@ -58373,13 +58556,23 @@ mod tests {
     #[test]
     fn destination_rollout_profiles_cover_non_solana_chain_identities() {
         let code_hash = format!("0x{}", "55".repeat(32));
+        assert_eq!(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
+        assert_eq!(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
+        assert_eq!(
+            encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+        );
+        assert_eq!(
+            encode_0x_lower_hex(&sccp_bsc_mainnet_network_id_word_v1()),
+            "0x0000000000000000000000000000000000000000000000000000000000000038"
+        );
 
         let bsc = sccp_evm_mainnet_destination_rollout_with_binding_v1(
             SCCP_DOMAIN_BSC,
             "0x2222222222222222222222222222222222222222".to_owned(),
             code_hash.clone(),
             format!("0x{}", "56".repeat(32)),
-            format!("0x{}", "5a".repeat(32)),
+            encode_0x_lower_hex(&sccp_bsc_mainnet_network_id_word_v1()),
             format!("0x{}", "5b".repeat(20)),
         )
         .expect("BSC destination rollout profile");
@@ -58390,6 +58583,22 @@ mod tests {
         assert_eq!(
             bsc.anchor_id.as_deref(),
             Some(SCCP_BSC_MAINNET_DESTINATION_ANCHOR_ID_V1)
+        );
+        assert_eq!(
+            bsc.destination_network_id.as_deref(),
+            Some("0x0000000000000000000000000000000000000000000000000000000000000038")
+        );
+        assert!(
+            sccp_evm_mainnet_destination_rollout_with_binding_v1(
+                SCCP_DOMAIN_BSC,
+                "0x2222222222222222222222222222222222222222".to_owned(),
+                code_hash.clone(),
+                format!("0x{}", "56".repeat(32)),
+                encode_0x_lower_hex(&sccp_eth_mainnet_network_id_word_v1()),
+                format!("0x{}", "5b".repeat(20)),
+            )
+            .is_none(),
+            "BSC destination rollout construction must reject Ethereum mainnet network ids"
         );
 
         let ton_destination_profile =
@@ -64657,6 +64866,163 @@ mod tests {
                 &deployment,
             ),
             "BSC facade must reject cross-domain material"
+        );
+    }
+
+    #[test]
+    fn eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter() {
+        let material = sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+            SCCP_DOMAIN_ETH,
+            sample_eth_sync_committee_hash(),
+            [0xB2; 32],
+            [0xC3; 32],
+            [0xD4; 32],
+            sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH),
+        )
+        .expect("ETH mainnet source verifier material");
+        let deployment = build_sccp_eth_mainnet_source_adapter_deployment(&material, [0xE6; 32])
+            .expect("ETH source adapter deployment");
+        let bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_SORA,
+            711,
+            Some(&material),
+            Some(&deployment),
+        );
+        let proof = source_chain_proof_from_bundle(&bundle);
+
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(&proof, &material),
+            "ETH source material alone must not satisfy the production source-adapter gate"
+        );
+        assert!(
+            verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &deployment,
+            )
+        );
+        assert!(
+            verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_some()
+        );
+
+        let artifact =
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                &material,
+                &deployment,
+                true,
+            )
+            .expect("ETH -> SORA local admission artifact");
+        assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        let SccpPlatformSubmissionPayloadV1::LocalAdmission(local_admission) =
+            &artifact.submission_package.platform_payload
+        else {
+            panic!("ETH -> SORA artifacts must use the local admission package");
+        };
+        assert_eq!(local_admission.version, 1);
+        assert_eq!(local_admission.proof_bytes, artifact.proof_bytes);
+        assert_eq!(
+            local_admission.source_verifier_material_hash,
+            sccp_source_verifier_material_hash(&material)
+        );
+        assert_eq!(
+            local_admission.source_adapter_engine_deployment_hash,
+            sccp_source_adapter_engine_deployment_hash(&deployment)
+        );
+        assert!(
+            verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &deployment,
+            ),
+            "ETH local admission package must verify without outbound EVM Groth16 calldata"
+        );
+
+        let material_only_bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_SORA,
+            712,
+            Some(&material),
+            None,
+        );
+        assert!(
+            verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &material_only_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH facade must reject source proofs that omit deployment evidence"
+        );
+        let wrong_target_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC, 713);
+        assert!(
+            verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_target_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH facade must reject non-SORA destination bundles"
+        );
+        let wrong_source_bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 714);
+        assert!(
+            verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &wrong_source_bundle,
+                &material,
+                &deployment,
+            )
+            .is_none(),
+            "ETH facade must reject non-ETH source bundles"
+        );
+
+        let mut replayed_receipt = deployment.clone();
+        replayed_receipt.deployment_receipt_hash = [0xAB; 32];
+        assert!(
+            !verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &replayed_receipt,
+            ),
+            "ETH facade must reject replayed deployment receipts"
+        );
+        assert!(
+            !verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                &material,
+                &replayed_receipt,
+            ),
+            "ETH local admission artifacts must reject replayed deployment receipts"
+        );
+
+        let bsc_material =
+            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                SCCP_DOMAIN_BSC,
+                sample_bsc_validator_set_hash(),
+                [0xB2; 32],
+                [0xC2; 32],
+                [0xD2; 32],
+                sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+            )
+            .expect("BSC material");
+        assert!(
+            build_sccp_eth_mainnet_source_adapter_deployment(&bsc_material, [0xE6; 32]).is_none(),
+            "ETH deployment helper must reject non-ETH source material"
+        );
+        assert!(
+            !verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &bsc_material,
+                &deployment,
+            ),
+            "ETH facade must reject cross-domain material"
         );
     }
 

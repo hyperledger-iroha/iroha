@@ -629,9 +629,62 @@ class EvmSccpProverTest {
     }
 
     @Test
+    fun bscMainnetFacadeBuildsLocalAdmissionSubmission() {
+        val input = BscMainnetLocalAdmissionSubmissionInput(
+            proofBytes = byteArrayOf(1, 2, 3),
+            publicInputsBytes = byteArrayOf(4, 5, 6),
+            bundleBytes = byteArrayOf(7, 8, 9),
+            envelopeBytes = byteArrayOf(10, 11, 12),
+            statementHash = "0x" + "66".repeat(32),
+            sourceVerifierMaterialHash = "0x" + "77".repeat(32),
+            sourceAdapterEngineDeploymentHash = "0x" + "88".repeat(32),
+        )
+        val submission = SccpBsc.buildLocalAdmissionSubmission(input)
+        val facadeSubmission = BscMainnetSccp().buildLocalAdmissionSubmission(input)
+
+        assertEquals(SccpBsc.LOCAL_ADMISSION_SUBMISSION_KIND_V1, submission.platformPayload)
+        assertEquals(SccpBsc.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1, submission.envelopeEncoding)
+        assertEquals(SccpBsc.LOCAL_ADMISSION_ENTRYPOINT_V1, submission.verifierEntrypoint)
+        assertEquals(SccpEvm.DOMAIN_BSC, submission.sourceDomain)
+        assertEquals(SccpEvm.DOMAIN_SORA, submission.targetDomain)
+        assertEquals(emptyList<EvmSccpSubmissionArgument>(), submission.arguments)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+        assertContentEquals(byteArrayOf(4, 5, 6), submission.publicInputsBytes)
+        assertContentEquals(byteArrayOf(7, 8, 9), submission.bundleBytes)
+        assertContentEquals(byteArrayOf(10, 11, 12), submission.envelopeBytes)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.localAdmission.proofBytes)
+        assertEquals(submission.envelopeHex, facadeSubmission.envelopeHex)
+
+        input.proofBytes[0] = 99
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildLocalAdmissionSubmission(
+                input.copy(sourceDomain = SccpEvm.DOMAIN_ETH),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildLocalAdmissionSubmission(input.copy(proofBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildLocalAdmissionSubmission(input.copy(envelopeBytes = byteArrayOf()))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildLocalAdmissionSubmission(input.copy(envelopeEncoding = "abi_tuple_v1"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.buildLocalAdmissionSubmission(input.copy(proofFamily = "debug-proof-family"))
+        }
+    }
+
+    @Test
     fun ethereumMainnetFacadeRequiresChainId1AndEthTarget() {
         val proofBytes = sampleGroth16ProofBytes()
         SccpEthereumMainnet.requireMainnetChainId(1L)
+        assertEquals(
+            "0x577b41c65ffbce226de59f224b464797257063747891b88ebec1bcd57af82727",
+            SccpEthereumMainnet.sourceEventTopic(),
+        )
         assertFailsWith<IllegalArgumentException> {
             SccpEthereumMainnet.requireMainnetChainId(56L)
         }
@@ -710,15 +763,99 @@ class EvmSccpProverTest {
     }
 
     @Test
+    fun ethereumMainnetFacadeBuildsLocalAdmissionSubmission() {
+        val input = EthereumMainnetLocalAdmissionSubmissionInput(
+            proofBytes = byteArrayOf(1, 2, 3),
+            publicInputsBytes = byteArrayOf(4, 5, 6),
+            bundleBytes = byteArrayOf(7, 8, 9),
+            envelopeBytes = byteArrayOf(10, 11, 12),
+            statementHash = "0x" + "66".repeat(32),
+            sourceVerifierMaterialHash = "0x" + "77".repeat(32),
+            sourceAdapterEngineDeploymentHash = "0x" + "88".repeat(32),
+        )
+        val submission = SccpEthereumMainnet.buildLocalAdmissionSubmission(input)
+        val facadeSubmission = EthereumMainnetSccp().buildLocalAdmissionSubmission(input)
+
+        assertEquals(SccpEthereumMainnet.LOCAL_ADMISSION_SUBMISSION_KIND_V1, submission.platformPayload)
+        assertEquals(SccpEthereumMainnet.LOCAL_ADMISSION_ENVELOPE_ENCODING_V1, submission.envelopeEncoding)
+        assertEquals(SccpEthereumMainnet.LOCAL_ADMISSION_ENTRYPOINT_V1, submission.verifierEntrypoint)
+        assertEquals(SccpEvm.DOMAIN_ETH, submission.sourceDomain)
+        assertEquals(SccpEvm.DOMAIN_SORA, submission.targetDomain)
+        assertEquals(emptyList<EvmSccpSubmissionArgument>(), submission.arguments)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+        assertContentEquals(byteArrayOf(4, 5, 6), submission.publicInputsBytes)
+        assertContentEquals(byteArrayOf(7, 8, 9), submission.bundleBytes)
+        assertContentEquals(byteArrayOf(10, 11, 12), submission.envelopeBytes)
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.localAdmission.proofBytes)
+        assertEquals(submission.envelopeHex, facadeSubmission.envelopeHex)
+
+        input.proofBytes[0] = 99
+        assertContentEquals(byteArrayOf(1, 2, 3), submission.proofBytes)
+
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(
+                input.copy(sourceDomain = SccpEvm.DOMAIN_BSC),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(proofBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(publicInputsBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(bundleBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(envelopeBytes = byteArrayOf()))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(envelopeBytes = byteArrayOf(0, 0)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(statementHash = "0x" + "00".repeat(32)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(
+                input.copy(sourceVerifierMaterialHash = "0x" + "00".repeat(32)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(
+                input.copy(sourceAdapterEngineDeploymentHash = "0x" + "00".repeat(32)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(envelopeEncoding = "abi_tuple_v1"))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildLocalAdmissionSubmission(input.copy(proofFamily = "debug-proof-family"))
+        }
+    }
+
+    @Test
     fun ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift() {
         val txHash = "0x" + "aa".repeat(32)
         val blockHash = "0x" + "bb".repeat(32)
+        val sourceEventDigest = "0x" + "ee".repeat(32)
+        val sourceBridgeEmitterAddress = "0x" + "12".repeat(20)
+        val unrelatedLog = mapOf<String, Any?>(
+            "address" to ("0x" + "00".repeat(20)),
+            "topics" to listOf("0x" + "00".repeat(32)),
+            "data" to "0x1234",
+        )
+        val sourceEventLog = mapOf<String, Any?>(
+            "address" to sourceBridgeEmitterAddress,
+            "topics" to listOf(SccpEthereumMainnet.sourceEventTopic(), sourceEventDigest),
+            "data" to "0x",
+        )
         val receipt = mapOf<String, Any?>(
             "transactionHash" to txHash,
             "blockHash" to blockHash,
             "blockNumber" to "0x1234",
             "status" to "0x1",
         )
+        val receiptWithSourceEvent = receipt + ("logs" to listOf(unrelatedLog, sourceEventLog))
         val block = mapOf<String, Any?>(
             "hash" to blockHash,
             "number" to "0x1234",
@@ -731,6 +868,31 @@ class EvmSccpProverTest {
             additionalFields = mapOf("finalizedHeaderRoot" to ("0x" + "dd".repeat(32))),
         )
         val beaconFinality = beaconFinalityEvidence.toMap()
+        val receiptProof = EthereumMainnetReceiptProof(
+            sourceEventDigest = "0x" + "ee".repeat(32),
+            beaconSlot = "32",
+            executionBlockNumber = "4660",
+            executionBlockHash = blockHash,
+            executionReceiptsRoot = "0x" + "cc".repeat(32),
+            beaconFinalizedRoot = "0x" + "dd".repeat(32),
+            syncCommitteeRoot = "0x" + "aa".repeat(32),
+            receiptRootIndex = "3",
+            receiptTrieProofNodes = listOf(byteArrayOf(0x01), byteArrayOf(0x02, 0x03)),
+            inclusionBranch = listOf(ByteArray(32) { 0x11.toByte() }),
+        )
+        val receiptProofHash = SccpSourceProofs.evmReceiptProofHash(
+            sourceEventDigest = receiptProof.sourceEventDigest,
+            beaconSlot = receiptProof.beaconSlot,
+            executionBlockNumber = receiptProof.executionBlockNumber,
+            executionBlockHash = receiptProof.executionBlockHash,
+            executionReceiptsRoot = receiptProof.executionReceiptsRoot,
+            beaconFinalizedRoot = receiptProof.beaconFinalizedRoot,
+            syncCommitteeRoot = receiptProof.syncCommitteeRoot,
+            receiptRootIndex = receiptProof.receiptRootIndex,
+            receiptTrieProofNodes = receiptProof.receiptTrieProofNodes,
+            inclusionBranch = receiptProof.inclusionBranch,
+        )
+        assertEquals("0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0", receiptProofHash)
         val calls = mutableListOf<String>()
         var consensusCalls = 0
         val sdk = EthereumMainnetSccp(
@@ -762,6 +924,8 @@ class EvmSccpProverTest {
                 assertEquals(txHash, evidence.transactionHash)
                 assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
                 assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
+                assertEquals(receiptProofHash, evidence.receiptProofHash)
+                assertEquals(receiptProof.sourceEventDigest, evidence.receiptProof?.sourceEventDigest)
                 byteArrayOf(1, 2, 3)
             },
             inboundSubmitter = EthereumMainnetInboundSubmitter { proofBytes ->
@@ -780,8 +944,62 @@ class EvmSccpProverTest {
         assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
         assertEquals(1, consensusCalls)
         assertEquals(listOf("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"), calls)
-        assertContentEquals(byteArrayOf(1, 2, 3), sdk.proveInboundToSora(evidence))
+        assertContentEquals(
+            byteArrayOf(1, 2, 3),
+            sdk.proveInboundToSora(evidence.copy(receiptProof = receiptProof, receiptProofHash = receiptProofHash)),
+        )
         assertEquals("submitted", sdk.submitInboundToIroha(byteArrayOf(1, 2, 3)))
+
+        val sourceEventEvidence = sdk.collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(
+                receipt = receiptWithSourceEvent,
+                block = block,
+                beaconFinality = beaconFinality,
+                sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            ),
+        )
+        assertEquals(sourceEventDigest, sourceEventEvidence.sourceEventDigest)
+        assertEquals(sourceBridgeEmitterAddress, sourceEventEvidence.sourceBridgeEmitterAddress)
+        val explicitSourceEventEvidence = sdk.collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(
+                receipt = receiptWithSourceEvent,
+                block = block,
+                beaconFinality = beaconFinality,
+                sourceEventDigest = sourceEventDigest,
+                sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+            ),
+        )
+        assertEquals(sourceEventDigest, explicitSourceEventEvidence.sourceEventDigest)
+
+        val receiptProofEvidence = EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(
+                receiptProof = receiptProof,
+                receiptProofHash = receiptProofHash,
+            ),
+        )
+        assertEquals(receiptProofHash, receiptProofEvidence.receiptProofHash)
+        assertFalse(receiptProof === receiptProofEvidence.receiptProof)
+        val mutableReceiptProofNode = receiptProof.receiptTrieProofNodes[0]
+        val mutableReceiptProofBranch = receiptProof.inclusionBranch[0]
+        mutableReceiptProofNode[0] = 0x7f
+        mutableReceiptProofBranch[0] = 0x7f
+        assertContentEquals(byteArrayOf(0x01), receiptProofEvidence.receiptProof?.receiptTrieProofNodes?.get(0))
+        assertContentEquals(ByteArray(32) { 0x11.toByte() }, receiptProofEvidence.receiptProof?.inclusionBranch?.get(0))
+        mutableReceiptProofNode[0] = 0x01
+        mutableReceiptProofBranch[0] = 0x11
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receiptProof = receiptProof,
+                    receiptProofHash = "0x" + "99".repeat(32),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receiptProof = receiptProof.copy(sourceDomain = SccpEvm.DOMAIN_BSC)),
+            )
+        }
 
         assertContentEquals(
             byteArrayOf(7, 8, 9),
@@ -796,6 +1014,8 @@ class EvmSccpProverTest {
                     receipt = receipt,
                     block = block,
                     beaconFinalityEvidence = beaconFinalityEvidence,
+                    receiptProof = receiptProof,
+                    receiptProofHash = receiptProofHash,
                 ),
             ),
         )
@@ -812,7 +1032,11 @@ class EvmSccpProverTest {
         assertContentEquals(
             byteArrayOf(4, 5, 6),
             perCallSdk.proveInboundToSora(
-                EthereumMainnetInboundEvidence(transactionHash = txHash),
+                EthereumMainnetInboundEvidence(
+                    transactionHash = txHash,
+                    receiptProof = receiptProof,
+                    receiptProofHash = receiptProofHash,
+                ),
                 provider = EthereumMainnetExecutionProvider { method, _ ->
                     perCallProviderCalls.add(method)
                     when (method) {
@@ -841,6 +1065,48 @@ class EvmSccpProverTest {
             ).proveInboundToSora(EthereumMainnetInboundEvidence(receipt = receipt, block = block))
         }
         assertEquals(0, proverCalls)
+
+        val missingReceiptProof = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver {
+                    proverCalls += 1
+                    byteArrayOf(1, 2, 3)
+                },
+            ).proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    receiptProofHash = receiptProofHash,
+                ),
+            )
+        }
+        assertTrue(missingReceiptProof.message?.contains("receiptProof") == true)
+        assertEquals(0, proverCalls)
+
+        val driftedReceiptProof = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver {
+                    proverCalls += 1
+                    byteArrayOf(1, 2, 3)
+                },
+            ).proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    receiptProof = receiptProof.copy(executionReceiptsRoot = "0x" + "99".repeat(32)),
+                ),
+            )
+        }
+        assertTrue(driftedReceiptProof.message?.contains("receiptProof.executionReceiptsRoot") == true)
+        assertEquals(0, proverCalls)
+
+        val missingProvider = assertFailsWith<IllegalStateException> {
+            EthereumMainnetSccp()
+                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(transactionHash = txHash))
+        }
+        assertTrue(missingProvider.message?.contains("execution provider") == true)
 
         assertFailsWith<IllegalArgumentException> {
             EthereumMainnetSccp(
@@ -926,6 +1192,68 @@ class EvmSccpProverTest {
                     receipt = receipt,
                     block = block,
                     beaconFinality = beaconFinality + ("executionReceiptsRoot" to ("0x" + "cd".repeat(32))),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receiptWithSourceEvent,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceEventDigest = sourceEventDigest,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receiptWithSourceEvent,
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = "0x" + "13".repeat(20),
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt + (
+                        "logs" to listOf(sourceEventLog + ("topics" to listOf("0x" + "ab".repeat(32), sourceEventDigest)))
+                    ),
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt + ("logs" to listOf(sourceEventLog, sourceEventLog)),
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                ),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            sdk.collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt = receipt + ("logs" to listOf(sourceEventLog + ("removed" to true))),
+                    block = block,
+                    beaconFinality = beaconFinality,
+                    sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 ),
             )
         }

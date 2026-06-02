@@ -16,16 +16,27 @@ public static class EthereumMainnetSccp
     public const string EvmGroth16Bn254ProofBackend = "evm-groth16-bn254-v1";
     public const string StarkFriProofFamily = "stark-fri-v1";
     public const string ContractCallAbiTuple = "abi_tuple_v1";
+    public const string LocalAdmissionEnvelopeEncoding = "norito:sccp-local-admission:v1";
+    public const string LocalAdmissionSubmissionKind = "local_admission";
+    public const string LocalAdmissionEntrypoint = "SubmitBridgeProof";
+    public const int NativeRecursiveMaxProofBytes = 2 * 1024 * 1024;
+    public const string SourceEventAbi = "SccpSourceEvent(bytes32)";
+    public const string SourceEventTopic =
+        "0x577b41c65ffbce226de59f224b464797257063747891b88ebec1bcd57af82727";
     public const string SubmitMessageProofAbi = "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
     public const string SubmitMessageProofSelector = "0xbd57826c";
     public const string MainnetNetworkId =
         "0x0000000000000000000000000000000000000000000000000000000000000001";
 
     private const string EvmDestinationBindingLabel = "iroha:sccp:evm-destination-binding:v1";
+    private const string EvmReceiptProofPrefix = "sccp:evm:receipt-proof:v1";
     private const string ProofRequestPrefix = "sccp:evm:groth16-proof-request:v1";
     private const string ProofEnvelopePrefix = "sccp:evm:groth16-proof-envelope:v1";
     private const int Groth16Bn254ProofAbiByteLength = 384;
     private const int Keccak256Rate = 136;
+    private const int MaxSourceMerkleBranchNodes = 64;
+    private const int MaxMptProofNodes = 64;
+    private const int MaxMptNodeBytes = 16 * 1024;
     private static readonly byte[] SubmitMessageProofSelectorBytes = [0xbd, 0x57, 0x82, 0x6c];
     private static readonly BigInteger Bn254ScalarFieldModulus =
         new(
@@ -98,6 +109,8 @@ public static class EthereumMainnetSccp
         0x8000000080008008UL,
     ];
 
+    private sealed record SourceEvent(string? SourceEventDigest, string? SourceBridgeEmitterAddress);
+
     private readonly record struct Bn254Fq2(BigInteger C0, BigInteger C1);
 
     private readonly record struct Bn254G2Projective(
@@ -151,8 +164,13 @@ public static class EthereumMainnetSccp
             ? null
             : NormalizeRpcHex(input.TransactionHash, nameof(input.TransactionHash), 32);
         var receipt = input.Receipt;
-        if (receipt is null && transactionHash is not null && executionProvider is not null)
+        if (receipt is null && transactionHash is not null)
         {
+            if (executionProvider is null)
+            {
+                throw new InvalidOperationException(
+                    "Ethereum mainnet execution provider is not linked for transactionHash evidence collection.");
+            }
             receipt = RequireDictionary(
                 await executionProvider.RequestAsync(
                     "eth_getTransactionReceipt",
@@ -161,10 +179,11 @@ public static class EthereumMainnetSccp
                 "eth_getTransactionReceipt");
         }
 
-        if (receipt is null && input.ReceiptProofHash is null)
+        var receiptProof = SnapshotReceiptProof(input.ReceiptProof);
+        if (receipt is null && receiptProof is null && input.ReceiptProofHash is null)
         {
             throw new ArgumentException(
-                "Ethereum mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash.",
+                "Ethereum mainnet inbound evidence requires receipt, receiptProof, receiptProofHash, or transactionHash.",
                 nameof(input));
         }
 
@@ -261,6 +280,18 @@ public static class EthereumMainnetSccp
                 blockReceiptsRoot);
         }
 
+        var sourceEvent = NormalizeEthereumReceiptSourceEvent(
+            receipt,
+            input.SourceEventDigest,
+            input.SourceBridgeEmitterAddress);
+        RequireReceiptProofMatchesEvidence(
+            receiptProof,
+            blockHash,
+            receiptBlockNumber,
+            blockReceiptsRoot,
+            beaconFinality,
+            sourceEvent.SourceEventDigest);
+
         return input with
         {
             SourceDomain = DomainEthereum,
@@ -269,9 +300,10 @@ public static class EthereumMainnetSccp
             Receipt = receipt,
             Block = block,
             BeaconFinality = beaconFinality,
-            ReceiptProofHash = input.ReceiptProofHash is null
-                ? null
-                : NormalizeRpcHex(input.ReceiptProofHash, nameof(input.ReceiptProofHash), 32),
+            ReceiptProof = receiptProof,
+            ReceiptProofHash = NormalizeReceiptProofHash(receiptProof, input.ReceiptProofHash),
+            SourceEventDigest = sourceEvent.SourceEventDigest,
+            SourceBridgeEmitterAddress = sourceEvent.SourceBridgeEmitterAddress,
         };
     }
 
@@ -295,6 +327,12 @@ public static class EthereumMainnetSccp
                 "Ethereum mainnet SCCP inbound proof requires beaconFinality.",
                 nameof(input));
         }
+        if (evidence.ReceiptProof is null)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet SCCP inbound proof requires receiptProof.",
+                nameof(input));
+        }
 
         var proofBytes = await inboundProver.ProveAsync(
             evidence,
@@ -311,6 +349,134 @@ public static class EthereumMainnetSccp
 
         var proofCopy = RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
         return await inboundSubmitter.SubmitAsync(proofCopy, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static byte[] CanonicalEvmSccpReceiptProofBytes(
+        string sourceEventDigest,
+        ulong beaconSlot,
+        ulong executionBlockNumber,
+        string executionBlockHash,
+        string executionReceiptsRoot,
+        string beaconFinalizedRoot,
+        string syncCommitteeRoot,
+        ulong receiptRootIndex,
+        IReadOnlyList<byte[]> receiptTrieProofNodes,
+        IReadOnlyList<byte[]> inclusionBranch,
+        int sourceDomain = DomainEthereum)
+    {
+        if (sourceDomain != DomainEthereum)
+        {
+            throw new ArgumentException("sourceDomain must be ETH.", nameof(sourceDomain));
+        }
+
+        var nodes = NormalizeReceiptTrieProofNodes(receiptTrieProofNodes);
+        var branch = NormalizeReceiptInclusionBranch(inclusionBranch, requireNonEmpty: true);
+        using var payload = new MemoryStream();
+        payload.WriteByte(1);
+        payload.Write(LeU32(sourceDomain));
+        payload.Write(RpcHexToBytes(sourceEventDigest, nameof(sourceEventDigest), 32));
+        payload.Write(LeU64(beaconSlot));
+        payload.Write(LeU64(executionBlockNumber));
+        payload.Write(RpcHexToBytes(executionBlockHash, nameof(executionBlockHash), 32, allowZero: true));
+        payload.Write(RpcHexToBytes(executionReceiptsRoot, nameof(executionReceiptsRoot), 32, allowZero: true));
+        payload.Write(RpcHexToBytes(beaconFinalizedRoot, nameof(beaconFinalizedRoot), 32, allowZero: true));
+        payload.Write(RpcHexToBytes(syncCommitteeRoot, nameof(syncCommitteeRoot), 32, allowZero: true));
+        payload.Write(LeU64(receiptRootIndex));
+        payload.Write(LeU32(nodes.Count));
+        foreach (var node in nodes)
+        {
+            payload.Write(WriteBytes(node));
+        }
+
+        payload.Write(LeU32(branch.Count));
+        foreach (var sibling in branch)
+        {
+            payload.Write(sibling);
+        }
+
+        return payload.ToArray();
+    }
+
+    public static string EvmSccpReceiptProofHash(
+        string sourceEventDigest,
+        ulong beaconSlot,
+        ulong executionBlockNumber,
+        string executionBlockHash,
+        string executionReceiptsRoot,
+        string beaconFinalizedRoot,
+        string syncCommitteeRoot,
+        ulong receiptRootIndex,
+        IReadOnlyList<byte[]> receiptTrieProofNodes,
+        IReadOnlyList<byte[]> inclusionBranch,
+        int sourceDomain = DomainEthereum)
+        => PrefixedBlake2bHex(
+            Encoding.UTF8.GetBytes(EvmReceiptProofPrefix),
+            CanonicalEvmSccpReceiptProofBytes(
+                sourceEventDigest,
+                beaconSlot,
+                executionBlockNumber,
+                executionBlockHash,
+                executionReceiptsRoot,
+                beaconFinalizedRoot,
+                syncCommitteeRoot,
+                receiptRootIndex,
+                receiptTrieProofNodes,
+                inclusionBranch,
+                sourceDomain));
+
+    public static EthereumMainnetLocalAdmissionSubmission BuildLocalAdmissionSubmission(
+        EthereumMainnetLocalAdmissionSubmissionInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        RequireInboundRoute(input.SourceDomain, input.TargetDomain);
+
+        if (!string.Equals(input.EnvelopeEncoding, LocalAdmissionEnvelopeEncoding, StringComparison.Ordinal)
+            || !string.Equals(input.SubmissionKind, LocalAdmissionSubmissionKind, StringComparison.Ordinal)
+            || !string.Equals(input.VerifierEntrypoint, LocalAdmissionEntrypoint, StringComparison.Ordinal)
+            || !string.Equals(input.ProofFamily, StarkFriProofFamily, StringComparison.Ordinal)
+            || !string.Equals(input.VerifierBackend, EvmGroth16Bn254ProofBackend, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet local-admission submission metadata is not canonical.",
+                nameof(input));
+        }
+
+        var proofBytes = RequireNativeRecursiveBytes(input.ProofBytes, nameof(input.ProofBytes));
+        var publicInputsBytes = RequireNativeRecursiveBytes(
+            input.PublicInputsBytes,
+            nameof(input.PublicInputsBytes));
+        var bundleBytes = RequireNativeRecursiveBytes(input.BundleBytes, nameof(input.BundleBytes));
+        var envelopeBytes = RequireNativeRecursiveBytes(input.EnvelopeBytes, nameof(input.EnvelopeBytes));
+        var statementHash = NormalizeNonZeroHex(input.StatementHash, nameof(input.StatementHash), 32);
+        var sourceVerifierMaterialHash = NormalizeNonZeroHex(
+            input.SourceVerifierMaterialHash,
+            nameof(input.SourceVerifierMaterialHash),
+            32);
+        var sourceAdapterEngineDeploymentHash = NormalizeNonZeroHex(
+            input.SourceAdapterEngineDeploymentHash,
+            nameof(input.SourceAdapterEngineDeploymentHash),
+            32);
+        var payload = new EthereumMainnetLocalAdmissionPayload(
+            ProofBytes: proofBytes,
+            PublicInputsBytes: publicInputsBytes,
+            BundleBytes: bundleBytes,
+            StatementHash: statementHash,
+            SourceVerifierMaterialHash: sourceVerifierMaterialHash,
+            SourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash);
+
+        return new EthereumMainnetLocalAdmissionSubmission(
+            ProofFamily: input.ProofFamily,
+            VerifierBackend: input.VerifierBackend,
+            SourceDomain: DomainEthereum,
+            TargetDomain: DomainSora,
+            StatementHash: statementHash,
+            SourceVerifierMaterialHash: sourceVerifierMaterialHash,
+            SourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+            LocalAdmission: payload,
+            ProofBytes: proofBytes,
+            PublicInputsBytes: publicInputsBytes,
+            BundleBytes: bundleBytes,
+            EnvelopeBytes: envelopeBytes);
     }
 
     public static EthereumMainnetOutboundProofRequest BuildOutboundProofRequest(
@@ -1086,7 +1252,11 @@ public static class EthereumMainnetSccp
         return null;
     }
 
-    private static string NormalizeRpcHex(object? value, string parameterName, int byteLength)
+    private static string NormalizeRpcHex(
+        object? value,
+        string parameterName,
+        int byteLength,
+        bool allowZero = false)
     {
         if (value is not string text
             || !string.Equals(text.Trim(), text, StringComparison.Ordinal)
@@ -1105,12 +1275,302 @@ public static class EthereumMainnetSccp
                 parameterName);
         }
 
-        if (!hex.Any(static character => character != '0'))
+        if (!allowZero && !hex.Any(static character => character != '0'))
         {
             throw new ArgumentException($"{parameterName} must not be zero.", parameterName);
         }
 
         return text;
+    }
+
+    private static SourceEvent NormalizeEthereumReceiptSourceEvent(
+        IReadOnlyDictionary<string, object?>? receipt,
+        string? sourceEventDigestInput,
+        string? sourceBridgeEmitterAddressInput)
+    {
+        var sourceEventDigest = sourceEventDigestInput is null
+            ? null
+            : NormalizeRpcHex(sourceEventDigestInput, nameof(EthereumMainnetInboundEvidence.SourceEventDigest), 32);
+        var sourceBridgeEmitterAddress = sourceBridgeEmitterAddressInput is null
+            ? null
+            : NormalizeRpcHex(
+                sourceBridgeEmitterAddressInput,
+                nameof(EthereumMainnetInboundEvidence.SourceBridgeEmitterAddress),
+                20);
+        if (sourceEventDigest is null && sourceBridgeEmitterAddress is null)
+        {
+            return new SourceEvent(null, null);
+        }
+
+        if (sourceBridgeEmitterAddress is null)
+        {
+            throw new ArgumentException(
+                "sourceBridgeEmitterAddress is required when validating sourceEventDigest.",
+                nameof(sourceBridgeEmitterAddressInput));
+        }
+
+        if (receipt is null)
+        {
+            throw new ArgumentException(
+                "receipt.logs is required for SCCP source event validation.",
+                nameof(receipt));
+        }
+
+        var logs = RequireList(FirstPresent(receipt, "logs"), "receipt.logs");
+        string? matchedDigest = null;
+        for (var index = 0; index < logs.Count; index++)
+        {
+            if (logs[index] is not IReadOnlyDictionary<string, object?> log)
+            {
+                throw new ArgumentException($"receipt.logs[{index}] must be an object.", nameof(receipt));
+            }
+
+            if (FirstPresent(log, "removed") is true)
+            {
+                throw new ArgumentException("receipt.logs must not contain removed logs.", nameof(receipt));
+            }
+
+            var logAddress = NormalizeRpcHex(
+                FirstPresent(log, "address"),
+                $"receipt.logs[{index}].address",
+                20,
+                allowZero: true);
+            var topics = RequireList(FirstPresent(log, "topics"), $"receipt.logs[{index}].topics");
+            if (topics.Count > 4)
+            {
+                throw new ArgumentException(
+                    $"receipt.logs[{index}].topics must contain at most 4 entries.",
+                    nameof(receipt));
+            }
+
+            var normalizedTopics = topics
+                .Select((topic, topicIndex) => NormalizeRpcHex(
+                    topic,
+                    $"receipt.logs[{index}].topics[{topicIndex}]",
+                    32,
+                    allowZero: true))
+                .ToArray();
+            var data = FirstPresent(log, "data") ?? "0x";
+            if (string.Equals(logAddress, sourceBridgeEmitterAddress, StringComparison.Ordinal)
+                && normalizedTopics.Length == 2
+                && string.Equals(normalizedTopics[0], SourceEventTopic, StringComparison.Ordinal))
+            {
+                var candidateDigest = normalizedTopics[1];
+                if (IsZeroRpcHex(candidateDigest)
+                    || (sourceEventDigest is not null
+                        && !string.Equals(sourceEventDigest, candidateDigest, StringComparison.Ordinal))
+                    || !string.Equals(data as string, "0x", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (matchedDigest is not null)
+                {
+                    throw new ArgumentException(
+                        "receipt.logs must contain exactly one matching SCCP source event.",
+                        nameof(receipt));
+                }
+
+                matchedDigest = candidateDigest;
+            }
+        }
+
+        if (matchedDigest is null)
+        {
+            throw new ArgumentException(
+                "receipt.logs must contain the expected SCCP source event.",
+                nameof(receipt));
+        }
+
+        return new SourceEvent(matchedDigest, sourceBridgeEmitterAddress);
+    }
+
+    private static string? NormalizeReceiptProofHash(
+        EthereumMainnetReceiptProof? receiptProof,
+        string? suppliedHash)
+    {
+        var normalizedHash = suppliedHash is null
+            ? null
+            : NormalizeRpcHex(suppliedHash, nameof(EthereumMainnetInboundEvidence.ReceiptProofHash), 32);
+        if (receiptProof is null)
+        {
+            return normalizedHash;
+        }
+
+        if (receiptProof.SourceDomain != DomainEthereum)
+        {
+            throw new ArgumentException(
+                "receiptProof.sourceDomain must be ETH.",
+                nameof(receiptProof));
+        }
+
+        var computedHash = EvmSccpReceiptProofHash(
+            receiptProof.SourceEventDigest,
+            receiptProof.BeaconSlot,
+            receiptProof.ExecutionBlockNumber,
+            receiptProof.ExecutionBlockHash,
+            receiptProof.ExecutionReceiptsRoot,
+            receiptProof.BeaconFinalizedRoot,
+            receiptProof.SyncCommitteeRoot,
+            receiptProof.ReceiptRootIndex,
+            receiptProof.ReceiptTrieProofNodes,
+            receiptProof.InclusionBranch,
+            receiptProof.SourceDomain);
+        if (normalizedHash is not null
+            && !string.Equals(normalizedHash, computedHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProofHash must match receiptProof.",
+                nameof(suppliedHash));
+        }
+
+        return computedHash;
+    }
+
+    private static void RequireReceiptProofMatchesEvidence(
+        EthereumMainnetReceiptProof? receiptProof,
+        string? blockHash,
+        string? receiptBlockNumber,
+        string? blockReceiptsRoot,
+        IReadOnlyDictionary<string, object?>? beaconFinality,
+        string? sourceEventDigest)
+    {
+        if (receiptProof is null)
+        {
+            return;
+        }
+
+        var proofBlockNumber = receiptProof.ExecutionBlockNumber;
+        if (receiptBlockNumber is not null
+            && proofBlockNumber != NormalizeUnsignedInteger(receiptBlockNumber, "block.number"))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionBlockNumber must match block.number.",
+                nameof(receiptProof));
+        }
+
+        if (beaconFinality is not null
+            && proofBlockNumber != NormalizeUnsignedInteger(
+                beaconFinality["executionBlockNumber"],
+                "beaconFinality.executionBlockNumber"))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionBlockNumber must match beaconFinality.executionBlockNumber.",
+                nameof(receiptProof));
+        }
+
+        var proofBlockHash = NormalizeRpcHex(
+            receiptProof.ExecutionBlockHash,
+            "receiptProof.executionBlockHash",
+            32);
+        if (blockHash is not null
+            && !string.Equals(proofBlockHash, blockHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionBlockHash must match block.hash.",
+                nameof(receiptProof));
+        }
+
+        if (beaconFinality is not null
+            && !string.Equals(
+                proofBlockHash,
+                beaconFinality["executionBlockHash"] as string,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionBlockHash must match beaconFinality.executionBlockHash.",
+                nameof(receiptProof));
+        }
+
+        var proofReceiptsRoot = NormalizeRpcHex(
+            receiptProof.ExecutionReceiptsRoot,
+            "receiptProof.executionReceiptsRoot",
+            32);
+        if (blockReceiptsRoot is not null
+            && !string.Equals(proofReceiptsRoot, blockReceiptsRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionReceiptsRoot must match block.receiptsRoot.",
+                nameof(receiptProof));
+        }
+
+        if (beaconFinality is not null
+            && !string.Equals(
+                proofReceiptsRoot,
+                beaconFinality["executionReceiptsRoot"] as string,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "receiptProof.executionReceiptsRoot must match beaconFinality.executionReceiptsRoot.",
+                nameof(receiptProof));
+        }
+
+        if (sourceEventDigest is not null)
+        {
+            var proofSourceEventDigest = NormalizeRpcHex(
+                receiptProof.SourceEventDigest,
+                "receiptProof.sourceEventDigest",
+                32);
+            if (!string.Equals(proofSourceEventDigest, sourceEventDigest, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "receiptProof.sourceEventDigest must match receipt source event.",
+                    nameof(receiptProof));
+            }
+        }
+    }
+
+    private static EthereumMainnetReceiptProof? SnapshotReceiptProof(EthereumMainnetReceiptProof? receiptProof)
+    {
+        if (receiptProof is null)
+        {
+            return null;
+        }
+
+        return receiptProof with
+        {
+            ReceiptTrieProofNodes = CopyByteArrays(receiptProof.ReceiptTrieProofNodes),
+            InclusionBranch = CopyByteArrays(receiptProof.InclusionBranch),
+        };
+    }
+
+    private static byte[][] CopyByteArrays(IReadOnlyList<byte[]> values)
+    {
+        var copy = new byte[values.Count][];
+        for (var index = 0; index < values.Count; index++)
+        {
+            copy[index] = values[index].ToArray();
+        }
+
+        return copy;
+    }
+
+    private static IReadOnlyList<object?> RequireList(object? value, string parameterName)
+    {
+        if (value is IReadOnlyList<object?> list)
+        {
+            return list;
+        }
+
+        if (value is System.Collections.IEnumerable enumerable && value is not string)
+        {
+            return enumerable.Cast<object?>().ToArray();
+        }
+
+        throw new ArgumentException($"{parameterName} must be an array.", parameterName);
+    }
+
+    private static bool IsZeroRpcHex(string text)
+    {
+        for (var index = 2; index < text.Length; index++)
+        {
+            if (text[index] != '0')
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string NormalizeRpcQuantity(object? value, string parameterName)
@@ -1237,6 +1697,29 @@ public static class EthereumMainnetSccp
         }
 
         return proofBytes.ToArray();
+    }
+
+    private static byte[] RequireNativeRecursiveBytes(byte[] bytes, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
+        }
+
+        if (!bytes.Any(static value => value != 0))
+        {
+            throw new ArgumentException($"{parameterName} must not be all zero.", parameterName);
+        }
+
+        if (bytes.Length > NativeRecursiveMaxProofBytes)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be at most {NativeRecursiveMaxProofBytes} bytes.",
+                parameterName);
+        }
+
+        return bytes.ToArray();
     }
 
     private static byte[] RequireGroth16ProofBytes(byte[] proofBytes, string parameterName)
@@ -1540,6 +2023,79 @@ public static class EthereumMainnetSccp
         return bytes.ToArray();
     }
 
+    private static byte[] RpcHexToBytes(
+        string value,
+        string parameterName,
+        int byteLength,
+        bool allowZero = false)
+    {
+        var normalized = NormalizeRpcHex(value, parameterName, byteLength, allowZero);
+        return Convert.FromHexString(normalized[2..]);
+    }
+
+    private static IReadOnlyList<byte[]> NormalizeReceiptTrieProofNodes(IReadOnlyList<byte[]> nodes)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (nodes.Count == 0 || nodes.Count > MaxMptProofNodes)
+        {
+            throw new ArgumentException(
+                $"receiptTrieProofNodes must contain 1..{MaxMptProofNodes} entries.",
+                nameof(nodes));
+        }
+
+        var normalized = new byte[nodes.Count][];
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            var node = nodes[index] ?? throw new ArgumentException(
+                $"receiptTrieProofNodes[{index}] is required.",
+                nameof(nodes));
+            if (node.Length == 0 || node.Length > MaxMptNodeBytes)
+            {
+                throw new ArgumentException(
+                    $"receiptTrieProofNodes[{index}] must contain 1..{MaxMptNodeBytes} bytes.",
+                    nameof(nodes));
+            }
+
+            normalized[index] = node.ToArray();
+        }
+
+        return normalized;
+    }
+
+    private static IReadOnlyList<byte[]> NormalizeReceiptInclusionBranch(
+        IReadOnlyList<byte[]> branch,
+        bool requireNonEmpty)
+    {
+        ArgumentNullException.ThrowIfNull(branch);
+        if (requireNonEmpty && branch.Count == 0)
+        {
+            throw new ArgumentException("inclusionBranch must not be empty.", nameof(branch));
+        }
+
+        if (branch.Count > MaxSourceMerkleBranchNodes)
+        {
+            throw new ArgumentException(
+                $"inclusionBranch must contain at most {MaxSourceMerkleBranchNodes} entries.",
+                nameof(branch));
+        }
+
+        var normalized = new byte[branch.Count][];
+        for (var index = 0; index < branch.Count; index++)
+        {
+            var sibling = branch[index] ?? throw new ArgumentException(
+                $"inclusionBranch[{index}] is required.",
+                nameof(branch));
+            if (sibling.Length != 32)
+            {
+                throw new ArgumentException($"inclusionBranch[{index}] must be 32 bytes.", nameof(branch));
+            }
+
+            normalized[index] = sibling.ToArray();
+        }
+
+        return normalized;
+    }
+
     private static EthereumMainnetOutboundProofRequest Snapshot(
         EthereumMainnetOutboundProofRequest request)
     {
@@ -1833,6 +2389,63 @@ public sealed record EthereumMainnetSccpDestinationBinding(
     string Key,
     string BindingHash);
 
+public sealed record EthereumMainnetLocalAdmissionSubmissionInput(
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    byte[] EnvelopeBytes,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash,
+    int SourceDomain = EthereumMainnetSccp.DomainEthereum,
+    int TargetDomain = EthereumMainnetSccp.DomainSora,
+    string ProofFamily = EthereumMainnetSccp.StarkFriProofFamily,
+    string VerifierBackend = EthereumMainnetSccp.EvmGroth16Bn254ProofBackend,
+    string EnvelopeEncoding = EthereumMainnetSccp.LocalAdmissionEnvelopeEncoding,
+    string SubmissionKind = EthereumMainnetSccp.LocalAdmissionSubmissionKind,
+    string VerifierEntrypoint = EthereumMainnetSccp.LocalAdmissionEntrypoint);
+
+public sealed record EthereumMainnetLocalAdmissionPayload(
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash)
+{
+    public int Version { get; } = 1;
+    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+}
+
+public sealed record EthereumMainnetLocalAdmissionSubmission(
+    string ProofFamily,
+    string VerifierBackend,
+    int SourceDomain,
+    int TargetDomain,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash,
+    EthereumMainnetLocalAdmissionPayload LocalAdmission,
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    byte[] EnvelopeBytes)
+{
+    public int Version { get; } = 1;
+    public string PlatformPayload { get; } = EthereumMainnetSccp.LocalAdmissionSubmissionKind;
+    public string EnvelopeEncoding { get; } = EthereumMainnetSccp.LocalAdmissionEnvelopeEncoding;
+    public string SubmissionKind { get; } = EthereumMainnetSccp.LocalAdmissionSubmissionKind;
+    public string VerifierEntrypoint { get; } = EthereumMainnetSccp.LocalAdmissionEntrypoint;
+    public IReadOnlyList<EthereumMainnetSccpSubmissionArgument> Arguments { get; } =
+        Array.Empty<EthereumMainnetSccpSubmissionArgument>();
+    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+    public string EnvelopeHex { get; } = "0x" + Convert.ToHexString(EnvelopeBytes).ToLowerInvariant();
+}
+
 public sealed record EthereumMainnetTransparentPublicInputs(
     int Version,
     string MessageId,
@@ -1990,6 +2603,31 @@ public sealed record EthereumMainnetBeaconFinalityEvidence(
     }
 }
 
+public sealed record EthereumMainnetReceiptProof
+{
+    public int SourceDomain { get; init; } = EthereumMainnetSccp.DomainEthereum;
+
+    public string SourceEventDigest { get; init; } = string.Empty;
+
+    public ulong BeaconSlot { get; init; }
+
+    public ulong ExecutionBlockNumber { get; init; }
+
+    public string ExecutionBlockHash { get; init; } = string.Empty;
+
+    public string ExecutionReceiptsRoot { get; init; } = string.Empty;
+
+    public string BeaconFinalizedRoot { get; init; } = string.Empty;
+
+    public string SyncCommitteeRoot { get; init; } = string.Empty;
+
+    public ulong ReceiptRootIndex { get; init; }
+
+    public IReadOnlyList<byte[]> ReceiptTrieProofNodes { get; init; } = Array.Empty<byte[]>();
+
+    public IReadOnlyList<byte[]> InclusionBranch { get; init; } = Array.Empty<byte[]>();
+}
+
 public sealed record EthereumMainnetInboundEvidence
 {
     public int SourceDomain { get; init; } = EthereumMainnetSccp.DomainEthereum;
@@ -2004,7 +2642,13 @@ public sealed record EthereumMainnetInboundEvidence
 
     public IReadOnlyDictionary<string, object?>? BeaconFinality { get; init; }
 
+    public EthereumMainnetReceiptProof? ReceiptProof { get; init; }
+
     public string? ReceiptProofHash { get; init; }
+
+    public string? SourceEventDigest { get; init; }
+
+    public string? SourceBridgeEmitterAddress { get; init; }
 
     public EthereumMainnetInboundEvidence WithBeaconFinalityEvidence(
         EthereumMainnetBeaconFinalityEvidence? evidence,

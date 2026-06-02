@@ -14,6 +14,10 @@ public static partial class BscMainnetSccp
     public const ulong MainnetChainId = 56;
     public const string EvmGroth16Bn254ProofBackend = "evm-groth16-bn254-v1";
     public const string StarkFriProofFamily = "stark-fri-v1";
+    public const string LocalAdmissionEnvelopeEncoding = "norito:sccp-local-admission:v1";
+    public const string LocalAdmissionSubmissionKind = "local_admission";
+    public const string LocalAdmissionEntrypoint = "SubmitBridgeProof";
+    public const int NativeRecursiveMaxProofBytes = 2 * 1024 * 1024;
     public const string MainnetNetworkId =
         "0x0000000000000000000000000000000000000000000000000000000000000038";
 
@@ -261,6 +265,61 @@ public static partial class BscMainnetSccp
 
         var proofCopy = RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
         return await inboundSubmitter.SubmitAsync(proofCopy, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static BscMainnetLocalAdmissionSubmission BuildLocalAdmissionSubmission(
+        BscMainnetLocalAdmissionSubmissionInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        RequireInboundRoute(input.SourceDomain, input.TargetDomain);
+
+        if (!string.Equals(input.EnvelopeEncoding, LocalAdmissionEnvelopeEncoding, StringComparison.Ordinal)
+            || !string.Equals(input.SubmissionKind, LocalAdmissionSubmissionKind, StringComparison.Ordinal)
+            || !string.Equals(input.VerifierEntrypoint, LocalAdmissionEntrypoint, StringComparison.Ordinal)
+            || !string.Equals(input.ProofFamily, StarkFriProofFamily, StringComparison.Ordinal)
+            || !string.Equals(input.VerifierBackend, EvmGroth16Bn254ProofBackend, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "BSC mainnet local-admission submission metadata is not canonical.",
+                nameof(input));
+        }
+
+        var proofBytes = RequireNativeRecursiveBytes(input.ProofBytes, nameof(input.ProofBytes));
+        var publicInputsBytes = RequireNativeRecursiveBytes(
+            input.PublicInputsBytes,
+            nameof(input.PublicInputsBytes));
+        var bundleBytes = RequireNativeRecursiveBytes(input.BundleBytes, nameof(input.BundleBytes));
+        var envelopeBytes = RequireNativeRecursiveBytes(input.EnvelopeBytes, nameof(input.EnvelopeBytes));
+        var statementHash = NormalizeNonZeroHex(input.StatementHash, nameof(input.StatementHash), 32);
+        var sourceVerifierMaterialHash = NormalizeNonZeroHex(
+            input.SourceVerifierMaterialHash,
+            nameof(input.SourceVerifierMaterialHash),
+            32);
+        var sourceAdapterEngineDeploymentHash = NormalizeNonZeroHex(
+            input.SourceAdapterEngineDeploymentHash,
+            nameof(input.SourceAdapterEngineDeploymentHash),
+            32);
+        var payload = new BscMainnetLocalAdmissionPayload(
+            ProofBytes: proofBytes,
+            PublicInputsBytes: publicInputsBytes,
+            BundleBytes: bundleBytes,
+            StatementHash: statementHash,
+            SourceVerifierMaterialHash: sourceVerifierMaterialHash,
+            SourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash);
+
+        return new BscMainnetLocalAdmissionSubmission(
+            ProofFamily: input.ProofFamily,
+            VerifierBackend: input.VerifierBackend,
+            SourceDomain: DomainBsc,
+            TargetDomain: DomainSora,
+            StatementHash: statementHash,
+            SourceVerifierMaterialHash: sourceVerifierMaterialHash,
+            SourceAdapterEngineDeploymentHash: sourceAdapterEngineDeploymentHash,
+            LocalAdmission: payload,
+            ProofBytes: proofBytes,
+            PublicInputsBytes: publicInputsBytes,
+            BundleBytes: bundleBytes,
+            EnvelopeBytes: envelopeBytes);
     }
 
     public static void RequireInboundRoute(int sourceDomain, int targetDomain)
@@ -694,6 +753,29 @@ public static partial class BscMainnetSccp
         return proofBytes.ToArray();
     }
 
+    private static byte[] RequireNativeRecursiveBytes(byte[] bytes, string parameterName)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (bytes.Length == 0)
+        {
+            throw new ArgumentException($"{parameterName} must not be empty.", parameterName);
+        }
+
+        if (!bytes.Any(static value => value != 0))
+        {
+            throw new ArgumentException($"{parameterName} must not be all zero.", parameterName);
+        }
+
+        if (bytes.Length > NativeRecursiveMaxProofBytes)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must be at most {NativeRecursiveMaxProofBytes} bytes.",
+                parameterName);
+        }
+
+        return bytes.ToArray();
+    }
+
     private static bool IsCanonicalRpcQuantityHex(string text)
     {
         return text == "0"
@@ -887,6 +969,63 @@ public sealed record BscMainnetSccpDestinationBinding(
     string ProofFamily,
     string Key,
     string BindingHash);
+
+public sealed record BscMainnetLocalAdmissionSubmissionInput(
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    byte[] EnvelopeBytes,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash,
+    int SourceDomain = BscMainnetSccp.DomainBsc,
+    int TargetDomain = BscMainnetSccp.DomainSora,
+    string ProofFamily = BscMainnetSccp.StarkFriProofFamily,
+    string VerifierBackend = BscMainnetSccp.EvmGroth16Bn254ProofBackend,
+    string EnvelopeEncoding = BscMainnetSccp.LocalAdmissionEnvelopeEncoding,
+    string SubmissionKind = BscMainnetSccp.LocalAdmissionSubmissionKind,
+    string VerifierEntrypoint = BscMainnetSccp.LocalAdmissionEntrypoint);
+
+public sealed record BscMainnetLocalAdmissionPayload(
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash)
+{
+    public int Version { get; } = 1;
+    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+}
+
+public sealed record BscMainnetLocalAdmissionSubmission(
+    string ProofFamily,
+    string VerifierBackend,
+    int SourceDomain,
+    int TargetDomain,
+    string StatementHash,
+    string SourceVerifierMaterialHash,
+    string SourceAdapterEngineDeploymentHash,
+    BscMainnetLocalAdmissionPayload LocalAdmission,
+    byte[] ProofBytes,
+    byte[] PublicInputsBytes,
+    byte[] BundleBytes,
+    byte[] EnvelopeBytes)
+{
+    public int Version { get; } = 1;
+    public string PlatformPayload { get; } = BscMainnetSccp.LocalAdmissionSubmissionKind;
+    public string EnvelopeEncoding { get; } = BscMainnetSccp.LocalAdmissionEnvelopeEncoding;
+    public string SubmissionKind { get; } = BscMainnetSccp.LocalAdmissionSubmissionKind;
+    public string VerifierEntrypoint { get; } = BscMainnetSccp.LocalAdmissionEntrypoint;
+    public IReadOnlyList<BscMainnetSccpSubmissionArgument> Arguments { get; } =
+        Array.Empty<BscMainnetSccpSubmissionArgument>();
+    public string ProofBytesHex { get; } = "0x" + Convert.ToHexString(ProofBytes).ToLowerInvariant();
+    public string PublicInputsBytesHex { get; } = "0x" + Convert.ToHexString(PublicInputsBytes).ToLowerInvariant();
+    public string BundleBytesHex { get; } = "0x" + Convert.ToHexString(BundleBytes).ToLowerInvariant();
+    public string EnvelopeHex { get; } = "0x" + Convert.ToHexString(EnvelopeBytes).ToLowerInvariant();
+}
 
 public interface IBscMainnetExecutionProvider
 {

@@ -1,35 +1,1817 @@
 # Status
 
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 
-## 2026-06-01 SCCP BSC launch-policy core-admission rerun
+## 2026-06-02 Sumeragi live stake-accounting proof
 
-- Re-applied the BSC-mainnet first-lane SCCP policy after the merge cleanup:
-  `sccp_production_policy_v1()` now defaults to `BscMainnetLane`, Core admits
-  configured BSC source proofs through the local `SubmitBridgeProof` path, and
-  Core/Torii configured launch-policy tests reject ETH/non-BSC lanes behind the
-  BSC gate.
-- Re-ran the full core-admission corridor after the focused policy tests. The
-  full `bridge_proofs` integration target passed all 35 tests, including the
-  positive configured BSC source-adapter admission test and the non-BSC
-  wait-for-lane-launch regressions.
+- Added top-level Sumeragi proof obligations tying live signed-stake accounting
+  to the commit-vote counters: `StakeSignedMatchesVoteCounters` proves
+  `stakeSigned` always equals `(commitVotesHonest * StakePerHonestVote) +
+  (commitVotesByz * StakePerByzVote)`, and `StakeAccountingNeverDiverges`
+  preserves that equality across every checked execution.
+- Wired the invariant and temporal property through the fast, deep, and TLC fast
+  Sumeragi configs, and documented the new obligation alongside the existing
+  quorum, RBC, progress-quiescence, honest-support, and commit-certificate
+  traceability corridor.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.26s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`, `18 min 9 sec`)
+
+## 2026-06-02 Ethereum mainnet SCCP SDK receipt-proof hardening
+
+- Tightened Ethereum mainnet inbound SCCP proof paths across JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and C# so `proveInboundToSora`
+  requires app-collected `receiptProof` material, not only a
+  `receiptProofHash`, before invoking local/native prover callbacks.
+- Added receipt-proof transcript alignment checks against collected
+  receipt/block/beacon-finality evidence: execution block number, execution
+  block hash, execution receipts root, and the optional SCCP source-event
+  digest now fail closed on drift before the prover callback can run.
+- Python inbound evidence collection now preserves copied `receipt_proof`
+  material alongside its computed hash for native prover callbacks.
+- Added adversarial SDK coverage for hash-only inbound evidence, drifted
+  receipt-proof transcripts, and callback-not-invoked behavior across the
+  touched SDK tests.
+- Validation:
+  - `npm run build:dist`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k ethereum_mainnet_sccp_facade`
+    (`3 passed, 84 deselected`)
+  - `swift test --filter SccpSolanaProverTests.testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `git diff --check -- <touched SCCP SDK files>`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" <touched SCCP SDK files>`
+    (no conflict markers)
+- Local validation blockers:
+  - Kotlin/JVM and Java Android Gradle tests could not start because no Java
+    runtime is available (`java -version` reports unable to locate a runtime).
+  - C# tests could not run because `dotnet` is not installed.
+
+## 2026-06-02 ISO XMLDSig certificate SPKI point-format hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every supplied
+  `KeyInfo/X509Data` certificate must expose an uncompressed 65-byte P-256 SEC1
+  subject public key that parses through the P-256 verifier, in addition to the
+  existing ECDSA-with-SHA256 and id-ecPublicKey/secp256r1 OID checks.
+- Added correctly signed compressed-SPKI certificate fixtures for both the
+  XMLDSig leaf and issuer positions, proving compressed certificate public-key
+  encodings fail closed without relying on broken certificate signatures.
 - Validation:
   - `cargo fmt --all`
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
-    (`1 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_core configured_sccp_bsc_mainnet_lane_launch --lib -- --nocapture`
-    (`2 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
-    (`1 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_torii configured_bsc_mainnet_lane_launch --features app_api --lib -- --nocapture`
-    (`2 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify cargo test -p iroha_torii destination_binding_query_respects_bsc_lane_launch_policy --features app_api --lib -- --nocapture`
-    (`1 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-verify bash scripts/check_sccp_production_corridor.sh --phase core-admission`
-    (`35 passed`)
+  - `cargo test -p iroha_torii compressed_ --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`20 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
   - `cargo fmt --all --check`
-  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md roadmap.md status.md`
-  - `bash -lc 'if rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py docs/source/bridge_proofs.md roadmap.md status.md; then exit 1; else exit 0; fi'`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig legal XML namespace canonicalization
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` canonical namespace
+  handling so an explicit `xmlns:xml="http://www.w3.org/XML/1998/namespace"`
+  declaration is accepted as the fixed XML namespace binding but omitted from
+  canonical output. Wrong `xml` rebindings and attempts to bind the XML/XMLNS
+  namespace names to default or non-`xml` prefixes still fail closed.
+- Added canonicalizer regressions proving legal local and inherited
+  `xmlns:xml` declarations do not serialize while `xml:*` attributes remain
+  sorted and emitted, and kept the signed `require-verified` XMLDSig/XAdES
+  fixture matrix green.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`17 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig malformed QName hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig/XAdES
+  structural helpers validate selected element QNames with the supported XML
+  name policy before namespace, child-shape, digest, or signature handling
+  continues. Malformed local-name matches such as `ds::Reference`,
+  `ds::Transform`, or `ds::DigestMethod` now fail closed instead of being
+  accepted through prefix-only namespace resolution.
+- Added focused XMLDSig Reference regressions covering malformed root,
+  direct-child, and namespace-bound digest-method QNames while keeping the
+  canonicalizer and full `require-verified` fixture matrix green.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_reference_rejects_malformed_qnames --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_reference --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig/XAdES default namespace hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so unprefixed XMLDSig
+  and XAdES structural elements still support legacy unqualified fixtures, but
+  now reject explicit default namespaces that conflict with the supported
+  XMLDSig or XAdES namespace.
+- Added re-signed end-to-end fixtures for wrong default XMLDSig and XAdES
+  namespaces, plus direct XAdES shape coverage for unprefixed
+  `QualifyingProperties` with a conflicting default namespace.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii wrong_default_namespace --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_torii namespace --lib -- --nocapture`
+    (`18 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo test -p iroha_torii supported_xml_xades_qualifying_properties_requires_direct_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig same-document Reference coverage hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so non-empty XMLDSig
+  payload `Reference URI="#..."` targets must strictly enclose the verified
+  signature carrier. Empty-URI references still sign the whole payload, and
+  valid same-document `Document` or message-body targets still pass, but a
+  header-only subtree can no longer authenticate unsigned settlement fields.
+- Added a signed `GrpHdr`-only same-document regression that previously had
+  valid digest/signature bytes while leaving the payment body outside the
+  payload Reference coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_reference_outside_signature_carrier --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_reference --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii same_document_id --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`98 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi honest commit-support proof
+
+- Added top-level Sumeragi obligations proving that committed states retain
+  enough honest commit-vote support after discounting the Byzantine vote budget:
+  `CommitImpliesHonestSupport` and `CommitHonestSupportNeverLost`.
+- Wired the new invariant and temporal property through the fast, deep, and TLC
+  fast model-checker configs, and documented the proof surface in the Sumeragi
+  formal README and roadmap.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.27s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`12` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig Sgntr wrapper verification
+
+- Extended `crates/iroha_torii/src/iso20022_bridge.rs` so `require-verified`
+  ISO XMLDSig payloads support the normal ISO `Sgntr` carrier shape: exactly
+  one `Sgntr` wrapper containing exactly one direct XMLDSig `Signature` child.
+  The verifier threads wrapper namespace declarations into the nested XMLDSig
+  tree while the enveloped-signature digest still removes only the `Signature`
+  element, leaving the signed wrapper bytes intact.
+- Kept multiplicity fail-closed semantics: extra `Signature` or `Sgntr`
+  carriers outside the selected bare `Signature` or `Sgntr` wrapper still
+  reject before digest or trust-pin evaluation.
+- Added an end-to-end signed fixture whose `ds` namespace is inherited from the
+  `Sgntr` wrapper, proving the wrapped carrier verifies through the full
+  `require-verified` profile path.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii sgntr_wrapped --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii extra_sgntr --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`95 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig raw public-key SEC1 hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so raw
+  `KeyValue/ECKeyValue/PublicKey` material must decode to an uncompressed
+  65-byte P-256 SEC1 point and parse through the P-256 verifier before
+  trust-pin matching or signature verification continues.
+- Added helper-level malformed/short/compressed point coverage and an
+  end-to-end `require-verified` regression that pins compressed bytes for the
+  same signing key, proving compressed raw key material still fails closed.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_key_material_enforces_key_info_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii compressed_public_key --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii public_key --lib -- --nocapture`
+    (`11 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`95 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig certificate algorithm corridor hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every certificate in
+  XMLDSig `KeyInfo/X509Data` must use ECDSA-with-SHA256 and
+  id-ecPublicKey/secp256r1 before extension, chain, or trust-pin evaluation
+  continues.
+- Added a generated chain fixture with a P-384/SHA-384 issuer signing an
+  otherwise valid P-256 XMLDSig leaf, proving unsupported certificate algorithms
+  fail closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii unsupported_certificate_algorithm --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`18 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi post-finality quiescence proof
+
+- Added top-level Sumeragi obligations proving that once a block is committed,
+  proposal, prepare/commit/new-view voting, timeout view-change, RBC progress,
+  Byzantine fault injection, and aggregate `PostGstProgressEnabled` actions
+  are disabled.
+- Wired `CommitDisablesProgressActions` as a state invariant and
+  `CommitProgressActionsNeverReenabled` as a temporal property in the fast,
+  deep, and TLC fast model-checker configs, and documented the new proof
+  surface in the Sumeragi formal README and roadmap.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9788` expected-failure modes, `1` scheduled/manual mode,
+    `10293` documented modes, `499` TLC fast modes, `9788` TLC mutation modes)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.29s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`11` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum mainnet EVM network-id pinning
+
+- Tightened EVM-family destination rollout construction and production
+  readiness so ETH must use the canonical Ethereum mainnet EIP-155 network id
+  word (`0x...01`) and BSC must use the canonical BSC mainnet word (`0x...38`).
+  An internally consistent destination binding key/hash recomputed over the
+  wrong nonzero network id no longer opens the production lane.
+- Added the public Rust `sccp_eth_mainnet_network_id_word_v1()` helper and
+  moved Torii/Core configured-lane fixtures onto the shared ETH/BSC network-id
+  helpers.
+- Hardened `scripts/sccp_evm_destination_evidence.py` so `--network-id` is an
+  optional mainnet override: omitted values default to the selected domain's
+  canonical EIP-155 id, while mismatched overrides are rejected before JSON or
+  TOML evidence is rendered. Updated the ETH/BSC destination binding,
+  route-allowlist, route-canary, JSON, and TOML vectors to the canonical ids.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_destination_evidence.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`13 passed`)
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp destination_rollout -- --nocapture`
+    (`6 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp lane_readiness -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp evm_destination_binding -- --nocapture`
+    (`3 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii --lib configured_ethereum_mainnet_lane_launch -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii --lib destination_binding_query_respects_ethereum_lane_launch_policy -- --nocapture`
+    (`1 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib configured_sccp_ethereum_mainnet_lane_launch -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch -- --nocapture`
+    did not reach the routing tests because unrelated
+    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` currently imports
+    missing `iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash`;
+    the library-only Torii run above passed.
+
+## 2026-06-02 SCCP EVM live evidence mainnet network-id default
+
+- Hardened `scripts/sccp_evm_live_evidence.py` so live destination evidence now
+  defaults `--expected-network-id` to the selected domain's canonical EIP-155
+  mainnet bytes32 (`eth=1`, `bsc=56`) and rejects explicit or bridge-reported
+  noncanonical values before full offline TOML evidence can be rendered.
+- Updated the live evidence tests and fake EVM provider fixtures to prove the
+  defaulted ETH mainnet network id is recorded in summaries, full TOML no
+  longer requires a redundant network-id flag, and forged noncanonical bridge
+  views fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`24 passed`)
+
+## 2026-06-02 SCCP JS Ethereum outbound bridge-address binding
+
+- Tightened the browser-first `EthereumMainnetSccp.submitOutboundToEthereum`
+  provider path so the transaction `to` address is derived from the wrapped
+  proof result's Ethereum mainnet destination binding. Explicit `to` or
+  `bridgeAddress` overrides are accepted only when they canonicalize to that
+  same bound bridge address.
+- Updated the Ethereum mainnet JS tests to prove same-address overrides still
+  work while a different bridge address is rejected before `eth_sendTransaction`
+  is called.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12 passed`)
+
+## 2026-06-02 SCCP JS BSC outbound bridge-address binding
+
+- Mirrored the browser provider-path hardening in `BscMainnetSccp.submitOutboundToBsc`:
+  raw `to`/`bridgeAddress` overrides are accepted only when they canonicalize
+  to the wrapped proof result's BSC mainnet destination-binding bridge address.
+- Regenerated the JS package `dist` output and updated the BSC mainnet wrapper
+  test so mismatched explicit targets are rejected before `eth_sendTransaction`
+  is called.
+- Validation:
+  - `npm run build:dist`
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`26 passed`)
+  - `node --test --test-name-pattern "browser Ethereum mainnet SCCP artifacts stay JS-only|browser BSC mainnet SCCP artifacts stay JS-only" javascript/iroha_js/test/package_dist.test.js`
+    (`2 passed`)
+
+## 2026-06-02 ISO XMLDSig signature-carrier multiplicity hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so `require-verified`
+  ISO XMLDSig payloads may contain only one supported signature carrier:
+  `Signature` or `Sgntr`. Any additional `Signature`/`Sgntr` element outside
+  the verified span now fails closed before digest or trust-pin evaluation.
+- Added a regression payload that is correctly signed while carrying an extra
+  ignored `Sgntr` block, proving the verifier rejects carrier multiplicity
+  rather than only detecting digest tampering.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii extra_sgntr --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_signature_shape --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig leaf KeyUsage criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so the XMLDSig
+  `KeyInfo/X509Data` leaf certificate must carry `digitalSignature` in a
+  critical `keyUsage` extension before the leaf public key can verify
+  `SignedInfo`.
+- Added a generated P-256 chain fixture whose leaf carries a valid non-critical
+  `keyUsage` with `digitalSignature`, proving the chain fails closed under
+  `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii noncritical_leaf_key_usage --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`17 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`93 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig issuer KeyUsage criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  certificate-chain issuers must carry `keyCertSign` in a critical `keyUsage`
+  extension, matching the already-enforced critical CA `basicConstraints`
+  policy before issuer/root DER SHA-256 pins can trust a chain.
+- Added a generated P-256 chain fixture whose issuer carries a valid
+  non-critical `keyUsage` with `digitalSignature` and `keyCertSign`, proving the
+  chain fails closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii noncritical_issuer_key_usage --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`92 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig critical X.509 extension whitelist hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so critical X.509
+  extensions are accepted only when they are in the XMLDSig verifier's enforced
+  subset: `basicConstraints` and `keyUsage`. Parsed-but-unenforced critical
+  extensions such as EKU now fail closed on both leaf and issuer certificates.
+- Added generated P-256 certificate-chain regressions with a valid critical
+  ExtendedKeyUsage extension on the leaf and issuer, proving recognized but
+  unsupported critical extension semantics cannot pass trust-pin matching.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unsupported_parsed_extension --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`16 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`92 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig leaf CA rejection
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so the XMLDSig
+  `KeyInfo/X509Data` leaf certificate must be an end-entity signing
+  certificate: `digitalSignature` remains required, and any CA
+  `basicConstraints` on the leaf now fails closed before profile trust pins are
+  considered.
+- Added a generated P-256 chain fixture whose leaf certificate asserts CA
+  `basicConstraints`, proving that an otherwise valid signed payload is rejected
+  under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii leaf_ca --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`15 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 Sumeragi RBC finality evidence proof
+
+- Added top-level Sumeragi obligations proving that finalized states are backed
+  by live RBC delivery evidence: `CommitImpliesRbcEvidence` requires committed
+  states to keep the delivered state, ready quorum, full chunk coverage, and
+  validated header/digest evidence, while `CommitRbcEvidenceNeverLost` preserves
+  that evidence after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.28s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`10` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig X509Data chain-bound hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  `KeyInfo/X509Data` material must contain a non-empty, duplicate-free chain of
+  at most eight DER certificates before certificate parsing, chain walking, or
+  profile trust-pin matching continues.
+- Added focused coverage for empty, duplicate, and overlong certificate vectors,
+  plus an end-to-end `require-verified` regression proving that a duplicate DER
+  certificate injected into unsigned `KeyInfo` fails closed.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii x509_certificate --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`14 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`36 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 ISO XMLDSig issuer BasicConstraints criticality hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  certificate-chain issuers must carry critical CA `basicConstraints` in
+  addition to `keyCertSign` before a profile certificate pin can trust the
+  linked chain.
+- Added a generated P-256 chain fixture whose issuer has `CA:TRUE`
+  `basicConstraints` encoded as non-critical, proving that otherwise valid
+  chains fail closed under `require-verified`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii noncritical_issuer_basic_constraints --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`15 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`90 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 SCCP Ethereum SDK sync-committee period parity
+
+- Mirrored the Ethereum mainnet sync-committee period rule into the public
+  Python, JS, and Swift SDK transcript helpers. SDK callers now reject ETH
+  sync-committee transition messages and signatures when `transitionSlot` is
+  zero, when `toSyncPeriod != fromSyncPeriod + 1`, or when the transition slot
+  does not belong to `fromSyncPeriod` under the mainnet `8192` slots-per-period
+  rule.
+- Exported the new period helpers/constants through Python package exports, JS
+  package declarations, and built JS dist entrypoints, and refreshed the
+  cross-SDK ETH transition transcript golden hashes for the period-consistent
+  `0 -> 1` transition at slot `19`.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'eth_sync_committee_transition_transcripts'`
+    (`1 passed, 86 deselected`)
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test --test-name-pattern "derives ETH sync-committee transition transcript hashes" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`1 passed`)
+  - `node --test --test-name-pattern "package SCCP entrypoint|ETH sync-committee payload" javascript/iroha_js/test/package_dist.test.js`
+    (`2 passed`)
+  - `swift test --filter SccpSolanaProverTests/testSourceProofHashesBindUiWitnessMaterial`
+    (`1 passed`)
+  - `git diff --check -- ...` over the touched SDK files and tests
+
+## 2026-06-02 ISO XMLDSig critical X.509 extension hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so every certificate
+  supplied in XMLDSig `KeyInfo/X509Data` rejects unknown, malformed, or
+  unparsed critical X.509 extensions before trust-pin matching can accept the
+  chain.
+- Added generated P-256 regressions with a critical private extension on the
+  leaf certificate and on the pinned issuer certificate, proving both fail
+  closed under `require-verified` profiles.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii critical_unknown --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`88 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 Sumeragi live commit-quorum proof
+
+- Added top-level Sumeragi obligations proving that finalized states remain
+  backed by live quorum counters: `CommitImpliesLiveVoteQuorum` and
+  `CommitImpliesLiveStakeQuorum` require committed states to keep vote and
+  signed-stake counters above their finality thresholds, while
+  `LiveCommitQuorumNeverLost` preserves both live thresholds after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.26s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`9` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XAdES SigningCertificateV2 chain-prefix hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so certificate-backed
+  XAdES `SigningCertificateV2` digests must be a non-empty, duplicate-free
+  ordered prefix of the verified XMLDSig certificate chain, starting at the leaf
+  certificate. A digest list that skips the issuer, repeats the leaf, starts
+  with an issuer, or extends beyond the verified chain now fails closed.
+- Added focused regressions covering accepted leaf-only, leaf+issuer, and
+  full-chain prefixes plus unordered, duplicate, and overlong digest lists.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii signing_certificate_v2 --lib -- --nocapture`
+    (`4 passed`)
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`35 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`88 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no conflict markers)
+
+## 2026-06-02 SCCP Ethereum sync-committee period binding hardening
+
+- Added `sccp_eth_mainnet_sync_committee_period_for_slot`, using the Ethereum
+  mainnet consensus rule `slot / (32 * 256)`, and wired it into the ETH source
+  proof verifier. Sync-committee transition proofs now have to be signed from
+  the period containing the transition slot, and the final transition in the
+  chain must land on the period containing the finalized beacon slot.
+- Updated the ETH transition-chain fixture to use period-consistent mainnet
+  slots and added an adversarial case where the transition signature and
+  payload hashes are internally valid but the transition slot belongs to the
+  wrong sync-committee period.
+- Validation:
+  - `cargo fmt --all`
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp eth_source_adapter -- --nocapture`
+    (`2 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp eth_sync_committee_transition -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO XMLDSig certificate pathLen hardening
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so XMLDSig
+  `KeyInfo/X509Data` issuer certificates now enforce
+  `basicConstraints.pathLenConstraint` against the supplied subordinate CA
+  chain before issuer/root DER SHA-256 trust pins can satisfy a
+  `require-verified` profile.
+- Refactored the generated certificate-chain fixture builder to emit arbitrary
+  chain lengths, then added three-certificate regressions proving
+  `pathLenConstraint = 1` accepts one subordinate intermediate CA while
+  `pathLenConstraint = 0` rejects the same otherwise valid chain.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii path_len --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`12 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`86 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 Sumeragi commit-certificate traceability proof
+
+- Added top-level Sumeragi obligations proving that finalized commit evidence
+  remains traceable to the live vote counters:
+  `CommitEvidenceMatchesVoteCounters` requires committed states to have
+  evidence votes equal to `commitVotesHonest + commitVotesByz` and evidence
+  stake equal to `stakeSigned`, while
+  `CommitEvidenceNeverDivergesFromVoteCounters` preserves that relationship
+  after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.28s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`8` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum SDK no-provider data collection hardening
+
+- Tightened the Ethereum-mainnet transaction-hash collection path across the
+  public SDK facades so receipt evidence collection fails explicitly when the
+  caller supplies only `transactionHash` without an app-owned execution
+  provider. This keeps the browser/mobile product path local-first and avoids
+  falling through to generic missing-receipt/proof errors or any implicit data
+  fallback.
+- Mirrored the regression coverage across JavaScript, Python, Swift,
+  Kotlin/JVM, Java Android, and C# source tests. The Swift Ethereum facade now
+  matches the BSC behavior by raising the explicit `executionProvider` error
+  before attempting receipt normalization.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence or ethereum_mainnet_sccp_facade_collects_inbound_receipts'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`87 passed`)
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`12` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+    from `kotlin/` (`BUILD SUCCESSFUL`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test --console=plain`
+    from `java/iroha_android/` (`BUILD SUCCESSFUL`)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    from `IrohaSwift/` (`1` test passed)
+  - `swift test --filter SccpSolanaProverTests`
+    from `IrohaSwift/` (`79` tests passed)
+  - `git diff --check -- ...` over the SCCP SDK/source files touched in this
+    slice
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' ...` over the same files (no matches)
+- C# test execution is blocked in this local environment: neither `dotnet` nor
+  `$HOME/.dotnet/dotnet` is available (`dotnet missing`). The C# source and
+  regression test were updated alongside the other SDKs.
+
+## 2026-06-02 SCCP Python Ethereum finality fail-closed hardening
+
+- Tightened `python/iroha_torii_client/sccp.py` so an explicitly supplied empty
+  Ethereum `beacon_finality`/`beaconFinality` object is no longer silently
+  ignored by `EthereumMainnetSccp.collect_inbound_evidence_from_receipt`.
+  User-supplied finality evidence now always goes through the strict finalized
+  execution block number, block hash, and receipts-root normalization path.
+- Added a Python SDK adversarial inbound evidence regression proving empty
+  `beacon_finality` fails closed with the same `beaconFinality` field checks
+  used for malformed or drifted finality data.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence or ethereum_mainnet_sccp_facade_collects_inbound_receipts'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`87 passed`)
+
+## 2026-06-02 SCCP EVM route-canary receipt block hardening
+
+- Tightened `scripts/sccp_evm_live_evidence.py` so a live
+  MessageProofAccepted route-canary receipt with `blockNumber = 0x0` is
+  rejected at RPC-summary parsing time instead of reaching the downstream
+  evidence-hash guard. This keeps the live Ethereum/BSC collection path aligned
+  with the offline destination evidence helper and Rust readiness checks, both
+  of which require positive route-canary receipt block numbers.
+- Added an adversarial live-EVM evidence regression that forges a successful
+  route-canary transaction receipt at block zero and proves the collector fails
+  closed before rendering governed TOML.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_evm_live_evidence.py pytests/scripts/sccp_evm_live_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py -k 'route_canary_rejects_unverified_transaction_metadata or expected_rpc_chain_id_parser_requires_canonical_decimal'`
+    (`2 passed, 20 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py`
+    (`22 passed`)
+  - `python3 -m pytest -q pytests/scripts/sccp_evm_live_evidence_test.py pytests/scripts/sccp_evm_destination_evidence_test.py`
+    (`35 passed`)
+
+## 2026-06-02 SCCP native SDK no-WASM release guard
+
+- Added a release-readiness test that scans the public SCCP SDK source artifacts
+  across JavaScript source/dist/declarations, Python package exports, Swift
+  SCCP sources, Kotlin/JVM SCCP helpers, Java Android SCCP helpers, and C# SCCP
+  sources for forbidden WASM, `snarkjs`, and remote-prover dependency markers.
+  This broadens the existing Ethereum/BSC facade spot checks into a release
+  gate over the user-facing native/local-prover SDK surface.
+- Validation:
+  - `python3 -m py_compile pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'all_public_sccp_sdk_sources_are_native_local_prover_only or ethereum_sdk_sources_are_native_local_prover_only or bsc_sdk_sources_are_native_local_prover_only'`
+    (`3 passed, 25 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`173 passed`)
+
+## 2026-06-02 Sumeragi prepare-quorum commit-gate proof
+
+- Added top-level Sumeragi obligations for the prepare certificate side of the
+  commit path: `CommitVotePhaseRequiresPrepareQuorum`,
+  `CommitImpliesPrepareQuorum`, and `PrepareQuorumNeverLostAfterCommit`.
+  These prove the model cannot enter commit-vote/finality states before a
+  prepare quorum and cannot lose that quorum after finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed in 0.27s`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7` temporal-property branches, `2338` distinct states, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 ISO XMLDSig namespace binding hardening
+
+- Tightened Torii's supported XMLDSig verifier so prefixed XMLDSig structural
+  elements must resolve to the XMLDSig namespace in the inherited scope for
+  their subtree. The check covers `Signature`, direct `SignedInfo`/
+  `SignatureValue`/`KeyInfo`/`Object` children, `SignedInfo` method and
+  `Reference` children, `Reference`/`Transforms`/`Transform`/`DigestMethod`/
+  `DigestValue`, and public-key or X.509 `KeyInfo` material. Existing
+  unprefixed fixtures remain supported.
+- Added regressions for a cryptographically valid prefixed payload signed under
+  a wrong `ds` namespace URI, plus focused Reference/Digest and KeyInfo
+  namespace-confusion cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XML QName close-tag hardening
+
+- Tightened the supported XML element scanner so once an opening tag is selected
+  by local name, the matching closing tag must use the exact same qualified
+  name. This preserves local-name lookup for supported prefixed XMLDSig inputs
+  while rejecting malformed shapes such as `<ds:SignedInfo>...</bad:SignedInfo>`
+  before XMLDSig structure or cryptographic verification continues.
+- Added regressions for a mismatched prefixed root close and a mismatched
+  prefixed XMLDSig direct child close inside `Signature`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig exact attribute lookup hardening
+
+- Tightened XMLDSig attribute value extraction so cryptographic policy
+  attributes are read by exact XML attribute name only. This removes the
+  previous local-name fallback from the accessor and keeps namespace-qualified
+  spoof attributes such as `ds:Algorithm` or `ds:URI` rejected before method,
+  transform, digest, or Reference policy is evaluated.
+- Added regressions covering namespace-qualified `Reference` `URI`,
+  `Transform` `Algorithm`, and `DigestMethod` `Algorithm` attributes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XAdES namespace binding hardening
+
+- Tightened the supported XAdES signed-property subset so prefixed XAdES
+  structural elements must resolve to the ETSI XAdES v1.3.2 namespace
+  (`http://uri.etsi.org/01903/v1.3.2#`). The verifier now carries inherited
+  namespace scope for referenced `SignedProperties` targets and validates
+  prefixed `QualifyingProperties`, `SignedProperties`,
+  `SignedSignatureProperties`, `SigningTime`, `SigningCertificateV2`, `Cert`,
+  and `CertDigest` nodes while keeping existing unprefixed fixtures accepted.
+- Corrected the prefixed XMLDSig fixture so XAdES properties use an `xades:`
+  prefix instead of the XMLDSig `ds:` prefix, and added end-to-end regressions
+  for accepted prefixed XAdES plus a re-signed wrong-namespace XAdES payload.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`86 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig certificate-chain issuer binding
+
+- Tightened `crates/iroha_torii/src/iso20022_bridge.rs` so each XMLDSig
+  `KeyInfo/X509Data` certificate-chain link must bind the child certificate's
+  issuer distinguished name to the parent certificate's subject distinguished
+  name before the parent signature verification can expose issuer/root DER
+  SHA-256 trust pins to a `require-verified` profile.
+- Added a generated P-256 chain fixture where the same CA key signs the leaf
+  with a mismatched issuer DN while the pinned issuer certificate carries a
+  different subject DN. The new
+  `require_verified_profile_rejects_certificate_chain_with_issuer_name_mismatch`
+  regression proves signature verification alone is not sufficient for trust
+  exposure.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii issuer_name_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`10 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`82 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`34 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii high_s --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii signature_value --lib -- --nocapture`
+    (`5 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+
+## 2026-06-02 SCCP release-evidence transcript hardening
+
+- Tightened `scripts/sccp_release_readiness_report.py` so passed corridor phase
+  evidence cannot borrow a completion sentinel from an unrelated partial
+  transcript. Single-phase logs must contain the completion sentinel in the
+  claimed phase block; full-corridor logs are still accepted for `all=...` only
+  when every known corridor phase marker is present and the completion sentinel
+  appears after the final phase marker.
+- Added a forged-log regression covering a partial multi-phase transcript that
+  includes the expected Rust command and success marker but omits the
+  `rust-sccp` phase-block completion sentinel.
+- Aligned the strict release-bundle verifier with the report builder so
+  `scripts/sccp_release_bundle.py --phase-evidence all=<full-run.log>` can
+  produce a self-verifying bundle from one complete corridor transcript, while
+  partial transcripts still fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'passes_for_complete_evidence_and_corridor or phase_log_without_phase_completion'`
+    (`2 passed, 25 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'hash_bound_full_corridor_log or completion_outside_claimed_phase_block'`
+    (`2 passed, 143 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`172 passed`)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py status.md`
+
+## 2026-06-02 Sumeragi committed-view witness proof
+
+- Added a latched `commitView` witness to `docs/formal/sumeragi/Sumeragi.tla`.
+  The top-level commit path now records the view that produced finality when an
+  honest commit vote, Byzantine commit vote, or RBC delivery transition first
+  makes `committed` true.
+- Added `CommitViewMatchesFinality`, `NoCommitViewBeforeCommit`, and
+  `CommitViewNeverChanges` to the top-level Apalache and TLC configs, proving
+  that no commit-view witness appears before finality and that the finality
+  witness remains tied to the active view after commit.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2338 distinct states`, `6` temporal-property branches, no errors)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 Sumeragi committed-phase terminality proof
+
+- Tightened `docs/formal/sumeragi/Sumeragi.tla` so the single-height
+  abstraction treats `"Committed"` as a terminal phase: committed states no
+  longer re-enter proposal or timeout-driven view-change transitions.
+- Added `CommittedPhaseMatchesFinality` and `CommittedPhaseNeverLeaves` to the
+  top-level Apalache and TLC configs, proving that the finality latch and
+  committed phase stay aligned and that committed phase cannot be left after
+  finality.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2338 distinct states`, `5` temporal-property branches, no errors)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+
+## 2026-06-02 SCCP Ethereum mainnet production corridor hardening
+
+- Fixed deployment-bound transparent proof verification so `LocalAdmission`
+  submission packages are accepted whenever the source proof is production-ready
+  against configured verifier material and source-adapter deployment evidence,
+  regardless of the counterparty verifier target. This closes the Solana/TON/
+  Substrate source-to-SORA verifier mismatch where the builder emitted
+  `LocalAdmission` but the verifier rebuilt a counterparty submission package.
+- The fix preserves the stricter production gate: local admission still requires
+  matching source verifier material, matching source-adapter deployment evidence,
+  and deployment-bound proof bytes. Replayed deployment receipts remain rejected.
+- Restored JVM/Android corridor compilation by exposing `getOfflineV2Readiness`
+  and the `/v1/offline/v2/readiness` parser in Kotlin/JVM and Java Android,
+  then removing duplicate Java Android `IrohaClient` default method definitions
+  that prevented the Android core test harness from compiling.
+- Validation:
+  - `cargo fmt --all`
+  - `bash scripts/check_sccp_production_corridor.sh --phase contract-smoke`
+    (`sccp_message_bridge_smoke: ok`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`815 passed`)
+  - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_sccp deployment_bound_transparent_proof_requires_matching_source_deployment -- --nocapture`
+    (`1 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase rust-sccp`
+    (`241 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
+    (`36 passed`)
+  - `bash scripts/check_sccp_production_corridor.sh --phase swift-sdk`
+    (`SccpSolanaProverTests`: `79 passed`; `ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions`: `1 passed`; existing NoritoBridge ABI-mismatch warning was emitted)
+  - `bash scripts/check_sccp_production_corridor.sh --phase kotlin-sdk`
+    (`BUILD SUCCESSFUL`; existing unchecked-cast warnings in offline tests were
+    emitted during test compilation)
+  - `bash scripts/check_sccp_production_corridor.sh --phase java-android`
+    (`BUILD SUCCESSFUL` for both Gradle SCCP harness invocations; existing
+    deprecation notes were emitted during test compilation)
+  - `bash scripts/check_sccp_production_corridor.sh --phase dotnet-sdk`
+    (`11 passed`)
+  - `git diff --check --` over the SCCP verifier, status, Kotlin offline-v2
+    readiness, and Java Android offline-v2 readiness/client files.
+
+## 2026-06-02 Sumeragi top-level TLC fairness check
+
+- Added `docs/formal/sumeragi/Sumeragi_tlc_fast.cfg`, a TLC-routed
+  top-level Sumeragi commit-path check that mirrors the existing fast
+  parameters while using `SPECIFICATION Spec` so TLC checks the model with its
+  weak-fairness assumptions instead of only the Apalache `INIT`/`NEXT`
+  encoding.
+- Tightened `docs/formal/sumeragi/Sumeragi.tla` so committed finality now keeps
+  explicit latched quorum and stake evidence. This preserves the meaning of the
+  commit-safety invariants after `TimeoutTick` resets per-view live counters.
+- Added top-level commit-certificate stability obligations:
+  `CommitEvidenceIsBounded`, `NoCommitEvidenceBeforeCommit`,
+  `CommitNeverRevoked`, and `CommitEvidenceNeverLost`. These prove the model
+  cannot accumulate orphan certificate evidence before finality, cannot exceed
+  the configured voting/stake evidence envelope, and cannot lose finality or
+  threshold certificate evidence after commit.
+- Added `VoteCountersRespectRosterBudgets` and `RbcDeliveryNeverLost`, so the
+  top-level model now explicitly proves live prepare/commit/new-view counters
+  stay within the honest/fault roster split and that delivered RBC availability
+  is never rolled back by later view-change, vote, or fault transitions.
+- Wired `bash scripts/formal/sumeragi_tlc.sh fast` into the TLC runner and the
+  formal README command list. The coverage guard now reaches the new
+  top-level TLC config alongside the existing Apalache fast/deep commit-path
+  commands and the 499 documented TLC fast rows.
+- Validation:
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
+  - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_tlc.sh fast`
+    (`2914 distinct states`, `4` temporal-property branches, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
+    (`NoError` through computation length `10`, `EXITCODE: OK`)
+  - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115 passed`)
+
+## 2026-06-02 SCCP Ethereum mainnet core launch readiness hardening
+
+- Added `iroha_core` bridge-proof regression coverage for complete Ethereum
+  mainnet lane material: governed ETH source verifier material, source-adapter
+  deployment evidence, EIP-155 chain-id `1` destination binding evidence, route
+  allowlist evidence, and route canary transcript fields now produce
+  production-ready lane readiness.
+- Added negative readiness checks for missing ETH route canary evidence and
+  replayed ETH source-adapter deployment receipts. The replayed deployment can
+  remain internally well-shaped, but the lane stays disabled because the
+  route-allowlist/canary evidence no longer binds the configured deployment
+  hash.
+- Updated non-ETH bridge-proof launch-policy tests to expect the default
+  Ethereum mainnet launch corridor instead of stale BSC launch wording.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_core --test bridge_proofs lane_launch -- --nocapture`
+    (`9 passed`)
+  - `cargo test -p iroha_sccp eth_source_adapter -- --nocapture`
+    (`2 passed`)
+  - `cargo test -p iroha_sccp evm_source_adapter_binds_receipt_trie_proof_hash_to_inclusion_witness -- --nocapture`
+    (`1 passed`)
+  - `git diff --check -- crates/iroha_core/tests/bridge_proofs.rs`
+
+## 2026-06-02 SCCP Ethereum mainnet JS/Python corridor validation
+
+- Ran the browser-oriented JavaScript SDK and Python SDK phases of the SCCP
+  production corridor after the Ethereum mainnet lane-readiness hardening. The
+  JavaScript phase covered the first-class `EthereumMainnetSccp` facade,
+  browser JS-only/local-prover ownership checks, user-supplied EIP-1193 +
+  Beacon REST collection, finalized evidence gating, source-bridge log
+  validation, and cross-SDK proof/calldata parity.
+- The Python SDK phase kept the matching local Ethereum mainnet evidence,
+  source-proof, destination-calldata, and submit-payload helpers green.
+- Validation:
+  - `bash scripts/check_sccp_production_corridor.sh --phase js-sdk,python-sdk`
+    (`js-sdk`: `169 passed`; `python-sdk`: `87 passed`)
+
+## 2026-06-02 SCCP Ethereum mainnet native receipt-proof release gates
+
+- Extended the SCCP release-readiness report and strict release-bundle verifier
+  inventories so Swift, Kotlin/JVM, Java Android, and .NET ETH/BSC SDK rows
+  must advertise typed Ethereum mainnet receipt-proof evidence helpers. The
+  verifier now fails weakened public release bundles that omit
+  `EthereumMainnetReceiptProof` or `EthereumMainnetSccp.ReceiptProof` from the
+  native Ethereum SDK helper surfaces.
+- Updated release-readiness tests to assert the new native helper symbols in
+  JSON output and to keep the canonical JavaScript helper row sourced from the
+  report module instead of a stale duplicate list.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_helper_symbols_exist_in_sdk_sources or ethereum_sdk_sources_are_native_local_prover_only or json_tracks_corridor_phase_results'`
+    (`3 passed, 23 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'verifier_helper_inventory_is_independent'`
+    (`1 passed, 143 deselected`)
+  - `git diff --check --` over the touched readiness/verifier scripts and tests
+
+## 2026-06-02 SCCP Ethereum mainnet native receipt-proof evidence parity
+
+- Added typed Ethereum mainnet receipt-proof evidence to Swift, Kotlin/JVM,
+  Java Android, and .NET inbound SDK facades. Native callers can now pass the
+  app-collected receipt-proof transcript directly; `collectInboundEvidenceFromReceipt`
+  derives the canonical `receiptProofHash`, retains the typed proof, and still
+  accepts the existing hash-only path.
+- Added fail-closed conflict checks across the native SDKs: a supplied
+  `receiptProofHash` must match the hash derived from `receiptProof`, and the
+  Ethereum mainnet facade rejects cross-lane receipt-proof transcripts whose
+  source domain is not ETH.
+- Hardened mutable native receipt-proof material in Kotlin/JVM and .NET:
+  inbound collection now deep-copies caller-owned proof nodes and inclusion
+  branches before deriving `receiptProofHash` and returning evidence to prover
+  callbacks, preventing post-validation caller mutation from changing the
+  validated transcript.
+- Extended native focused tests with the shared Ethereum receipt-proof vector
+  (`0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0`)
+  plus conflicting-hash, non-ETH source-domain, and post-validation mutation
+  negatives.
+- Validation:
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`; existing unrelated Torii deprecation/no-op-try warnings were
+    emitted during test target compilation)
+  - `git diff --check --` over the touched Swift/Kotlin/Java/C#/status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched native SDK
+    implementation files found no matches.
+  - `git diff --check --` over the Kotlin/.NET snapshot-hardening files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the Kotlin/.NET snapshot-hardening
+    implementation files found no matches.
+  - `java -version` reports no local Java runtime, so Kotlin/JVM and Java
+    Android test execution remains pending in this environment.
+  - `dotnet --info` is unavailable, so .NET test execution remains pending in
+    this environment.
+
+## 2026-06-02 SCCP Ethereum mainnet .NET receipt-proof helper parity
+
+- Added .NET `EthereumMainnetSccp.CanonicalEvmSccpReceiptProofBytes(...)` and
+  `EvmSccpReceiptProofHash(...)` helpers for the ETH source-adapter
+  receipt-proof transcript. The helper binds source domain, source-event
+  digest, beacon slot, execution block number/hash, receipts root, finalized
+  beacon root, sync committee root, receipt-root index, bounded MPT proof
+  nodes, and a non-empty inclusion branch before hashing with the canonical
+  `sccp:evm:receipt-proof:v1` Blake2b prefix.
+- Added a .NET shared-vector test whose transcript bytes/hash match the
+  existing Python implementation, plus negative checks for non-ETH source
+  domains, zero source-event digest, empty proof nodes, empty MPT nodes, empty
+  inclusion branches, and malformed branch siblings.
+- Validation:
+  - `git diff --check -- csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs status.md`
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched C# files found no
+    matches.
+  - `python3` regenerated the shared receipt-proof hash vector:
+    `0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0`
+  - `dotnet --info` is unavailable in this environment, so the C# test remains
+    pending runtime execution.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK source-event receipt validation
+
+- Added browser/JS, Python, and Swift SDK receipt-log validation for Ethereum
+  mainnet inbound evidence. When callers configure
+  `sourceBridgeEmitterAddress` or provide ETH source verifier material,
+  collected JSON-RPC receipts must contain exactly one non-removed
+  `SccpSourceEvent(bytes32)` log from that bridge; the SDK derives or checks
+  `sourceEventDigest` before proof callbacks run.
+- Added the same source-event receipt validation surface to Kotlin/JVM, Java
+  Android, and .NET native Ethereum mainnet SDK paths. Native callers can now
+  pass or derive `sourceEventDigest`, persist the normalized
+  `sourceBridgeEmitterAddress`, and get fail-closed local validation before
+  inbound proof callbacks run.
+- The SDK validators keep unrelated logs harmless, including logs with zero
+  topics or non-empty data, while the matching SCCP source event must still have
+  the exact two-topic, empty-data shape.
+- Exposed the EVM source-event topic helper as `evmSccpSourceEventTopic()` in
+  JS and Swift, `evm_sccp_source_event_topic()` in Python,
+  `SccpEthereumMainnet.sourceEventTopic()` in Kotlin,
+  `EthereumMainnetSccp.sourceEventTopic()` in Java Android, and
+  `EthereumMainnetSccp.SourceEventTopic` in .NET; added TypeScript declarations
+  for source bridge validation fields on the Ethereum facade.
+- Extended JS, Python, Swift, Kotlin/JVM, Java Android, and .NET Ethereum
+  mainnet facade tests for positive derived and explicit source-event evidence
+  plus missing emitter, wrong emitter, wrong event topic, duplicate event, and
+  removed-log rejection cases.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`11 passed`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs'`
+    (`1 passed, 86 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift`
+    (`1 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `node --check javascript/iroha_js/src/index.js`
+  - `node --check javascript/iroha_js/dist/index.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `git diff --check --` over the touched JS/Python/Swift/status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched JS/Python/Swift files
+    found no matches.
+  - `git diff --check --` over the touched Kotlin/Java/C# native SDK and
+    status files
+  - `rg -n 'wasm|WebAssembly|snarkjs'` over the touched Kotlin/Java/C# native
+    SDK files found no matches.
+  - Kotlin/JVM, Java Android, and .NET runtime test execution is pending in
+    this environment because the local Java and `dotnet` runtimes are
+    unavailable.
+
+## 2026-06-02 SCCP Ethereum mainnet receipt-proof hash conflict hardening
+
+- Tightened the JavaScript Ethereum mainnet inbound evidence collector so a
+  caller-supplied `receiptProofHash` must match the hash derived from the
+  supplied `receiptProof`; conflicting values now fail instead of being silently
+  replaced.
+- Added JS and Python tests that pin both the positive computed-hash path and
+  the negative mismatched-hash path for SDK-collected Ethereum receipt proof
+  evidence.
+- Validation:
+  - `cd javascript/iroha_js && npm run build:dist`
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs'`
+    (`1 passed, 86 deselected`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `git diff --check --` over the touched JS/Python/status files
+  - Conflict-marker and `wasm|WebAssembly|snarkjs` scans over the touched
+    JS/Python files found no matches.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK zero-material admission hardening
+
+- Tightened Ethereum mainnet local-admission packaging in the JavaScript and
+  Python SDKs so `publicInputsBytes`, `statementHash`,
+  `sourceVerifierMaterialHash`, and `sourceAdapterEngineDeploymentHash` must be
+  non-zero before a native verifier output can be wrapped for `SubmitBridgeProof`.
+  This brings the web/Python helpers in line with Swift, Kotlin/JVM, Java
+  Android, and .NET fail-closed behavior.
+- Extended the Ethereum local-admission negative tests across JS, Python, Swift,
+  Kotlin/JVM, Java Android, and .NET to cover all-zero public input bytes,
+  bundle bytes, envelope bytes, and zero statement/source-material/deployment
+  hashes.
+- Validation:
+  - `npm run build:dist` from `javascript/iroha_js`
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `cd javascript/iroha_js && node --test test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/dist/sccp.js`
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_builds_local_admission_submission'`
+    (`1 passed, 86 deselected`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `git diff --check --` over the touched SDK files
+  - Conflict-marker and `wasm|WebAssembly|snarkjs` scans over the touched SDK
+    files found no matches.
+- Validation not run: Java/Gradle validation remains unavailable because this
+  machine has no installed Java runtime; .NET validation remains unavailable
+  because `dotnet` is not installed.
+
+## 2026-06-02 SCCP Ethereum mainnet receipt and Swift validation hardening
+
+- Tightened the EVM receipt/MPT regression so a status-0 receipt is rejected
+  even when it carries an otherwise valid SCCP source-event log from the
+  configured emitter. This keeps Ethereum mainnet source admission fail-closed
+  for failed transactions, not merely malformed logs.
+- Unblocked Swift SCCP focused validation by renaming the V2-only offline note
+  proof container to `OfflineNoteProofBoxV2`, avoiding the duplicate
+  `OfflineNoteProofBox` declaration while preserving the existing V1 type.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo test -p iroha_sccp evm_receipt_mpt_value_extracts_typed_rlp_receipt_root --lib -- --nocapture`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter SccpSolanaProverTests/testBscMainnetSccpBuildsLocalAdmissionSubmission`
+    (`1 passed`)
+  - `cd IrohaSwift && swift test --filter OfflineNoteV2Tests/testOfflineNoteV2ProofAndHashValidationRejectsMalformedValues`
+    (`1 passed`)
+- Validation not run: Java/Gradle validation remains unavailable because this
+  machine has no installed Java runtime; .NET validation remains unavailable
+  because `dotnet` is not installed.
+
+## 2026-06-02 SCCP Ethereum mainnet native SDK local-admission parity
+
+- Added ETH -> SORA local-admission packaging helpers to the remaining native
+  SDK surfaces: Swift, Java Android, and .NET. Each surface now exposes a
+  first-class Ethereum mainnet input/package type and facade method, enforces
+  `sourceDomain == ETH` and `targetDomain == SORA`, validates canonical
+  `SubmitBridgeProof` local-admission metadata, normalizes the three binding
+  hashes, copies native verifier artifact bytes, and rejects empty/all-zero
+  artifacts before Torii/core submission packaging.
+- Release-readiness helper inventories now require the Ethereum local-admission
+  symbols for Swift, Java Android, and .NET as well as the earlier JS, Python,
+  and Kotlin/JVM symbols.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `rg -n 'wasm|WebAssembly|snarkjs' IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+    (no matches)
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EthereumMainnetSccp.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs csharp/tests/Hyperledger.Iroha.Sdk.Tests/SccpEthereumMainnetTests.cs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - Conflict-marker scan over the same touched files.
+- Validation not run: `dotnet` is not installed on this machine; Java/Gradle
+  validation remains unavailable because this machine has no installed Java
+  runtime.
+
+## 2026-06-02 SCCP Ethereum mainnet SDK local-admission packaging
+
+- Added ETH -> SORA local-admission packaging helpers for the browser JS SDK,
+  Python SDK, and Kotlin/JVM SDK. The helpers package native verifier output
+  for `SubmitBridgeProof`, bind `sourceDomain == ETH` and `targetDomain ==
+  SORA`, validate the canonical local-admission metadata, copy byte buffers, and
+  reject empty/all-zero proof artifacts before submission.
+- The JS package root now re-exports the local-admission constants plus
+  `buildEthereumMainnetSccpLocalAdmissionSubmission` and
+  `buildBscMainnetSccpLocalAdmissionSubmission`; TypeScript declarations cover
+  both runtime exports and the `EthereumMainnetSccp.buildLocalAdmissionSubmission`
+  facade method.
+- Release-readiness helper inventories now require the new ETH local-admission
+  helper symbols for JS, Python, and Kotlin. Java Android, Swift, and .NET still
+  need the same ETH local-admission parity before the SDK layer can be called
+  complete.
+- Validation:
+  - `node --test javascript/iroha_js/test/sccpEthereumMainnet.test.js`
+    (`10 passed`)
+  - `node --test javascript/iroha_js/test/sccpBscMainnet.test.js`
+    (`12 passed`)
+  - `npm run build:dist && node --test test/sccpPackageExports.test.js`
+    from `javascript/iroha_js` (`6 passed`)
+  - `node --test test/sccpEthereumMainnet.test.js test/sccpBscMainnet.test.js`
+    from `javascript/iroha_js` (`22 passed`)
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ethereum_mainnet_sccp_builds_local_admission_submission or bsc_mainnet_sccp_local_admission_submission'`
+    (`2 passed, 85 deselected`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `rg -n 'wasm|WebAssembly|snarkjs' javascript/iroha_js/src/sccp.js javascript/iroha_js/test/sccpEthereumMainnet.test.js python/iroha_torii_client/sccp.py kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt`
+    (no matches)
+- Validation not run: `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest --console=plain`
+  could not start because this machine has no installed Java runtime.
+
+## 2026-06-02 SCCP Ethereum mainnet source-admission helper facade
+
+- Added Ethereum-mainnet-specific Rust helpers for the governed
+  source-adapter path:
+  `build_sccp_eth_mainnet_source_adapter_deployment`,
+  `verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production`, and
+  `verify_sccp_eth_mainnet_source_chain_proof_envelope_production`.
+- The new regression proves the ETH -> SORA helper path rejects material-only
+  proofs, wrong source/target domains, replayed deployment receipts, and BSC
+  material while still producing a local-admission package with the expected
+  governed material/deployment hashes.
+- Reconfirmed the first-release active launch policy is Ethereum mainnet:
+  configured ETH material can open independently, while configured BSC source
+  evidence now stops at the Ethereum lane gate until the BSC lane policy opens.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_sccp eth_mainnet_source_sdk_facade_requires_deployment_bound_source_adapter --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_lane_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch --features app_api --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-mainnet cargo test -p iroha_torii destination_binding_query_respects_ethereum_lane_launch_policy --features app_api --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO XMLDSig same-document references, transforms, and SignedProperties
+
+- Extended the supported ISO XMLDSig Reference URI scope from only an empty URI
+  to either an empty URI or one unique same-document `#id` target. Target
+  selection accepts exact `Id`, `ID`, `id`, and `xml:id` attributes, rejects
+  remote/absolute references, empty fragments, duplicate IDs, and
+  namespace-qualified non-`xml` ID attributes, then canonicalizes only the
+  selected unsigned element before the SHA-256 digest check. Referenced elements
+  nested under ancestor namespace declarations carry that inherited namespace
+  context into root canonicalization.
+- Tightened Reference transform policy to require an enveloped-signature
+  transform first, with at most one final supported C14N transform. Explicit
+  Reference C14N transforms now drive payload digest canonicalization; legacy
+  references without that final transform retain the existing exclusive-C14N
+  default. Missing, reordered, extra, or unsupported transforms fail closed even
+  when `SignedInfo` is otherwise correctly re-signed.
+- Added narrow XAdES `SignedProperties` Reference support. The verifier now
+  allows one optional Reference with the XAdES `SignedProperties` Type URI, a
+  local `#id` target whose root is `SignedProperties`, exactly one supported C14N
+  transform, and a SHA-256 digest. The enclosing `QualifyingProperties` target
+  must bind to the enclosing `Signature` `Id`; certificate-backed XAdES
+  signatures must bind the first `SigningCertificateV2` SHA-256 digest to the
+  XMLDSig leaf certificate. The supported XAdES signed-property shape is direct
+  `Signature` -> `Object` -> `QualifyingProperties` -> `SignedProperties` ->
+  `SignedSignatureProperties` -> singleton text-only `SigningTime` and optional
+  `SigningCertificateV2`; `QualifyingProperties` accepts only `Target`, and
+  `SigningCertificateV2` accepts only attribute-free direct `Cert` children with
+  attribute-free direct `CertDigest` children, a `DigestMethod` carrying only
+  `Algorithm`, and a text-only `DigestValue`. Any `SignedProperties` element
+  under the signature must be the verified referenced direct target;
+  unreferenced, duplicate, misplaced, wrapped, unrelated, tampered,
+  target-drifted, wrapped certificate-digest, or certificate-digest-drifted
+  XAdES properties fail closed. X.509 validity
+  evaluation uses only a singleton attribute-free text-only `SigningTime` from
+  that verified `SignedProperties` target, falling back to BAH `CreDt` when no
+  signed time is present; unsigned signature-local `SigningTime` values are not
+  trusted.
+- Kept the supported XMLDSig method/transform subset parameter-free. `SignedInfo`
+  `CanonicalizationMethod`/`SignatureMethod`, Reference `DigestMethod`, payload
+  Reference transforms, and XAdES `SignedProperties` transforms now reject
+  non-whitespace child content such as `InclusiveNamespaces`, XPath, HMAC, or
+  digest parameters instead of silently ignoring unsupported semantics. Critical
+  XMLDSig method elements must appear exactly once. XMLDSig method/transform
+  elements accept only `Algorithm`, payload References accept only `URI`, XAdES
+  `SignedProperties` References accept only `URI`/`Type`, Reference transforms
+  must be enclosed in exactly one attribute-free `Transforms` wrapper, and extra
+  direct children under `Reference` or `Transforms` fail closed. Supported
+  References must keep direct children ordered as `Transforms`, `DigestMethod`,
+  then `DigestValue`.
+- Enforced singleton cryptographic value extraction for required XMLDSig base64
+  fields. `SignatureValue`, per-Reference `DigestValue`, and XAdES
+  `CertDigest` values now reject duplicates and must be attribute-free text
+  leaves without nested markup or comments; XAdES `CertDigest` wrappers may only
+  contain direct `DigestMethod`/`DigestValue` children. `PublicKey` must also be
+  singular, and both `PublicKey` and `X509Certificate` credential leaves must be
+  attribute-free text without nested markup or comments. Public-key material
+  cannot be mixed with `X509Certificate` material in the same `KeyInfo`. Key
+  material must appear inside exactly one `KeyInfo` using either
+  `KeyValue/ECKeyValue` with the P-256 `NamedCurve` URI or one `X509Data`
+  certificate-chain wrapper. The structured wrappers accept only implemented
+  direct children (`KeyInfo` -> `KeyValue` or `X509Data`, `KeyValue` ->
+  `ECKeyValue`, `ECKeyValue` -> `NamedCurve`/`PublicKey`, and `X509Data` ->
+  `X509Certificate`) and only namespace declaration attributes, except for the
+  required `NamedCurve URI`; unsupported child elements, unsupported ordinary
+  attributes, non-whitespace wrapper text, duplicate `KeyInfo` blocks, and
+  `PublicKey`/`X509Certificate` material outside that block fail closed.
+- Tightened top-level XMLDSig structure parsing so `Signature` accepts only the
+  implemented direct children (`SignedInfo`, singleton `SignatureValue`,
+  singleton `KeyInfo`, and at most one `Object`) and `SignedInfo` accepts only
+  direct `CanonicalizationMethod`, `SignatureMethod`, and `Reference` children
+  in that supported order.
+  The verifier now derives canonicalization, signature bytes, and key material
+  from those direct children, so wrapped `SignedInfo` or method nodes,
+  unsupported direct children, and duplicate singleton nodes fail before digest
+  or ECDSA verification.
+- Canonicalized the supported P-256 ECDSA signature policy. Both XMLDSig
+  fixed-width `r || s` and DER `SignatureValue` encodings are still accepted,
+  but non-canonical high-S signatures now fail closed before ECDSA verification;
+  generated XMLDSig fixtures normalize signatures to low-S before encoding.
+- Added direct reference-target coverage for valid `xml:id` resolution,
+  inherited namespace context, invalid URI/duplicate-ID rejection, exact
+  transform-set enforcement, and `SignedProperties` transform enforcement, plus
+  end-to-end require-verified `pacs.008` fixtures signed over
+  `Reference URI="#doc-001"`, an explicit inclusive Reference C14N transform, a
+  re-signed unsupported extra transform rejection, a valid two-Reference XAdES
+  `SignedProperties` payload, unreferenced and duplicate `SignedProperties`
+  elements, `SignedProperties` digest tampering, `QualifyingProperties` target
+  drift, a certificate-backed
+  `SigningCertificateV2` leaf digest accept/reject pair, direct
+  `SigningCertificateV2` `Cert`/`CertDigest` shape checks, and parameterized
+  C14N/Signature/Digest/Transform rejection, duplicate method rejection, and
+  transform-without-wrapper rejection. Added singleton regressions for duplicate
+  required base64 children, duplicate XAdES `CertDigest` methods, unsupported
+  XMLDSig method/Reference/Transforms/Transform/DigestMethod attributes,
+  reordered Reference children, ambiguous public-key inputs, required-base64
+  attributes/nested markup/comments, duplicate `SignatureValue`, duplicate
+  `DigestValue`, unsupported `SignatureValue` attributes, duplicate `PublicKey`,
+  nested/commented `PublicKey` and `X509Certificate` credential leaves, duplicate
+  `KeyInfo`, `PublicKey` outside `KeyInfo`, and mixed
+  `PublicKey`/`X509Certificate` material. Added KeyInfo-shape regressions for wrong `NamedCurve`, missing
+  `KeyValue/ECKeyValue` wrappers, certificate
+  material without `X509Data`, unsupported `KeyInfo`/`KeyValue`/`ECKeyValue`/
+  `X509Data` child elements, unsupported KeyInfo credential attributes, and
+  non-whitespace `KeyInfo` wrapper text. Added direct `Signature`/`SignedInfo`
+  shape regressions for wrapped `SignedInfo`, reordered or unsupported direct
+  `Signature`/`SignedInfo` children, duplicate singleton signature children, and
+  wrapped or duplicated method nodes. Added XAdES placement regressions for direct
+  `Object/QualifyingProperties/SignedProperties` shape, unsupported
+  `QualifyingProperties` attributes, wrapped `QualifyingProperties`, wrapped
+  `SignedProperties`, unsupported extra XAdES wrapper children, and reordered
+  Reference children. Added evaluation-time regressions for
+  signed-property `SigningTime`, duplicate signed times, unsupported signed
+  `SigningTime` attributes, the no-signed-time without-BAH path, and unsupported
+  `SignedSignatureProperties` placement, `SigningCertificateV2`/`Cert`/
+  `CertDigest`/XAdES `DigestMethod` attributes. Added P-256 malleability
+  regressions proving mathematically valid high-S fixed-width and DER
+  `SignatureValue` encodings fail closed while low-S encodings still pass.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii high_s --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_ --lib -- --nocapture`
+    (`33 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii signature_value --lib -- --nocapture`
+    (`5 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`80 passed`)
+  - `cargo fmt --all --check`
+  - `git diff --check -- crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
+    (no matches)
+
+## 2026-06-02 ISO XMLDSig prefixed attribute canonicalization
+
+- Extended the supported XMLDSig canonicalizer from implicit `xml:` attributes to
+  declared non-`xml` prefixed attributes. Attribute sorting now resolves
+  namespace URI/local-name keys from local, ancestor, and inherited root
+  namespace bindings; duplicate expanded attribute names and unbound prefixes
+  fail closed.
+- Added end-to-end require-verified fixtures proving prefixed attributes
+  canonicalize inside the signed payload digest and inside exclusive-C14N
+  `SignedInfo` when the namespace is inherited from the enclosing `Signature`.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`31 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 ISO XMLDSig implicit XML namespace attributes
+
+- Extended the require-verified XMLDSig fixture coverage for implicit `xml:`
+  namespace attributes from payload digest canonicalization into `SignedInfo`
+  signature verification. The canonicalizer accepts `xml:*` attributes without
+  requiring an explicit `xmlns:xml` declaration, sorts them by the XML namespace
+  URI/local name, and still rejects explicit reserved namespace declarations plus
+  unbound prefixed attributes.
+- This narrows the remaining canonical XML gap to broader namespace-aware C14N
+  coverage, official rail trust/revocation fixture packages, and official
+  MDR/XSD fixtures.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`13 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_signed_info --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`28 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 ISO XMLDSig no-comments canonicalization
+
+- Extended the supported XML canonicalizer used by Torii ISO XMLDSig/XAdES
+  verification to omit valid XML comments for the supported no-comments C14N
+  algorithms. Malformed comment syntax still fails closed, and processing
+  instructions, CDATA, DTD/general/custom entity expansion, carriage returns,
+  unsupported attribute namespaces, and broader namespace context remain outside
+  the supported subset.
+- Added an end-to-end `require-verified` fixture where comments appear in both
+  the referenced `pacs.008` payload and `SignedInfo`; digest and signature
+  verification now prove comments are omitted before hashing/verifying.
+- Updated the ISO engineering backlog, settlement mapping, and TradFi interop
+  audit to describe no-comments C14N comment omission accurately.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`10 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile_accepts_comments_in_no_comments_c14n --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 profile mismatch and lifecycle transitions
+
+- Tightened Torii ISO profile admission so a selected rail profile with no
+  inbound message profile for the submitted endpoint family returns
+  `UnknownMessageType` instead of a generic validation failure. BAH `MsgDefIdr`
+  values outside the selected profile version set are now covered by a focused
+  regression as well.
+- Broadened lifecycle transition coverage for payment returns and cancellations:
+  known-original `pacs.004` returns now assert the original durable record is
+  rejected with the ISO reason/detail while the lifecycle message is accepted,
+  and known-original `camt.056` recalls now assert the original moves to pending
+  hold with `CANCELLATION_REQUESTED` recorded.
+- Updated the engineering backlog and TradFi interop audit so profile mismatch
+  and cancellation/return transition tests are no longer listed as open ISO
+  gaps.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii profile_validation_rejects_selected_profile_message_type_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii live_profile_rejects_app_header_message_definition_mismatch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii lifecycle_camt056_marks_known_original_pending_cancellation --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii lifecycle_pacs004_marks_original_returned --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 reference snapshot checksum metadata
+
+- Added focused Torii coverage proving profile admission metadata records the
+  exact `ReferenceDataSnapshots::snapshot_id()` checksum when reference data is
+  loaded. The regression loads a BIC/LEI snapshot, validates an inbound
+  `pacs.008`, and confirms the metadata checksum matches the runtime snapshot
+  id and differs from the all-missing default snapshot checksum.
+- The engineering backlog no longer lists reference snapshot checksum
+  expectations as an open Torii test gap.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii profile_validation_records_reference_snapshot_checksum --lib -- --nocapture`
+    (`1 passed`)
+
+## 2026-06-02 ISO 20022 business-message idempotency
+
+- Extended Torii ISO bridge idempotency from payload hashes and normalized UETRs
+  to trimmed `BizMsgIdr`/BAH business-message identifiers. Distinct durable
+  records can no longer reuse the same business message id, and rejected-message
+  replacement keeps failing closed if the retry would claim another record's
+  business message id.
+- The business message id comparison trims transport whitespace but remains
+  case-sensitive; UETR normalization remains case-insensitive.
+- Updated the engineering backlog and finance mapping docs so replay by
+  business message id/UETR is no longer listed as outstanding.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii idempotency --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii retry_replacement --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii durable_store_reloads_message_status --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 TradFi XMLDSig supported canonicalization
+
+- Replaced literal-byte XMLDSig verification for the supported ISO bridge
+  subset with deterministic canonicalization before `SignedInfo` signature
+  verification and enveloped payload digest checks. The canonicalizer expands
+  empty elements, normalizes attribute quotes, sorts namespace declarations,
+  unprefixed attributes, declared prefixed attributes, and implicit `xml:`
+  namespace attributes, decodes
+  predefined and numeric XML character references, applies inherited root
+  namespace declarations from the enclosing `Signature` element according to the
+  declared C14N mode (all root declarations for inclusive C14N, visibly used
+  root declarations for exclusive C14N), and validates tag nesting before
+  hashing or verifying.
+- The verifier still fails closed for XML needing broader canonical XML
+  machinery: DTD/general/custom entity expansion, malformed comments, processing
+  instructions, CDATA, carriage returns, duplicate attributes, unbound prefixed
+  attributes, explicit reserved namespace declarations, inherited namespace
+  context beyond root namespace declarations, raw attribute whitespace rewrites,
+  and malformed tag structure remain rejected until complete namespace-aware C14N
+  coverage is implemented.
+- Added regressions proving self-closing `SignedInfo` methods pass only when
+  the signature is calculated over canonicalized bytes, and that a signature
+  calculated over raw self-closing XML is rejected. Added character-reference
+  regressions covering predefined/numeric decode, invalid reference rejection,
+  and an end-to-end XMLDSig payload digest over a message id containing
+  `&amp;`. Added a prefixed `ds:Signature` regression proving `SignedInfo`
+  verification uses namespace declarations inherited from the outer
+  `Signature` element, and added inclusive/exclusive C14N regressions proving
+  the declared canonicalization mode controls inherited namespace bytes before
+  signature verification. Added fixed-width P-256 ECDSA `SignatureValue`
+  coverage so XMLDSig signatures encoded as raw `r || s` bytes verify alongside
+  the existing DER fixtures. Added comment regressions proving no-comments C14N
+  omits XML comments from both referenced payload and `SignedInfo` bytes. Added
+  namespace-attribute and prefixed-attribute regressions covering canonical
+  expanded-name ordering, signed payload digests, `SignedInfo` signature
+  verification, reserved namespace declaration rejection, unbound prefixed
+  attribute rejection, and duplicate expanded-attribute rejection.
+- Validation:
+  - `cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`16 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_character_references_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_xml_namespace_attribute_in_signed_info --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_prefixed_signed_info_with_inherited_namespace --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_fixed_width_ecdsa_signature_value --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_rejects_exclusive_bytes_declared_as_inclusive_c14n --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_accepts_self_closing_signed_info_methods --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile_rejects_raw_self_closing_signed_info_signature --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`31 passed`)
+  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`9 passed`)
+  - `cargo fmt --all --check`
+
+## 2026-06-02 TradFi XMLDSig certificate revocation pins
+
+- Added profile-level `revoked_certificate_sha256` for ISO XMLDSig/XAdES
+  verification. The field is parsed from user config, carried through actual
+  config into `TradfiRailProfile`, normalized with the same lowercase non-zero
+  SHA-256 validation as trust pins, and enforced before public-key or
+  certificate-chain trust pins can admit a signature.
+- Torii now rejects an otherwise valid `require-verified` P-256/SHA-256
+  XMLDSig chain when any verified leaf or issuer DER digest appears in the
+  selected profile's revocation deny list. A matching public-key pin does not
+  override an explicitly revoked certificate chain.
+- Added operator-facing configuration guidance for certificate-anchor rotation:
+  overlap current and next `trusted_certificate_sha256` pins during rail cutover,
+  then remove the retired digest; reserve `revoked_certificate_sha256` for
+  compromised leaf or anchor digests that must override otherwise trusted
+  material.
+- Remaining TradFi trust work is now external rail/profile trust-anchor
+  packages, complete canonical XML coverage, CRL/OCSP or rail revocation-feed
+  fixtures, and official MDR/XSD fixture coverage.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_core xml_signature_key_pins_accept_any_verified_certificate_digest --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_config iso_bridge_json_deserializes --lib -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii xml_signature_revocation_pin --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`20 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`9 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii supported_xml_canonicalizer --lib -- --nocapture`
+    (`5 passed`)
+
+## 2026-06-01 SCCP Ethereum mainnet launch-policy focused rerun
+
+- Re-applied the Ethereum-mainnet first-lane SCCP policy after the merge
+  cleanup: `sccp_production_policy_v1()` now defaults to
+  `EthereumMainnetLane`, Core/Torii configured launch-policy tests accept
+  configured ETH material without requiring future lanes, and configured
+  non-ETH source-adapter material stays behind the Ethereum launch gate.
+- Re-aligned public SCCP release-readiness and strict release-bundle scripts so
+  the active launch lane is Ethereum mainnet (`chain_id == 1`) while future
+  EVM lanes remain blocked until their own evidence is complete.
+- Re-ran the focused policy and admission checks for the current Ethereum
+  first-lane state. The full multi-hour workspace test suite and full
+  core-admission corridor were not rerun in this pass.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/iso20022_bridge.rs`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'active_launch_lane or complete_evidence_and_corridor or corridor_phase_results' pytests/scripts/sccp_release_bundle_test.py -k 'active_launch_lane_without_future_lanes or release_checklist or hash_bound_public_artifacts'`
+    (`6 passed, 164 deselected`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_sccp production_policy_uses_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`1 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core configured_sccp_ethereum_mainnet_lane_launch --lib -- --nocapture`
+    (`2 passed`)
+  - `CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_lane_launch -- --nocapture`
+    (`1 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch --features app_api --lib -- --nocapture`
+    (`2 passed`)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-eth-policy cargo test -p iroha_torii destination_binding_query_respects_ethereum_lane_launch_policy --features app_api --lib -- --nocapture`
+    (`1 passed`)
 
 ## 2026-06-01 TradFi XMLDSig certificate-chain pins
 
@@ -41,52 +1823,54 @@ Last updated: 2026-06-01
 - Hardened the chain policy deterministically: XML signing leaves must carry
   `digitalSignature`, and every supplied issuer must be a CA certificate with
   `keyCertSign` before its digest can satisfy a profile pin.
+- Added deterministic certificate validity checks for X.509 XMLDSig material:
+  leaf and issuer certificates are evaluated against verified signed XAdES
+  `SigningTime` when present, otherwise the Business Application Header `CreDt`;
+  no wall-clock validation is used in the verifier path. The timestamp parser
+  rejects malformed and non-ASCII date/time literals without panicking before
+  certificate-chain validation.
+- Added a deterministic supported XML canonicalization subset while the bridge
+  still rejects XML outside the implemented C14N surface. `require-verified`
+  signatures now canonicalize `SignedInfo` and referenced payload XML before
+  hashing or signature verification, including empty-element expansion,
+  attribute quote normalization, and namespace-declaration/unprefixed-attribute
+  sorting. Valid XML comments are now omitted for supported no-comments C14N,
+  while malformed comments, processing instructions, CDATA, DTD/general/custom
+  entity expansion, carriage returns, unsupported attribute namespaces, duplicate
+  attributes, and malformed tag structure fail closed.
 - Added generated P-256 X.509 fixtures covering a signed ISO payload accepted
   by a pinned issuer digest and rejected when the same chain lacks any matching
   profile trust pin, plus adversarial fixtures for non-CA issuers, issuers
-  without `keyCertSign`, and leaves without `digitalSignature`. The production
-  dependency now enables x509-parser's signature-verification support; `rcgen`
-  is used only as a Torii test fixture generator.
+  without `keyCertSign`, leaves without `digitalSignature`, expired leaves,
+  not-yet-valid issuers, non-ASCII XAdES signing times, accepted self-closing
+  `SignedInfo` methods signed over canonicalized bytes, and rejected
+  self-closing `SignedInfo` signatures calculated over raw XML bytes. The
+  production dependency now enables x509-parser's signature-verification
+  support; `rcgen` is used only as a Torii test fixture generator.
 - Remaining TradFi trust work is official rail/profile trust-anchor packages,
-  revocation/expiry policy fixtures, anchor rotation examples, and official
+  complete canonical XML coverage, revocation policy fixtures, and official
   MDR/XSD fixture coverage.
 - Validation:
   - `cargo fmt --all`
+  - `cargo fmt --all --check`
   - `cargo test -p iroha_core xml_signature_key_pins_accept_any_verified_certificate_digest --lib -- --nocapture`
     (`1 passed`)
-  - `cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
-    (`5 passed`)
-  - `cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
-    (`13 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii certificate_chain --lib -- --nocapture`
+    (`8 passed`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_torii require_verified_profile --lib -- --nocapture`
+    (`18 passed`)
   - `git diff --check -- crates/iroha_core/src/iso_bridge/profiles.rs crates/iroha_torii/Cargo.toml crates/iroha_torii/src/iso20022_bridge.rs docs/source/engineering_backlog.md docs/source/finance/settlement_iso_mapping.md docs/source/finance/tradfi_interop_audit.md roadmap.md status.md`
   - `bash -lc 'if rg -n "^(<<<<<<<|=======$|>>>>>>>)"; then exit 1; else exit 0; fi'`
 
-## 2026-06-01 SCCP BSC local-admission finalization
+## 2026-06-01 SCCP BSC local-admission evidence
 
-- Restored BSC mainnet as the active SCCP production launch policy across the
-  Rust policy default, Core/Torii configured launch-policy tests, and public
-  release-readiness/release-bundle scripts.
-- Kept BSC -> SORA inbound proofs on the explicit local-admission submission
-  package path, with the source proof bound to configured BSC verifier material
-  plus governed source-adapter deployment evidence instead of outbound EVM
-  Groth16 destination packaging.
-- Resolved generated conflict markers in the SCCP/Core/Torii/status/roadmap
-  surfaces by preserving the local worktree side, then rechecked the final tree
-  for marker-free BSC launch-policy sources.
-- Validation:
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
-    (`1 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_core --test bridge_proofs bsc_mainnet_source_chain_proof -- --nocapture`
-    (`2 passed`)
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-bsc-final cargo test -p iroha_sccp bsc_mainnet --lib -- --nocapture`
-    (`3 passed`)
-  - `cargo fmt --all --check`
-  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
-  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'launch or json_tracks_corridor_phase_results or sdk_helper_symbols or user_prover_surfaces'`
-    (`6 passed, 20 deselected`)
-  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch or submission_surface or helper_inventory_is_independent'`
-    (`15 passed, 129 deselected`)
-  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_core/tests/bridge_proofs.rs crates/iroha_core/src/smartcontracts/isi/world.rs crates/iroha_torii/src/routing.rs scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py status.md roadmap.md`
+- Kept BSC -> SORA inbound proof support on the explicit local-admission
+  submission package path, with the source proof bound to configured BSC
+  verifier material plus governed source-adapter deployment evidence instead
+  of outbound EVM Groth16 destination packaging.
+- The earlier BSC-active launch-policy validation for this path is superseded
+  by the Ethereum-mainnet first-lane gate described above: configured BSC
+  source proofs now remain blocked until the BSC lane policy opens.
 
 ## 2026-06-01 TradFi XMLDSig profile trust pins
 
@@ -132,29 +1916,14 @@ Last updated: 2026-06-01
   - `bash scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
     (`815 passed`)
 
-## 2026-06-01 SCCP BSC launch policy evidence alignment
+## 2026-06-01 SCCP launch policy evidence alignment
 
-- Re-audited the current SCCP launch policy against the release scripts and
-  core admission path: `sccp_production_policy_v1()` is `BscMainnetLane`, and
-  the public release-readiness scripts now use the same active BSC domain.
-- Verified the BSC -> SORA positive `SubmitBridgeProof` path uses the local
-  admission package with configured BSC source verifier material,
-  deployment-bound source-adapter evidence, BSC destination rollout, and BSC
-  route allowlist material.
-- Updated the public docs/roadmap wording that still described the older
-  Ethereum-active policy, so operator-facing release evidence matches the
-  runtime gate that is actually compiled.
-- Validation:
-  - `cargo test -p iroha_core --test bridge_proofs submit_sccp_inbound_message_with_configured_bsc_source_adapter_is_accepted_for_bsc_launch -- --nocapture`
-    (`1 passed`)
-  - `bash scripts/check_sccp_production_corridor.sh --phase core-admission`
-    (`35 passed`)
-  - `cargo test -p iroha_sccp production_policy_uses_bsc_mainnet_lane_launch --lib -- --nocapture`
-    (`1 passed`)
-  - `PYTHONPATH=python python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_all_lanes_root_blockers`
-    (`3 passed`)
-  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
-  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py crates/iroha_core/tests/bridge_proofs.rs crates/iroha_sccp/src/lib.rs`
+- This earlier BSC-active policy note is superseded by the Ethereum-mainnet
+  launch-policy focused rerun above. The current runtime default, release
+  scripts, docs, and focused admission regressions use Ethereum mainnet as the
+  active first lane.
+- BSC source-proof material remains covered as future-lane evidence and must
+  wait for the BSC lane policy before `SubmitBridgeProof` can admit it.
 
 ## 2026-06-01 SCCP BSC source proof deployment binding
 
@@ -309,25 +2078,58 @@ Last updated: 2026-06-01
 
 - Hardened `scripts/formal/check_sumeragi_formal_coverage.py` so referenced
   Sumeragi TLA modules now reject duplicate or non-leading `MODULE` headers,
-  missing or duplicate terminating `====` markers, trailing content after the
-  terminator,
+  malformed module identifiers, missing or duplicate terminating `====` markers,
+  trailing content after the terminator,
   duplicate constant declarations, duplicate top-level operator definitions, and
   repeated top-level `RECURSIVE` declarations before either Apalache or TLC is
-  invoked. The guard now also requires duplicate-free TLA variable declarations
-  to match exactly one static top-level `vars` tuple, and requires every
-  selected CFG filename to belong to the selected TLA module by exact stem or
-  module-stem prefix. Runner proof inputs now also have single-assignment
+  invoked. Referenced TLA modules must also stay free of top-level `ASSUME`,
+  `ASSUMPTION`, `AXIOM`, and theorem/proof directives such as `THEOREM`,
+  `PROOF`, or `QED`, so module assumptions or proof text cannot make a
+  checked model vacuous or uncheckable before invariants run. The guard now
+  also requires duplicate-free TLA variable declarations to match exactly one
+  static top-level `vars` tuple, and requires every selected CFG filename to
+  belong to the selected TLA module by exact stem or module-stem prefix. Runner
+  proof inputs now also have single-assignment
   checks, so duplicate `spec_file` or `cfg_file` assignments cannot be hidden by
-  Python dictionary conversion before static resolution, and resolved
+  Python dictionary conversion before static resolution, append-style
+  `spec_file`/`cfg_file` mutations fail closed, declaration-prefixed or
+  array-indexed proof-input assignments and mutating shell builtins are
+  rejected, and resolved
   `spec_file`/`cfg_file` inputs must remain flat direct children of the Sumeragi
   formal directory with the expected `.tla`/`.cfg` suffixes. TLC `module`
   assignments must now be TLA identifiers before the runner maps them to module
-  files.
+  files, and append-style, declaration-prefixed, or array-indexed assignments
+  plus shell-builtin mutations for `module`, `tlc_constraint`, or
+  `apalache_length` are rejected before model checking.
 - The TLA operator parser now distinguishes top-level module operators from
   scoped `LET` helpers, so CFG behavior/check references and TLC constraints
   cannot be satisfied by a helper that is not available as a module-level
-  proof target. The new `vars` parser handles both inline tuples and multiline
-  tuples with unindented closing delimiters.
+  proof target. Named `INSTANCE` declarations are now dependency declarations
+  only, so a module instance alias cannot be counted as an available CFG/TLC
+  proof target. Top-level operator definitions must now use non-reserved static
+  signatures, so reserved TLA keywords or malformed parameter lists cannot be
+  counted as available CFG targets, and CFG references to behavior, constraint,
+  invariant, and property operators must resolve to non-reserved zero-arity
+  definitions. The new `vars` parser handles both inline
+  tuples and multiline tuples with
+  unindented closing delimiters, and now requires the full body to be exactly
+  one static tuple.
+  Empty TLA `CONSTANT(S)` and `VARIABLE(S)` declaration blocks are rejected
+  before model checking, so declaration headers cannot masquerade as populated
+  model surfaces. TLA declaration lines must now be non-reserved static
+  identifier lists and cannot end the declaration block with a dangling comma,
+  so malformed or reserved `CONSTANT(S)`/`VARIABLE(S)` text cannot silently
+  shrink the model surface. The `vars` tuple must use the same non-reserved
+  static variable names.
+  TLA dependency declarations must now use non-reserved static module
+  identifiers in `EXTENDS` lists and `INSTANCE` statements plus non-reserved
+  static named-instance aliases, so malformed or reserved import text cannot be
+  partially scanned into a weaker dependency set.
+  TLA `RECURSIVE` declarations must now list static operator declarations, so
+  malformed recursive entries cannot be partially counted as available
+  top-level operators. Recursive declarations must also match actual top-level
+  definitions with the same arity, so declarations alone cannot satisfy CFG
+  proof-target reachability.
 - Added missing terminating `====` markers to the 127 Sumeragi TLA modules that
   previously had a module header but no explicit terminator, bringing the
   full 500-module formal corpus under the same terminator rule.
@@ -348,20 +2150,59 @@ Last updated: 2026-06-01
   CFG shape validation now counts only top-level `SPECIFICATION`, `INIT`,
   `NEXT`, `INVARIANT(S)`, and `PROPERTY/PROPERTIES` directives when proving a
   config has behavior and semantic checks, so indented continuation entries
-  cannot masquerade as behavior or check directives.
+  cannot masquerade as behavior or check directives. Indented continuation
+  entries whose first token is a CFG directive are now rejected before model
+  checking, and empty multi-line `INVARIANTS`/`PROPERTIES` blocks are rejected
+  before they can masquerade as real check declarations.
+  Empty CFG `CONSTANT`/`CONSTANTS` blocks are now rejected before they can
+  masquerade as intentional constant binding sections. CFG constant-binding
+  lines must now bind exactly one static constant name, so assignment-looking
+  text inside a value cannot be miscounted as a separate bound constant.
+  Formal artifact inventory now scans recursively under `docs/formal/sumeragi`,
+  so nested `.tla`/`.cfg` files cannot hide from conflict-marker and
+  reachability checks.
+  CFG-referenced non-`TypeInvariant` semantic checks now also fail closed when
+  the selected TLA module defines them as top-level literal `TRUE` or `FALSE`
+  predicates, single-line or multi-line boolean-only `TRUE`/`FALSE` wrappers,
+  or simple alias chains resolving to `TRUE`, `FALSE`, or `TypeInvariant`,
+  preventing a vacuous invariant/property from satisfying coverage.
+  Static CFG constraints and TLC runner-injected constraints now fail closed
+  under the same zero-arity and trivial-chain checks, so a local bound cannot be
+  parameterized, a literal or single-line/multi-line boolean-only
+  `TRUE`/`FALSE` predicate, or an alias chain resolving to
+  `TRUE`/`FALSE`/`TypeInvariant`.
+  Static CFG `CONSTRAINT` directives are now singleton semantic filters, so
+  repeated constraints in one CFG fail before TLC can silently conjunct them and
+  narrow the checked state space.
+  Documented mutation modes must now resolve to Apalache/TLC CFG stems that
+  contain their normalized `-bug-` suffix, with the existing commit-root TLC
+  `_tlc_bug_` allowance preserved.
   The current 500-module formal corpus passes with single leading headers,
-  exactly one terminal `====` per module, no duplicate TLA declarations,
-  variable/`vars` drift, CFG/module ownership drift, duplicate runner
-  proof-input assignments, flat-name drift, suffix drift, non-identifier TLC
-  module names, malformed runner case-block shape, unresolved formal wiring or
-  artifact merge markers, indented CFG continuation spoofing, or formal-path
-  containment violations.
+  exactly one terminal `====` per module, and without malformed or reserved
+  module identifiers, duplicate TLA declarations, malformed or reserved TLA
+  operator signatures, malformed or reserved TLA `RECURSIVE` declarations,
+  missing or arity-mismatched recursive definitions, top-level TLA
+  assumption/proof directives, malformed, reserved, or empty TLA
+  declaration blocks, malformed TLA dependency declarations, dynamic, reserved,
+  or wrapped `vars` tuple bodies,
+  variable/`vars` drift, parameterized CFG proof targets, CFG/module ownership
+  drift, named-instance proof targets, duplicate runner proof-input assignments,
+  flat-name drift, suffix drift, non-identifier TLC module names, malformed
+  runner case-block shape,
+  unresolved formal wiring or artifact merge markers,
+  indented CFG continuation spoofing, CFG `vars` tuple proof targets,
+  CFG-referenced literal or
+  single-line/multi-line boolean-wrapper/type-alias-chain semantic checks,
+  empty multi-line check blocks, malformed or empty CFG constant blocks, hidden
+  nested formal artifacts, reserved CFG constant bindings, duplicated, vacuous,
+  or parameterized static CFG constraints, vacuous or parameterized TLC runner
+  constraints, mutation CFG-name drift, or formal-path containment violations.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
     (`504 PR modes, 9788 expected-failure modes, 1 scheduled/manual modes, 10293 documented modes, 499 TLC fast modes, 9788 TLC mutation modes`)
   - `python3 -m pytest -q pytests/scripts/sumeragi_formal_coverage_test.py`
-    (`79 passed`)
+    (`115 passed`)
   - TLA terminator audit across `docs/formal/sumeragi/*.tla`
     (`missing 0`, `multi 0`, `trailing_after_end 0`)
   - `bash -n scripts/formal/sumeragi_tlc.sh scripts/formal/sumeragi_apalache.sh scripts/formal/install_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
@@ -436,7 +2277,7 @@ Last updated: 2026-06-01
 - Tightened the EVM-family source live collector's operator-supplied hash pins
   to require lowercase `0x` hex as well, keeping live source TOML generation
   aligned with the exact remote JSON-RPC and summary evidence checks.
-- Restored the release-bundle verifier's active BSC launch-lane boundary:
+- Restored the release-bundle verifier's active Ethereum launch-lane boundary:
   complete cryptographic-evidence row checks apply to the active lane, while
   future-lane rows remain diagnostic until their launch policies open.
 - Added all-lanes regressions for non-canonical EVM source bridge and
@@ -1767,13 +3608,14 @@ Last updated: 2026-06-01
   assignment must resolve to an existing `.tla` file with a matching module
   declaration. CFG
   `SPECIFICATION`, `INIT`, `NEXT`, `CONSTRAINT`, `INVARIANT(S)`, and
-  `PROPERTY/PROPERTIES` references must use static TLA operator-name syntax and
-  are now checked against the selected TLA module's operator definitions.
+  `PROPERTY/PROPERTIES` references must use non-reserved static TLA
+  operator-name syntax and are now checked against zero-arity selected-module
+  operator definitions.
   Multi-line `INVARIANTS`/`PROPERTIES` blocks must list exactly one operator per
   continuation line. CFG constant bindings are checked against the selected TLA
-  module's constant declarations in both directions, and duplicated constant or
-  behavior/check targets are rejected. Every referenced CFG must also include at
-  least one
+  module's constant declarations in both directions, and duplicated constant,
+  constraint, or behavior/check targets are rejected. Every referenced CFG must
+  also include at least one
   non-`TypeInvariant` invariant/property target, so no baseline, scheduled, or
   expected-failure run can degrade into a type-only check. Every `.tla` and
   `.cfg` file in the Sumeragi formal directory must also be reached by at least
@@ -1816,10 +3658,15 @@ Last updated: 2026-06-01
   Apalache local and Docker paths must pass the selected length, config, run
   directory, and spec, while TLC must pass the selected worker count, metadata
   directory, config, and module. Static CFG constraints and TLC runner-generated
-  constraints must resolve to selected-module operators, so constrained TLC runs
-  cannot silently target stale or missing predicates. The guard also compares
-  the resolved Apalache and TLC mutation CFG targets, allowing only the explicit
-  commit-root `_tlc_bug_` configs to diverge from the Apalache CFG names.
+  constraints must resolve to zero-arity selected-module operators, so
+  constrained TLC runs cannot silently target stale, missing, or parameterized
+  predicates. Static CFG constraints and TLC runner-generated constraints must
+  also avoid literal `TRUE`/`FALSE` predicates, single-line or multi-line
+  boolean-only `TRUE`/`FALSE` wrappers, and simple alias chains resolving to
+  `TRUE`/`FALSE`/`TypeInvariant`, so constrained runs cannot silently disable
+  the model or prune every behavior. The guard also compares the resolved
+  Apalache and TLC mutation CFG targets, allowing only the explicit commit-root
+  `_tlc_bug_` configs to diverge from the Apalache CFG names.
 - Added TLC runner coverage for the eleven original frontier recovery mutation
   configs via `frontier-bug-*`, plus exact TLC mapping overrides for
   `rbc-bug-duplicate-ready` and `engine-proposal-bug-skip-validation`.
@@ -1829,7 +3676,9 @@ Last updated: 2026-06-01
   ordering, and guard-before-Apalache order checks, Apalache version pin
   extraction and drift rejection, expected-failure counterexample semantics
   checks, baseline expected-failure marker rejection, malformed proof-input and
-  scalar runner assignment rejection, runner command-shape validation, runner
+  scalar runner assignment rejection including append-style, declaration-style,
+  array-indexed mutations, and mutating shell builtins, runner command-shape
+  validation, runner
   invocation proof-input binding checks, Apalache length-table parsing and
   runner drift
   rejection, CFG directive validation including duplicate `CHECK_DEADLOCK`
@@ -1848,14 +3697,20 @@ Last updated: 2026-06-01
   same-module Apalache/TLC routing, TLC-only mode allowance, and cross-runner
   module drift rejection. The TLA dependency tests now pin parsing for
   `EXTENDS`, `LOCAL INSTANCE`, and named `INSTANCE` dependencies, plus
-  fail-closed rejection of missing local modules. The CFG operator-reference
-  tests now pin single-line and multi-line behavior/check/constraint directive
-  parsing, static TLA operator-name syntax, TLA operator definition parsing, and
-  fail-closed rejection when a CFG names an operator missing from the selected
-  module. TLC constraint tests now pin static CFG
-  `CONSTRAINT` parsing and fail-closed runner constraint validation. The CFG
+  fail-closed rejection of missing local modules, reserved module names,
+  reserved named-instance aliases, and top-level TLA assumption/proof
+  directives. The CFG operator-reference tests
+  now pin single-line and multi-line behavior/check/constraint directive parsing,
+  non-reserved static TLA operator-name syntax, TLA operator definition parsing,
+  named `INSTANCE` aliases staying out of proof-target definitions, recursive
+  declaration-to-definition matching, zero-arity CFG proof targets, and
+  fail-closed rejection when a CFG names an operator missing from the
+  selected module. TLC constraint tests now pin static CFG
+  `CONSTRAINT` parsing and fail-closed zero-arity runner constraint validation.
+  The CFG
   constant-binding tests now pin inline/block CFG bindings, annotated TLA
-  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines,
+  constant blocks, fail-closed rejection of malformed `CONSTANTS` block lines
+  and reserved constant binding names,
   fail-closed rejection when a CFG binds a constant missing from the selected
   module, and fail-closed rejection when a declared TLA constant is not bound by
   the CFG. The duplicate constant binding
@@ -1863,9 +3718,11 @@ Last updated: 2026-06-01
   repeated constant bindings. The CFG semantic-check tests now pin
   acceptance for `TypeInvariant` plus a semantic check and rejection for
   type-only CFGs. The duplicate CFG target tests now pin acceptance for unique
-  behavior/check targets and rejection for repeated behavior directives or
-  repeated invariant/property operators. The formal inventory tests now pin
-  fail-closed rejection of unreferenced `.tla` or `.cfg` files.
+  behavior/check targets and rejection for repeated behavior directives,
+  repeated static constraints, or repeated invariant/property operators. The
+  trivial-chain tests now also pin single-line and multi-line boolean-only
+  literal wrappers for semantic checks and constraints. The formal inventory
+  tests now pin fail-closed rejection of unreferenced `.tla` or `.cfg` files.
 - Validation:
   - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`

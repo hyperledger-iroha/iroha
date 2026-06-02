@@ -8552,6 +8552,24 @@ mod sccp_message_backend_tests {
         format!("0x{}", digit.to_string().repeat(40))
     }
 
+    fn test_sccp_evm_mainnet_network_id(domain: u32) -> String {
+        match domain {
+            iroha_sccp::SCCP_DOMAIN_ETH => {
+                format!(
+                    "0x{}",
+                    hex::encode(iroha_sccp::sccp_eth_mainnet_network_id_word_v1())
+                )
+            }
+            iroha_sccp::SCCP_DOMAIN_BSC => {
+                format!(
+                    "0x{}",
+                    hex::encode(iroha_sccp::sccp_bsc_mainnet_network_id_word_v1())
+                )
+            }
+            _ => unreachable!("test helper only supports EVM mainnet domains"),
+        }
+    }
+
     fn test_sccp_h256_is_nonzero(hash: &[u8; 32]) -> bool {
         hash.iter().any(|byte| *byte != 0)
     }
@@ -8694,7 +8712,7 @@ mod sccp_message_backend_tests {
                     test_sccp_evm_address(seed + 10),
                     test_sccp_hex32_string(seed + 11),
                     test_sccp_hex32_string(seed + 12),
-                    test_sccp_hex32_string(seed + 13),
+                    test_sccp_evm_mainnet_network_id(domain),
                     test_sccp_evm_address(seed + 14),
                 )
                 .expect("EVM-family SCCP destination rollout")
@@ -10407,7 +10425,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_bsc_lane_launch_policy() {
+    fn destination_binding_query_respects_ethereum_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),
@@ -10466,7 +10484,8 @@ mod sccp_message_backend_tests {
         )
         .expect_err("TRON destination bindings must wait for their lane launch");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
 
         let err = validate_sccp_destination_binding_matches_configured_launch_policy(
@@ -10478,19 +10497,20 @@ mod sccp_message_backend_tests {
             "validated strict-disabled destination bindings must still wait for lane launch",
         );
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 5")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 5")
         }));
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_accepts_bsc_without_all_lanes() {
+    fn configured_ethereum_mainnet_lane_launch_accepts_eth_without_all_lanes() {
         let mut zk = iroha_core::state::default_zk_config();
         zk.sccp_source_verifier_materials.clear();
         zk.sccp_source_adapter_engine_deployments.clear();
         zk.sccp_destination_rollouts.clear();
         zk.sccp_route_allowlists.clear();
 
-        let domain = iroha_sccp::SCCP_DOMAIN_BSC;
+        let domain = iroha_sccp::SCCP_DOMAIN_ETH;
         let material = test_sccp_source_verifier_material_for_domain(domain, 0x20);
         let deployment = test_sccp_source_adapter_deployment_for_domain(domain, &material, 0x20);
         let rollout = test_sccp_destination_rollout_for_domain(domain, 0x20);
@@ -10509,9 +10529,9 @@ mod sccp_message_backend_tests {
             .push(test_actual_sccp_route_allowlist(&allowlist));
 
         sccp_configured_launch_ready_for_domain(&zk, domain)
-            .expect("complete BSC lane should pass without other lanes");
+            .expect("complete ETH lane should pass without other lanes");
         let err = sccp_configured_all_lanes_launch_ready(&zk)
-            .expect_err("single BSC lane must not satisfy all-lanes diagnostics");
+            .expect_err("single ETH lane must not satisfy all-lanes diagnostics");
         assert!(
             conversion_message(&err)
                 .is_some_and(|message| { message.contains("SCCP all-lanes launch policy") })
@@ -10519,12 +10539,13 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn configured_bsc_mainnet_lane_launch_rejects_eth() {
+    fn configured_ethereum_mainnet_lane_launch_rejects_bsc() {
         let zk = test_configured_sccp_all_lanes_zk_config();
-        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_ETH)
-            .expect_err("ETH must wait until its lane policy opens");
+        let err = sccp_configured_launch_ready_for_domain(&zk, iroha_sccp::SCCP_DOMAIN_BSC)
+            .expect_err("BSC must wait until its lane policy opens");
         assert!(conversion_message(&err).is_some_and(|message| {
-            message.contains("SCCP BSC mainnet lane launch policy") && message.contains("domain 1")
+            message.contains("SCCP Ethereum mainnet lane launch policy")
+                && message.contains("domain 2")
         }));
     }
 

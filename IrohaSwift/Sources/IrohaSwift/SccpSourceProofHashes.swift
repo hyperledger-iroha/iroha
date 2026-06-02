@@ -85,6 +85,10 @@ private let sccpEthSyncCommitteeSignatureBytes = 96
 private let sccpEthMaxSyncCommitteePublicKeyBytes = 96
 private let sccpEthMaxSyncCommitteePopBytes = 256
 private let sccpEthMaxSyncCommitteeSignatureBytes = 192
+public let sccpEthMainnetSlotsPerEpoch: UInt64 = 32
+public let sccpEthMainnetEpochsPerSyncCommitteePeriod: UInt64 = 256
+public let sccpEthMainnetSlotsPerSyncCommitteePeriod: UInt64 =
+    sccpEthMainnetSlotsPerEpoch * sccpEthMainnetEpochsPerSyncCommitteePeriod
 private let sccpEthMaxSyncCommitteePayloadBytes =
     1 + 4 + sccpEthMaxSyncCommitteeAuthorities *
         (4 + sccpEthMaxSyncCommitteePublicKeyBytes + 8 + 4 + sccpEthMaxSyncCommitteePopBytes)
@@ -1352,6 +1356,27 @@ public func ethSyncCommitteePayloadHash(syncCommitteePublicKeys: [Data],
     )
 }
 
+/// Return the Ethereum mainnet sync-committee period for a beacon slot.
+public func ethMainnetSyncCommitteePeriodForSlot(_ slot: UInt64) -> UInt64 {
+    slot / sccpEthMainnetSlotsPerSyncCommitteePeriod
+}
+
+private func requireEthMainnetTransitionPeriods(fromSyncPeriod: UInt64,
+                                                toSyncPeriod: UInt64,
+                                                transitionSlot: UInt64) throws {
+    guard transitionSlot != 0 else {
+        throw SccpSourceProofHashError.invalidValidatorSet("transitionSlot")
+    }
+    let nextPeriod = fromSyncPeriod.addingReportingOverflow(1)
+    guard !nextPeriod.overflow,
+          nextPeriod.partialValue == toSyncPeriod else {
+        throw SccpSourceProofHashError.invalidValidatorSet("toSyncPeriod")
+    }
+    guard ethMainnetSyncCommitteePeriodForSlot(transitionSlot) == fromSyncPeriod else {
+        throw SccpSourceProofHashError.invalidValidatorSet("transitionSlot")
+    }
+}
+
 /// Canonical ETH sync-committee transition message bytes.
 public func canonicalEthSyncCommitteeTransitionMessageBytes(sourceDomain: UInt32 = sccpDomainEthereum,
                                                             fromSyncPeriod: UInt64,
@@ -1362,6 +1387,14 @@ public func canonicalEthSyncCommitteeTransitionMessageBytes(sourceDomain: UInt32
                                                             nextSyncCommitteeHash: String,
                                                             nextSyncCommitteePayloadHash: String,
                                                             nextSyncCommitteeBranchHash: String) throws -> Data {
+    guard sourceDomain == sccpDomainEthereum else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
+    try requireEthMainnetTransitionPeriods(
+        fromSyncPeriod: fromSyncPeriod,
+        toSyncPeriod: toSyncPeriod,
+        transitionSlot: transitionSlot
+    )
     var out = Data()
     out.append(1)
     sourceProofAppendU32Le(sourceDomain, to: &out)
@@ -1514,6 +1547,14 @@ public func canonicalEthSyncCommitteeTransitionSignatureBytes(version: UInt8 = 1
     guard version == 1 else {
         throw SccpSourceProofHashError.invalidValidatorSet("ETH sync-committee transition signature version")
     }
+    guard sourceDomain == sccpDomainEthereum else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
+    try requireEthMainnetTransitionPeriods(
+        fromSyncPeriod: fromSyncPeriod,
+        toSyncPeriod: toSyncPeriod,
+        transitionSlot: transitionSlot
+    )
     let derivedPayloadHash = try ethSyncCommitteePayloadHash(payload: nextSyncCommitteePayload)
     guard derivedPayloadHash.lowercased() == nextSyncCommitteePayloadHash.lowercased() else {
         throw SccpSourceProofHashError.invalidValidatorSet("nextSyncCommitteePayloadHash")

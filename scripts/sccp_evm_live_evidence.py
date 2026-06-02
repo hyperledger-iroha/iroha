@@ -148,6 +148,17 @@ def _default_rpc_chain_id_for_domain(domain: int) -> int:
         raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from exc
 
 
+def _default_network_id_for_domain(domain: int) -> bytes:
+    try:
+        return evidence.evm_mainnet_network_id_for_domain(domain)
+    except argparse.ArgumentTypeError:
+        raise
+    except Exception as exc:
+        raise argparse.ArgumentTypeError(
+            "domain must have a canonical EVM mainnet network id"
+        ) from exc
+
+
 def _http_error_detail(exc: urllib.error.HTTPError) -> str:
     raw = exc.read(EVM_JSON_RPC_MAX_ERROR_BYTES + 1)
     truncated = len(raw) > EVM_JSON_RPC_MAX_ERROR_BYTES
@@ -1071,6 +1082,8 @@ def _route_canary_receipt_block_summary(
         receipt_block_number_text,
         method="route-canary receipt blockNumber",
     )
+    if receipt_block_number == 0:
+        raise RuntimeError("route-canary receipt blockNumber must be non-zero")
     receipt_block_hash = _parse_exact_hex32_blob(
         receipt.get("blockHash"),
         label="route-canary receipt blockHash",
@@ -1554,15 +1567,23 @@ def collect_live_evidence(
         )
     destination["expected_rpc_chain_id"] = expected_rpc_chain_id
     destination["expected_rpc_chain_id_matches"] = True
+    canonical_network_id = _default_network_id_for_domain(args.domain)
     expected_network_id = getattr(args, "expected_network_id", None)
-    if expected_network_id is not None:
-        if _hex(expected_network_id) != destination["network_id"]:
-            raise ValueError(
-                "--expected-network-id does not match bridge networkId(): "
-                f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
-            )
-        destination["expected_network_id"] = _hex(expected_network_id)
-        destination["expected_network_id_matches"] = True
+    if expected_network_id is None:
+        expected_network_id = canonical_network_id
+    elif expected_network_id != canonical_network_id:
+        raise ValueError(
+            "--expected-network-id must match the canonical "
+            f"{destination['chain']} mainnet EIP-155 network id "
+            f"{_hex(canonical_network_id)}"
+        )
+    if _hex(expected_network_id) != destination["network_id"]:
+        raise ValueError(
+            "--expected-network-id does not match bridge networkId(): "
+            f"expected {_hex(expected_network_id)}, got {destination['network_id']}"
+        )
+    destination["expected_network_id"] = _hex(expected_network_id)
+    destination["expected_network_id_matches"] = True
     expected_bridge_code_hash = getattr(args, "expected_bridge_code_hash", None)
     if expected_bridge_code_hash is not None:
         if _hex(expected_bridge_code_hash) != destination["bridge_code_hash"]:
@@ -1767,7 +1788,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expected-network-id",
         type=lambda value: _parse_hex32(value, label="expected network id"),
-        help="Expected non-zero bridge networkId() bytes32.",
+        help=(
+            "Expected bridge networkId() bytes32. Defaults to the canonical "
+            "mainnet EIP-155 id for --domain: eth=1, bsc=56; an explicit "
+            "value must match that canonical id."
+        ),
     )
     parser.add_argument(
         "--expected-rpc-chain-id",

@@ -9,7 +9,8 @@ as part of a coordinated migration.
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_nexus_cross_dataspace_localnet.sh` – runs the deterministic Nexus cross-dataspace all-or-nothing localnet proof (`nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`) through `scripts/run_nexus_cross_dataspace_atomic_swap.sh`.
 - `check_sumeragi_formal.sh` – runs bounded Apalache checks for the Sumeragi
-  commit-path, TLC-cross-checked fork-safety, TLC-cross-checked quorum-policy,
+  commit-path, the TLC-routed top-level commit-path fairness check,
+  TLC-cross-checked fork-safety, TLC-cross-checked quorum-policy,
   TLC-cross-checked RBC deliver-quorum, TLC-cross-checked RBC causality gate,
   TLC-cross-checked RBC local READY emission gate, TLC-cross-checked RBC local
   DELIVER emission gate, TLC-cross-checked RBC delivered-session rebroadcast
@@ -1601,27 +1602,41 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   duplicate-free Apalache command lists including scheduled/manual workflow
   commands, exact Apalache runner-mode CI reachability, unused runner-branch
   rejection, documented mutation-mode expected-failure coverage, TLC
-  mutation-mode expected-failure runner routing, Apalache/TLC mutation CFG
-  equivalence, expected-failure counterexample semantics, baseline
-  expected-failure marker rejection, well-formed single-assignment runner proof
-  inputs and scalar runner assignments, flat direct-child formal path and suffix
+  mutation-mode expected-failure runner routing, mutation-mode CFG name
+  fragments, Apalache/TLC mutation CFG equivalence, expected-failure
+  counterexample semantics, baseline
+  expected-failure marker rejection, well-formed
+  non-append/non-declaration/non-array/shell-builtin-mutation-free
+  single-assignment runner proof inputs and scalar runner assignments, flat
+  direct-child formal path and suffix
   containment, runner command shape, runner invocation proof-input binding, TLC
-  constraint operator binding,
-  non-type-only CFG
-  checks, top-level-only CFG behavior/check detection,
+  constraint operator binding, zero-arity and
+  nontrivial CFG/TLC runner constraints,
+  non-type-only CFG checks, nontrivial CFG-referenced semantic checks,
+  top-level-only CFG behavior/check detection, indented CFG directive rejection,
+  non-empty multi-line CFG check blocks,
   Apalache/TLC TLA module identity, TLC module identifier and
-  module-file reachability, TLA dependency resolution, Apalache length
-  declarations, well-formed purpose-bearing duplicate-free README length rows,
-  and README length table agreement, single top-of-file TLA module-header
-  consistency, single terminating TLA `====` markers, duplicate-free TLA constant and top-level
-  operator declarations, TLA variable/`vars` tuple consistency, CFG/module
+  module-file reachability, non-reserved static TLA dependency resolution,
+  assumption/proof-free TLA modules, Apalache length declarations, well-formed
+  purpose-bearing duplicate-free README length rows, and README length table
+  agreement, single static top-of-file TLA module-header consistency, single
+  terminating TLA `====` markers, duplicate-free TLA constant and static
+  recursive/top-level operator declarations, matched recursive operator
+  definitions, non-reserved static non-empty TLA declaration blocks, exact TLA
+  variable/`vars` tuple consistency,
+  CFG/module
   filename ownership,
-  supported CFG directive validation, CFG behavior/check declarations, static
-  CFG operator-name syntax, top-level operator definitions, complete constant
-  bindings, fail-closed CFG constant block binding shape,
-  duplicate-free `CHECK_DEADLOCK` directives, duplicate-free constant/check
-  targets, complete TLA+/CFG inventory reachability, and referenced TLA+/CFG
-  files stay in sync before Apalache starts.
+  supported CFG directive validation, CFG behavior/check declarations,
+  non-reserved static non-`vars` CFG operator-name syntax, zero-arity CFG
+  proof targets, top-level operator definitions, named `INSTANCE` aliases
+  excluded from proof targets, complete non-reserved constant bindings,
+  fail-closed one-binding-per-line CFG constant shape,
+  non-empty CFG constant blocks,
+  duplicate-free `CHECK_DEADLOCK` directives, duplicate-free constant,
+  constraint, and check targets, single-line and multi-line boolean-wrapper-free
+  vacuity checks for semantic checks and constraints, complete recursive
+  TLA+/CFG inventory reachability, and referenced TLA+/CFG files stay in sync
+  before Apalache starts.
   For reproducible local setup without Docker, install the pinned toolchain with
   `bash scripts/formal/install_apalache.sh 0.52.2`.
   The `block-sync-roster-status` family covers block-sync roster source/drop

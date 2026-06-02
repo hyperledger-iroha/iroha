@@ -583,6 +583,9 @@ export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced"
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
 export const SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1: 384;
 export const SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1: "abi_tuple_v1";
+export const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: "norito:sccp-local-admission:v1";
+export const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: "local_admission";
+export const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: "SubmitBridgeProof";
 export const SCCP_TRON_CONTRACT_CALL_ABI_TUPLE_V1: "tron_abi_tuple_v1";
 export const SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1: "submitSccpMessageProof(bytes,bytes32[6],bytes32)";
 export const SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1: string;
@@ -3644,6 +3647,113 @@ export type EthereumMainnetSccpSubmissionInput = EvmSccpSubmissionInput &
     | { proof_result: EvmSccpProofResult }
   );
 
+export interface EvmMainnetLocalAdmissionSubmissionInput {
+  proofResult?: {
+    proofBytes?: BinaryLike;
+    proof_bytes?: BinaryLike;
+    publicInputsBytes?: BinaryLike;
+    public_inputs_bytes?: BinaryLike;
+    bundleBytes?: BinaryLike;
+    bundle_bytes?: BinaryLike;
+    envelopeBytes?: BinaryLike;
+    envelope_bytes?: BinaryLike;
+    statementHash?: string;
+    statement_hash?: string;
+    sourceVerifierMaterialHash?: string;
+    source_verifier_material_hash?: string;
+    sourceAdapterEngineDeploymentHash?: string;
+    source_adapter_engine_deployment_hash?: string;
+    submissionPackage?: Record<string, unknown>;
+    submission_package?: Record<string, unknown>;
+  };
+  proof_result?: EvmMainnetLocalAdmissionSubmissionInput["proofResult"];
+  submissionPackage?: Record<string, unknown>;
+  submission_package?: Record<string, unknown>;
+  sourceDomain?: SccpDomainIdInput;
+  source_domain?: SccpDomainIdInput;
+  targetDomain?: SccpDomainIdInput;
+  target_domain?: SccpDomainIdInput;
+  proofBytes?: BinaryLike;
+  proof_bytes?: BinaryLike;
+  proof?: BinaryLike;
+  publicInputsBytes?: BinaryLike;
+  public_inputs_bytes?: BinaryLike;
+  bundleBytes?: BinaryLike;
+  bundle_bytes?: BinaryLike;
+  envelopeBytes?: BinaryLike;
+  envelope_bytes?: BinaryLike;
+  statementHash?: string;
+  statement_hash?: string;
+  sourceVerifierMaterialHash?: string;
+  source_verifier_material_hash?: string;
+  sourceAdapterEngineDeploymentHash?: string;
+  source_adapter_engine_deployment_hash?: string;
+  proofFamily?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  proof_family?: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  verifierBackend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  verifier_backend?: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  envelopeEncoding?: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  envelope_encoding?: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  submissionKind?: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  submission_kind?: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  verifierEntrypoint?: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+  verifier_entrypoint?: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+}
+
+export interface EvmMainnetLocalAdmissionPayload {
+  readonly version: 1;
+  readonly proofBytes: Uint8Array;
+  readonly proofBytesHex: string;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicInputsBytesHex: string;
+  readonly bundleBytes: Uint8Array;
+  readonly bundleBytesHex: string;
+  readonly statementHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterEngineDeploymentHash: string;
+}
+
+export interface EvmMainnetLocalAdmissionSubmission {
+  readonly version: 1;
+  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
+  readonly verifierBackend: typeof SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1;
+  readonly platformPayload: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  readonly envelopeEncoding: typeof SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1;
+  readonly submissionKind: typeof SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1;
+  readonly verifierEntrypoint: typeof SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1;
+  readonly sourceDomain: number;
+  readonly targetDomain: typeof SCCP_DOMAIN_SORA;
+  readonly statementHash: string;
+  readonly sourceVerifierMaterialHash: string;
+  readonly sourceAdapterEngineDeploymentHash: string;
+  readonly arguments: readonly [];
+  readonly localAdmission: Readonly<EvmMainnetLocalAdmissionPayload>;
+  readonly proofBytes: Uint8Array;
+  readonly proofBytesHex: string;
+  readonly publicInputsBytes: Uint8Array;
+  readonly publicInputsBytesHex: string;
+  readonly bundleBytes: Uint8Array;
+  readonly bundleBytesHex: string;
+  readonly envelopeBytes: Uint8Array;
+  readonly envelopeHex: string;
+}
+
+export type EthereumMainnetLocalAdmissionSubmissionInput =
+  EvmMainnetLocalAdmissionSubmissionInput;
+export type EthereumMainnetLocalAdmissionSubmission =
+  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_ETH };
+export type BscMainnetLocalAdmissionSubmissionInput =
+  EvmMainnetLocalAdmissionSubmissionInput;
+export type BscMainnetLocalAdmissionSubmission =
+  EvmMainnetLocalAdmissionSubmission & { readonly sourceDomain: typeof SCCP_DOMAIN_BSC };
+
+export function buildEthereumMainnetSccpLocalAdmissionSubmission(
+  input: EthereumMainnetLocalAdmissionSubmissionInput,
+): EthereumMainnetLocalAdmissionSubmission;
+export function buildBscMainnetSccpLocalAdmissionSubmission(
+  input: BscMainnetLocalAdmissionSubmissionInput,
+): BscMainnetLocalAdmissionSubmission;
+
 export interface TronSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
@@ -4120,6 +4230,14 @@ export interface EthereumMainnetInboundEvidenceInput {
   receipt_proof?: EvmSccpReceiptProofInput;
   receiptProofHash?: string;
   receipt_proof_hash?: string;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  sourceBridgeEmitterAddress?: string;
+  source_bridge_emitter_address?: string;
+  expectedSourceBridgeEmitterAddress?: string;
+  expected_source_bridge_emitter_address?: string;
+  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+  source_verifier_material?: SccpSourceVerifierMaterialInput;
   [key: string]: unknown;
 }
 
@@ -4129,6 +4247,8 @@ export interface EthereumMainnetInboundEvidence
   readonly targetDomain: number;
   readonly beaconFinality?: EthereumMainnetBeaconFinalityEvidence;
   readonly receiptProofHash?: string;
+  readonly sourceEventDigest?: string;
+  readonly sourceBridgeEmitterAddress?: string;
 }
 
 export type EthereumMainnetInboundProveFn = (
@@ -4162,6 +4282,14 @@ export type EthereumMainnetSccpOptions = EvmSccpProverOptions & {
   submitToEthereum?: EthereumMainnetSubmitOutboundFn;
   destinationBinding?: EvmSccpDestinationBindingInput;
   destination_binding?: EvmSccpDestinationBindingInput;
+  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+  source_verifier_material?: SccpSourceVerifierMaterialInput;
+  sourceBridgeEmitterAddress?: string;
+  source_bridge_emitter_address?: string;
+  expectedSourceBridgeEmitterAddress?: string;
+  expected_source_bridge_emitter_address?: string;
+  bridgeAddress?: string;
+  bridge_address?: string;
   outboundProver?: EvmSccpProver;
   outbound_prover?: EvmSccpProver;
   prover?: EvmSccpProver;
@@ -4182,6 +4310,14 @@ export class EthereumMainnetSccp {
       execution_provider?: EthereumMainnetExecutionProvider;
       consensusProvider?: EthereumMainnetConsensusProvider;
       consensus_provider?: EthereumMainnetConsensusProvider;
+      sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
+      source_verifier_material?: SccpSourceVerifierMaterialInput;
+      sourceBridgeEmitterAddress?: string;
+      source_bridge_emitter_address?: string;
+      expectedSourceBridgeEmitterAddress?: string;
+      expected_source_bridge_emitter_address?: string;
+      bridgeAddress?: string;
+      bridge_address?: string;
     } & Record<string, unknown>,
   ): Promise<EthereumMainnetInboundEvidence>;
   proveInboundToSora(
@@ -4204,6 +4340,9 @@ export class EthereumMainnetSccp {
       submitToIroha?: EthereumMainnetSubmitInboundFn;
     } & Record<string, unknown>,
   ): Promise<unknown>;
+  buildLocalAdmissionSubmission(
+    input: EthereumMainnetLocalAdmissionSubmissionInput,
+  ): EthereumMainnetLocalAdmissionSubmission;
   buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest;
   proveOutboundToEthereum(
     input: EvmSccpProofRequestInput,
@@ -4294,6 +4433,8 @@ export interface BscMainnetInboundEvidenceInput {
   finality_evidence?: BscMainnetParliaFinalityEvidenceInput;
   receiptProof?: BscSccpReceiptProofInput;
   receipt_proof?: BscSccpReceiptProofInput;
+  receiptProofHash?: string;
+  receipt_proof_hash?: string;
   [key: string]: unknown;
 }
 
@@ -4378,6 +4519,9 @@ export class BscMainnetSccp {
       submitToIroha?: BscMainnetSubmitInboundFn;
     } & Record<string, unknown>,
   ): Promise<unknown>;
+  buildLocalAdmissionSubmission(
+    input: BscMainnetLocalAdmissionSubmissionInput,
+  ): BscMainnetLocalAdmissionSubmission;
   buildOutboundProofRequest(input: BscMainnetSccpProofRequestInput): BscMainnetSccpProofRequest;
   proveOutboundToBsc(
     input: BscMainnetSccpProofRequestInput,
@@ -4643,6 +4787,7 @@ export function buildSubstrateSccpSubmission(
 ): SubstrateSccpSubmission;
 export function canonicalEvmSccpReceiptProofBytes(input: EvmSccpReceiptProofInput): Uint8Array;
 export function evmSccpReceiptProofHash(input: EvmSccpReceiptProofInput): string;
+export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(receiptRoot: string): Uint8Array;
 export function canonicalEthSyncCommitteePayloadBytes(input: EthSyncCommitteePayloadInput): Uint8Array;
 export function ethSyncCommitteeHash(input: EthSyncCommitteePayloadInput): string;
@@ -4660,6 +4805,10 @@ export function ethBeaconBodyRootFromExecutionPayloadBranch(
   executionPayloadBranch: readonly (string | Uint8Array | ArrayBuffer | ArrayBufferView | number[])[],
 ): string;
 export function ethBeaconBlockHeaderRoot(input: EthBeaconBlockHeaderRootInput): string;
+export const SCCP_ETH_MAINNET_SLOTS_PER_EPOCH: 32;
+export const SCCP_ETH_MAINNET_EPOCHS_PER_SYNC_COMMITTEE_PERIOD: 256;
+export const SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD: 8192;
+export function ethMainnetSyncCommitteePeriodForSlot(slot: string | number | bigint): bigint;
 export function canonicalEthSyncCommitteeTransitionMessageBytes(
   input: EthSyncCommitteeTransitionMessageInput,
 ): Uint8Array;

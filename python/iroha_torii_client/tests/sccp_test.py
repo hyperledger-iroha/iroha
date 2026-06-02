@@ -35,6 +35,9 @@ from iroha_torii_client import (  # noqa: E402
     SCCP_BSC_MAINNET_NETWORK_ID,
     SCCP_EVM_CONTRACT_CALL_ABI_TUPLE_V1,
     SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1,
+    SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1,
+    SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1,
     SCCP_SUBMIT_MESSAGE_PROOF_ABI_V1,
     SCCP_SUBMIT_MESSAGE_PROOF_SELECTOR_V1,
     SCCP_SOLANA_BORSH_INSTRUCTION_V1,
@@ -106,8 +109,10 @@ from iroha_torii_client import (  # noqa: E402
     bsc_mainnet_sccp_destination_binding_hash,
     build_ethereum_mainnet_sccp_destination_proof_request,
     build_ethereum_mainnet_sccp_destination_submission,
+    build_ethereum_mainnet_sccp_local_admission_submission,
     build_bsc_mainnet_sccp_destination_proof_request,
     build_bsc_mainnet_sccp_destination_submission,
+    build_bsc_mainnet_sccp_local_admission_submission,
     bsc_validator_set_transition_message_hash,
     bsc_sccp_receipt_proof_hash,
     build_evm_sccp_bridge_proof_submit_payload,
@@ -220,10 +225,12 @@ from iroha_torii_client import (  # noqa: E402
     eth_beacon_block_header_root,
     eth_beacon_body_root_from_execution_payload_branch,
     eth_execution_payload_header_root_from_rlp,
+    eth_mainnet_sync_committee_period_for_slot,
     eth_sync_committee_transition_message_hash,
     eth_sync_committee_transition_signature_hash,
     evm_sccp_destination_binding,
     evm_sccp_destination_binding_hash,
+    evm_sccp_source_event_topic,
     evm_sccp_receipt_proof_hash,
     normalize_evm_sccp_proof_context,
     normalize_sccp_source_adapter_deployment_binding,
@@ -354,6 +361,20 @@ HEX32_E = "0x" + "ee" * 32
 HEX32_F = "0x" + "12" * 32
 HEX32_G = "0x" + "56" * 32
 HEX32_H = "0x" + "78" * 32
+SOURCE_EVENT_DIGEST = "0x" + "34" * 32
+SOURCE_BRIDGE_ADDRESS = "0x" + "44" * 20
+
+
+def source_event_log(**overrides: Any) -> Dict[str, Any]:
+    log: Dict[str, Any] = {
+        "address": SOURCE_BRIDGE_ADDRESS,
+        "topics": [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST],
+        "data": "0x",
+    }
+    log.update(overrides)
+    return log
+
+
 TRON_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
     "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8"
 )
@@ -642,8 +663,8 @@ ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX = (
 )
 ETH_NEXT_SYNC_COMMITTEE_HASH = "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445"
 ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH = "0xfdba6ad2ff9acca564b1042eec01c2d6356d5e2ade5e653c9d47360e55d53e17"
-ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH = "0xc5cbfaf915a63e59bc142277814f13fab1e8012a0bd56db7033b18bc02637bec"
-ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH = "0x2d03886e7ea307f7b5a77af00075b32536cbf016d0d8554bec2b1e424252f858"
+ETH_SYNC_COMMITTEE_TRANSITION_MESSAGE_HASH = "0xadc0fed2a0af2e54e063896334129b18b70b12f3fc9f414f2e3fe6e18bab961e"
+ETH_SYNC_COMMITTEE_TRANSITION_SIGNATURE_HASH = "0xb31cae00d416dbccdc8a0abb455f47793ab18edfd72441158693bab5eda4a05d"
 TON_VALIDATOR_SET_HASH = "0x68bfccd52bc19cf8cdaffc611d58e53824d0aee395a4d813eca0bcefb3970938"
 TON_NEXT_VALIDATOR_SET_PAYLOAD_HEX = (
     "0102000000"
@@ -7189,6 +7210,8 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
     assert next_payload.hex() == ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HEX
     assert eth_sync_committee_hash_from_payload(next_payload) == ETH_NEXT_SYNC_COMMITTEE_HASH
     assert eth_sync_committee_payload_hash(next_payload) == ETH_NEXT_SYNC_COMMITTEE_PAYLOAD_HASH
+    assert eth_mainnet_sync_committee_period_for_slot("19") == 0
+    assert eth_mainnet_sync_committee_period_for_slot(8192) == 1
     with pytest.raises(TypeError, match="syncCommitteePublicKeys must not use multiple aliases"):
         canonical_eth_sync_committee_payload_bytes(
             {
@@ -7199,8 +7222,8 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
 
     message_input = {
         "source_domain": SCCP_DOMAIN_ETH,
-        "from_sync_period": "7",
-        "to_sync_period": "8",
+        "from_sync_period": "0",
+        "to_sync_period": "1",
         "transition_slot": "19",
         "finalized_beacon_root": HEX32_A,
         "parent_sync_committee_hash": ETH_SYNC_COMMITTEE_HASH,
@@ -7223,7 +7246,19 @@ def test_derives_eth_sync_committee_transition_transcripts_from_ui_witness_mater
         )
     with pytest.raises(TypeError, match="fromSyncPeriod must not use multiple aliases"):
         canonical_eth_sync_committee_transition_message_bytes(
-            {**message_input, "fromSyncPeriod": "7"}
+            {**message_input, "fromSyncPeriod": "0"}
+        )
+    with pytest.raises(ValueError, match="toSyncPeriod"):
+        canonical_eth_sync_committee_transition_message_bytes(
+            {**message_input, "to_sync_period": "2"}
+        )
+    with pytest.raises(ValueError, match="transitionSlot must belong to fromSyncPeriod"):
+        canonical_eth_sync_committee_transition_message_bytes(
+            {**message_input, "from_sync_period": "1", "to_sync_period": "2"}
+        )
+    with pytest.raises(ValueError, match="transitionSlot must not be zero"):
+        canonical_eth_sync_committee_transition_message_bytes(
+            {**message_input, "transition_slot": "0"}
         )
     with pytest.raises(TypeError, match="nextSyncCommitteePayloadHash must not use multiple aliases"):
         canonical_eth_sync_committee_transition_message_bytes(
@@ -11838,6 +11873,78 @@ def test_ethereum_mainnet_sccp_facade_requires_chain_id_1_and_eth_target() -> No
         )
 
 
+def test_ethereum_mainnet_sccp_builds_local_admission_submission() -> None:
+    input_value = {
+        "source_domain": SCCP_DOMAIN_ETH,
+        "target_domain": SCCP_DOMAIN_SORA,
+        "proof_bytes": b"\x01\x02\x03",
+        "public_inputs_bytes": b"\x04\x05\x06",
+        "bundle_bytes": b"\x07\x08\x09",
+        "envelope_bytes": b"\x0a\x0b\x0c",
+        "statement_hash": "0x" + "66" * 32,
+        "source_verifier_material_hash": "0x" + "77" * 32,
+        "source_adapter_engine_deployment_hash": "0x" + "88" * 32,
+    }
+    submission = build_ethereum_mainnet_sccp_local_admission_submission(input_value)
+    facade_submission = EthereumMainnetSccp().build_local_admission_submission(
+        input_value
+    )
+
+    assert submission["platform_payload"] == SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1
+    assert submission["envelope_encoding"] == SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1
+    assert submission["verifier_entrypoint"] == SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1
+    assert submission["source_domain"] == SCCP_DOMAIN_ETH
+    assert submission["target_domain"] == SCCP_DOMAIN_SORA
+    assert submission["arguments"] == []
+    assert submission["proof_bytes"] == b"\x01\x02\x03"
+    assert submission["public_inputs_bytes"] == b"\x04\x05\x06"
+    assert submission["bundle_bytes"] == b"\x07\x08\x09"
+    assert submission["envelope_bytes"] == b"\x0a\x0b\x0c"
+    assert submission["local_admission"]["proof_bytes"] == b"\x01\x02\x03"
+    assert facade_submission["envelope_hex"] == submission["envelope_hex"]
+
+    with pytest.raises(ValueError, match="ETH -> SORA"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "source_domain": SCCP_DOMAIN_BSC}
+        )
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "proof_bytes": b"\x00\x00"}
+        )
+    with pytest.raises(TypeError, match="publicInputsBytes must not be all zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "public_inputs_bytes": b"\x00\x00"}
+        )
+    with pytest.raises(TypeError, match="bundleBytes must not be all zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "bundle_bytes": b"\x00\x00"}
+        )
+    with pytest.raises(TypeError, match="envelopeBytes must not be empty"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "envelope_bytes": b""}
+        )
+    with pytest.raises(TypeError, match="envelopeBytes must not be all zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "envelope_bytes": b"\x00\x00"}
+        )
+    with pytest.raises(TypeError, match="statementHash must not be zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "statement_hash": "0x" + "00" * 32}
+        )
+    with pytest.raises(TypeError, match="sourceVerifierMaterialHash must not be zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "source_verifier_material_hash": "0x" + "00" * 32}
+        )
+    with pytest.raises(TypeError, match="sourceAdapterEngineDeploymentHash must not be zero"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "source_adapter_engine_deployment_hash": "0x" + "00" * 32}
+        )
+    with pytest.raises(TypeError, match="metadata is not canonical"):
+        build_ethereum_mainnet_sccp_local_admission_submission(
+            {**input_value, "envelope_encoding": "abi_tuple_v1"}
+        )
+
+
 def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -> None:
     class ExecutionProvider:
         def __init__(self) -> None:
@@ -11880,6 +11987,21 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
                 "finalizedHeaderRoot": HEX32_D,
             }
 
+    receipt_proof = {
+        "source_domain": SCCP_DOMAIN_ETH,
+        "source_event_digest": "0x" + "34" * 32,
+        "beacon_slot": "11",
+        "execution_block_number": "4660",
+        "execution_block_hash": HEX32_B,
+        "execution_receipts_root": HEX32_C,
+        "beacon_finalized_root": HEX32_D,
+        "sync_committee_root": HEX32_E,
+        "receipt_root_index": "0",
+        "receipt_trie_proof_nodes": [EVM_RECEIPT_STATE_MPT_NODE_HEX],
+        "inclusion_branch": [HEX32_E],
+    }
+    receipt_proof_hash = evm_sccp_receipt_proof_hash(receipt_proof)
+
     async def prove_inbound(
         evidence: Mapping[str, Any],
         _options: Mapping[str, Any],
@@ -11889,6 +12011,8 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         assert evidence["beacon_finality"]["execution_block_number"] == "4660"
         assert evidence["beacon_finality"]["execution_block_hash"] == HEX32_B
         assert evidence["beacon_finality"]["execution_receipts_root"] == HEX32_C
+        assert evidence["receipt_proof_hash"] == receipt_proof_hash
+        assert evidence["receipt_proof"]["execution_block_hash"] == HEX32_B
         return b"\x07\x08\x09"
 
     submitted: list[bytes] = []
@@ -11914,7 +12038,11 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
     assert evidence["beacon_finality"]["finalizedHeaderRoot"] == HEX32_D
     assert evidence["beacon_finality"]["execution_block_number"] == "4660"
 
-    proof = asyncio.run(sdk.prove_inbound_to_sora({"transaction_hash": HEX32_A}))
+    proof = asyncio.run(
+        sdk.prove_inbound_to_sora(
+            {"transaction_hash": HEX32_A, "receipt_proof": receipt_proof}
+        )
+    )
     assert proof == b"\x07\x08\x09"
 
     mutable_proof = bytearray(b"\x0a\x0b\x0c")
@@ -11926,6 +12054,112 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         asyncio.run(sdk.submit_inbound_to_iroha(b""))
     with pytest.raises(TypeError, match="proofBytes must not be all zero"):
         asyncio.run(sdk.submit_inbound_to_iroha(b"\x00\x00"))
+
+    receipt_proof_evidence = asyncio.run(
+        EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+            {
+                "receipt_proof": receipt_proof,
+                "receipt_proof_hash": receipt_proof_hash,
+            }
+        )
+    )
+    assert receipt_proof_evidence["receipt_proof_hash"] == receipt_proof_hash
+    assert receipt_proof_evidence["receipt_proof"]["source_domain"] == SCCP_DOMAIN_ETH
+    with pytest.raises(ValueError, match="receiptProofHash must match receiptProof"):
+        asyncio.run(
+            EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                {
+                    "receipt_proof": receipt_proof,
+                    "receipt_proof_hash": HEX32_A,
+                }
+            )
+        )
+
+    source_receipt = {
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
+        "status": "0x1",
+        "logs": [
+            {
+                "address": "0x" + "00" * 20,
+                "topics": ["0x" + "00" * 32],
+                "data": "0x1234",
+            },
+            source_event_log(),
+        ],
+    }
+    source_evidence = asyncio.run(
+        EthereumMainnetSccp(
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+        ).collect_inbound_evidence_from_receipt({"receipt": source_receipt})
+    )
+    assert source_evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
+    assert source_evidence["source_bridge_emitter_address"] == SOURCE_BRIDGE_ADDRESS
+    explicit_source_evidence = asyncio.run(
+        EthereumMainnetSccp(
+            source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+        ).collect_inbound_evidence_from_receipt(
+            {"receipt": source_receipt, "sourceEventDigest": SOURCE_EVENT_DIGEST}
+        )
+    )
+    assert explicit_source_evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
+
+    with pytest.raises(TypeError, match="sourceBridgeEmitterAddress is required"):
+        asyncio.run(
+            EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                {"receipt": source_receipt, "sourceEventDigest": SOURCE_EVENT_DIGEST}
+            )
+        )
+    with pytest.raises(TypeError, match="expected SCCP source event"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address="0x" + "45" * 20
+            ).collect_inbound_evidence_from_receipt({"receipt": source_receipt})
+        )
+    with pytest.raises(TypeError, match="expected SCCP source event"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [
+                            source_event_log(
+                                topics=[HEX32_A, SOURCE_EVENT_DIGEST]
+                            )
+                        ],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match="exactly one matching"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [source_event_log(), source_event_log()],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match="removed logs"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [source_event_log(removed=True)],
+                    }
+                }
+            )
+        )
 
 
 def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
@@ -11963,6 +12197,19 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
         "executionReceiptsRoot": HEX32_C,
         "finalizedHeaderRoot": HEX32_D,
     }
+    good_receipt_proof = {
+        "source_domain": SCCP_DOMAIN_ETH,
+        "source_event_digest": HEX32_D,
+        "beacon_slot": "11",
+        "execution_block_number": "4660",
+        "execution_block_hash": HEX32_B,
+        "execution_receipts_root": HEX32_C,
+        "beacon_finalized_root": HEX32_D,
+        "sync_committee_root": HEX32_E,
+        "receipt_root_index": "0",
+        "receipt_trie_proof_nodes": [EVM_RECEIPT_STATE_MPT_NODE_HEX],
+        "inclusion_branch": [HEX32_E],
+    }
     receipt_without_block_number = dict(good_receipt)
     del receipt_without_block_number["blockNumber"]
     block_without_number = dict(good_block)
@@ -11977,6 +12224,13 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
                     )
                 ).collect_inbound_evidence_from_receipt({"transaction_hash": HEX32_A})
             )
+
+    with pytest.raises(TypeError, match="execution provider is required"):
+        asyncio.run(
+            EthereumMainnetSccp().collect_inbound_evidence_from_receipt(
+                {"transaction_hash": HEX32_A}
+            )
+        )
 
     with pytest.raises((TypeError, ValueError), match="transactionHash"):
         asyncio.run(
@@ -12053,6 +12307,12 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
             {**good_finality, "executionReceiptsRoot": HEX32_D},
             "beaconFinality.executionReceiptsRoot",
         ),
+        (
+            good_receipt,
+            good_block,
+            {},
+            "beaconFinality.executionBlockNumber",
+        ),
     )
 
     for receipt, block, finality, expected_message in cases:
@@ -12081,6 +12341,35 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
         asyncio.run(
             EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
                 {"receipt": good_receipt, "block": good_block}
+            )
+        )
+    assert not called
+
+    with pytest.raises(TypeError, match="receiptProof"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": good_receipt,
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                    "receipt_proof_hash": HEX32_A,
+                }
+            )
+        )
+    assert not called
+
+    with pytest.raises(ValueError, match="receiptProof.executionReceiptsRoot"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": good_receipt,
+                    "block": good_block,
+                    "beacon_finality": good_finality,
+                    "receipt_proof": {
+                        **good_receipt_proof,
+                        "execution_receipts_root": HEX32_D,
+                    },
+                }
             )
         )
     assert not called
@@ -12204,6 +12493,59 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
                     "destination_binding": sample_evm_destination_binding(),
                 }
             }
+        )
+
+
+def test_bsc_mainnet_sccp_local_admission_submission_wraps_native_output() -> None:
+    input_value = {
+        "source_domain": SCCP_DOMAIN_BSC,
+        "target_domain": SCCP_DOMAIN_SORA,
+        "proof_bytes": bytearray(b"\x01\x02\x03"),
+        "public_inputs_bytes": b"\x04\x05\x06",
+        "bundle_bytes": b"\x07\x08\x09",
+        "envelope_bytes": b"\x0a\x0b\x0c",
+        "statement_hash": "0x" + "66" * 32,
+        "source_verifier_material_hash": "0x" + "77" * 32,
+        "source_adapter_engine_deployment_hash": "0x" + "88" * 32,
+    }
+    submission = build_bsc_mainnet_sccp_local_admission_submission(input_value)
+    facade_submission = BscMainnetSccp().build_local_admission_submission(input_value)
+
+    assert submission["platform_payload"] == SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1
+    assert submission["envelope_encoding"] == SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1
+    assert submission["verifier_entrypoint"] == SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1
+    assert submission["source_domain"] == SCCP_DOMAIN_BSC
+    assert submission["target_domain"] == SCCP_DOMAIN_SORA
+    assert submission["arguments"] == []
+    assert submission["proof_bytes"] == b"\x01\x02\x03"
+    assert submission["public_inputs_bytes"] == b"\x04\x05\x06"
+    assert submission["bundle_bytes"] == b"\x07\x08\x09"
+    assert submission["envelope_bytes"] == b"\x0a\x0b\x0c"
+    assert submission["local_admission"]["proof_bytes"] == b"\x01\x02\x03"
+    assert facade_submission["envelope_hex"] == submission["envelope_hex"]
+
+    input_value["proof_bytes"][0] = 0x99
+    assert submission["proof_bytes"] == b"\x01\x02\x03"
+
+    with pytest.raises(ValueError, match="BSC -> SORA"):
+        build_bsc_mainnet_sccp_local_admission_submission(
+            {**input_value, "source_domain": SCCP_DOMAIN_ETH}
+        )
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        build_bsc_mainnet_sccp_local_admission_submission(
+            {**input_value, "proof_bytes": b"\x00\x00"}
+        )
+    with pytest.raises(TypeError, match="envelopeBytes must not be empty"):
+        build_bsc_mainnet_sccp_local_admission_submission(
+            {**input_value, "envelope_bytes": b""}
+        )
+    with pytest.raises(TypeError, match="metadata is not canonical"):
+        build_bsc_mainnet_sccp_local_admission_submission(
+            {**input_value, "envelope_encoding": "abi_tuple_v1"}
+        )
+    with pytest.raises(TypeError, match="metadata is not canonical"):
+        build_bsc_mainnet_sccp_local_admission_submission(
+            {**input_value, "proof_family": "debug-proof-family"}
         )
 
 

@@ -5,25 +5,27 @@ from types import SimpleNamespace
 
 
 ETH_DESTINATION_BINDING_VECTOR = (
-    "3ad95ac3e5bc2892f768aae40a3b7ba673d561858b7d1318fbb9f6eba83207bf"
+    "c86f9d904df50c4522d01da3773916ebecce816f3fdfa664e2dff7cfbe697c45"
 )
 BSC_DESTINATION_BINDING_VECTOR = (
-    "01f0a2b6b82ff36dfd375b2262dfb011d858267efb4b38ffcb17cb2461a39956"
+    "5e97d6da2b4ca7d64171ae717cfa31340a736c125485812a7cb9641570bc27d6"
 )
+ETH_MAINNET_NETWORK_ID = "00" * 31 + "01"
+BSC_MAINNET_NETWORK_ID = "00" * 31 + "38"
 EVM_SOURCE_VERIFIER_MATERIAL_HASH = "aa" * 32
 EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "99" * 32
 ETH_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "0e191f1431409c99cb2aabd3e39b6e9f1ed063afc95ca7a8904b5c63c1875ace"
+    "3bf99a87cc501ee17858c86eaea872a7e4a75d60bfd01e872cdd5a843895ea6e"
 )
 BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "366c86cf9a9fd660ab30fc918fd3e608e35d9d658c2030a4425592dd8abd225a"
+    "03492e28a9c71c56c7702eb438b5aff0df0f5e263a6173f3b950a7b45cc1bda6"
 )
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "a1866900d19941f95aa804caccee87d2eac23c5724ded8d30bb616d4c593761b"
+    "c08cea56ca5233fad7af7e4a2a849eb1c245f1f093015858b11049a0b63992d9"
 )
 BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "a835789acb0317dc287dc894f653b3c42b1ab5e14aae053b31dd14574b47c04f"
+    "fbe2366715a171e9e1d8afdc48b811316c3c32cd393e83c65e5e27134e0d1def"
 )
 
 
@@ -43,7 +45,7 @@ def load_evidence_module():
 def evm_runtime_material(module, *, domain=1):
     bridge_runtime = bytes.fromhex("6001600255")
     verifier_runtime = bytes.fromhex("6080604052")
-    network_id = bytes.fromhex("33" * 32)
+    network_id = module.evm_mainnet_network_id_for_domain(domain)
     verifier_address = bytes.fromhex("11" * 20)
     bridge_address = bytes.fromhex("22" * 20)
     verifier_key_hash = bytes.fromhex("cc" * 32)
@@ -302,25 +304,26 @@ def test_evm_address_and_hash_parsers_reject_zero_and_wrong_width(tmp_path):
 
 def test_evm_destination_binding_hash_matches_vectors_and_domain_separates():
     module = load_evidence_module()
-    common = {
-        "network_id": bytes.fromhex("33" * 32),
+    common_eth = {
+        "network_id": bytes.fromhex(ETH_MAINNET_NETWORK_ID),
         "source_domain": 0,
         "verifier_address": bytes.fromhex("11" * 20),
         "bridge_address": bytes.fromhex("22" * 20),
         "verifier_code_hash": bytes.fromhex("bb" * 32),
         "verifier_key_hash": bytes.fromhex("cc" * 32),
     }
+    common_bsc = {**common_eth, "network_id": bytes.fromhex(BSC_MAINNET_NETWORK_ID)}
 
-    eth_hash = module.evm_destination_binding_hash(target_domain=1, **common)
-    bsc_hash = module.evm_destination_binding_hash(target_domain=2, **common)
-    eth_key = module.evm_destination_binding_key(target_domain=1, **common)
+    eth_hash = module.evm_destination_binding_hash(target_domain=1, **common_eth)
+    bsc_hash = module.evm_destination_binding_hash(target_domain=2, **common_bsc)
+    eth_key = module.evm_destination_binding_key(target_domain=1, **common_eth)
 
     assert eth_hash.hex() == ETH_DESTINATION_BINDING_VECTOR
     assert bsc_hash.hex() == BSC_DESTINATION_BINDING_VECTOR
     assert eth_hash != bsc_hash
     assert eth_key == (
         "evm:0:1:"
-        + "33" * 32
+        + ETH_MAINNET_NETWORK_ID
         + ":0x"
         + "11" * 20
         + ":0x"
@@ -360,7 +363,6 @@ def test_evm_route_allowlist_hash_matches_lane_evidence_vectors():
 def test_evm_route_canary_transaction_hash_binds_target_domain():
     module = load_evidence_module()
     common = {
-        "route_allowlist_hash": bytes.fromhex(ETH_ROUTE_ALLOWLIST_HASH_VECTOR),
         "bridge_address": bytes.fromhex("22" * 20),
         "transaction_hash": bytes.fromhex("44" * 32),
         "log_index": 0,
@@ -377,20 +379,30 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         "statement_hash": bytes.fromhex("66" * 32),
         "proof_version": 1,
         "proof_source_domain": 0,
-        "destination_binding_hash": bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
         "verifier_backend_hash": module.evm_verifier_backend_hash(),
         "proof_family_hash": module.evm_proof_family_hash(),
-        "network_id": bytes.fromhex("33" * 32),
         "used_message_proof": True,
+    }
+    eth_common = {
+        **common,
+        "route_allowlist_hash": bytes.fromhex(ETH_ROUTE_ALLOWLIST_HASH_VECTOR),
+        "destination_binding_hash": bytes.fromhex(ETH_DESTINATION_BINDING_VECTOR),
+        "network_id": bytes.fromhex(ETH_MAINNET_NETWORK_ID),
+    }
+    bsc_common = {
+        **common,
+        "route_allowlist_hash": bytes.fromhex(BSC_ROUTE_ALLOWLIST_HASH_VECTOR),
+        "destination_binding_hash": bytes.fromhex(BSC_DESTINATION_BINDING_VECTOR),
+        "network_id": bytes.fromhex(BSC_MAINNET_NETWORK_ID),
     }
 
     eth_hash = module.evm_route_canary_transaction_evidence_hash(
         target_domain=module.SCCP_DOMAIN_ETH,
-        **common,
+        **eth_common,
     )
     bsc_hash = module.evm_route_canary_transaction_evidence_hash(
         target_domain=module.SCCP_DOMAIN_BSC,
-        **common,
+        **bsc_common,
     )
 
     assert eth_hash != bsc_hash
@@ -399,7 +411,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
     try:
         module.evm_route_canary_transaction_evidence_hash(
             target_domain=module.SCCP_DOMAIN_SORA,
-            **common,
+            **eth_common,
         )
     except ValueError as exc:
         assert "target_domain must be ETH or BSC" in str(exc)
@@ -413,7 +425,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         ("finality_height", "transaction_hash"),
         ("finality_block_hash", "transaction_hash"),
     ):
-        reused = dict(common)
+        reused = dict(eth_common)
         reused[field] = reused[source_field]
         try:
             module.evm_route_canary_transaction_evidence_hash(
@@ -429,7 +441,7 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
 def test_evm_destination_binding_hash_rejects_malformed_direct_material():
     module = load_evidence_module()
     common = {
-        "network_id": bytes.fromhex("33" * 32),
+        "network_id": bytes.fromhex(ETH_MAINNET_NETWORK_ID),
         "source_domain": 0,
         "target_domain": 1,
         "verifier_address": bytes.fromhex("11" * 20),
@@ -447,6 +459,16 @@ def test_evm_destination_binding_hash_rejects_malformed_direct_material():
         assert "network_id must not be zero" in str(exc)
     else:
         raise AssertionError("zero EVM network id was accepted")
+
+    try:
+        module.evm_destination_binding_hash(
+            network_id=bytes.fromhex("33" * 32),
+            **{key: value for key, value in common.items() if key != "network_id"},
+        )
+    except ValueError as exc:
+        assert "network_id must match ETH mainnet EIP-155 chain id 1" in str(exc)
+    else:
+        raise AssertionError("non-mainnet ETH network id was accepted")
 
     try:
         module.evm_destination_binding_hash(
@@ -562,7 +584,7 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
     verifier_code_hash = module.runtime_bytecode_hash(verifier_runtime)
     bridge_code_hash = module.runtime_bytecode_hash(bridge_runtime)
     verifier_key_hash = bytes.fromhex("cc" * 32)
-    network_id = bytes.fromhex("33" * 32)
+    network_id = module.evm_mainnet_network_id_for_domain(module.SCCP_DOMAIN_ETH)
     verifier_address = bytes.fromhex("11" * 20)
     bridge_address = bytes.fromhex("22" * 20)
     destination_binding_hash = module.evm_destination_binding_hash(
@@ -773,10 +795,10 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         + '"'
         in rendered
     )
-    assert '# sccp_evm_destination_network_id = "0x' + "33" * 32 + '"' in rendered
+    assert '# sccp_evm_destination_network_id = "0x' + ETH_MAINNET_NETWORK_ID + '"' in rendered
     assert '# sccp_evm_destination_bridge_address = "0x' + "22" * 20 + '"' in rendered
     assert "# sccp_evm_destination_binding_key = " in rendered
-    assert 'destination_network_id = "0x' + "33" * 32 + '"' in rendered
+    assert 'destination_network_id = "0x' + ETH_MAINNET_NETWORK_ID + '"' in rendered
     assert 'destination_bridge_address = "0x' + "22" * 20 + '"' in rendered
     assert 'destination_binding_key = "evm:0:1:' in rendered
     assert (
@@ -1016,6 +1038,7 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
     ]
     binding_only_args = args[:14]
     route_unpinned_args = args[:-2]
+    default_network_args = [*args[:2], *args[4:]]
     full_args = [
         *args,
         "--bridge-runtime-bytecode-hex",
@@ -1058,6 +1081,22 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
         "true",
     ]
 
+    assert module.main(default_network_args) == 0
+    defaulted = json.loads(capsys.readouterr().out)
+    assert defaulted["network_id"] == "0x" + ETH_MAINNET_NETWORK_ID
+    assert defaulted["destination_binding_hash"] == (
+        "0x" + eth.destination_binding_hash.hex()
+    )
+
+    wrong_network_args = list(args)
+    wrong_network_args[3] = "0x" + "33" * 32
+    try:
+        module.main(wrong_network_args)
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("mismatched ETH mainnet network id override was accepted")
+
     assert module.main(binding_only_args) == 0
     unpinned = json.loads(capsys.readouterr().out)
     assert unpinned["expected_destination_binding_hash_matches"] is False
@@ -1099,7 +1138,7 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
     output = json.loads(capsys.readouterr().out)
     assert output["source_domain"] == 0
     assert output["target_domain"] == 1
-    assert output["network_id"] == "0x" + "33" * 32
+    assert output["network_id"] == "0x" + ETH_MAINNET_NETWORK_ID
     assert output["destination_binding_key"].startswith("evm:0:1:")
     assert output["destination_binding_hash"] == (
         "0x" + eth.destination_binding_hash.hex()
@@ -1165,7 +1204,7 @@ def test_evm_cli_requires_code_hash_or_runtime_bytecode():
                 "--domain",
                 "eth",
                 "--network-id",
-                "0x" + "33" * 32,
+                "0x" + ETH_MAINNET_NETWORK_ID,
                 "--verifier-address",
                 "0x" + "11" * 20,
                 "--bridge-address",
@@ -1194,7 +1233,7 @@ def test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode(capsys):
         "--domain",
         "eth",
         "--network-id",
-        "0x" + "33" * 32,
+        "0x" + ETH_MAINNET_NETWORK_ID,
         "--verifier-address",
         "0x" + "11" * 20,
         "--bridge-address",
