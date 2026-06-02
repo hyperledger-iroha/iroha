@@ -127,7 +127,10 @@ config surface. Each runtime entry must include `secret_hex`,
 `hidden_program_hex` is the Norito-encoded `HiddenRamFheProgram` whose digest
 must match the on-chain programmed BFV public parameters. Torii runtime config
 must not include BFV secret keys; it signs execution receipts and evaluates
-with public/evaluation-key material only.
+with public/evaluation-key material only. Programmed BFV public parameters are
+relinearization-only for the first release; Soracloud rotation/bootstrap
+refresh keys are governed by FHE execution policies instead of
+identifier-program metadata.
 
 Current SDK support:
 

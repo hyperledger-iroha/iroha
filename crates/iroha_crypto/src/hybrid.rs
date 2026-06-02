@@ -24,6 +24,7 @@ const SUITE_KDF_SALT_V1: &[u8] = b"sorafs.hybrid.kem.hkdf:v1";
 const SUITE_KDF_INFO_V1: &[u8] = b"sorafs.hybrid.kem.material:v1";
 const SUITE_REKEY_INFO_V1: &[u8] = b"sorafs.hybrid.kem.rekey:v1";
 const HYBRID_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
+const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1_u8; 32];
 
 /// Supported hybrid suites for payload envelopes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -90,6 +91,9 @@ pub enum HybridError {
         /// Observed byte length.
         found: usize,
     },
+    /// X25519 public key is low-order and cannot contribute to the shared secret.
+    #[error("x25519 public key is low-order")]
+    InvalidX25519PublicKey,
     /// Invalid X25519 secret key length encountered.
     #[error("invalid x25519 secret key length (expected {expected}, found {found})")]
     InvalidX25519SecretKeyLength {
@@ -158,7 +162,7 @@ impl HybridPublicKey {
         }
         let mut x25519_array = [0_u8; 32];
         x25519_array.copy_from_slice(x25519_bytes);
-        let x25519 = X25519PublicKey::from(x25519_array);
+        let x25519 = decode_x25519_public_key(x25519_array)?;
 
         let kyber_bytes = kyber.as_ref();
         let expected_len = HYBRID_KEM_SUITE.public_key_len();
@@ -385,6 +389,7 @@ impl HybridKemCiphertext {
         }
         let mut ephemeral_public_array = [0_u8; 32];
         ephemeral_public_array.copy_from_slice(ephemeral_bytes);
+        let _ephemeral_public = decode_x25519_public_key(ephemeral_public_array)?;
 
         let kyber_bytes = kyber_ciphertext.as_ref();
         let expected_ct_len = HYBRID_KEM_SUITE.ciphertext_len();
@@ -584,6 +589,23 @@ fn derive_material(
     Ok(DerivedSecret::new(encryption_key, rekey_secret))
 }
 
+fn decode_x25519_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HybridError> {
+    let public_key = X25519PublicKey::from(bytes);
+    if x25519_public_key_is_low_order(&public_key) {
+        return Err(HybridError::InvalidX25519PublicKey);
+    }
+    Ok(public_key)
+}
+
+fn x25519_public_key_is_low_order(public_key: &X25519PublicKey) -> bool {
+    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
+    probe_secret
+        .diffie_hellman(public_key)
+        .as_bytes()
+        .iter()
+        .all(|&byte| byte == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use rand::SeedableRng as _;
@@ -648,18 +670,27 @@ mod tests {
     }
 
     #[test]
-    fn encapsulate_rejects_low_order_x25519_public_key() {
+    fn public_key_decode_rejects_low_order_x25519_public_key() {
         let mut rng = ChaCha20Rng::from_seed([0x77; 32]);
         let pair = HybridKeyPair::generate(&mut rng);
-        let bad_public = HybridPublicKey::from_bytes([0u8; 32], pair.public().kyber_bytes())
-            .expect("public key parses");
-        let err = encapsulate(
+        let err = HybridPublicKey::from_bytes([0u8; 32], pair.public().kyber_bytes())
+            .expect_err("low-order public key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidX25519PublicKey);
+    }
+
+    #[test]
+    fn ciphertext_decode_rejects_low_order_ephemeral_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x78; 32]);
+        let pair = HybridKeyPair::generate(&mut rng);
+        let (ciphertext, _sender) = encapsulate(
             HybridSuite::X25519MlKem768ChaCha20Poly1305,
-            &bad_public,
+            pair.public(),
             &mut rng,
         )
-        .expect_err("low-order public key must be rejected");
-        assert_eq!(err, HybridError::InvalidX25519SharedSecret);
+        .expect("encapsulation succeeds");
+        let err = HybridKemCiphertext::from_parts([0u8; 32], ciphertext.kyber_ciphertext())
+            .expect_err("low-order ephemeral public key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidX25519PublicKey);
     }
 
     #[test]

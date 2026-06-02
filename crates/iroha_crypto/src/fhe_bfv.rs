@@ -41,6 +41,8 @@ const IDENTIFIER_KEYGEN_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.keygen
 const IDENTIFIER_SLOT_ENCRYPT_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.identifier.slot.v1";
 const BFV_PARAMETER_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.parameter_digest.v1";
 const BFV_EVALUATION_KEY_DIGEST_DOMAIN: &[u8] = b"iroha.crypto.fhe.bfv.eval_key_digest.v1";
+const BFV_BOOTSTRAP_KEY_ID_MAX_BYTES: usize = 128;
+const BFV_EVALUATION_KEY_MAX_ROTATION_KEYS: usize = 64;
 
 /// Registered RAM-LFE BFV plaintext modulus.
 ///
@@ -294,6 +296,11 @@ impl BfvEvaluationKeyBundle {
     pub fn validate(&self, params: &BfvParameters) -> Result<(), BfvError> {
         params.validate()?;
         validate_relinearization_key(params, &self.relinearization_key)?;
+        if self.rotation_keys.len() > BFV_EVALUATION_KEY_MAX_ROTATION_KEYS {
+            return Err(BfvError::InvalidParameters(format!(
+                "evaluation-key bundle supports at most {BFV_EVALUATION_KEY_MAX_ROTATION_KEYS} rotation keys"
+            )));
+        }
         let mut seen_rotations = std::collections::BTreeSet::new();
         for key in &self.rotation_keys {
             if key.rotation_steps == 0 {
@@ -310,11 +317,7 @@ impl BfvEvaluationKeyBundle {
             validate_ciphertext(params, &key.zero_refresh)?;
         }
         if let Some(bootstrap_key) = self.bootstrap_key.as_ref() {
-            if bootstrap_key.key_id.trim().is_empty() {
-                return Err(BfvError::InvalidParameters(
-                    "bootstrap key id must not be empty".to_owned(),
-                ));
-            }
+            validate_bootstrap_key_id(&bootstrap_key.key_id)?;
             validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
         }
         Ok(())
@@ -610,16 +613,13 @@ pub fn bootstrap_key_from_seed(
     key_id: impl Into<String>,
     seed: &[u8],
 ) -> Result<BfvBootstrapKey, BfvError> {
+    let key_id = key_id.into();
+    validate_bootstrap_key_id(&key_id)?;
     let zero_refresh = encrypt_from_seed(params, public_key, &[0], seed)?;
     let bootstrap_key = BfvBootstrapKey {
-        key_id: key_id.into(),
+        key_id,
         zero_refresh,
     };
-    if bootstrap_key.key_id.trim().is_empty() {
-        return Err(BfvError::InvalidParameters(
-            "bootstrap key id must not be empty".to_owned(),
-        ));
-    }
     validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
     Ok(bootstrap_key)
 }
@@ -635,11 +635,7 @@ pub fn bootstrap_ciphertext(
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
     params.validate()?;
-    if bootstrap_key.key_id.trim().is_empty() {
-        return Err(BfvError::InvalidParameters(
-            "bootstrap key id must not be empty".to_owned(),
-        ));
-    }
+    validate_bootstrap_key_id(&bootstrap_key.key_id)?;
     validate_ciphertext(params, &bootstrap_key.zero_refresh)?;
     add_ciphertexts(params, ciphertext, &bootstrap_key.zero_refresh)
 }
@@ -1042,6 +1038,30 @@ fn validate_poly(params: &BfvParameters, poly: &[u64], label: &str) -> Result<()
             "{label} contains a coefficient outside ciphertext modulus {}",
             params.ciphertext_modulus
         )));
+    }
+    Ok(())
+}
+
+fn validate_bootstrap_key_id(key_id: &str) -> Result<(), BfvError> {
+    if key_id.is_empty() {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must not be empty".to_owned(),
+        ));
+    }
+    if key_id.len() > BFV_BOOTSTRAP_KEY_ID_MAX_BYTES {
+        return Err(BfvError::InvalidParameters(format!(
+            "bootstrap key id exceeds the maximum supported length {BFV_BOOTSTRAP_KEY_ID_MAX_BYTES}"
+        )));
+    }
+    if key_id.trim() != key_id {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must be canonical without surrounding whitespace".to_owned(),
+        ));
+    }
+    if !key_id.bytes().all(|byte| byte.is_ascii_graphic()) {
+        return Err(BfvError::InvalidParameters(
+            "bootstrap key id must contain only printable ASCII bytes".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -1702,17 +1722,63 @@ mod tests {
         assert!(err.to_string().contains("ciphertext c0 length"));
 
         let blank_bootstrap_key = BfvEvaluationKeyBundle {
-            relinearization_key,
+            relinearization_key: relinearization_key.clone(),
             rotation_keys: Vec::new(),
             bootstrap_key: Some(BfvBootstrapKey {
                 key_id: "   ".to_owned(),
-                zero_refresh,
+                zero_refresh: zero_refresh.clone(),
             }),
         };
         let err = blank_bootstrap_key
             .validate(&params)
             .expect_err("blank bootstrap key ids must be rejected");
         assert!(err.to_string().contains("bootstrap key id"));
+
+        let padded_bootstrap_key = BfvEvaluationKeyBundle {
+            relinearization_key: relinearization_key.clone(),
+            rotation_keys: Vec::new(),
+            bootstrap_key: Some(BfvBootstrapKey {
+                key_id: " bootstrap-refresh-key".to_owned(),
+                zero_refresh: zero_refresh.clone(),
+            }),
+        };
+        let err = padded_bootstrap_key
+            .digest(&params)
+            .expect_err("padded bootstrap key ids must not receive digests");
+        assert!(err.to_string().contains("canonical"));
+
+        let control_bootstrap_key = BfvBootstrapKey {
+            key_id: "bootstrap\nkey".to_owned(),
+            zero_refresh: zero_refresh.clone(),
+        };
+        let err = bootstrap_ciphertext(&params, &control_bootstrap_key, &zero_refresh)
+            .expect_err("control bytes in bootstrap key ids must be rejected");
+        assert!(err.to_string().contains("printable ASCII"));
+
+        let err = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "a".repeat(BFV_BOOTSTRAP_KEY_ID_MAX_BYTES + 1),
+            b"bfv-oversized-bootstrap-key-id",
+        )
+        .expect_err("oversized bootstrap key ids must be rejected");
+        assert!(err.to_string().contains("maximum supported length"));
+
+        let oversized_rotation_bundle = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: (1..=u32::try_from(BFV_EVALUATION_KEY_MAX_ROTATION_KEYS + 1)
+                .expect("rotation-key count fits into u32"))
+                .map(|rotation_steps| BfvRotationKey {
+                    rotation_steps,
+                    zero_refresh: zero_refresh.clone(),
+                })
+                .collect(),
+            bootstrap_key: None,
+        };
+        let err = oversized_rotation_bundle
+            .validate(&params)
+            .expect_err("oversized rotation-key bundles must be rejected");
+        assert!(err.to_string().contains("rotation keys"));
     }
 
     #[cfg(feature = "bfv-accel")]

@@ -55,6 +55,7 @@ const DILITHIUM3_SIGNATURE_LEN: usize = 2701;
 const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
+const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
@@ -710,6 +711,30 @@ pub fn diff_capabilities(
         }
     }
     warnings
+}
+
+fn capability_contains_id(caps: &[CapabilityTlv], ty: u16, id: u8) -> bool {
+    caps.iter()
+        .any(|cap| cap.ty == ty && cap.value.first().copied() == Some(id))
+}
+
+fn push_selected_capability_warning(
+    warnings: &mut Vec<CapabilityWarning>,
+    role: &str,
+    caps: &[CapabilityTlv],
+    ty: u16,
+    id: u8,
+) {
+    if capability_contains_id(caps, ty, id) {
+        return;
+    }
+    warnings.push(CapabilityWarning {
+        capability_type: ty,
+        message: format!(
+            "{role} capability {} does not advertise selected id {id:#04x}",
+            capability_label(ty)
+        ),
+    });
 }
 
 fn encode_capabilities(entries: &[CapabilityTlv]) -> Vec<u8> {
@@ -1853,6 +1878,55 @@ fn derive_ed25519_signature(
     Ok(signature.to_bytes())
 }
 
+fn validate_handshake_signature_len(
+    context: &str,
+    name: &str,
+    actual: usize,
+    expected: usize,
+) -> Result<(), HarnessError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(HarnessError::Validation(format!(
+            "{context} {name} signature must be {expected} bytes, got {actual}"
+        )))
+    }
+}
+
+fn read_handshake_signature_pair(
+    cursor: &mut MessageCursor<'_>,
+    context: &str,
+) -> Result<(), HarnessError> {
+    let dilithium = cursor.read_len_prefixed()?;
+    validate_handshake_signature_len(
+        context,
+        "Dilithium3",
+        dilithium.len(),
+        DILITHIUM3_SIGNATURE_LEN,
+    )?;
+
+    let ed25519 = cursor.read_len_prefixed()?;
+    validate_handshake_signature_len(context, "Ed25519", ed25519.len(), ED25519_SIGNATURE_LEN)
+}
+
+fn validate_noise_padding(
+    context: &str,
+    frame_len: usize,
+    padding: &[u8],
+) -> Result<(), HarnessError> {
+    if frame_len % NOISE_PADDING_BLOCK != 0 {
+        return Err(HarnessError::Validation(format!(
+            "{context} frame length must be a multiple of {NOISE_PADDING_BLOCK} bytes, got {frame_len}"
+        )));
+    }
+    if padding.iter().any(|&byte| byte != 0) {
+        return Err(HarnessError::Validation(format!(
+            "{context} padding must be zero-filled"
+        )));
+    }
+    Ok(())
+}
+
 /// Render a simulation report as pretty JSON.
 ///
 /// # Errors
@@ -2992,13 +3066,13 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
 ) -> Result<(Vec<u8>, ClientState), HarnessError> {
+    let kem_profile = kem_profile(params.kem_id)?;
     let (handshake_suite, _) = verify_capabilities_alignment(
         params.kem_id,
         params.sig_id,
         params.client_capabilities,
         params.relay_capabilities,
     )?;
-    let kem_profile = kem_profile(params.kem_id)?;
 
     let mut client_nonce = [0u8; 32];
     rng.fill_bytes(&mut client_nonce);
@@ -3236,23 +3310,11 @@ fn parse_hybrid_relay_response(
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
 
-    let relay_ephemeral_bytes = cursor.read_len_prefixed()?;
-    if relay_ephemeral_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay ephemeral key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_ephemeral_pub = [0u8; NOISE_SECRET_LEN];
-    relay_ephemeral_pub.copy_from_slice(relay_ephemeral_bytes);
+    let relay_ephemeral_pub =
+        decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
 
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if relay_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_static_pub = [0u8; NOISE_SECRET_LEN];
-    relay_static_pub.copy_from_slice(&relay_static_bytes);
+    let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
 
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
@@ -3283,9 +3345,12 @@ fn parse_hybrid_relay_response(
     let mut transcript_hash = [0u8; 32];
     transcript_hash.copy_from_slice(&transcript_bytes);
 
-    let _relay_dilithium_sig = cursor.read_len_prefixed()?;
-    let _relay_ed_sig = cursor.read_len_prefixed()?;
-    let _padding = cursor.remaining_slice();
+    read_handshake_signature_pair(&mut cursor, "hybrid relay response")?;
+    validate_noise_padding(
+        "hybrid relay response",
+        relay_message.len(),
+        cursor.remaining_slice(),
+    )?;
 
     Ok(HybridRelayParsed {
         relay_nonce,
@@ -3323,23 +3388,11 @@ fn parse_pqfs_relay_response(
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
 
-    let relay_ephemeral_bytes = cursor.read_len_prefixed()?;
-    if relay_ephemeral_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay ephemeral key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_ephemeral_pub = [0u8; NOISE_SECRET_LEN];
-    relay_ephemeral_pub.copy_from_slice(relay_ephemeral_bytes);
+    let relay_ephemeral_pub =
+        decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
 
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if relay_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_static_pub = [0u8; NOISE_SECRET_LEN];
-    relay_static_pub.copy_from_slice(&relay_static_bytes);
+    let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
 
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
@@ -3380,9 +3433,12 @@ fn parse_pqfs_relay_response(
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
     let dual_mix = cursor.read_len_prefixed()?.to_vec();
 
-    let _relay_dilithium_sig = cursor.read_len_prefixed()?;
-    let _relay_ed_sig = cursor.read_len_prefixed()?;
-    let _padding = cursor.remaining_slice();
+    read_handshake_signature_pair(&mut cursor, "pqfs relay response")?;
+    validate_noise_padding(
+        "pqfs relay response",
+        relay_message.len(),
+        cursor.remaining_slice(),
+    )?;
 
     Ok(PqfsRelayParsed {
         relay_nonce,
@@ -3438,23 +3494,21 @@ fn handle_nk2_client_finish(
     let profile = kem_profile(kem_id)?;
     let parsed = parse_hybrid_relay_response(relay_message, &descriptor_commit, profile.suite())?;
 
-    let client_caps = parse_capabilities(&client_capabilities)?;
-    let relay_caps = parse_capabilities(&parsed.relay_capabilities)?;
-    let HandshakeSuiteNegotiation {
-        selected,
-        mut warnings,
-    } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
-    warnings.extend(diff_capabilities(&client_caps, &relay_caps));
+    let (selected, _) = verify_capabilities_alignment(
+        kem_id,
+        sig_id,
+        &client_capabilities,
+        &parsed.relay_capabilities,
+    )?;
     if selected != HandshakeSuite::Nk2Hybrid {
-        warnings.push(suite_warning(format!(
+        let warning = suite_warning(format!(
             "relay negotiated {} but NK2 Hybrid response was received",
             selected.label()
-        )));
-    }
-    if !warnings.is_empty() {
-        let telemetry = build_telemetry_payload(kem_id, sig_id, &warnings).ok();
+        ));
+        let telemetry = build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning))
+            .ok();
         return Err(HarnessError::Downgrade {
-            warnings,
+            warnings: vec![warning],
             telemetry,
         });
     }
@@ -3516,27 +3570,21 @@ fn ensure_nk3_negotiation(
     kem_id: u8,
     sig_id: u8,
 ) -> Result<(), HarnessError> {
-    let client_caps = parse_capabilities(client_capabilities)?;
-    let relay_caps = parse_capabilities(relay_capabilities)?;
-    let HandshakeSuiteNegotiation {
-        selected,
-        mut warnings,
-    } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
-    warnings.extend(diff_capabilities(&client_caps, &relay_caps));
+    let (selected, _) =
+        verify_capabilities_alignment(kem_id, sig_id, client_capabilities, relay_capabilities)?;
     if selected != HandshakeSuite::Nk3PqForwardSecure {
-        warnings.push(suite_warning(format!(
+        let warning = suite_warning(format!(
             "relay negotiated {} but NK3 PQ-FS response was received",
             selected.label()
-        )));
+        ));
+        let telemetry = build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning))
+            .ok();
+        return Err(HarnessError::Downgrade {
+            warnings: vec![warning],
+            telemetry,
+        });
     }
-    if warnings.is_empty() {
-        return Ok(());
-    }
-    let telemetry = build_telemetry_payload(kem_id, sig_id, &warnings).ok();
-    Err(HarnessError::Downgrade {
-        warnings,
-        telemetry,
-    })
+    Ok(())
 }
 
 fn compute_nk3_transcript(
@@ -3755,17 +3803,11 @@ fn parse_client_hello_nk2(
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
 
-    let mut client_ephemeral_public = [0u8; NOISE_SECRET_LEN];
-    client_ephemeral_public.copy_from_slice(cursor.read_exact(NOISE_SECRET_LEN)?);
+    let client_ephemeral_public =
+        decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
 
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if client_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "client static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut client_static_public = [0u8; NOISE_SECRET_LEN];
-    client_static_public.copy_from_slice(&client_static_bytes);
+    let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
 
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
@@ -3797,9 +3839,12 @@ fn parse_client_hello_nk2(
         _ => {}
     }
 
-    let _dilithium = cursor.read_len_prefixed()?;
-    let _ed = cursor.read_len_prefixed()?;
-    let _padding = cursor.remaining_slice();
+    read_handshake_signature_pair(&mut cursor, "nk2 client hello")?;
+    validate_noise_padding(
+        "nk2 client hello",
+        cursor.buf.len(),
+        cursor.remaining_slice(),
+    )?;
 
     Ok(ClientHelloParsed {
         client_nonce,
@@ -3840,17 +3885,11 @@ fn parse_client_hello_nk3(
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
 
-    let mut client_ephemeral_public = [0u8; NOISE_SECRET_LEN];
-    client_ephemeral_public.copy_from_slice(cursor.read_exact(NOISE_SECRET_LEN)?);
+    let client_ephemeral_public =
+        decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
 
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if client_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "client static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut client_static_public = [0u8; NOISE_SECRET_LEN];
-    client_static_public.copy_from_slice(&client_static_bytes);
+    let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
 
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
@@ -3884,9 +3923,12 @@ fn parse_client_hello_nk3(
     }
 
     let forward_commitment = cursor.read_len_prefixed()?.to_vec();
-    let _dilithium = cursor.read_len_prefixed()?;
-    let _ed = cursor.read_len_prefixed()?;
-    let _padding = cursor.remaining_slice();
+    read_handshake_signature_pair(&mut cursor, "nk3 client hello")?;
+    validate_noise_padding(
+        "nk3 client hello",
+        cursor.buf.len(),
+        cursor.remaining_slice(),
+    )?;
 
     Ok(ClientHelloParsed {
         client_nonce,
@@ -3990,6 +4032,34 @@ fn verify_capabilities_alignment(
         mut warnings,
     } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
+    push_selected_capability_warning(
+        &mut warnings,
+        "client",
+        &client_caps,
+        CAPABILITY_PQKEM,
+        kem_id,
+    );
+    push_selected_capability_warning(
+        &mut warnings,
+        "relay",
+        &relay_caps,
+        CAPABILITY_PQKEM,
+        kem_id,
+    );
+    push_selected_capability_warning(
+        &mut warnings,
+        "client",
+        &client_caps,
+        CAPABILITY_PQSIG,
+        sig_id,
+    );
+    push_selected_capability_warning(
+        &mut warnings,
+        "relay",
+        &relay_caps,
+        CAPABILITY_PQSIG,
+        sig_id,
+    );
     if warnings.is_empty() {
         Ok((selected, warnings))
     } else {
@@ -4633,6 +4703,35 @@ fn compute_dual_mix(
     )
 }
 
+fn decode_noise_public_key(
+    label: &str,
+    bytes: &[u8],
+) -> Result<[u8; NOISE_SECRET_LEN], HarnessError> {
+    if bytes.len() != NOISE_SECRET_LEN {
+        return Err(HarnessError::Validation(format!(
+            "{label} must be {NOISE_SECRET_LEN} bytes"
+        )));
+    }
+    let mut public = [0u8; NOISE_SECRET_LEN];
+    public.copy_from_slice(bytes);
+    if noise_public_key_is_low_order(&public) {
+        return Err(HarnessError::Validation(format!(
+            "{label} must not be low-order"
+        )));
+    }
+    Ok(public)
+}
+
+fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
+    let public_key = X25519PublicKey::from(*public);
+    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
+    probe_secret
+        .diffie_hellman(&public_key)
+        .as_bytes()
+        .iter()
+        .all(|&byte| byte == 0)
+}
+
 struct MessageCursor<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -4673,6 +4772,8 @@ impl<'a> MessageCursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use core::ops::Range;
+
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -5010,6 +5111,122 @@ mod tests {
         encode_tlvs(&entries)
     }
 
+    fn capabilities_with_selected_id(base: &[u8], ty: u16, id: u8, required: bool) -> Vec<u8> {
+        let mut entries = parse_capabilities(base).expect("parse base capabilities");
+        entries.push(CapabilityTlv {
+            ty,
+            value: vec![id, 0],
+            required,
+        });
+        entries.sort_by_key(|cap| cap.ty);
+        encode_tlvs(&entries)
+    }
+
+    fn len_prefixed_payload_range(frame: &[u8], offset: &mut usize) -> Range<usize> {
+        let len = u16::from_be_bytes([frame[*offset], frame[*offset + 1]]) as usize;
+        *offset += 2;
+        let start = *offset;
+        *offset += len;
+        start..*offset
+    }
+
+    fn len_prefixed_header_range(frame: &[u8], offset: &mut usize) -> Range<usize> {
+        let start = *offset;
+        let len = u16::from_be_bytes([frame[*offset], frame[*offset + 1]]) as usize;
+        *offset += 2 + len;
+        start..start + 2
+    }
+
+    fn skip_len_prefixed_payload(frame: &[u8], offset: &mut usize) {
+        let _ = len_prefixed_payload_range(frame, offset);
+    }
+
+    fn client_hello_ephemeral_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        offset += 3;
+        offset..offset + NOISE_SECRET_LEN
+    }
+
+    fn client_hello_static_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = client_hello_ephemeral_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn relay_response_ephemeral_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn relay_response_static_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = relay_response_ephemeral_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn overwrite_noise_key(frame: &mut [u8], range: Range<usize>, replacement: [u8; 32]) {
+        assert_eq!(range.len(), NOISE_SECRET_LEN);
+        frame[range].copy_from_slice(&replacement);
+    }
+
+    fn overwrite_len_prefix(frame: &mut [u8], range: Range<usize>, replacement_len: usize) {
+        assert_eq!(range.len(), 2);
+        let replacement_len =
+            u16::try_from(replacement_len).expect("test signature length must fit u16");
+        frame[range].copy_from_slice(&replacement_len.to_be_bytes());
+    }
+
+    fn client_first_signature_len_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        offset += 3 + NOISE_SECRET_LEN;
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        if frame[0] == PQFS_CLIENT_COMMIT_TYPE {
+            skip_len_prefixed_payload(frame, &mut offset);
+        }
+        skip_len_prefixed_payload(frame, &mut offset);
+        let resume_flag = frame[offset];
+        offset += 1;
+        if resume_flag == 1 {
+            skip_len_prefixed_payload(frame, &mut offset);
+        }
+        if frame[0] == PQFS_CLIENT_COMMIT_TYPE {
+            skip_len_prefixed_payload(frame, &mut offset);
+        }
+        len_prefixed_header_range(frame, &mut offset)
+    }
+
+    fn relay_signature_len_ranges(frame: &[u8]) -> (Range<usize>, Range<usize>) {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        skip_len_prefixed_payload(frame, &mut offset);
+        match frame[0] {
+            HYBRID_RELAY_RESPONSE_TYPE => {
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+            }
+            PQFS_RELAY_RESPONSE_TYPE => {
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+                skip_len_prefixed_payload(frame, &mut offset);
+            }
+            other => panic!("unexpected relay response type {other:#04x}"),
+        }
+        let dilithium = len_prefixed_header_range(frame, &mut offset);
+        let ed25519 = len_prefixed_header_range(frame, &mut offset);
+        (dilithium, ed25519)
+    }
+
     #[test]
     fn ensure_nk3_negotiation_accepts_forward_secure_suite() {
         let Nk3Fixture {
@@ -5027,6 +5244,323 @@ mod tests {
             sig_id,
         )
         .expect("nk3 negotiation succeeds");
+    }
+
+    #[test]
+    fn parse_client_hello_nk2_rejects_low_order_ephemeral_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng = StdRng::seed_from_u64(7301);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("build nk2 client hello");
+
+        let range = client_hello_ephemeral_range(&client_hello);
+        overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
+        let err = parse_client_hello(&client_hello, params.resume_hash)
+            .err()
+            .expect("low-order client ephemeral key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("client ephemeral key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_client_hello_nk3_rejects_low_order_static_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng = StdRng::seed_from_u64(7302);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("build nk3 client hello");
+
+        let range = client_hello_static_range(&client_hello);
+        overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
+        let err = parse_client_hello(&client_hello, params.resume_hash)
+            .err()
+            .expect("low-order client static key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("client static key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_hybrid_relay_response_rejects_low_order_ephemeral_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(7303);
+        let mut rng_relay = StdRng::seed_from_u64(7304);
+        let relay_keys = KeyPair::random();
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("build nk2 client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("build nk2 relay response");
+
+        let range = relay_response_ephemeral_range(&relay_response);
+        overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err =
+            parse_hybrid_relay_response(&relay_response, params.descriptor_commit, profile.suite())
+                .err()
+                .expect("low-order relay ephemeral key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("relay ephemeral key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_pqfs_relay_response_rejects_low_order_static_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(7305);
+        let mut rng_relay = StdRng::seed_from_u64(7306);
+        let relay_keys = KeyPair::random();
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("build nk3 client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("build nk3 relay response");
+
+        let range = relay_response_static_range(&relay_response);
+        overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err =
+            parse_pqfs_relay_response(&relay_response, params.descriptor_commit, profile.suite())
+                .err()
+                .expect("low-order relay static key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("relay static key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn verify_capabilities_alignment_rejects_unadvertised_selected_ids() {
+        let defaults = RuntimeParams::soranet_defaults();
+
+        let err = verify_capabilities_alignment(
+            2,
+            defaults.sig_id,
+            defaults.client_capabilities,
+            defaults.relay_capabilities,
+        )
+        .expect_err("selected ML-KEM id must be advertised by both sides");
+        match err {
+            HarnessError::Downgrade {
+                warnings,
+                telemetry,
+            } => {
+                assert!(
+                    warnings
+                        .iter()
+                        .any(|warning| warning.capability_type == CAPABILITY_PQKEM
+                            && warning.message.contains("selected id 0x02")),
+                    "missing selected KEM warning: {warnings:?}"
+                );
+                assert!(telemetry.is_some(), "downgrade should emit telemetry");
+            }
+            other => panic!("expected downgrade error, got {other:?}"),
+        }
+
+        let err = verify_capabilities_alignment(
+            defaults.kem_id,
+            2,
+            defaults.client_capabilities,
+            defaults.relay_capabilities,
+        )
+        .expect_err("selected signature id must be advertised by both sides");
+        match err {
+            HarnessError::Downgrade { warnings, .. } => assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.capability_type == CAPABILITY_PQSIG
+                        && warning.message.contains("selected id 0x02")),
+                "missing selected signature warning: {warnings:?}"
+            ),
+            other => panic!("expected downgrade error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_client_hello_rejects_short_dilithium_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = StdRng::seed_from_u64(7311);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("client hello");
+
+        let range = client_first_signature_len_range(&client_hello);
+        overwrite_len_prefix(&mut client_hello, range, DILITHIUM3_SIGNATURE_LEN - 1);
+
+        let err = match parse_client_hello(&client_hello, params.resume_hash) {
+            Ok(_) => panic!("malformed Dilithium signature length must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("Dilithium3 signature"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_client_hello_rejects_malformed_padding() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng = StdRng::seed_from_u64(7314);
+        let (client_hello, _state) = build_client_hello(&params, &mut rng).expect("client hello");
+
+        let mut nonzero_padding = client_hello.clone();
+        let last = nonzero_padding
+            .last_mut()
+            .expect("client hello should contain padding");
+        assert_eq!(*last, 0, "test fixture should end in zero padding");
+        *last = 0xA5;
+        let err = match parse_client_hello(&nonzero_padding, params.resume_hash) {
+            Ok(_) => panic!("non-zero padding must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("zero-filled"),
+            "unexpected error: {err}"
+        );
+
+        let mut truncated_padding = client_hello;
+        assert_eq!(
+            truncated_padding.pop(),
+            Some(0),
+            "test fixture should remove one padding byte"
+        );
+        let err = match parse_client_hello(&truncated_padding, params.resume_hash) {
+            Ok(_) => panic!("non-block-sized frame must be rejected"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("multiple of"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_relay_response_rejects_short_ed25519_signature() {
+        let params = RuntimeParams::soranet_defaults();
+        let mut rng_client = StdRng::seed_from_u64(7312);
+        let mut rng_relay = StdRng::seed_from_u64(7313);
+        let relay_keys = KeyPair::random();
+
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("relay response");
+
+        let (_dilithium_range, ed25519_range) = relay_signature_len_ranges(&relay_response);
+        overwrite_len_prefix(
+            &mut relay_response,
+            ed25519_range,
+            ED25519_SIGNATURE_LEN - 1,
+        );
+
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err = match relay_response.first().copied() {
+            Some(HYBRID_RELAY_RESPONSE_TYPE) => parse_hybrid_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            Some(PQFS_RELAY_RESPONSE_TYPE) => parse_pqfs_relay_response(
+                &relay_response,
+                params.descriptor_commit,
+                profile.suite(),
+            )
+            .map(|_| ()),
+            other => panic!("unexpected relay response type {other:?}"),
+        }
+        .expect_err("malformed Ed25519 signature length must be rejected");
+        assert!(
+            err.to_string().contains("Ed25519 signature"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -5746,8 +6280,19 @@ mod tests {
 
     #[test]
     fn runtime_handshake_roundtrip_supports_mlkem1024() {
-        let mut params = RuntimeParams::soranet_defaults();
-        params.kem_id = 2;
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_capabilities =
+            capabilities_with_selected_id(defaults.client_capabilities, CAPABILITY_PQKEM, 2, true);
+        let relay_capabilities =
+            capabilities_with_selected_id(defaults.relay_capabilities, CAPABILITY_PQKEM, 2, true);
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_capabilities.as_slice(),
+            relay_capabilities: relay_capabilities.as_slice(),
+            kem_id: 2,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
         let mut rng_client = StdRng::seed_from_u64(11);
         let mut rng_relay = StdRng::seed_from_u64(12);
         let client_keys = KeyPair::random();

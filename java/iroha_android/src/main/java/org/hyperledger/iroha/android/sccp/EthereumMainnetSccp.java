@@ -103,7 +103,7 @@ public final class EthereumMainnetSccp {
     final ExecutionProvider selectedProvider =
         Objects.requireNonNull(provider, "executionProvider");
     final Object chainId = selectedProvider.request("eth_chainId", Collections.emptyList());
-    requireMainnetChainId(normalizeMainnetChainId(chainId));
+    requireMainnetChainId(normalizeRpcChainId(chainId));
     return chainId;
   }
 
@@ -258,7 +258,18 @@ public final class EthereumMainnetSccp {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receiptProof");
     }
-    return inboundProver.prove(evidence);
+    final byte[] proofBytes = inboundProver.prove(evidence);
+    if (proofBytes == null || proofBytes.length == 0) {
+      throw new IllegalArgumentException("proofBytes must not be empty");
+    }
+    boolean nonzero = false;
+    for (final byte value : proofBytes) {
+      nonzero |= value != 0;
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException("proofBytes must not be all zero");
+    }
+    return Arrays.copyOf(proofBytes, proofBytes.length);
   }
 
   public Object submitInboundToIroha(final byte[] proofBytes) {
@@ -432,6 +443,10 @@ public final class EthereumMainnetSccp {
 
   private static void requireEthereumRequestInput(final EvmSccpProver.ProofRequestInput input) {
     Objects.requireNonNull(input, "input");
+    if (input.sourceDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet proof requests must route SORA -> ETH");
+    }
     if (input.publicInputs().targetDomain() != DOMAIN_ETH) {
       throw new IllegalArgumentException("Ethereum mainnet proof requests must target ETH");
     }
@@ -445,6 +460,10 @@ public final class EthereumMainnetSccp {
 
   private static void requireEthereumProofRequest(final EvmSccpProver.ProofRequest request) {
     Objects.requireNonNull(request, "request");
+    if (request.sourceDomain() != DOMAIN_SORA) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet proof requests must route SORA -> ETH");
+    }
     if (request.targetDomain() != DOMAIN_ETH
         || request.publicInputs().targetDomain() != DOMAIN_ETH) {
       throw new IllegalArgumentException("Ethereum mainnet proof requests must target ETH");
@@ -456,6 +475,10 @@ public final class EthereumMainnetSccp {
       final SourceSccpProofs.EvmDestinationBinding destinationBinding) {
     final SourceSccpProofs.EvmDestinationBinding binding =
         Objects.requireNonNull(destinationBinding, "destinationBinding");
+    if (binding.sourceDomain != DOMAIN_SORA) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet destinationBinding must start from SORA");
+    }
     if (binding.targetDomain != DOMAIN_ETH) {
       throw new IllegalArgumentException("Ethereum mainnet destinationBinding must target ETH");
     }
@@ -482,8 +505,13 @@ public final class EthereumMainnetSccp {
         input.destinationBinding());
   }
 
-  private static long normalizeMainnetChainId(final Object value) {
-    return normalizeUnsignedInteger(value, "eth_chainId");
+  private static long normalizeRpcChainId(final Object value) {
+    final String quantity = normalizeRpcQuantity(value, "eth_chainId");
+    final BigInteger parsed = new BigInteger(quantity.substring(2), 16);
+    if (parsed.bitLength() > 63) {
+      throw new IllegalArgumentException("eth_chainId must fit positive i64");
+    }
+    return parsed.longValue();
   }
 
   private static long normalizeUnsignedInteger(final Object value, final String label) {

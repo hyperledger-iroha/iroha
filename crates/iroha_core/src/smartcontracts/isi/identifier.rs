@@ -921,6 +921,28 @@ pub mod isi {
                 .expect_err("zero verifier-key hash must reject before proof parsing");
             let message = err.to_string();
             assert!(message.contains("non-zero"), "unexpected error: {message}");
+
+            let schema_drift = sample_proof_box(&verifier, |envelope| {
+                envelope.public_inputs.extend_from_slice(b":schema-drift");
+            });
+            let err = verify_execution_proof(&schema_drift, &execution, &verifier)
+                .expect_err("public-input schema drift must reject before proof parsing");
+            let message = err.to_string();
+            assert!(
+                message.contains("public-input schema hash"),
+                "unexpected error: {message}"
+            );
+
+            let wrong_vk_hash = sample_proof_box(&verifier, |envelope| {
+                envelope.vk_hash = [0xA5; Hash::LENGTH];
+            });
+            let err = verify_execution_proof(&wrong_vk_hash, &execution, &verifier)
+                .expect_err("wrong verifier-key hash must reject before proof parsing");
+            let message = err.to_string();
+            assert!(
+                message.contains("mismatched verifying key"),
+                "unexpected error: {message}"
+            );
         }
     }
 }

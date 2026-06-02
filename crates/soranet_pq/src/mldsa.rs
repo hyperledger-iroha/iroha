@@ -84,6 +84,30 @@ impl MlDsaSuite {
         }
     }
 
+    /// Validate a public key encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length.
+    pub fn validate_public_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_public_key_len(self, bytes)
+    }
+
+    /// Validate a secret key encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length.
+    pub fn validate_secret_key(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_secret_key_len(self, bytes)
+    }
+
+    /// Validate a detached signature encoding for this suite.
+    ///
+    /// # Errors
+    /// Returns an error when the byte string has the wrong encoded length.
+    pub fn validate_signature(self, bytes: &[u8]) -> Result<(), MlDsaError> {
+        validate_mldsa_signature_len(self, bytes)
+    }
+
     const fn public_key_kind(self) -> &'static str {
         match self {
             MlDsaSuite::MlDsa44 => "ML-DSA-44 public key",
@@ -336,6 +360,30 @@ pub fn verify_mldsa(
                 .map_err(MlDsaError::VerificationFailed)
         }
     }
+}
+
+/// Validate the encoding of an ML-DSA public key.
+///
+/// # Errors
+/// Returns an error when the public-key byte string has the wrong encoded length.
+pub fn validate_mldsa_public_key(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_public_key(bytes)
+}
+
+/// Validate the encoding of an ML-DSA secret key.
+///
+/// # Errors
+/// Returns an error when the secret-key byte string has the wrong encoded length.
+pub fn validate_mldsa_secret_key(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_secret_key(bytes)
+}
+
+/// Validate the encoding of an ML-DSA detached signature.
+///
+/// # Errors
+/// Returns an error when the signature byte string has the wrong encoded length.
+pub fn validate_mldsa_signature(suite: MlDsaSuite, bytes: &[u8]) -> Result<(), MlDsaError> {
+    suite.validate_signature(bytes)
 }
 
 #[cfg(test)]
@@ -607,6 +655,39 @@ mod tests {
             MlDsaError::BadEncoding(err) => assert!(err.kind.contains("signature")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn suite_validation_helpers_reject_wrong_lengths() {
+        let suite = MlDsaSuite::MlDsa65;
+
+        for (label, err) in [
+            (
+                "public key",
+                suite.validate_public_key(&vec![0u8; suite.public_key_len() - 1]),
+            ),
+            (
+                "secret key",
+                suite.validate_secret_key(&vec![0u8; suite.secret_key_len() - 1]),
+            ),
+            (
+                "signature",
+                suite.validate_signature(&vec![0u8; suite.signature_len() - 1]),
+            ),
+        ] {
+            let err = err.expect_err("short ML-DSA material must fail");
+            match err {
+                MlDsaError::BadEncoding(err) => assert!(err.to_string().contains(label)),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+
+        validate_mldsa_public_key(suite, &vec![0u8; suite.public_key_len()])
+            .expect("canonical public key length");
+        validate_mldsa_secret_key(suite, &vec![0u8; suite.secret_key_len()])
+            .expect("canonical secret key length");
+        validate_mldsa_signature(suite, &vec![0u8; suite.signature_len()])
+            .expect("canonical signature length");
     }
 
     #[test]

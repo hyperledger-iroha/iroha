@@ -628,7 +628,7 @@ const SCCP_TON_MAINNET_GLOBAL_ID: i32 = -239;
 const SCCP_TON_MASTERCHAIN_WORKCHAIN_ID: i32 = -1;
 const SCCP_TON_MASTERCHAIN_SHARD: u64 = 0x8000_0000_0000_0000;
 const SCCP_TON_BASECHAIN_WORKCHAIN_ID: i32 = 0;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TON_BASECHAIN_FULL_SHARD: u64 = 0x8000_0000_0000_0000;
 const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES: usize = 64;
 const SCCP_SUBSTRATE_MAX_AUTHORITIES: usize = 2048;
@@ -6815,6 +6815,8 @@ pub fn sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
     if !matches!(allowlist.domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC)
         || destination_rollout.domain != allowlist.domain
         || target_domain != allowlist.domain
+        || proof_version != 1
+        || proof_source_domain != SCCP_DOMAIN_SORA
         || !used_message_proof
     {
         return None;
@@ -7254,7 +7256,11 @@ fn sccp_route_allowlist_evm_canary_evidence_is_bound(
     let Some(proof_source_domain) = allowlist.evm_route_canary_proof_source_domain else {
         return false;
     };
-    if allowlist.evm_route_canary_used_message_proof != Some(true) {
+    if target_domain != domain
+        || proof_version != 1
+        || proof_source_domain != SCCP_DOMAIN_SORA
+        || allowlist.evm_route_canary_used_message_proof != Some(true)
+    {
         return false;
     }
     sccp_evm_route_canary_evidence_hash_v1(
@@ -18268,7 +18274,8 @@ fn build_sccp_message_transparent_fastpq_batch_internal(
     Some(batch)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 fn build_sccp_message_transparent_fastpq_batch(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -18732,7 +18739,8 @@ fn verify_sccp_message_transparent_inner_proof_bytes_internal(
     fastpq_prover::verify(&batch, &proof).is_ok()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 fn verify_sccp_message_transparent_inner_proof_bytes(
     proof_bytes: &[u8],
     bundle: &NexusSccpMessageProofV1,
@@ -19037,7 +19045,8 @@ fn verify_sccp_tron_submission_package_internal(
         && envelope_bytes == proof.submission_package.envelope_bytes
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 fn verify_sccp_evm_submission_package(
     manifest: &SccpProofManifestV1,
     proof: &NexusSccpMessageTransparentProofV1,
@@ -34830,7 +34839,8 @@ fn signer_indices_from_bitmap(bitmap: &[u8], roster_len: usize) -> Option<Vec<us
     Some(indices)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 mod tests {
     use super::*;
     use norito::to_bytes;
@@ -35998,6 +36008,12 @@ mod tests {
     fn sample_eth_sync_committee_hash() -> H256 {
         let signers = sample_eth_sync_committee_keypairs();
         sample_eth_sync_committee_hash_for(&signers)
+    }
+
+    /// Return the sample Ethereum mainnet sync committee root used by SCCP fixtures.
+    #[cfg(feature = "test-fixtures")]
+    pub fn sample_eth_mainnet_sync_committee_root() -> H256 {
+        sample_eth_sync_committee_hash()
     }
 
     fn sample_eth_sync_committee_signature_proof_for(
@@ -39908,6 +39924,75 @@ mod tests {
             source_material,
             source_deployment,
         )
+    }
+
+    /// Build a deployment-bound Ethereum mainnet -> SORA transfer bundle for executor tests.
+    #[cfg(feature = "test-fixtures")]
+    pub fn sample_eth_mainnet_to_sora_transfer_bundle_with_material_and_deployment(
+        nonce: u64,
+        source_material: &SccpSourceVerifierMaterialV1,
+        source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+    ) -> NexusSccpMessageProofV1 {
+        let bundle = sample_transfer_bundle_with_source_material_and_deployment(
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_SORA,
+            nonce,
+            Some(source_material),
+            Some(source_deployment),
+        );
+        let source_proof = decode_sccp_source_chain_proof_envelope(&bundle.finality_proof)
+            .expect("decode ETH source-chain proof envelope");
+        assert!(
+            verify_sccp_eth_mainnet_source_chain_proof_envelope_production(
+                &source_proof,
+                source_material,
+                source_deployment,
+            )
+        );
+        assert!(
+            verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production(
+                &bundle,
+                source_material,
+                source_deployment,
+            )
+            .is_some()
+        );
+        bundle
+    }
+
+    /// Build a local-admission transparent proof for an Ethereum mainnet -> SORA transfer.
+    #[cfg(feature = "test-fixtures")]
+    pub fn sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment(
+        nonce: u64,
+        source_material: &SccpSourceVerifierMaterialV1,
+        source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+    ) -> NexusSccpMessageTransparentProofV1 {
+        let bundle = sample_eth_mainnet_to_sora_transfer_bundle_with_material_and_deployment(
+            nonce,
+            source_material,
+            source_deployment,
+        );
+        let artifact =
+            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
+                &bundle,
+                source_material,
+                source_deployment,
+                true,
+            )
+            .expect("build ETH local-admission transparent proof");
+        assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        assert!(matches!(
+            artifact.submission_package.platform_payload,
+            SccpPlatformSubmissionPayloadV1::LocalAdmission(_)
+        ));
+        assert!(
+            verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(
+                &artifact,
+                source_material,
+                source_deployment,
+            )
+        );
+        artifact
     }
 
     fn assert_source_chain_proof_binds_material_but_adapter_is_not_ready(
@@ -55224,6 +55309,74 @@ mod tests {
             .is_none(),
             "EVM canary transcript roles must reject transaction/finality replay"
         );
+        let assert_rejected_canary = |target_domain: u32,
+                                      proof_version: u32,
+                                      proof_source_domain: u32,
+                                      used_message_proof| {
+            assert!(
+                sccp_evm_route_canary_evidence_hash_v1(
+                    SCCP_DOMAIN_ETH,
+                    decode_fixed_hex_bytes::<32>(
+                        route_allowlist
+                            .route_allowlist_hash
+                            .as_deref()
+                            .expect("route allowlist hash"),
+                    )
+                    .expect("decode route allowlist hash"),
+                    destination_binding_hash,
+                    &destination_rollout,
+                    [0xea; 32],
+                    3,
+                    18_765_432,
+                    [0xe8; 32],
+                    [0xe9; 32],
+                    [0xeb; 32],
+                    [0xdd; 32],
+                    [0xdc; 32],
+                    target_domain,
+                    [0xf1; 32],
+                    [0xee; 32],
+                    [0xed; 32],
+                    [0xec; 32],
+                    proof_version,
+                    proof_source_domain,
+                    used_message_proof,
+                )
+                .is_none(),
+                "EVM canary hash must reject wrong target/proof metadata"
+            );
+            assert!(
+                sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+                    route_allowlist.clone(),
+                    &destination_rollout,
+                    destination_binding_hash,
+                    source_material_hash,
+                    source_deployment_hash,
+                    [0xea; 32],
+                    3,
+                    18_765_432,
+                    [0xe8; 32],
+                    [0xe9; 32],
+                    [0xeb; 32],
+                    [0xdd; 32],
+                    [0xdc; 32],
+                    target_domain,
+                    [0xf1; 32],
+                    [0xee; 32],
+                    [0xed; 32],
+                    [0xec; 32],
+                    proof_version,
+                    proof_source_domain,
+                    used_message_proof,
+                )
+                .is_none(),
+                "EVM canary allowlist builder must reject wrong target/proof metadata"
+            );
+        };
+        assert_rejected_canary(SCCP_DOMAIN_BSC, 1, SCCP_DOMAIN_SORA, true);
+        assert_rejected_canary(SCCP_DOMAIN_ETH, 2, SCCP_DOMAIN_SORA, true);
+        assert_rejected_canary(SCCP_DOMAIN_ETH, 1, SCCP_DOMAIN_ETH, true);
+        assert_rejected_canary(SCCP_DOMAIN_ETH, 1, SCCP_DOMAIN_SORA, false);
         let allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
             route_allowlist,
             &destination_rollout,
@@ -67072,4 +67225,13 @@ mod tests {
             "op::submit_sccp_message_proof"
         );
     }
+}
+
+#[cfg(feature = "test-fixtures")]
+pub mod test_fixtures {
+    pub use super::tests::{
+        sample_eth_mainnet_sync_committee_root,
+        sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment,
+        sample_eth_mainnet_to_sora_transfer_bundle_with_material_and_deployment,
+    };
 }

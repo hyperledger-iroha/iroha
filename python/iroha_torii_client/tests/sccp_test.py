@@ -12215,7 +12215,7 @@ def test_ethereum_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> 
     block_without_number = dict(good_block)
     del block_without_number["number"]
 
-    for chain_id in ("0x38", "0x01", "0X1"):
+    for chain_id in ("1", 1, "0x38", "0x01", "0X1"):
         with pytest.raises((TypeError, ValueError), match="eth_chainId|quantity"):
             asyncio.run(
                 EthereumMainnetSccp(
@@ -12697,7 +12697,7 @@ def test_bsc_mainnet_sccp_facade_rejects_adversarial_inbound_evidence() -> None:
     block_without_number = dict(good_block)
     del block_without_number["number"]
 
-    for chain_id in ("0x1", "0x038", "0X38"):
+    for chain_id in ("56", 56, "0x1", "0x038", "0X38"):
         with pytest.raises((TypeError, ValueError), match="chain id 56|quantity"):
             asyncio.run(
                 BscMainnetSccp(

@@ -77,6 +77,7 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pass ",
         "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
         "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "package declarations expose Ethereum mainnet SCCP facade methods",
         "package declarations expose BSC mainnet Parlia finality evidence hooks",
     ),
     "python-sdk": (" passed in ",),
@@ -96,9 +97,9 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
-ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_BSC
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
 ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,
@@ -353,6 +354,9 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.submitInboundToIroha",
             "EthereumMainnetSccp.buildLocalAdmissionSubmission",
             "buildEthereumMainnetSccpLocalAdmissionSubmission",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.OutboundSubmitFunction",
             "EthereumMainnetConsensusProvider",
@@ -390,6 +394,9 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
             "EthereumMainnetSccp.proveInboundToSora",
             "EthereumMainnetSccp.submitInboundToIroha",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetConsensusProvider",
             "EthereumMainnetBeaconFinalityEvidence",
@@ -432,6 +439,9 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "EthereumMainnetSccp.submitInboundToIroha",
             "EthereumMainnetSccp.buildLocalAdmissionSubmission",
             "EthereumMainnetSccp.buildLocalAdmission",
+            "EthereumMainnetSccp.buildOutboundProofRequest",
+            "EthereumMainnetSccp.proveOutboundToEthereum",
+            "EthereumMainnetSccp.buildEthereumCalldata",
             "EthereumMainnetSccp.submitOutboundToEthereum",
             "EthereumMainnetSccp.ConsensusProvider",
             "EthereumMainnetSccp.BeaconFinalityEvidence",

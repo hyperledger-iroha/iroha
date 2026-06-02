@@ -96,7 +96,7 @@ public final class BscMainnetSccp {
     final ExecutionProvider selectedProvider =
         Objects.requireNonNull(provider, "executionProvider");
     final Object chainId = selectedProvider.request("eth_chainId", Collections.emptyList());
-    requireMainnetChainId(normalizeMainnetChainId(chainId));
+    requireMainnetChainId(normalizeRpcChainId(chainId));
     return chainId;
   }
 
@@ -396,52 +396,13 @@ public final class BscMainnetSccp {
         input.destinationBinding());
   }
 
-  private static long normalizeMainnetChainId(final Object value) {
-    if (value instanceof BigInteger) {
-      final BigInteger parsed = (BigInteger) value;
-      if (parsed.signum() < 0 || parsed.bitLength() > 63) {
-        throw new IllegalArgumentException("eth_chainId must fit positive i64");
-      }
-      return parsed.longValue();
+  private static long normalizeRpcChainId(final Object value) {
+    final String quantity = normalizeRpcQuantity(value, "eth_chainId");
+    final BigInteger parsed = new BigInteger(quantity.substring(2), 16);
+    if (parsed.bitLength() > 63) {
+      throw new IllegalArgumentException("eth_chainId must fit positive i64");
     }
-    if (value instanceof Byte
-        || value instanceof Short
-        || value instanceof Integer
-        || value instanceof Long) {
-      final long parsed = ((Number) value).longValue();
-      if (parsed < 0) {
-        throw new IllegalArgumentException("eth_chainId must be non-negative");
-      }
-      return parsed;
-    }
-    if (value instanceof Number) {
-      throw new IllegalArgumentException("eth_chainId must be an integral JSON-RPC quantity");
-    }
-    if (value instanceof String) {
-      final String text = (String) value;
-      if (!text.trim().equals(text)) {
-        throw new IllegalArgumentException("eth_chainId must be canonical");
-      }
-      final BigInteger parsed;
-      if (text.startsWith("0x")) {
-        final String hex = text.substring(2);
-        if (!hex.matches("0|[1-9a-f][0-9a-f]*")) {
-          throw new IllegalArgumentException(
-              "eth_chainId must be a canonical JSON-RPC quantity");
-        }
-        parsed = new BigInteger(hex, 16);
-      } else {
-        if (!text.matches("0|[1-9][0-9]*")) {
-          throw new IllegalArgumentException("eth_chainId must be a canonical decimal integer");
-        }
-        parsed = new BigInteger(text, 10);
-      }
-      if (parsed.bitLength() > 63) {
-        throw new IllegalArgumentException("eth_chainId must fit positive i64");
-      }
-      return parsed.longValue();
-    }
-    throw new IllegalArgumentException("eth_chainId must be a JSON-RPC quantity or integer");
+    return parsed.longValue();
   }
 
   @SuppressWarnings("unchecked")

@@ -4384,10 +4384,10 @@ export interface EthereumMainnetInboundEvidence
 export type EthereumMainnetInboundProveFn = (
   evidence: EthereumMainnetInboundEvidence,
   options?: Record<string, unknown>,
-) => unknown | Promise<unknown>;
+) => BinaryLike | Promise<BinaryLike>;
 
 export type EthereumMainnetSubmitInboundFn = (
-  proofOrPayload: unknown,
+  proofBytes: Uint8Array,
   options?: Record<string, unknown>,
 ) => unknown | Promise<unknown>;
 
@@ -4461,9 +4461,9 @@ export class EthereumMainnetSccp {
       proveInboundToSora?: EthereumMainnetInboundProveFn;
       prove_inbound?: EthereumMainnetInboundProveFn;
     } & Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<Uint8Array>;
   submitInboundToIroha(
-    input: unknown,
+    input: BinaryLike,
     options?: {
       submitInboundToIroha?: EthereumMainnetSubmitInboundFn;
       submit_inbound_to_iroha?: EthereumMainnetSubmitInboundFn;

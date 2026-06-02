@@ -15,9 +15,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
-ACTIVE_LAUNCH_DOMAIN = 2
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
+ACTIVE_LAUNCH_DOMAIN = 1
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
 ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
@@ -78,6 +78,7 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pass ",
         "browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned",
         "browser BSC mainnet SCCP artifacts stay JS-only and local-prover owned",
+        "package declarations expose Ethereum mainnet SCCP facade methods",
         "package declarations expose BSC mainnet Parlia finality evidence hooks",
     ),
     "python-sdk": (" passed in ",),
@@ -172,6 +173,9 @@ EVM_SWIFT_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.submitInboundToIroha",
     "EthereumMainnetSccp.buildLocalAdmissionSubmission",
     "buildEthereumMainnetSccpLocalAdmissionSubmission",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetSccp.OutboundSubmitFunction",
     "EthereumMainnetConsensusProvider",
@@ -209,6 +213,9 @@ EVM_KOTLIN_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.collectInboundEvidenceFromReceipt",
     "EthereumMainnetSccp.proveInboundToSora",
     "EthereumMainnetSccp.submitInboundToIroha",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetConsensusProvider",
     "EthereumMainnetBeaconFinalityEvidence",
@@ -251,6 +258,9 @@ EVM_JAVA_ANDROID_USER_PROVER_HELPERS = (
     "EthereumMainnetSccp.submitInboundToIroha",
     "EthereumMainnetSccp.buildLocalAdmissionSubmission",
     "EthereumMainnetSccp.buildLocalAdmission",
+    "EthereumMainnetSccp.buildOutboundProofRequest",
+    "EthereumMainnetSccp.proveOutboundToEthereum",
+    "EthereumMainnetSccp.buildEthereumCalldata",
     "EthereumMainnetSccp.submitOutboundToEthereum",
     "EthereumMainnetSccp.ConsensusProvider",
     "EthereumMainnetSccp.BeaconFinalityEvidence",

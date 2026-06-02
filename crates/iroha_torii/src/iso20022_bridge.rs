@@ -940,10 +940,14 @@ fn normalise_profile_sha256_pins(
     let mut seen = HashSet::new();
     let mut normalized = Vec::new();
     for pin in pins {
-        let candidate = pin.trim().to_ascii_lowercase();
-        if candidate.len() != 64 || !candidate.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        let candidate = pin.as_str();
+        if candidate.len() != 64
+            || !candidate
+                .chars()
+                .all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+        {
             eyre::bail!(
-                "iso_bridge profile `{profile_id}` {field} entries must be 64-character SHA-256 hex strings"
+                "iso_bridge profile `{profile_id}` {field} entries must be canonical lowercase 64-character SHA-256 hex strings"
             );
         }
         if candidate.chars().all(|ch| ch == '0') {
@@ -951,8 +955,8 @@ fn normalise_profile_sha256_pins(
                 "iso_bridge profile `{profile_id}` {field} must not contain the all-zero placeholder"
             );
         }
-        if seen.insert(candidate.clone()) {
-            normalized.push(candidate);
+        if seen.insert(candidate.to_owned()) {
+            normalized.push(candidate.to_owned());
         }
     }
     Ok(normalized)
@@ -3050,6 +3054,7 @@ const XMLDSIG_P256_NAMED_CURVE: &str = "urn:oid:1.2.840.10045.3.1.7";
 const P256_XMLDSIG_SIGNATURE_LEN: usize = 64;
 const P256_UNCOMPRESSED_SEC1_PUBLIC_KEY_LEN: usize = 65;
 const X509_EKU_DOCUMENT_SIGNING_OID: &str = "1.3.6.1.5.5.7.3.36";
+const X509_ANY_POLICY_OID: &str = "2.5.29.32.0";
 const XMLDSIG_MAX_X509_CERTIFICATES: usize = 8;
 const XML_SIGNATURE_MAX_X509_CERTIFICATES: usize = XMLDSIG_MAX_X509_CERTIFICATES;
 const XMLDSIG_MAX_X509_CERTIFICATE_BYTES: usize = 16 * 1024;
@@ -4459,15 +4464,32 @@ fn xml_signature_key_material_with_policy(
         certificate_sha256.push(sha256_hex(certificates_der));
     }
     if let Some(profile) = profile {
+        if let (Some(terminal_certificate), Some(terminal_certificate_sha256)) =
+            (parsed_certificates.last(), certificate_sha256.last())
+        {
+            let terminal_is_trust_anchor = profile
+                .x509_trust_anchor_sha256_pins
+                .iter()
+                .chain(profile.trusted_certificate_sha256.iter())
+                .any(|pin| pin == terminal_certificate_sha256);
+            if terminal_is_trust_anchor && !x509_certificate_is_ca(terminal_certificate)? {
+                return Err(MsgError::ValidationFailed);
+            }
+        }
         if !x509_certificate_satisfies_policy_oids(
             &parsed_certificates[0],
             &profile.x509_required_certificate_policy_oids,
         )? {
             return Err(MsgError::ValidationFailed);
         }
+        validate_x509_required_certificate_policy_path(
+            &parsed_certificates,
+            &profile.x509_required_certificate_policy_oids,
+        )?;
         validate_x509_name_constraints(&certificates)?;
         validate_x509_leaf_revocation(
             &certificates,
+            evaluation_time,
             embedded_crl_values,
             profile.x509_require_crl_revocation_check,
             &profile.x509_crl_der_base64,
@@ -4534,6 +4556,7 @@ fn xml_signature_x509_revocation_values_with_namespaces(
 fn validate_x509_certificate_chain(
     certificate_chain: &[Vec<u8>],
     x509_trust_anchor_sha256_pins: &[String],
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
     if certificate_chain.is_empty() || x509_trust_anchor_sha256_pins.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -4545,9 +4568,7 @@ fn validate_x509_certificate_chain(
         }
         let certificate = parse_x509_certificate_der(certificate_der)?;
         validate_x509_certificate_critical_extensions(&certificate)?;
-        if !certificate.validity().is_valid() {
-            return Err(MsgError::ValidationFailed);
-        }
+        ensure_xml_signature_certificate_valid_at(&certificate, evaluation_time)?;
     }
 
     for index in 0..certificate_chain.len() {
@@ -4923,6 +4944,7 @@ fn uri_host(uri: &str) -> Option<&str> {
 
 fn validate_x509_leaf_revocation(
     certificate_chain: &[Vec<u8>],
+    evaluation_time: ASN1Time,
     embedded_crl_values: &[String],
     x509_require_crl_revocation_check: bool,
     x509_crl_der_base64: &[String],
@@ -4946,6 +4968,7 @@ fn validate_x509_leaf_revocation(
         validate_x509_leaf_crl_revocation(
             &leaf,
             &issuer,
+            evaluation_time,
             embedded_crl_values,
             x509_require_crl_revocation_check,
             x509_crl_der_base64,
@@ -4955,6 +4978,7 @@ fn validate_x509_leaf_revocation(
         validate_x509_leaf_ocsp_revocation(
             &leaf,
             &issuer,
+            evaluation_time,
             embedded_ocsp_response_values,
             x509_require_ocsp_revocation_check,
             x509_ocsp_response_der_base64,
@@ -4966,6 +4990,7 @@ fn validate_x509_leaf_revocation(
 fn validate_x509_leaf_crl_revocation(
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
     embedded_crl_values: &[String],
     x509_require_crl_revocation_check: bool,
     x509_crl_der_base64: &[String],
@@ -4984,7 +5009,7 @@ fn validate_x509_leaf_crl_revocation(
     let mut matching_crl_seen = false;
     for crl_der in &crl_der_values {
         let crl = parse_x509_crl_der(crl_der)?;
-        validate_x509_crl_freshness(&crl)?;
+        validate_x509_crl_freshness(&crl, evaluation_time)?;
         if crl.issuer() != issuer.subject() {
             continue;
         }
@@ -5006,6 +5031,7 @@ fn validate_x509_leaf_crl_revocation(
 fn validate_x509_leaf_ocsp_revocation(
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
     embedded_ocsp_response_values: &[String],
     x509_require_ocsp_revocation_check: bool,
     x509_ocsp_response_der_base64: &[String],
@@ -5021,7 +5047,7 @@ fn validate_x509_leaf_ocsp_revocation(
         decode_x509_ocsp_responses(embedded_ocsp_response_values, x509_ocsp_response_der_base64)?;
     let mut matching_good_response_seen = false;
     for ocsp_response_der in &ocsp_response_der_values {
-        match validate_ocsp_response_for_leaf(ocsp_response_der, leaf, issuer)? {
+        match validate_ocsp_response_for_leaf(ocsp_response_der, leaf, issuer, evaluation_time)? {
             OcspLeafStatus::Good => matching_good_response_seen = true,
             OcspLeafStatus::Revoked | OcspLeafStatus::Unknown => {
                 return Err(MsgError::ValidationFailed);
@@ -5131,15 +5157,16 @@ fn validate_ocsp_response_for_leaf(
     ocsp_response_der: &[u8],
     leaf: &X509Certificate<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<OcspLeafStatus, MsgError> {
     let response = parse_ocsp_response_der(ocsp_response_der)?;
-    validate_ocsp_response_signature(&response, issuer)?;
+    validate_ocsp_response_signature(&response, issuer, evaluation_time)?;
     let mut matched_status = None;
     for single_response in &response.responses {
         if !ocsp_cert_id_matches_leaf(single_response, leaf, issuer) {
             continue;
         }
-        validate_ocsp_response_freshness(response.produced_at, single_response)?;
+        validate_ocsp_response_freshness(response.produced_at, single_response, evaluation_time)?;
         if matched_status.replace(single_response.status).is_some() {
             return Err(MsgError::ValidationFailed);
         }
@@ -5333,6 +5360,7 @@ fn find_xml_element_outside_span(container: &str, allowed: XmlElementSpan, local
 fn validate_ocsp_response_signature(
     response: &ParsedOcspResponse<'_>,
     issuer: &X509Certificate<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
     if response.signature_algorithm_oid != OID_ECDSA_WITH_SHA256_DER {
         return Err(MsgError::ValidationFailed);
@@ -5343,7 +5371,7 @@ fn validate_ocsp_response_signature(
     for certificate_der in &response.responder_certificates {
         let responder = parse_x509_certificate_der(certificate_der)?;
         validate_x509_certificate_critical_extensions(&responder)?;
-        if !responder.validity().is_valid()
+        if !responder.validity().is_valid_at(evaluation_time)
             || responder.issuer() != issuer.subject()
             || !x509_certificate_allows_ocsp_signing(&responder)?
             || !ocsp_responder_id_matches_certificate(&response.responder_id, &responder)?
@@ -5418,9 +5446,12 @@ fn ocsp_cert_id_matches_leaf(
 fn validate_ocsp_response_freshness(
     produced_at: ASN1Time,
     response: &ParsedOcspSingleResponse<'_>,
+    evaluation_time: ASN1Time,
 ) -> Result<(), MsgError> {
-    let now = ASN1Time::now();
-    if produced_at > now || response.this_update > now || response.next_update < now {
+    if produced_at > evaluation_time
+        || response.this_update > evaluation_time
+        || response.next_update < evaluation_time
+    {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
@@ -5497,7 +5528,7 @@ fn parse_ocsp_response_data<'a>(
     let responses = der_read_required(&mut content, 0x30)?;
     let responses = parse_ocsp_single_responses(responses.value)?;
     if content.first() == Some(&0xA1) {
-        let _extensions = der_read_required(&mut content, 0xA1)?;
+        return Err(MsgError::ValidationFailed);
     }
     if !content.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -5551,7 +5582,7 @@ fn parse_ocsp_single_response(
         return Err(MsgError::ValidationFailed);
     };
     if content.first() == Some(&0xA1) {
-        let _extensions = der_read_required(&mut content, 0xA1)?;
+        return Err(MsgError::ValidationFailed);
     }
     if !content.is_empty() {
         return Err(MsgError::ValidationFailed);
@@ -5617,7 +5648,7 @@ fn parse_ocsp_responder_certificates(certs_der: &[u8]) -> Result<Vec<&[u8]>, Msg
     Ok(certificates)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct DerElement<'a> {
     tag: u8,
     value: &'a [u8],
@@ -5655,6 +5686,9 @@ fn der_read_element<'a>(input: &mut &'a [u8]) -> Result<DerElement<'a>, MsgError
         if length_len == 0 || length_len > 4 || start.len() < 2 + length_len {
             return Err(MsgError::ValidationFailed);
         }
+        if length_len > 1 && start[2] == 0 {
+            return Err(MsgError::ValidationFailed);
+        }
         let mut length = 0usize;
         for byte in &start[2..2 + length_len] {
             length = length
@@ -5689,6 +5723,9 @@ fn der_read_required_integer(input: &mut &[u8], tag: u8) -> Result<u64, MsgError
 
 fn der_integer_value(value: &[u8]) -> Result<u64, MsgError> {
     if value.is_empty() || value.len() > 8 || value[0] & 0x80 != 0 {
+        return Err(MsgError::ValidationFailed);
+    }
+    if value.len() > 1 && value[0] == 0 && value[1] & 0x80 == 0 {
         return Err(MsgError::ValidationFailed);
     }
     let mut result = 0u64;
@@ -5760,15 +5797,17 @@ fn x509_leaf_issuer_certificate<'a>(
     Err(MsgError::ValidationFailed)
 }
 
-fn validate_x509_crl_freshness(crl: &CertificateRevocationList<'_>) -> Result<(), MsgError> {
-    let now = ASN1Time::now();
-    if crl.last_update() > now {
+fn validate_x509_crl_freshness(
+    crl: &CertificateRevocationList<'_>,
+    evaluation_time: ASN1Time,
+) -> Result<(), MsgError> {
+    if crl.last_update() > evaluation_time {
         return Err(MsgError::ValidationFailed);
     }
     let Some(next_update) = crl.next_update() else {
         return Err(MsgError::ValidationFailed);
     };
-    if next_update < now {
+    if next_update < evaluation_time {
         return Err(MsgError::ValidationFailed);
     }
     Ok(())
@@ -5873,27 +5912,64 @@ fn x509_certificate_satisfies_policy_oids(
     if required_policy_oids.is_empty() {
         return Ok(true);
     }
+    let Some(present) = x509_certificate_policy_oids(certificate)? else {
+        return Ok(false);
+    };
+    Ok(required_policy_oids
+        .iter()
+        .all(|required| present.contains(required)))
+}
+
+fn validate_x509_required_certificate_policy_path(
+    certificate_chain: &[X509Certificate<'_>],
+    required_policy_oids: &[String],
+) -> Result<(), MsgError> {
+    if required_policy_oids.is_empty() || certificate_chain.len() <= 2 {
+        return Ok(());
+    }
+    for intermediate in &certificate_chain[1..certificate_chain.len() - 1] {
+        let Some(present) = x509_certificate_policy_oids(intermediate)? else {
+            return Err(MsgError::ValidationFailed);
+        };
+        if present.contains(X509_ANY_POLICY_OID) {
+            continue;
+        }
+        if !required_policy_oids
+            .iter()
+            .all(|required| present.contains(required))
+        {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn x509_certificate_policy_oids(
+    certificate: &X509Certificate<'_>,
+) -> Result<Option<HashSet<String>>, MsgError> {
     let mut policy_extension_count = 0usize;
     let mut present = HashSet::new();
     for extension in certificate.extensions() {
         if let ParsedExtension::CertificatePolicies(policies) = extension.parsed_extension() {
             policy_extension_count += 1;
             for policy in policies {
-                present.insert(policy.policy_id.to_string());
+                if !present.insert(policy.policy_id.to_string()) {
+                    return Err(MsgError::ValidationFailed);
+                }
             }
         }
     }
-    if policy_extension_count != 1 {
-        return Ok(false);
+    match policy_extension_count {
+        0 => Ok(None),
+        1 => Ok(Some(present)),
+        _ => Err(MsgError::ValidationFailed),
     }
-    Ok(required_policy_oids
-        .iter()
-        .all(|required| present.contains(required)))
 }
 
 fn validate_x509_certificate_critical_extensions(
     certificate: &X509Certificate<'_>,
 ) -> Result<(), MsgError> {
+    ensure_no_unsupported_x509_policy_processing_extensions(certificate)?;
     for extension in certificate.extensions() {
         if !extension.critical {
             continue;
@@ -5902,6 +5978,20 @@ fn validate_x509_certificate_critical_extensions(
             ParsedExtension::UnsupportedExtension { .. }
             | ParsedExtension::ParseError { .. }
             | ParsedExtension::Unparsed => return Err(MsgError::ValidationFailed),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_unsupported_x509_policy_processing_extensions(
+    certificate: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    for extension in certificate.extensions() {
+        match extension.parsed_extension() {
+            ParsedExtension::PolicyMappings(_)
+            | ParsedExtension::PolicyConstraints(_)
+            | ParsedExtension::InhibitAnyPolicy(_) => return Err(MsgError::ValidationFailed),
             _ => {}
         }
     }
@@ -6300,6 +6390,7 @@ fn ensure_xml_signature_issuer_path_len(
 fn ensure_xml_signature_supported_critical_extensions(
     certificate: &X509Certificate<'_>,
 ) -> Result<(), MsgError> {
+    ensure_no_unsupported_x509_policy_processing_extensions(certificate)?;
     for extension in certificate.extensions() {
         if !extension.critical {
             continue;
@@ -6354,6 +6445,7 @@ fn canonicalize_supported_xml_with_mode(
         || xml.trim() != xml
         || xml.contains("<?")
         || xml.contains("<![CDATA[")
+        || xml.contains("]]>")
         || xml.contains('\r')
     {
         return Err(MsgError::ValidationFailed);
@@ -6964,10 +7056,7 @@ fn decode_supported_xml_character_reference(reference: &str) -> Result<char, Msg
         "apos" => return Ok('\''),
         _ => {}
     }
-    let codepoint = if let Some(hex) = reference
-        .strip_prefix("#x")
-        .or_else(|| reference.strip_prefix("#X"))
-    {
+    let codepoint = if let Some(hex) = reference.strip_prefix("#x") {
         if hex.is_empty() || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return Err(MsgError::ValidationFailed);
         }
@@ -7710,9 +7799,9 @@ mod tests {
         pkcs8::DecodePrivateKey as _,
     };
     use rcgen::{
-        BasicConstraints, CertificateParams, CustomExtension, DnType, IsCa, Issuer,
-        KeyPair as RcgenKeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384,
-        PublicKeyData, SignatureAlgorithm, SigningKey as _, date_time_ymd,
+        BasicConstraints, CertificateParams, CustomExtension, DnType, ExtendedKeyUsagePurpose,
+        IsCa, Issuer, KeyPair as RcgenKeyPair, KeyUsagePurpose, PKCS_ECDSA_P256_SHA256,
+        PKCS_ECDSA_P384_SHA384, PublicKeyData, SignatureAlgorithm, SigningKey as _, date_time_ymd,
     };
     use tempfile::{NamedTempFile, TempDir};
 
@@ -7762,6 +7851,9 @@ mod tests {
     const TEST_X509_CA_LEAF_CERTIFICATE_DER_B64: &str = "MIIBuTCCAV6gAwIBAgIUYGDPiGTotSHSfWM8XYe/GEbgxMAwCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIENBIExlYWYgVGVzdCBSb290MCAXDTI2MDYwMTE1Mzk0OFoYDzIxMjYwNTA4MTUzOTQ4WjAoMSYwJAYDVQQDDB1Jcm9oYSBJU08gQ0EgTGVhZiBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABLEm+DVadYD1LlM2ajEFvT/AjUnpLMIDc0/tDON6N5yq8gPormUtKDGOsb7CMFHlVejOHtucto9Msj9S/aoREcCjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgGGMB0GA1UdDgQWBBTcnncTx0zw/Hfrbw/23gK54Jcx+DAfBgNVHSMEGDAWgBSU0NnWDyVoLCSbSLjWVa39Qo7RzjAKBggqhkjOPQQDAgNJADBGAiEAwgSjxDFs4mVOJytH5JxTIaTBWMp1MlMXpRunfQ3Gj8MCIQD8pkrPjeAjm8Rj+A234oR5BALB2rJnHNRjChyXXxYoJA==";
     const TEST_X509_CA_LEAF_ROOT_CERTIFICATE_DER_B64: &str = "MIIBtTCCAVygAwIBAgIUWUVYri4LhKX478p+THSVJUaPOo0wCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIENBIExlYWYgVGVzdCBSb290MCAXDTI2MDYwMTE1Mzk0OFoYDzIxMjYwNTA4MTUzOTQ4WjAmMSQwIgYDVQQDDBtJcm9oYSBJU08gQ0EgTGVhZiBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARA+2dbKqgiqg/E83r4aUwHObSZ+F3vOpucoKVw8/t0DiK1Ip4ajtLDFBUBB9KRW9AZn3VqX3pigu6N8VXkRRJ+o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUlNDZ1g8laCwkm0i41lWt/UKO0c4wHwYDVR0jBBgwFoAUlNDZ1g8laCwkm0i41lWt/UKO0c4wCgYIKoZIzj0EAwIDRwAwRAIgVnt/5K51wxExk4D7ndU8ZwyehZnQ7a3ZXUjSRHZeOAsCIEtJiNOCtiTilnOPOTLd44TpK/xJJ5en8VThPpTzvbQN";
     const TEST_X509_POLICY_OID: &str = "1.3.6.1.4.1.55555.1.1";
+    const TEST_X509_POLICY_OID_ARCS: &[u64] = &[1, 3, 6, 1, 4, 1, 55555, 1, 1];
+    const TEST_X509_WRONG_POLICY_OID_ARCS: &[u64] = &[1, 3, 6, 1, 4, 1, 55555, 1, 2];
+    const X509_ANY_POLICY_OID_ARCS: &[u64] = &[2, 5, 29, 32, 0];
     const TEST_X509_POLICY_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgQf3eEFqA7jglOKGQ5WsPZaDme/HcKmlcWRlmlqR4bHGhRANCAASVooKXzWhB5zksBPxZWOT58wiH+r0Ibqwf2Ru5Rh7zw4nw8H7/j2vY8zbRJ3E3r/Rh3pOdK3z1Qw/w0bT3gB5A";
     const TEST_X509_POLICY_LEAF_CERTIFICATE_DER_B64: &str = "MIIBxzCCAW2gAwIBAgIUPuFsDaDMpHF3NgeTGnIEhCOq3NEwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwaSXJvaGEgSVNPIFBvbGljeSBUZXN0IFJvb3QwIBcNMjYwNjAxMTIxNzAwWhgPMjEyNjA1MDgxMjE3MDBaMCUxIzAhBgNVBAMMGklyb2hhIElTTyBQb2xpY3kgVGVzdCBMZWFmMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElaKCl81oQec5LAT8WVjk+fMIh/q9CG6sH9kbuUYe88OJ8PB+/49r2PM20SdxN6/0Yd6TnSt89UMP8NG094AeQKN5MHcwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFER1X6dAjJEwRyZR0U9snoEqP1m3MB8GA1UdIwQYMBaAFDdfynzPJ3kOExwR74uNUYowe1IRMBcGA1UdIAQQMA4wDAYKKwYBBAGDsgMBATAKBggqhkjOPQQDAgNIADBFAiA6Q8LV3dY5W+t3TkfF4CG5cSPnp0Ck1Y8syE121dXjbgIhAP0h9a2FZzfQP04iu/e8T8iE/VK1EJ+cUQJaGs09Wa9R";
     const TEST_X509_POLICY_ROOT_CERTIFICATE_DER_B64: &str = "MIIBszCCAVqgAwIBAgIUL5B/imcHZ4KDLP8LZnFRqYSmTqEwCgYIKoZIzj0EAwIwJTEjMCEGA1UEAwwaSXJvaGEgSVNPIFBvbGljeSBUZXN0IFJvb3QwIBcNMjYwNjAxMTIxNzAwWhgPMjEyNjA1MDgxMjE3MDBaMCUxIzAhBgNVBAMMGklyb2hhIElTTyBQb2xpY3kgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEbpV/eWHEwxV+no2+2M6BIGiPho0U+Ky+iUZ/J/4KXdEk0y81+/MC72LiD0rbSxLL+nxRE9VwhzILejQG8KVg8qNmMGQwHwYDVR0jBBgwFoAUN1/KfM8neQ4THBHvi41RijB7UhEwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFDdfynzPJ3kOExwR74uNUYowe1IRMAoGCCqGSM49BAMCA0cAMEQCIFDwLtr3jD6nngIPGkIb5a5VU3vI8CEp1TLTFkZDEi1EAiANb9nOlWWaTbgaVU6efVlbrwNmMVgH3aVRcGszRdg4BA==";
@@ -8760,11 +8852,21 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_crl_x509_certificate_chain(embedded_crl: Option<&str>) -> String {
+        signed_pacs008_xml_with_crl_x509_certificate_chain_at(
+            embedded_crl,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_crl_x509_certificate_chain_at(
+        embedded_crl: Option<&str>,
+        signing_time: &str,
+    ) -> String {
         let signing_key = test_x509_crl_leaf_signing_key();
         let crl_xml = embedded_crl
             .map(|crl| format!("<X509CRL>{crl}</X509CRL>"))
             .unwrap_or_default();
-        signed_pacs008_xml_with_key_info(
+        signed_pacs008_xml_with_key_info_at(
             &signing_key,
             &format!(
                 concat!(
@@ -8778,6 +8880,7 @@ mod tests {
                 root = TEST_X509_CRL_ROOT_CERTIFICATE_DER_B64,
                 crl_xml = crl_xml
             ),
+            signing_time,
         )
     }
 
@@ -8799,11 +8902,21 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_ocsp_x509_certificate_chain(embedded_ocsp: Option<&str>) -> String {
+        signed_pacs008_xml_with_ocsp_x509_certificate_chain_at(
+            embedded_ocsp,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_ocsp_x509_certificate_chain_at(
+        embedded_ocsp: Option<&str>,
+        signing_time: &str,
+    ) -> String {
         let signing_key = test_x509_ocsp_leaf_signing_key();
         let ocsp_xml = embedded_ocsp
             .map(|ocsp| format!("<EncapsulatedOCSPValue>{ocsp}</EncapsulatedOCSPValue>"))
             .unwrap_or_default();
-        signed_pacs008_xml_with_key_info(
+        signed_pacs008_xml_with_key_info_at(
             &signing_key,
             &format!(
                 concat!(
@@ -8817,6 +8930,7 @@ mod tests {
                 root = TEST_X509_OCSP_ROOT_CERTIFICATE_DER_B64,
                 ocsp_xml = ocsp_xml
             ),
+            signing_time,
         )
     }
 
@@ -8838,28 +8952,70 @@ mod tests {
     }
 
     fn signed_pacs008_xml_with_key_info(signing_key: &P256SigningKey, key_info: &str) -> String {
+        signed_pacs008_xml_with_key_info_at(signing_key, key_info, XML_SIGNATURE_TEST_SIGNING_TIME)
+    }
+
+    fn signed_pacs008_xml_with_key_info_at(
+        signing_key: &P256SigningKey,
+        key_info: &str,
+        signing_time: &str,
+    ) -> String {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
             .expect("signature insertion point");
         let canonical_unsigned = canonicalize_supported_xml(&unsigned).expect("canonical payload");
-        let digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
-        let signed_info = signed_info_xml(XML_C14N_1_0, &digest, false);
+        let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
+        let signed_properties_id = "signed-props-001";
+        let signed_properties = xml_signature_x509_certificates(key_info)
+            .ok()
+            .and_then(|certificates| certificates.first().cloned())
+            .map(|leaf_der| {
+                signed_properties_xml_with_signing_certificate_v2_at(
+                    signed_properties_id,
+                    &leaf_der,
+                    signing_time,
+                )
+                .0
+            });
+        let signed_info = if let Some(signed_properties) = signed_properties.as_ref() {
+            let canonical_signed_properties =
+                canonicalize_supported_xml(signed_properties).expect("canonical SignedProperties");
+            let signed_properties_digest =
+                BASE64_STANDARD.encode(Sha256::digest(canonical_signed_properties.as_bytes()));
+            signed_info_xml_with_signed_properties_reference(
+                XML_C14N_1_0,
+                &payload_digest,
+                signed_properties_id,
+                &signed_properties_digest,
+            )
+        } else {
+            signed_info_xml(XML_C14N_1_0, &payload_digest, false)
+        };
         let canonical_signed_info =
             canonicalize_supported_xml(&signed_info).expect("canonical SignedInfo");
         let signature: P256Signature = signing_key.sign(canonical_signed_info.as_bytes());
         let signature = low_s_p256_signature(signature);
         let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let qualifying_properties = if let Some(signed_properties) = signed_properties {
+            format!(
+                r##"<Object><QualifyingProperties Target="#sig-001">{signed_properties}</QualifyingProperties></Object>"##
+            )
+        } else {
+            r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##
+                .to_owned()
+        };
         let signature_xml = format!(
             concat!(
                 r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
                 "{key_info}",
-                r##"<Object><QualifyingProperties Target="#sig-001"></QualifyingProperties></Object>"##,
+                "{qualifying_properties}",
                 "</Signature>"
             ),
             signed_info = signed_info,
             signature_value = signature_value,
-            key_info = key_info
+            key_info = key_info,
+            qualifying_properties = qualifying_properties
         );
         format!(
             "{}{}{}",
@@ -9045,6 +9201,18 @@ mod tests {
         id: &str,
         leaf_der: &[u8],
     ) -> (String, String) {
+        signed_properties_xml_with_signing_certificate_v2_at(
+            id,
+            leaf_der,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_properties_xml_with_signing_certificate_v2_at(
+        id: &str,
+        leaf_der: &[u8],
+        signing_time: &str,
+    ) -> (String, String) {
         let leaf_digest = BASE64_STANDARD.encode(Sha256::digest(leaf_der));
         (
             format!(
@@ -9058,7 +9226,7 @@ mod tests {
                     "</SignedSignatureProperties></SignedProperties>"
                 ),
                 id = id,
-                signing_time = XML_SIGNATURE_TEST_SIGNING_TIME,
+                signing_time = signing_time,
                 sha256 = XMLDSIG_SHA256,
                 leaf_digest = leaf_digest
             ),
@@ -9824,6 +9992,21 @@ mod tests {
     }
 
     #[derive(Clone, Copy)]
+    enum CertificatePolicyPathMode {
+        Required,
+        AnyPolicy,
+        Wrong,
+        Missing,
+    }
+
+    #[derive(Clone, Copy)]
+    enum UnsupportedPolicyProcessingExtension {
+        PolicyMappings,
+        PolicyConstraints,
+        InhibitAnyPolicy,
+    }
+
+    #[derive(Clone, Copy)]
     enum XmlSignatureValueEncoding {
         Der,
         FixedWidth,
@@ -9929,6 +10112,115 @@ mod tests {
             &leaf_key,
             &[leaf_cert.der().as_ref(), issuer_cert.der().as_ref()],
         )
+    }
+
+    fn signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+        intermediate_policy: CertificatePolicyPathMode,
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+            intermediate_policy,
+            None,
+        )
+    }
+
+    fn signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+        extension: UnsupportedPolicyProcessingExtension,
+    ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+            CertificatePolicyPathMode::Required,
+            Some(extension),
+        )
+    }
+
+    fn signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain_options(
+        intermediate_policy: CertificatePolicyPathMode,
+        unsupported_policy_processing_extension: Option<UnsupportedPolicyProcessingExtension>,
+    ) -> CertificateChainSignedPayload {
+        let root_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("root key");
+        let mut root_params =
+            CertificateParams::new(vec!["iso-root.example".to_owned()]).expect("root params");
+        root_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Policy Path Test Root");
+        root_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        root_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        root_params.not_before = date_time_ymd(2020, 1, 1);
+        root_params.not_after = date_time_ymd(2030, 1, 1);
+        let root_cert = root_params
+            .self_signed(&root_key)
+            .expect("root certificate");
+        let root = Issuer::new(root_params, root_key);
+
+        let intermediate_key =
+            RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("intermediate key");
+        let mut intermediate_params =
+            CertificateParams::new(vec!["iso-intermediate.example".to_owned()])
+                .expect("intermediate params");
+        intermediate_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Policy Path Test Intermediate",
+        );
+        intermediate_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        intermediate_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        intermediate_params.not_before = date_time_ymd(2020, 1, 1);
+        intermediate_params.not_after = date_time_ymd(2030, 1, 1);
+        apply_certificate_policy_extension(&mut intermediate_params, intermediate_policy);
+        if let Some(extension) = unsupported_policy_processing_extension {
+            intermediate_params
+                .custom_extensions
+                .push(unsupported_policy_processing_x509_extension(extension));
+        }
+        let intermediate_cert = intermediate_params
+            .signed_by(&intermediate_key, &root)
+            .expect("intermediate certificate");
+        let intermediate = Issuer::new(intermediate_params, intermediate_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["iso-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Policy Path Test Leaf");
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        apply_certificate_policy_extension(&mut leaf_params, CertificatePolicyPathMode::Required);
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &intermediate)
+            .expect("leaf certificate");
+
+        signed_pacs008_xml_with_certificate_chain_material(
+            &leaf_key,
+            &[
+                leaf_cert.der().as_ref(),
+                intermediate_cert.der().as_ref(),
+                root_cert.der().as_ref(),
+            ],
+        )
+    }
+
+    fn apply_certificate_policy_extension(
+        params: &mut CertificateParams,
+        policy: CertificatePolicyPathMode,
+    ) {
+        let policy_arcs = match policy {
+            CertificatePolicyPathMode::Required => Some(TEST_X509_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::AnyPolicy => Some(X509_ANY_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::Wrong => Some(TEST_X509_WRONG_POLICY_OID_ARCS),
+            CertificatePolicyPathMode::Missing => None,
+        };
+        if let Some(policy_arcs) = policy_arcs {
+            params
+                .custom_extensions
+                .push(certificate_policies_x509_extension(&[policy_arcs]));
+        }
     }
 
     fn signed_pacs008_xml_with_compressed_leaf_certificate_spki() -> CertificateChainSignedPayload {
@@ -10101,6 +10393,20 @@ mod tests {
         leaf_key: &RcgenKeyPair,
         certificates_der: &[&[u8]],
     ) -> CertificateChainSignedPayload {
+        signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            leaf_key,
+            certificates_der,
+            "",
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        )
+    }
+
+    fn signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+        leaf_key: &RcgenKeyPair,
+        certificates_der: &[&[u8]],
+        extra_x509_data_xml: &str,
+        signing_time: &str,
+    ) -> CertificateChainSignedPayload {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
@@ -10109,9 +10415,10 @@ mod tests {
         let payload_digest = BASE64_STANDARD.encode(Sha256::digest(canonical_unsigned.as_bytes()));
 
         let signed_properties_id = "signed-props-001";
-        let (signed_properties, _) = signed_properties_xml_with_signing_certificate_v2(
+        let (signed_properties, _) = signed_properties_xml_with_signing_certificate_v2_at(
             signed_properties_id,
             certificates_der[0],
+            signing_time,
         );
         let canonical_signed_properties =
             canonicalize_supported_xml(&signed_properties).expect("canonical SignedProperties");
@@ -10144,6 +10451,7 @@ mod tests {
                 r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
                 "<KeyInfo><X509Data>",
                 "{certificates_xml}",
+                "{extra_x509_data_xml}",
                 "</X509Data></KeyInfo>",
                 r##"<Object><QualifyingProperties Target="#sig-001">"##,
                 "{signed_properties}",
@@ -10153,6 +10461,7 @@ mod tests {
             signed_info = signed_info,
             signature_value = signature_value,
             certificates_xml = certificates_xml,
+            extra_x509_data_xml = extra_x509_data_xml,
             signed_properties = signed_properties
         );
         CertificateChainSignedPayload {
@@ -10164,6 +10473,239 @@ mod tests {
             ),
             leaf_sha256: sha256_hex(certificates_der[0]),
             issuer_sha256: sha256_hex(certificates_der[certificates_der.len() - 1]),
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum TestOcspResponseStatus {
+        Good,
+        Revoked,
+    }
+
+    struct GeneratedOcspSignedPayload {
+        payload: String,
+        trust_anchor_pin: String,
+        response_der_base64: String,
+    }
+
+    fn signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+        response_status: TestOcspResponseStatus,
+        embed_ocsp_response: bool,
+        signing_time: &str,
+    ) -> GeneratedOcspSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["ocsp-issuer.example".to_owned()]).expect("issuer params");
+        issuer_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Generated OCSP Issuer");
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["ocsp-leaf.example".to_owned()]).expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "ISO Bridge Generated OCSP Leaf");
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        let response_der = test_ocsp_response_der(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            issuer.key(),
+            response_status,
+            None,
+        );
+        let response_der_base64 = BASE64_STANDARD.encode(&response_der);
+        let extra_x509_data_xml = embed_ocsp_response
+            .then(|| {
+                format!("<EncapsulatedOCSPValue>{response_der_base64}</EncapsulatedOCSPValue>")
+            })
+            .unwrap_or_default();
+        let certificates_der = [leaf_cert.der().as_ref(), issuer_cert.der().as_ref()];
+        let signed_payload = signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            &leaf_key,
+            &certificates_der,
+            &extra_x509_data_xml,
+            signing_time,
+        );
+
+        GeneratedOcspSignedPayload {
+            payload: signed_payload.payload,
+            trust_anchor_pin: signed_payload.issuer_sha256,
+            response_der_base64,
+        }
+    }
+
+    fn signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+        include_responder_certificate: bool,
+    ) -> GeneratedOcspSignedPayload {
+        let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
+        let mut issuer_params =
+            CertificateParams::new(vec!["delegated-ocsp-issuer.example".to_owned()])
+                .expect("issuer params");
+        issuer_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Issuer",
+        );
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        issuer_params.not_before = date_time_ymd(2020, 1, 1);
+        issuer_params.not_after = date_time_ymd(2030, 1, 1);
+        issuer_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyCertSign,
+        ];
+        let issuer_cert = issuer_params
+            .self_signed(&issuer_key)
+            .expect("issuer certificate");
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("leaf key");
+        let mut leaf_params =
+            CertificateParams::new(vec!["delegated-ocsp-leaf.example".to_owned()])
+                .expect("leaf params");
+        leaf_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Leaf",
+        );
+        leaf_params.is_ca = IsCa::NoCa;
+        leaf_params.not_before = date_time_ymd(2020, 1, 1);
+        leaf_params.not_after = date_time_ymd(2030, 1, 1);
+        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        let leaf_cert = leaf_params
+            .signed_by(&leaf_key, &issuer)
+            .expect("leaf certificate");
+
+        let responder_key =
+            RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("responder key");
+        let mut responder_params =
+            CertificateParams::new(vec!["delegated-ocsp-responder.example".to_owned()])
+                .expect("responder params");
+        responder_params.distinguished_name.push(
+            DnType::CommonName,
+            "ISO Bridge Generated Delegated OCSP Responder",
+        );
+        responder_params.is_ca = IsCa::NoCa;
+        responder_params.not_before = date_time_ymd(2020, 1, 1);
+        responder_params.not_after = date_time_ymd(2030, 1, 1);
+        responder_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        responder_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::OcspSigning];
+        let responder_cert = responder_params
+            .signed_by(&responder_key, &issuer)
+            .expect("responder certificate");
+
+        let response_der = test_ocsp_response_der(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            responder_cert.der().as_ref(),
+            &responder_key,
+            TestOcspResponseStatus::Good,
+            include_responder_certificate.then(|| responder_cert.der().as_ref()),
+        );
+        let response_der_base64 = BASE64_STANDARD.encode(&response_der);
+        let certificates_der = [leaf_cert.der().as_ref(), issuer_cert.der().as_ref()];
+        let signed_payload = signed_pacs008_xml_with_certificate_chain_material_and_x509_extra(
+            &leaf_key,
+            &certificates_der,
+            "",
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+
+        GeneratedOcspSignedPayload {
+            payload: signed_payload.payload,
+            trust_anchor_pin: signed_payload.issuer_sha256,
+            response_der_base64,
+        }
+    }
+
+    fn test_ocsp_response_der(
+        leaf_der: &[u8],
+        issuer_der: &[u8],
+        responder_der: &[u8],
+        signer_key: &RcgenKeyPair,
+        status: TestOcspResponseStatus,
+        responder_certificate_der: Option<&[u8]>,
+    ) -> Vec<u8> {
+        let leaf = parse_x509_certificate_der(leaf_der).expect("leaf certificate DER");
+        let issuer = parse_x509_certificate_der(issuer_der).expect("issuer certificate DER");
+        let responder =
+            parse_x509_certificate_der(responder_der).expect("responder certificate DER");
+
+        let mut single_response = test_ocsp_cert_id_der(&leaf, &issuer);
+        single_response.extend(test_ocsp_cert_status_der(status));
+        single_response.extend(der_tlv(0x18, b"20260601141606Z".to_vec()));
+        single_response.extend(der_tlv(0xA0, der_tlv(0x18, b"21260508141606Z".to_vec())));
+        let single_response = der_sequence(single_response);
+
+        let mut response_data = Vec::new();
+        response_data.extend(der_tlv(0xA1, responder.subject().as_raw().to_vec()));
+        response_data.extend(der_tlv(0x18, b"20260601141606Z".to_vec()));
+        response_data.extend(der_sequence(single_response));
+        let tbs_response_data = der_sequence(response_data);
+
+        let signature = signer_key
+            .sign(&tbs_response_data)
+            .expect("OCSP response signature");
+        let signature = low_s_p256_signature_der_from_bytes(&signature);
+        let mut signature_bits = vec![0];
+        signature_bits.extend(signature);
+
+        let mut basic_response = tbs_response_data.clone();
+        basic_response.extend(der_sequence(der_tlv(
+            0x06,
+            OID_ECDSA_WITH_SHA256_DER.to_vec(),
+        )));
+        basic_response.extend(der_tlv(0x03, signature_bits));
+        if let Some(certificate_der) = responder_certificate_der {
+            basic_response.extend(der_tlv(0xA0, der_sequence(certificate_der.to_vec())));
+        }
+        let basic_response = der_sequence(basic_response);
+
+        let mut response_bytes = Vec::new();
+        response_bytes.extend(der_tlv(0x06, OID_OCSP_BASIC_RESPONSE_DER.to_vec()));
+        response_bytes.extend(der_tlv(0x04, basic_response));
+        let response_bytes = der_sequence(response_bytes);
+
+        let mut ocsp_response = Vec::new();
+        ocsp_response.extend(der_tlv(0x0A, vec![0]));
+        ocsp_response.extend(der_tlv(0xA0, response_bytes));
+        der_sequence(ocsp_response)
+    }
+
+    fn test_ocsp_cert_id_der(leaf: &X509Certificate<'_>, issuer: &X509Certificate<'_>) -> Vec<u8> {
+        let issuer_name_hash = Sha256::digest(issuer.subject().as_raw());
+        let issuer_key_hash = Sha256::digest(issuer.public_key().subject_public_key.data.as_ref());
+        let mut cert_id = Vec::new();
+        cert_id.extend(der_sequence(der_tlv(0x06, OID_SHA256_DER.to_vec())));
+        cert_id.extend(der_tlv(0x04, issuer_name_hash.to_vec()));
+        cert_id.extend(der_tlv(0x04, issuer_key_hash.to_vec()));
+        cert_id.extend(der_tlv(0x02, leaf.raw_serial().to_vec()));
+        der_sequence(cert_id)
+    }
+
+    fn test_ocsp_cert_status_der(status: TestOcspResponseStatus) -> Vec<u8> {
+        match status {
+            TestOcspResponseStatus::Good => der_tlv(0x80, Vec::new()),
+            TestOcspResponseStatus::Revoked => {
+                der_tlv(0xA1, der_tlv(0x18, b"20260601000000Z".to_vec()))
+            }
         }
     }
 
@@ -10660,6 +11202,97 @@ mod tests {
         extension
     }
 
+    fn certificate_policies_x509_extension(policy_oids: &[&[u64]]) -> CustomExtension {
+        let mut policies = Vec::new();
+        for policy_oid in policy_oids {
+            policies.extend(der_sequence(der_oid(policy_oid)));
+        }
+        CustomExtension::from_oid_content(&[2, 5, 29, 32], der_sequence(policies))
+    }
+
+    fn unsupported_policy_processing_x509_extension(
+        extension: UnsupportedPolicyProcessingExtension,
+    ) -> CustomExtension {
+        match extension {
+            UnsupportedPolicyProcessingExtension::PolicyMappings => {
+                let mut mapping = Vec::new();
+                mapping.extend(der_oid(TEST_X509_POLICY_OID_ARCS));
+                mapping.extend(der_oid(TEST_X509_WRONG_POLICY_OID_ARCS));
+                CustomExtension::from_oid_content(
+                    &[2, 5, 29, 33],
+                    der_sequence(der_sequence(mapping)),
+                )
+            }
+            UnsupportedPolicyProcessingExtension::PolicyConstraints => {
+                CustomExtension::from_oid_content(
+                    &[2, 5, 29, 36],
+                    vec![0x30, 0x03, 0x80, 0x01, 0x00],
+                )
+            }
+            UnsupportedPolicyProcessingExtension::InhibitAnyPolicy => {
+                CustomExtension::from_oid_content(&[2, 5, 29, 54], vec![0x02, 0x01, 0x00])
+            }
+        }
+    }
+
+    fn der_oid(arcs: &[u64]) -> Vec<u8> {
+        assert!(
+            arcs.len() >= 2,
+            "OID fixtures must include at least two arcs"
+        );
+        assert!(
+            arcs[0] <= 2,
+            "OID first arc must fit DER object identifier rules"
+        );
+        assert!(
+            arcs[0] == 2 || arcs[1] < 40,
+            "OID second arc must fit DER object identifier rules"
+        );
+        let mut encoded = Vec::new();
+        append_der_oid_arc(&mut encoded, arcs[0] * 40 + arcs[1]);
+        for arc in &arcs[2..] {
+            append_der_oid_arc(&mut encoded, *arc);
+        }
+        der_tlv(0x06, encoded)
+    }
+
+    fn append_der_oid_arc(out: &mut Vec<u8>, arc: u64) {
+        let mut bytes = vec![(arc & 0x7f) as u8];
+        let mut remaining = arc >> 7;
+        while remaining > 0 {
+            bytes.push(((remaining & 0x7f) as u8) | 0x80);
+            remaining >>= 7;
+        }
+        out.extend(bytes.into_iter().rev());
+    }
+
+    fn der_sequence(content: Vec<u8>) -> Vec<u8> {
+        der_tlv(0x30, content)
+    }
+
+    fn der_tlv(tag: u8, content: Vec<u8>) -> Vec<u8> {
+        let mut out = vec![tag];
+        out.extend(der_length(content.len()));
+        out.extend(content);
+        out
+    }
+
+    fn der_length(len: usize) -> Vec<u8> {
+        if len < 0x80 {
+            return vec![len as u8];
+        }
+        let mut bytes = Vec::new();
+        let mut remaining = len;
+        while remaining > 0 {
+            bytes.push((remaining & 0xff) as u8);
+            remaining >>= 8;
+        }
+        bytes.reverse();
+        let mut out = vec![0x80 | bytes.len() as u8];
+        out.extend(bytes);
+        out
+    }
+
     fn noncritical_basic_constraints_ca_extension() -> CustomExtension {
         CustomExtension::from_oid_content(&[2, 5, 29, 19], vec![0x30, 0x03, 0x01, 0x01, 0xff])
     }
@@ -10720,6 +11353,109 @@ mod tests {
             .expect(expected);
 
         assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_required_x509_policy_path_payload_accepted(fixture: CertificateChainSignedPayload) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
+        profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect("required X.509 certificate policy path should verify");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_required_x509_policy_path_payload_rejected(
+        fixture: CertificateChainSignedPayload,
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
+        profile.x509_required_certificate_policy_oids = vec![TEST_X509_POLICY_OID.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed =
+            parse_message("pacs.008", fixture.payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, fixture.payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    fn assert_x509_trust_anchor_payload_accepted(
+        payload: String,
+        trust_anchor_pin: String,
+        configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
+        configure_profile(&mut profile);
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect(expected);
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    fn assert_x509_trust_anchor_payload_rejected(
+        payload: String,
+        trust_anchor_pin: String,
+        configure_profile: impl FnOnce(&mut actual::IsoBridgeProfile),
+        expected: &str,
+    ) {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![trust_anchor_pin];
+        configure_profile(&mut profile);
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err(expected);
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     fn assert_require_verified_signed_payload_accepted(payload: String, expected: &str) {
@@ -12433,11 +13169,138 @@ mod tests {
             "<A>&amp</A>",
             "<A>&#0;</A>",
             "<A>&#xD800;</A>",
+            "<A>&#X41;</A>",
             "<A>&#x110000;</A>",
+            "<A>bad]]>tail</A>",
         ] {
             let err = canonicalize_supported_xml(xml)
-                .expect_err("unsupported or invalid XML character references must fail closed");
+                .expect_err("unsupported or invalid XML character data must fail closed");
 
+            assert!(matches!(err, MsgError::ValidationFailed));
+        }
+    }
+
+    #[test]
+    fn der_reader_rejects_noncanonical_lengths_and_integers() {
+        let mut valid_long_form = vec![0x30, 0x81, 0x80];
+        valid_long_form.extend([0_u8; 128]);
+        let element = der_expect_single(&valid_long_form, 0x30)
+            .expect("minimal DER long-form length should parse");
+        assert_eq!(element.value.len(), 128);
+
+        let mut leading_zero_length = vec![0x30, 0x82, 0x00, 0x80];
+        leading_zero_length.extend([0_u8; 128]);
+        let err = der_expect_single(&leading_zero_length, 0x30)
+            .expect_err("long-form DER length with leading zero must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let mut unnecessary_long_form = vec![0x30, 0x81, 0x7f];
+        unnecessary_long_form.extend([0_u8; 127]);
+        let err = der_expect_single(&unnecessary_long_form, 0x30)
+            .expect_err("long-form DER length below 128 must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        assert_eq!(der_integer_value(&[0]).expect("zero is canonical"), 0);
+        assert_eq!(der_integer_value(&[0x7f]).expect("127 is canonical"), 127);
+        assert_eq!(
+            der_integer_value(&[0x00, 0x80]).expect("leading zero is needed for positive 128"),
+            128
+        );
+        let err = der_integer_value(&[0x00, 0x7f])
+            .expect_err("unneeded leading zero in DER integer must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = der_integer_value(&[0x80])
+            .expect_err("negative DER integer encodings must fail closed");
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn ocsp_parser_rejects_unsupported_extensions() {
+        fn test_ocsp_single_response_der(include_extensions: bool) -> Vec<u8> {
+            let algorithm_identifier = der_sequence(der_tlv(0x06, OID_SHA256_DER.to_vec()));
+            let cert_id = der_sequence(
+                [
+                    algorithm_identifier,
+                    der_tlv(0x04, vec![0x11; 32]),
+                    der_tlv(0x04, vec![0x22; 32]),
+                    der_tlv(0x02, vec![0x01]),
+                ]
+                .concat(),
+            );
+            let mut content = [
+                cert_id,
+                der_tlv(0x80, Vec::new()),
+                der_tlv(0x18, b"20260601141606Z".to_vec()),
+                der_tlv(0xA0, der_tlv(0x18, b"21260508141606Z".to_vec())),
+            ]
+            .concat();
+            if include_extensions {
+                content.extend(der_tlv(0xA1, der_sequence(Vec::new())));
+            }
+            der_sequence(content)
+        }
+
+        fn test_ocsp_response_data_der(include_extensions: bool) -> Vec<u8> {
+            let mut content = [
+                der_tlv(0x82, vec![0x33; 20]),
+                der_tlv(0x18, b"20260601141606Z".to_vec()),
+                der_sequence(test_ocsp_single_response_der(false)),
+            ]
+            .concat();
+            if include_extensions {
+                content.extend(der_tlv(0xA1, der_sequence(Vec::new())));
+            }
+            der_sequence(content)
+        }
+
+        let single_response = test_ocsp_single_response_der(false);
+        let single_response = der_expect_single(&single_response, 0x30)
+            .expect("test SingleResponse")
+            .value;
+        parse_ocsp_single_response(single_response)
+            .expect("minimal SingleResponse without extensions should parse");
+
+        let single_response_with_extensions = test_ocsp_single_response_der(true);
+        let single_response_with_extensions =
+            der_expect_single(&single_response_with_extensions, 0x30)
+                .expect("test SingleResponse with extensions")
+                .value;
+        let err = match parse_ocsp_single_response(single_response_with_extensions) {
+            Ok(_) => panic!("unsupported SingleResponse extensions must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        let response_data = test_ocsp_response_data_der(false);
+        let response_data = der_expect_single(&response_data, 0x30)
+            .expect("test ResponseData")
+            .value;
+        parse_ocsp_response_data(response_data)
+            .expect("minimal ResponseData without extensions should parse");
+
+        let response_data_with_extensions = test_ocsp_response_data_der(true);
+        let response_data_with_extensions = der_expect_single(&response_data_with_extensions, 0x30)
+            .expect("test ResponseData with extensions")
+            .value;
+        let err = match parse_ocsp_response_data(response_data_with_extensions) {
+            Ok(_) => panic!("unsupported ResponseData extensions must fail closed"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, MsgError::ValidationFailed));
+
+        for response_der_base64 in [
+            TEST_X509_OCSP_GOOD_RESPONSE_DER_B64,
+            TEST_X509_OCSP_REVOKED_RESPONSE_DER_B64,
+            TEST_X509_OCSP_DELEGATED_GOOD_RESPONSE_DER_B64,
+            TEST_X509_OCSP_DELEGATED_GOOD_NO_CERTS_RESPONSE_DER_B64,
+        ] {
+            let response_der = BASE64_STANDARD
+                .decode(response_der_base64)
+                .expect("legacy OCSP fixture must decode");
+            let err = match parse_ocsp_response_der(&response_der) {
+                Ok(_) => panic!("legacy OCSP fixture with unsupported extensions must fail closed"),
+                Err(err) => err,
+            };
             assert!(matches!(err, MsgError::ValidationFailed));
         }
     }
@@ -13453,6 +14316,77 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_x509_certificate_policy_intermediate_path() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Required,
+        );
+        assert_required_x509_policy_path_payload_accepted(fixture);
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_policy_intermediate_any_policy() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::AnyPolicy,
+        );
+        assert_required_x509_policy_path_payload_accepted(fixture);
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_policy_intermediate_gap() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Missing,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "intermediate CAs without required certificate policies must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_policy_intermediate_drift() {
+        let fixture = signed_pacs008_xml_with_policy_intermediate_x509_certificate_chain(
+            CertificatePolicyPathMode::Wrong,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "intermediate CAs with unrelated certificate policies must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_policy_mappings_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::PolicyMappings,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 policy mappings require full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_policy_constraints_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::PolicyConstraints,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 policy constraints require full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_inhibit_any_policy_extension() {
+        let fixture = signed_pacs008_xml_with_unsupported_policy_processing_x509_certificate_chain(
+            UnsupportedPolicyProcessingExtension::InhibitAnyPolicy,
+        );
+        assert_required_x509_policy_path_payload_rejected(
+            fixture,
+            "X.509 inhibit-any-policy requires full policy-tree processing and must fail closed",
+        );
+    }
+
+    #[test]
     fn require_verified_profile_rejects_missing_x509_crl_when_required() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -13476,6 +14410,76 @@ mod tests {
             );
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_configured_crl() {
+        assert_x509_trust_anchor_payload_accepted(
+            signed_pacs008_xml_with_crl_x509_certificate_chain(None),
+            test_x509_crl_root_certificate_pin(),
+            |profile| {
+                profile.x509_require_crl_revocation_check = true;
+                profile.x509_crl_der_base64 = vec![TEST_X509_CRL_EMPTY_DER_B64.to_owned()];
+            },
+            "configured CRL material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_embedded_crl() {
+        assert_x509_trust_anchor_payload_accepted(
+            signed_pacs008_xml_with_crl_x509_certificate_chain(Some(TEST_X509_CRL_EMPTY_DER_B64)),
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "embedded CRL material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_not_yet_fresh_at_signing_time() {
+        assert_x509_trust_anchor_payload_rejected(
+            signed_pacs008_xml_with_crl_x509_certificate_chain_at(None, "2026-05-01T12:00:00Z"),
+            test_x509_crl_root_certificate_pin(),
+            |profile| {
+                profile.x509_require_crl_revocation_check = true;
+                profile.x509_crl_der_base64 = vec![TEST_X509_CRL_EMPTY_DER_B64.to_owned()];
+            },
+            "CRLs whose lastUpdate is after the signed evaluation time must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_outside_key_info() {
+        let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None).replacen(
+            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(
+                r##"<Object><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL><QualifyingProperties Target="#sig-001">"##
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "CRL material outside signed KeyInfo/X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_crl_in_key_info_outside_x509_data() {
+        let payload = signed_pacs008_xml_with_crl_x509_certificate_chain(None).replacen(
+            "</X509Data></KeyInfo>",
+            &format!("</X509Data><X509CRL>{TEST_X509_CRL_EMPTY_DER_B64}</X509CRL></KeyInfo>"),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            test_x509_crl_root_certificate_pin(),
+            |profile| profile.x509_require_crl_revocation_check = true,
+            "CRL material outside X509Data must fail closed",
+        );
     }
 
     #[test]
@@ -13550,6 +14554,164 @@ mod tests {
             .expect_err("CRLs from unrelated issuers must not satisfy signer revocation checking");
 
         assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_missing_x509_ocsp_when_required() {
+        assert_x509_trust_anchor_payload_rejected(
+            signed_pacs008_xml_with_ocsp_x509_certificate_chain(None),
+            test_x509_ocsp_root_certificate_pin(),
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "profiles requiring OCSP revocation checking must fail without OCSP material",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_configured_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "configured OCSP material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_certificate_with_embedded_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            true,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "embedded OCSP material should satisfy required signer revocation checking",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_not_yet_fresh_at_signing_time() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            "2026-05-01T12:00:00Z",
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "OCSP responses produced after the signed evaluation time must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_outside_key_info() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let payload = fixture.payload.replacen(
+            r##"<Object><QualifyingProperties Target="#sig-001">"##,
+            &format!(
+                r##"<Object><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue><QualifyingProperties Target="#sig-001">"##,
+                fixture.response_der_base64
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "OCSP material outside signed KeyInfo/X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_ocsp_in_key_info_outside_x509_data() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Good,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let payload = fixture.payload.replacen(
+            "</X509Data></KeyInfo>",
+            &format!(
+                "</X509Data><EncapsulatedOCSPValue>{}</EncapsulatedOCSPValue></KeyInfo>",
+                fixture.response_der_base64
+            ),
+            1,
+        );
+
+        assert_x509_trust_anchor_payload_rejected(
+            payload,
+            fixture.trust_anchor_pin,
+            |profile| profile.x509_require_ocsp_revocation_check = true,
+            "OCSP material outside X509Data must fail closed",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_certificate_revoked_by_configured_ocsp() {
+        let fixture = signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+            TestOcspResponseStatus::Revoked,
+            false,
+            XML_SIGNATURE_TEST_SIGNING_TIME,
+        );
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| profile.x509_ocsp_response_der_base64 = vec![response_der_base64],
+            "configured OCSP material must reject revoked signer certificates",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_delegated_x509_ocsp_responder() {
+        let fixture = signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(true);
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_accepted(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "delegated OCSP responders with embedded responder certificates should verify",
+        );
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_delegated_x509_ocsp_without_responder_certificate() {
+        let fixture =
+            signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(false);
+        let response_der_base64 = fixture.response_der_base64.clone();
+        assert_x509_trust_anchor_payload_rejected(
+            fixture.payload,
+            fixture.trust_anchor_pin,
+            move |profile| {
+                profile.x509_require_ocsp_revocation_check = true;
+                profile.x509_ocsp_response_der_base64 = vec![response_der_base64];
+            },
+            "delegated OCSP responses must include a verifiable responder certificate",
+        );
     }
 
     #[test]

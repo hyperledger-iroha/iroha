@@ -188,6 +188,7 @@ arc-swap = "1.7.1"
 criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 
 hex = { workspace = true }
 expect-test = { workspace = true }

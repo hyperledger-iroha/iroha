@@ -873,6 +873,11 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
             None,
         ),
         (
+            fake_opener_for(module, route_canary_block_response_number="0x1235"),
+            "block number does not match receipt blockNumber",
+            None,
+        ),
+        (
             fake_opener_for(
                 module,
                 route_canary_block_receipts_root="0x" + "00" * 32,

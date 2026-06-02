@@ -23,6 +23,59 @@ and completed history lives in [`status.md`](./status.md).
   alias projections, account-asset predicates, asset holders, committed-history
   contract activity, and generic aggregates, plus localhost socket profiles for
   the same workload set.
+- Keep crypto primitives fail-closed at the crypto boundary. The
+  secp256k1 recoverable prehash helper now emits canonical low-S signatures and
+  rejects high-S malleable recoverable inputs before public-key/EVM-address
+  recovery, complementing the SCCP caller-side canonical-signature preflights.
+  Ed25519 uncached batch verification now preflights signature `R` encodings so
+  non-canonical or small-order representations fail before the batch backend.
+  X25519 public-key decoders for the hybrid KEM and standalone key exchange now
+  reject low-order encodings before ECDH, while retaining shared-secret checks
+  as defense in depth. SoraNet NK2/NK3 handshake parsers now apply the same
+  low-order X25519 policy to decoded Noise static and ephemeral public keys,
+  reject malformed Dilithium3/Ed25519 handshake signature field lengths,
+  require 1024-byte zero-padded frames, and reject selected KEM/signature ids
+  that are absent from either peer's advertised capability TLVs; unsupported
+  KEM ids fail at the KEM profile gate before downgrade telemetry is built.
+  SoraNet signed-ticket decode and direct verification now reject ML-DSA-44
+  signature vectors whose length disagrees with the suite metadata before
+  accepting tokens or entering backend verification. SoraNet revocation-store
+  reload now rejects duplicate persisted fingerprints, rejects overflowing
+  expiry timestamps, and bounds loaded active records to the configured
+  capacity. SoraNet guard-directory snapshots now reject duplicate or
+  key-mismatched issuer fingerprints and enforce ML-DSA-65 issuer public-key
+  length/phase requirements at decode time. SoraNet admission-token replay-store
+  reload now rejects duplicate persisted token IDs and overflowing expiry
+  timestamps, and admission-token verification now preflights ML-DSA issuer
+  public-key and detached-signature lengths before backend verification or
+  replay-store mutation. SoraNet SRCv2 bundle verification now also rejects
+  weak Ed25519 verifier keys and preflights ML-DSA-65 issuer public-key and
+  detached-signature lengths before backend verification, and local SRCv2
+  issuance reuses certificate-payload admission plus ML-DSA-65 issuer
+  secret-key length preflight before signing bundles. Phase 2 SRCv2 rollout
+  accepts Ed25519-only relay certificates while Phase 3 remains the
+  dual-signature gate. SoraNet SRCv2 certificate decode now rejects unknown
+  ML-KEM suite ids and key-material length drift for ML-DSA-65 identity keys
+  and advertised ML-KEM relay public keys, rejects malformed/noncanonical/weak
+  Ed25519 identity public keys, rejects ML-DSA-65 detached signature length
+  drift, and its canonical CBOR parser rejects trailing certificate/bundle data
+  plus non-shortest integer/length encodings and duplicate nested
+  bundle/signature/endpoint/KEM-policy fields. Guard-directory relay entries
+  now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
+  snapshot directory hash, and a unique relay ID, with relay certificate
+  signatures verified against embedded issuer keys under the snapshot validation
+  phase; zero-length or inverted snapshot validity windows now fail closed, and
+  relay certificate validity must cover the full snapshot window without being
+  published after the snapshot.
+  SRCv2 role/capability bitmask decode now rejects unsupported bits
+  instead of masking them away, and validity windows fail closed when inverted
+  or published after expiry. KEM rotation policies now reject static
+  fallback/rotation/grace metadata, staged policies without fallbacks, rolling
+  policies without nonzero cadence, and preferred/fallback suite equality.
+  Handshake-suite preference lists must be non-empty and duplicate-free, and
+  endpoint URL lists must be non-empty and duplicate-free with non-empty,
+  whitespace/control-free URL strings. Endpoint tags, when present, must also
+  be non-empty, whitespace/control-free, and duplicate-free per endpoint.
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
   `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
@@ -32,16 +85,24 @@ and completed history lives in [`status.md`](./status.md).
   or rail revocation-feed fixtures; complete canonical XML coverage; and
   broader MDR/XSD validation breadth beyond the checked-in live-profile fixture
   corridor.
-  `require-verified` profiles now require profile-specific public-key,
-  leaf-certificate, or linked certificate-chain DER SHA-256 pins before a
-  P-256/SHA-256 enveloped signature can pass, with deterministic leaf/issuer
+  `require-verified` profiles now require profile-specific public-key pins or
+  linked terminal CA trust-anchor DER SHA-256 pins before a P-256/SHA-256
+  enveloped signature can pass, with deterministic leaf/issuer
   distinguished-name binding, non-CA leaf enforcement, critical leaf
   `keyUsage`/`digitalSignature`, critical issuer CA basicConstraints, critical
   issuer `keyUsage`/`keyCertSign`, issuer path-length constraint enforcement,
+  required certificate-policy continuity through intermediate CAs below the
+  terminal trust anchor, fail-closed rejection of policy mappings, policy
+  constraints, and inhibit-any-policy extensions,
   bounded duplicate-free `X509Data` chains, certificate-chain
   ECDSA-with-SHA256/secp256r1 enforcement with uncompressed P-256 SEC1 SPKI
   bytes, unsupported-critical-extension rejection, and validity-at-signing checks
-  for X.509 chains, explicit certificate revocation pins, low-S
+  for X.509 chains, explicit certificate revocation pins, configured and
+  signature-scoped embedded CRL/OCSP signer revocation checks evaluated against verified XAdES
+  `SigningTime` or BAH `CreDt` rather than local wall clock, canonical
+  lowercase SHA-256 trust/revocation pin admission, shortest-form DER
+  length/minimal positive-integer admission for parsed OCSP responses,
+  fail-closed rejection of unsupported OCSP response/single-response extensions, low-S
   fixed-width P-256 `r || s` or low-S DER ECDSA signature-value decoding, and a
   deterministic supported canonical XML subset that expands empty elements,
   normalizes attribute quotes, and sorts namespace
@@ -94,6 +155,7 @@ and completed history lives in [`status.md`](./status.md).
   XAdES structural elements must resolve to the ETSI XAdES v1.3.2 namespace.
   It still fails closed for inherited namespace context beyond root
   declarations, unbound prefixed attributes, reserved namespace rebindings,
+  CDATA/CDEnd tokens, uppercase `#X` numeric character references,
   DTD/general/custom entity expansion, and all other XML outside the
   implemented subset.
 - Keep UI-side SCCP proof-generation SDK inputs fail-closed for ambiguous
@@ -117,7 +179,10 @@ and completed history lives in [`status.md`](./status.md).
   before native prover or submitter callbacks run; those native Ethereum
   facades also accept app-supplied consensus/finality providers so collected
   mainnet receipts can attach beacon-finality evidence before local source
-  proving, browser/provider chain-id parsing is canonical, EVM live-evidence
+  proving, browser/provider chain-id parsing is canonical, JavaScript,
+  Python, Swift, Kotlin/JVM, Java Android, and .NET execution-provider
+  `eth_chainId` responses must be canonical JSON-RPC quantities rather than
+  decimal strings or decoded numeric values, EVM live-evidence
   block tags fail closed on unstable or noncanonical values before JSON-RPC,
   and browser/native collectors now reject beacon-finality evidence
   whose execution block number, execution block hash, or execution receipts root
@@ -144,17 +209,26 @@ and completed history lives in [`status.md`](./status.md).
   helper symbols in the `eth,bsc` SDK rows. The JavaScript package-dist tests
   now also guard the browser Ethereum and BSC mainnet SCCP artifacts against
   `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, and prover
-  endpoint dependency markers, and release-bundle verification requires both
-  no-WASM guard test names plus the BSC Parlia declaration test name in the JS
-  phase transcript. Release-readiness tests
+  endpoint dependency markers, and package declaration tests require the full
+  Ethereum-mainnet browser facade method list plus typed local proof bytes for
+  inbound proving/submission. Release-bundle verification requires both
+  no-WASM guard test names plus the Ethereum facade declaration and BSC Parlia
+  declaration test names in the JS phase transcript. Release-readiness tests
   also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
   Android, and .NET facade sources for missing files or forbidden
   WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
-  paths native or local-prover owned. Release-readiness and strict
+  paths native or local-prover owned. They now also guard the Ethereum mainnet
+  evidence-collection regions so they keep using app-owned execution/consensus
+  providers and do not grow Torii, proxy, or embedded HTTP-client fallbacks.
+  Swift, Kotlin/JVM, and Java Android Ethereum inbound facades now reject
+  empty/all-zero app-owned prover output and return copied proof bytes before
+  Iroha submission, matching the JS/Python/.NET local-prover path.
+  Release-readiness and strict
   release-bundle verifier helper inventories now require the native typed
   Ethereum receipt-proof evidence helpers for Swift, Kotlin/JVM, Java Android,
-  and .NET, and the active production launch policy now targets the Ethereum
-  mainnet lane rather than waiting on other SCCP lanes. The Python, Swift,
+  and .NET, and now require the full Swift/Kotlin/JVM/Java Android native
+  Ethereum outbound facade methods by name. The active production launch policy
+  targets the Ethereum mainnet lane rather than waiting on other SCCP lanes. The Python, Swift,
   Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
   now also require wrapped proof results carrying the chain-id-1 destination
   binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
@@ -221,7 +295,10 @@ and completed history lives in [`status.md`](./status.md).
   forged. Strict release-bundle verification now also owns regressions for
   positive receipt block numbers, non-zero receipt block hashes, non-zero block
   `receiptsRoot` values, receipt-block hash-role separation, and direct helper
-  parity with the runtime's finality-height hash-role rejection.
+  parity with the runtime's finality-height hash-role rejection. Runtime and
+  builder-side canary checks also pin the EVM proof transcript to target-domain
+  ETH/BSC, proof version `1`, proof source-domain SORA, and a consumed
+  `usedMessageProofs(messageId)` replay guard.
 - Keep TRON route-canary helper and runtime transcript policy aligned: the
   source bridge evidence helper, all-lanes preflight, release-bundle verifier,
   and Rust runtime now all reject finality-height replay across TRON v3
@@ -251,7 +328,13 @@ and completed history lives in [`status.md`](./status.md).
 - Keep core-admission SCCP tests aligned with the first-release Ethereum
   mainnet lane launch policy; non-ETH source proofs may recognize configured
   source-adapter evidence but must stop at lane launch before route-canary,
-  route-allowlist, or destination-rollout drift checks.
+  route-allowlist, or destination-rollout drift checks. Core now also owns a
+  positive configured ETH source-adapter `SubmitBridgeProof` path using a
+  sync-committee-bound Ethereum mainnet fixture, so the Ethereum-first launch
+  gate is covered by both acceptance and rejection tests. The same Core
+  corridor rejects replaying that proof under a different governed ETH sync
+  committee root or source-bridge emitter even when the substituted material
+  has matching deployment, destination, route-allowlist, and canary records.
 - Keep BSC mainnet inbound source-proof support on an explicit local-admission proof path:
   core now has a Parlia receipt/validator fixture proving configured source
   verifier material plus source-adapter deployment binding, including replayed
@@ -282,11 +365,12 @@ and completed history lives in [`status.md`](./status.md).
   entrypoints, plus the exact expected row construction and submission text, so
   weakening the report generator cannot remove cryptographic prover helpers or
   define a shorter portal/mobile table as canonical for published rows.
-- Keep public SCCP user-prover rows gated by the real release phases; BSC
+- Keep public SCCP user-prover rows gated by the real release phases; Ethereum
   mainnet source proofs now use lane-local configured readiness instead of the
-  global all-lanes gate, so BSC can open with complete mainnet source,
+  global all-lanes gate, so ETH can open with complete mainnet source,
   destination, route allowlist, and canary evidence while other advertised
-  lanes remain fail-closed until their own launch policy opens. Strict
+  lanes remain fail-closed until their own launch policy opens. Core, Torii,
+  and bridge-proof regressions now exercise that ETH-only launch gate. Strict
   bundle verification now rejects duplicate, unknown, or missing required
   phases, requires every SDK plus core-admission on each row, and keeps
   EVM/TRON proof backends tied to contract-smoke evidence.
@@ -333,6 +417,10 @@ and completed history lives in [`status.md`](./status.md).
   cross-checks; the current local TLC slice covers the top-level commit-path
   fast model under the fairness-backed `Spec`, including finality and
   committed-phase terminality, committed-view witness stability,
+  commit-view future-view exclusion,
+  view-change quorum evidence for nonzero active views,
+  NewView quorum handoff and complete-only view evidence,
+  pre-commit stale commit-vote reset across view changes,
   prepare-quorum commit gating, commit-certificate evidence stability,
   commit-certificate vote/stake traceability,
   live stake-accounting traceability,
@@ -5050,12 +5138,23 @@ or ABI behavior.
   domain-separated BFV evaluation-key bundle digest, and `RunSoracloudFheJob`
   rejects structurally valid but ungoverned key bundles before output state is
   emitted.
+- Keep BFV evaluation-key metadata bounded and canonical. The crypto validator
+  now caps rotation-key bundles and rejects noncanonical or oversized bootstrap
+  key ids before bundle digests or bootstrap refresh operations admit them.
+  Programmed RAM-LFE public parameters now reject rotation/bootstrap refresh
+  material entirely because first-release identifier programs consume only the
+  relinearization key.
 - Keep signed and proof-attestation identifier receipt compatibility
   fixture-backed instead of local-only. The current shared fixture pins
   canonical payload bytes, Iroha prehash, resolver signature, signed/proof
   attestation bytes, and adversarial receipt/policy mutations across
   the Rust data model, Torii runtime claim-receipt signing path, JavaScript,
   Swift, Kotlin/JVM, and Java Android.
+- Keep proof-carrying RAM-LFE policy metadata canonical and bounded. The crypto
+  public-parameter parser now rejects noncanonical verifier backend/circuit ids,
+  zero hidden-program digests, zero public-input schema hashes,
+  empty/all-zero verifier keys, and oversized verifier keys before proof
+  policies are admitted.
 - Keep ZK-ACE authorization SDK surfaces aligned with executable chain
   support. Python now exposes identity commitment lifecycle instructions,
   authorized-transfer submission, and fail-closed capability metadata so BOI

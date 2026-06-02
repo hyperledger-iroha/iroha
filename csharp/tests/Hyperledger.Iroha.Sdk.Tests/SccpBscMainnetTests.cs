@@ -460,6 +460,12 @@ public sealed class SccpBscMainnetTests
             () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
                 new ExecutionProviderStub("0x038", receipt, block)).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub("56", receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => BscMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub(56, receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
             () => BscMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
                 new BscMainnetInboundEvidence
                 {

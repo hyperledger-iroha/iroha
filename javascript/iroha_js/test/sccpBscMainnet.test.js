@@ -138,7 +138,7 @@ test("BscMainnetSccp validates EIP-1193 execution providers as BSC mainnet", asy
   assert.equal(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
 });
 
-test("BscMainnetSccp rejects Ethereum and padded JSON-RPC chain ids", async () => {
+test("BscMainnetSccp rejects Ethereum and noncanonical JSON-RPC chain ids", async () => {
   await assert.rejects(
     () =>
       new BscMainnetSccp({
@@ -159,7 +159,29 @@ test("BscMainnetSccp rejects Ethereum and padded JSON-RPC chain ids", async () =
           },
         },
       }).validateExecutionProviderMainnet(),
-    /hex, decimal, number, or bigint chain id/u,
+    /canonical JSON-RPC quantity/u,
+  );
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp({
+        executionProvider: {
+          async request() {
+            return "56";
+          },
+        },
+      }).validateExecutionProviderMainnet(),
+    /canonical JSON-RPC quantity/u,
+  );
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp({
+        executionProvider: {
+          async request() {
+            return 56;
+          },
+        },
+      }).validateExecutionProviderMainnet(),
+    /canonical JSON-RPC quantity/u,
   );
 });
 

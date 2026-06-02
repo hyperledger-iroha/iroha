@@ -695,6 +695,7 @@ class EvmSccpProverTest {
             verifierKeyHash = "0x" + "cc".repeat(32),
         )
         assertEquals(SccpSourceProofs.ETH_MAINNET_NETWORK_ID, binding.networkId)
+        assertEquals(SccpEvm.DOMAIN_SORA, binding.sourceDomain)
         assertEquals(SccpEvm.DOMAIN_ETH, binding.targetDomain)
         assertEquals(binding.hash, SccpEthereumMainnet.destinationBindingHash(
             verifierAddress = "0x" + "11".repeat(20),
@@ -760,6 +761,17 @@ class EvmSccpProverTest {
                 ),
             )
         }
+        val wrongSourceRequest = assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildProofRequest(input.copy(sourceDomain = SccpEvm.DOMAIN_BSC))
+        }
+        assertTrue(wrongSourceRequest.message?.contains("SORA -> ETH") == true)
+
+        val wrongSourceBinding = assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.buildProofRequest(
+                input.copy(destinationBinding = binding.copy(sourceDomain = SccpEvm.DOMAIN_BSC)),
+            )
+        }
+        assertTrue(wrongSourceBinding.message?.contains("destinationBinding") == true)
     }
 
     @Test
@@ -944,10 +956,20 @@ class EvmSccpProverTest {
         assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
         assertEquals(1, consensusCalls)
         assertEquals(listOf("eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"), calls)
-        assertContentEquals(
-            byteArrayOf(1, 2, 3),
-            sdk.proveInboundToSora(evidence.copy(receiptProof = receiptProof, receiptProofHash = receiptProofHash)),
-        )
+        val proofReadyEvidence = evidence.copy(receiptProof = receiptProof, receiptProofHash = receiptProofHash)
+        assertContentEquals(byteArrayOf(1, 2, 3), sdk.proveInboundToSora(proofReadyEvidence))
+        val emptyProof = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver { byteArrayOf() },
+            ).proveInboundToSora(proofReadyEvidence)
+        }
+        assertTrue(emptyProof.message?.contains("proofBytes must not be empty") == true)
+        val zeroProof = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                inboundProver = EthereumMainnetInboundProver { byteArrayOf(0, 0) },
+            ).proveInboundToSora(proofReadyEvidence)
+        }
+        assertTrue(zeroProof.message?.contains("proofBytes must not be all zero") == true)
         assertEquals("submitted", sdk.submitInboundToIroha(byteArrayOf(1, 2, 3)))
 
         val sourceEventEvidence = sdk.collectInboundEvidenceFromReceipt(
@@ -1111,6 +1133,16 @@ class EvmSccpProverTest {
         assertFailsWith<IllegalArgumentException> {
             EthereumMainnetSccp(
                 executionProvider = EthereumMainnetExecutionProvider { _, _ -> "0x38" },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "1" },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> 1L },
             ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
         }
         assertFailsWith<IllegalArgumentException> {
@@ -1347,6 +1379,16 @@ class EvmSccpProverTest {
         assertFailsWith<IllegalArgumentException> {
             BscMainnetSccp(
                 executionProvider = BscMainnetExecutionProvider { _, _ -> "0x1" },
+            ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                executionProvider = BscMainnetExecutionProvider { _, _ -> "56" },
+            ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                executionProvider = BscMainnetExecutionProvider { _, _ -> 56L },
             ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
         }
         assertFailsWith<IllegalArgumentException> {

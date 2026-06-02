@@ -6989,6 +6989,13 @@ const normalizeEthereumMainnetChainId = (chainId) => {
   throw new TypeError("eth_chainId must be a hex, decimal, number, or bigint chain id");
 };
 
+const normalizeEvmRpcChainId = (chainId) => {
+  if (typeof chainId === "string" && /^0x(?:0|[1-9a-f][0-9a-f]*)$/u.test(chainId)) {
+    return BigInt(chainId);
+  }
+  throw new TypeError("eth_chainId must be a canonical JSON-RPC quantity");
+};
+
 const requireEthereumMainnetChainId = (chainId) => {
   const normalized = normalizeEthereumMainnetChainId(chainId);
   if (normalized !== BigInt(SCCP_ETH_MAINNET_EVM_CHAIN_ID)) {
@@ -6997,8 +7004,24 @@ const requireEthereumMainnetChainId = (chainId) => {
   return normalized;
 };
 
+const requireEthereumMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
+  if (normalized !== BigInt(SCCP_ETH_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("Ethereum mainnet SCCP requires eth_chainId == 0x1");
+  }
+  return normalized;
+};
+
 const requireBscMainnetChainId = (chainId) => {
   const normalized = normalizeEthereumMainnetChainId(chainId);
+  if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
+  }
+  return normalized;
+};
+
+const requireBscMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
   if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
     throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
   }
@@ -7735,10 +7758,16 @@ const requireEthereumMainnetInboundReceiptProof = (evidence) => {
 
 const requireEthereumMainnetOutboundRequest = (request) => {
   requireProductionEvmProofRequest(request);
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("EthereumMainnetSccp outbound proofs must start from SORA");
+  }
   if (request.targetDomain !== SCCP_DOMAIN_ETH || request.publicInputs?.targetDomain !== SCCP_DOMAIN_ETH) {
     throw new RangeError("EthereumMainnetSccp outbound proofs must target Ethereum mainnet");
   }
   const binding = ethereumMainnetSccpDestinationBinding(request.destinationBinding);
+  if (binding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (request.destinationBindingHash !== binding.bindingHash) {
     throw new TypeError("destinationBindingHash must match Ethereum mainnet destinationBinding");
   }
@@ -7766,6 +7795,9 @@ const requireEthereumMainnetSubmission = (submission, input) => {
       "destination_binding",
     ),
   );
+  if (destinationBinding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
     throw new TypeError(
       "submission destinationBindingHash must match Ethereum mainnet destinationBinding",
@@ -7889,7 +7921,7 @@ export class EthereumMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await ethereumJsonRpcRequest(provider, "eth_chainId", []);
-    requireEthereumMainnetChainId(chainId);
+    requireEthereumMainnetRpcChainId(chainId);
     return chainId;
   }
 
@@ -8186,7 +8218,7 @@ export class BscMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await bscJsonRpcRequest(provider, "eth_chainId", []);
-    requireBscMainnetChainId(chainId);
+    requireBscMainnetRpcChainId(chainId);
     return chainId;
   }
 

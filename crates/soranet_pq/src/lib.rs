@@ -25,7 +25,8 @@ pub use crate::{
     mldsa::{
         MlDsaError, MlDsaKeyPair, MlDsaSignature, MlDsaSuite, generate_mldsa_keypair,
         generate_mldsa_keypair_from_os, generate_mldsa_keypair_from_seed, sign_mldsa,
-        sign_mldsa_from_os, verify_mldsa,
+        sign_mldsa_from_os, validate_mldsa_public_key, validate_mldsa_secret_key,
+        validate_mldsa_signature, verify_mldsa,
     },
     mlkem::{
         MlKemCiphertext, MlKemKeyPair, MlKemMetadata, MlKemParameters, MlKemSharedSecret,

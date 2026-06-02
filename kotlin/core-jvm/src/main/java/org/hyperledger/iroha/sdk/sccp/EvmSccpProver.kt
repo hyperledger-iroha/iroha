@@ -888,11 +888,17 @@ object SccpEthereumMainnet {
 
     @JvmStatic
     fun buildProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest {
+        require(input.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof requests must route SORA -> ETH"
+        }
         require(input.publicInputs.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet proof requests must target ETH"
         }
         val destinationBinding = input.destinationBinding
             ?: throw IllegalArgumentException("Ethereum mainnet proof requests require destinationBinding")
+        require(destinationBinding.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet destinationBinding must start from SORA"
+        }
         require(destinationBinding.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet destinationBinding must target ETH"
         }
@@ -913,8 +919,14 @@ object SccpEthereumMainnet {
 
     @JvmStatic
     fun wrapProofResult(proofBytes: ByteArray, request: EvmSccpProofRequest): EvmSccpProofResult {
+        require(request.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof results must route SORA -> ETH"
+        }
         require(request.targetDomain == DOMAIN_ETH && request.publicInputs.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet proof results must target ETH"
+        }
+        require(request.destinationBinding?.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof results require SORA source destinationBinding"
         }
         require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
             "Ethereum mainnet proof results require chain id 1 destinationBinding"
@@ -2064,7 +2076,7 @@ class EthereumMainnetSccp(
         val selectedProvider = provider
             ?: throw IllegalStateException("Ethereum mainnet execution provider is not linked")
         val chainId = selectedProvider.request("eth_chainId", emptyList())
-        SccpEthereumMainnet.requireMainnetChainId(normalizeMainnetChainId(chainId))
+        SccpEthereumMainnet.requireMainnetChainId(normalizeRpcChainId(chainId))
         return chainId
     }
 
@@ -2206,7 +2218,10 @@ class EthereumMainnetSccp(
         require(evidence.receiptProof != null) {
             "Ethereum mainnet SCCP inbound proof requires receiptProof"
         }
-        return prover.prove(evidence)
+        val proofBytes = prover.prove(evidence)
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        return proofBytes.copyOf()
     }
 
     fun submitInboundToIroha(proofBytes: ByteArray): Any? {
@@ -2255,8 +2270,12 @@ class EthereumMainnetSccp(
             sourceProofBytes = input.sourceProofBytes.copyOf(),
         )
 
-    private fun normalizeMainnetChainId(value: Any?): Long =
-        normalizeUnsignedInteger(value, "eth_chainId")
+    private fun normalizeRpcChainId(value: Any?): Long {
+        val quantity = normalizeRpcQuantity(value, "eth_chainId")
+        val parsed = BigInteger(quantity.substring(2), 16)
+        require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
+        return parsed.toLong()
+    }
 
     private fun normalizeUnsignedInteger(value: Any?, label: String): Long =
         when (value) {
@@ -2580,7 +2599,7 @@ class BscMainnetSccp(
         val selectedProvider = provider
             ?: throw IllegalStateException("BSC mainnet execution provider is not linked")
         val chainId = selectedProvider.request("eth_chainId", emptyList())
-        SccpBsc.requireMainnetChainId(normalizeMainnetChainId(chainId))
+        SccpBsc.requireMainnetChainId(normalizeRpcChainId(chainId))
         return chainId
     }
 
@@ -2753,37 +2772,12 @@ class BscMainnetSccp(
             sourceProofBytes = input.sourceProofBytes.copyOf(),
         )
 
-    private fun normalizeMainnetChainId(value: Any?): Long =
-        when (value) {
-            is Long -> value
-            is Int -> value.toLong()
-            is Short -> value.toLong()
-            is Byte -> value.toLong()
-            is BigInteger -> {
-                require(value.signum() >= 0 && value.bitLength() <= 63) {
-                    "eth_chainId must fit positive i64"
-                }
-                value.toLong()
-            }
-            is String -> {
-                require(value.trim() == value) { "eth_chainId must be canonical" }
-                val parsed = if (value.startsWith("0x")) {
-                    val text = value.substring(2)
-                    require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
-                        "eth_chainId must be a canonical JSON-RPC quantity"
-                    }
-                    BigInteger(text, 16)
-                } else {
-                    require(value.matches(Regex("0|[1-9][0-9]*"))) {
-                        "eth_chainId must be a canonical decimal integer"
-                    }
-                    BigInteger(value, 10)
-                }
-                require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
-                parsed.toLong()
-            }
-            else -> throw IllegalArgumentException("eth_chainId must be a JSON-RPC quantity or integer")
-        }
+    private fun normalizeRpcChainId(value: Any?): Long {
+        val quantity = normalizeRpcQuantity(value, "eth_chainId")
+        val parsed = BigInteger(quantity.substring(2), 16)
+        require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
+        return parsed.toLong()
+    }
 
     private fun requireMap(value: Any?, label: String): Map<String, Any?> {
         @Suppress("UNCHECKED_CAST")
