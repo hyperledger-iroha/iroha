@@ -3590,7 +3590,7 @@ pub mod confidential {
     /// Default verifier backend identifier.
     pub const VERIFIER_BACKEND: &str = "halo2-ipa-pallas";
     /// Maximum confidential proof size (bytes).
-    pub const MAX_PROOF_SIZE_BYTES: u32 = 262_144;
+    pub const MAX_PROOF_SIZE_BYTES: u32 = 1_048_576;
     /// Maximum nullifiers per transaction.
     pub const MAX_NULLIFIERS_PER_TX: u32 = 8;
     /// Maximum commitments per transaction.

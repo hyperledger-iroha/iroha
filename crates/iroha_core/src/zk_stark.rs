@@ -33,6 +33,20 @@ const GOLDILOCKS_GENERATOR: u64 = 7;
 pub const STARK_HASH_SHA256_V1: u8 = 1;
 /// Selector for a Poseidon2 transcript and Merkle commitments.
 pub const STARK_HASH_POSEIDON2_V1: u8 = 2;
+/// Canonical ZK-ACE v0 STARK evaluation domain size (`2^n_log2`).
+pub const ZK_ACE_STARK_FRI_V1_N_LOG2: u8 = 10;
+/// Canonical ZK-ACE v0 FRI blowup factor (`2^blowup_log2`).
+pub const ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2: u8 = 3;
+/// Canonical ZK-ACE v0 verifier query count.
+pub const ZK_ACE_STARK_FRI_V1_QUERIES: u16 = 24;
+/// Canonical max proof size for hardened ZK-ACE v0 STARK/FRI proofs.
+pub const ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES: u32 = 1024 * 1024;
+/// Minimum ZK-ACE STARK domain size accepted by ledger-grade admission.
+pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2: u8 = ZK_ACE_STARK_FRI_V1_N_LOG2;
+/// Minimum ZK-ACE FRI blowup accepted by ledger-grade admission.
+pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2: u8 = ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2;
+/// Minimum ZK-ACE FRI query count accepted by ledger-grade admission.
+pub const ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES: u16 = ZK_ACE_STARK_FRI_V1_QUERIES;
 
 const MAX_DOMAIN_LOG2: u8 = 24;
 const MAX_FRI_LAYERS: usize = 32;
@@ -488,6 +502,63 @@ mod tests {
     }
 
     #[test]
+    fn zk_ace_stark_fri_verifying_key_payload_validation_fails_closed() {
+        let valid = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
+            n_log2: ZK_ACE_STARK_FRI_V1_N_LOG2,
+            blowup_log2: ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
+            fold_arity: 2,
+            queries: ZK_ACE_STARK_FRI_V1_QUERIES,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        validate_zk_ace_stark_fri_verifying_key_payload(&valid)
+            .expect("canonical ZK-ACE STARK/FRI payload is accepted");
+
+        let mutations: [(&str, fn(&mut StarkFriVerifyingKeyV1)); 10] = [
+            ("version", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.version = 2
+            }),
+            ("circuit", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.circuit_id = "other".to_owned()
+            }),
+            ("hash", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.hash_fn = STARK_HASH_POSEIDON2_V1;
+            }),
+            ("fold", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.fold_arity = 4;
+            }),
+            ("merkle", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.merkle_arity = 4;
+            }),
+            ("n_log2_floor", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.n_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+            }),
+            ("blowup_floor", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.blowup_log2 = ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 - 1;
+            }),
+            ("queries_floor", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.queries = ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES - 1;
+            }),
+            ("domain_limit", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.n_log2 = MAX_DOMAIN_LOG2 + 1;
+            }),
+            ("query_limit", |payload: &mut StarkFriVerifyingKeyV1| {
+                payload.queries = MAX_FRI_QUERIES as u16 + 1;
+            }),
+        ];
+        for (label, mutate) in mutations {
+            let mut invalid = valid.clone();
+            mutate(&mut invalid);
+            assert!(
+                validate_zk_ace_stark_fri_verifying_key_payload(&invalid).is_err(),
+                "{label} mutation must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn synthesized_envelope_verifies_sha256() {
         let params = StarkFriParamsV1 {
             version: 1,
@@ -793,6 +864,56 @@ pub struct StarkFriVerifyingKeyV1 {
     pub merkle_arity: u8,
     /// Hash function selector (`1 = SHA-256`, `2 = Poseidon2`).
     pub hash_fn: u8,
+}
+
+/// Validate that a STARK/FRI verifier-key payload is acceptable for ledger-grade ZK-ACE.
+///
+/// This is a control-plane floor, not a full algebraic soundness proof. It prevents
+/// governance or recovery paths from activating the historical PoC-sized ZK-ACE
+/// parameters for fresh ledger admission.
+pub fn validate_zk_ace_stark_fri_verifying_key_payload(
+    payload: &StarkFriVerifyingKeyV1,
+) -> Result<(), String> {
+    if payload.version != 1 {
+        return Err("ZK-ACE STARK/FRI verifier key must use version 1".to_owned());
+    }
+    if payload.circuit_id != iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID {
+        return Err("ZK-ACE STARK/FRI verifier key circuit id mismatch".to_owned());
+    }
+    if payload.hash_fn != STARK_HASH_SHA256_V1 {
+        return Err("ZK-ACE STARK/FRI verifier key must use SHA-256".to_owned());
+    }
+    if payload.fold_arity != 2 {
+        return Err("ZK-ACE STARK/FRI verifier key must use binary FRI folding".to_owned());
+    }
+    if payload.merkle_arity != 2 {
+        return Err("ZK-ACE STARK/FRI verifier key must use binary Merkle paths".to_owned());
+    }
+    if payload.n_log2 < ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 {
+        return Err(format!(
+            "ZK-ACE STARK/FRI n_log2 {} is below production floor {}",
+            payload.n_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2
+        ));
+    }
+    if payload.blowup_log2 < ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2 {
+        return Err(format!(
+            "ZK-ACE STARK/FRI blowup_log2 {} is below production floor {}",
+            payload.blowup_log2, ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+        ));
+    }
+    if payload.queries < ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES {
+        return Err(format!(
+            "ZK-ACE STARK/FRI queries {} is below production floor {}",
+            payload.queries, ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES
+        ));
+    }
+    if payload.n_log2 > MAX_DOMAIN_LOG2
+        || payload.blowup_log2 > MAX_DOMAIN_LOG2
+        || usize::from(payload.queries) > MAX_FRI_QUERIES
+    {
+        return Err("ZK-ACE STARK/FRI verifier key exceeds native verifier limits".to_owned());
+    }
+    Ok(())
 }
 
 /// Commitments for multiple layers and optional composition root.

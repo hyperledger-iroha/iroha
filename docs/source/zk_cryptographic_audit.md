@@ -131,18 +131,24 @@ posts a successful diagnostic `/v1/zk/submit-proof` request, derives the corresp
 ledger proof id, and asserts that `/v1/proofs/{id}` still reports not found because no
 ledger `VerifyProof` path ran.
 
-### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI parameters are PoC-scale
+### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI parameters need an explicit production floor
 
-Severity: Medium for production deployment; informational for PoC use.
+Severity: Medium.
 
-Evidence: `zk_ace_stark_fri_params_v1()` configures `n_log2 = 4`,
-`blowup_log2 = 1`, `queries = 2`, binary folding, binary Merkle paths, and SHA-256.
-The verifier binds these parameters exactly, but the repo does not contain a
-quantitative reduction or production soundness proof for this parameter set.
+Status: Hardened. `zk_ace_stark_fri_params_v1()` now configures `n_log2 = 10`,
+`blowup_log2 = 3`, `queries = 24`, binary folding, binary Merkle paths, and
+SHA-256, with a 1 MiB max proof cap on the bundled VK record and the default
+confidential proof admission cap. Ledger-grade ZK-ACE identity admission decodes
+the inline STARK VK payload and rejects active VK records below that production
+floor.
 
-Recommendation: document a production security target and derive `n_log2`, blowup,
-query count, hash mode, AIR degree, and grinding bounds from that target. Treat
-parameter changes as governance-visible VK changes.
+Residual recommendation: maintain a quantitative production security target and
+derive future `n_log2`, blowup, query count, hash mode, AIR degree, and grinding
+bounds from that target. Treat parameter changes as governance-visible VK changes.
+
+Regression coverage: `zk_ace_rejects_downgraded_stark_verifier_parameters` installs
+an active inline ZK-ACE VK with the historical PoC parameters and asserts that
+identity registration fails before any ZK-ACE identity state is recorded.
 
 ### ZK-AUDIT-04: BN254/Halo2 naming must remain segregated from ledger-grade IPA policy
 
@@ -213,16 +219,18 @@ public-input bindings. The privacy claim remains a proof obligation for producti
 
 ## Parameter Security
 
-ZK-ACE v0 uses `n_log2 = 4`, `blowup_log2 = 1`, `fold_arity = 2`, `queries = 2`,
+ZK-ACE v0 uses `n_log2 = 10`, `blowup_log2 = 3`, `fold_arity = 2`, `queries = 24`,
 `merkle_arity = 2`, SHA-256, and domain tag `iroha:zk-ace:stark-fri:v0`. The code
 binds these values correctly through VK payloads, envelope metadata, inner params,
-transcript challenge derivation, and domain tags.
+transcript challenge derivation, and domain tags. Ledger admission rejects active
+ZK-ACE VK payloads whose `n_log2`, blowup, or query count falls below that floor.
 
 Security interpretation: SHA-256 Merkle and Fiat-Shamir binding is a strong
-dependency assumption, but two FRI queries over a domain of 16 with blowup 2 is not
-enough to infer production-grade soundness from code review alone. The 256-attempt
-blinding loop limits privacy-row grinding, but its security depends on transcript
-query distribution and AIR shape.
+dependency assumption. The hardened floor removes the historical domain-16/two-query
+PoC profile from ledger-grade admission, but exact soundness remains a proof
+obligation because this audit does not supply a formal STARK/FRI reduction. The
+256-attempt blinding loop limits privacy-row grinding, but its security depends on
+transcript query distribution and AIR shape.
 
 ## IPA/Halo2 Verification
 
@@ -300,8 +308,9 @@ cargo test -p fastpq_prover
 
 Audit-driven regression coverage includes the fresh ZK-ACE trust-flag bypass,
 diagnostic success not creating ledger proof records, continued backend-label
-rejection, and VK/domain binding on parameter changes. Add further regressions only
-for newly confirmed gaps.
+rejection, VK/domain binding on parameter changes, and ZK-ACE rejection of
+downgraded STARK/FRI verifier parameters. Add further regressions only for newly
+confirmed gaps.
 
 ## Conclusion
 
@@ -311,7 +320,8 @@ public-input binding, and proof dispatch are consistently tied together. Native
 STARK/FRI and FASTPQ verification include meaningful malformed-proof rejection and
 statement-binding checks.
 
-The remaining work is parameter proof and boundary hardening. ZK-ACE v0 parameters
-are PoC-scale and need a production soundness analysis before production claims.
+The remaining work is the quantitative parameter proof. The historical ZK-ACE
+PoC-scale parameter profile is now rejected by ledger-grade admission, but a
+production soundness analysis is still required for exact security margins.
 Recovery-only trust and diagnostic endpoints must remain outside fresh ledger
 admission, with tests proving that separation.

@@ -10297,10 +10297,27 @@ pub mod isi {
                 "ZK-ACE verifying key backend mismatch".into(),
             ));
         }
-        Ok(crate::state::ZkAssetVerifierBinding {
-            id: id.clone(),
-            commitment: record.commitment,
-        })
+        #[cfg(feature = "zk-stark")]
+        {
+            let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
+                norito::decode_from_bytes(&key.bytes).map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "ZK-ACE verifying key payload is not a STARK/FRI verifier key".into(),
+                    )
+                })?;
+            crate::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&vk_payload)
+                .map_err(|err| InstructionExecutionError::InvariantViolation(err.into()))?;
+            Ok(crate::state::ZkAssetVerifierBinding {
+                id: id.clone(),
+                commitment: record.commitment,
+            })
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            Err(InstructionExecutionError::InvariantViolation(
+                "ZK-ACE STARK verifier is not enabled".into(),
+            ))
+        }
     }
 
     fn ensure_zk_ace_record_active(
@@ -17977,7 +17994,8 @@ pub mod isi {
         }
 
         #[cfg(feature = "zk-stark")]
-        const ZK_ACE_TEST_MAX_PROOF_BYTES: u32 = 256 * 1024;
+        const ZK_ACE_TEST_MAX_PROOF_BYTES: u32 =
+            crate::zk_stark::ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES;
 
         fn zk_ace_test_witness(seed: u8) -> ZkAceWitnessV1 {
             ZkAceWitnessV1 {
@@ -18046,10 +18064,10 @@ pub mod isi {
                     version: 1,
                     circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
                         .to_owned(),
-                    n_log2: 4,
-                    blowup_log2: 1,
+                    n_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_N_LOG2,
+                    blowup_log2: crate::zk_stark::ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
                     fold_arity: 2,
-                    queries: 2,
+                    queries: crate::zk_stark::ZK_ACE_STARK_FRI_V1_QUERIES,
                     merkle_arity: 2,
                     hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
                 };
@@ -18065,6 +18083,25 @@ pub mod isi {
                     vec![0xa5; 32],
                 )
             }
+        }
+
+        #[cfg(feature = "zk-stark")]
+        fn weak_zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
+            let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
+                    .to_owned(),
+                n_log2: 4,
+                blowup_log2: 1,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            VerifyingKeyBox::new(
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_BACKEND.into(),
+                norito::to_bytes(&payload).expect("encode weak ZK-ACE STARK verifying key"),
+            )
         }
 
         fn install_zk_ace_verifier(
@@ -19344,6 +19381,58 @@ pub mod isi {
             assert!(
                 msg.contains("public input schema hash mismatch"),
                 "unexpected verifier schema error: {msg}"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn zk_ace_rejects_downgraded_stark_verifier_parameters() {
+            let fixture = zk_ace_transfer_fixture();
+            let block = new_dummy_block();
+            let mut state_block = fixture.state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            install_zk_ace_verifier(
+                &mut stx,
+                &fixture.vk_id,
+                ConfidentialStatus::Active,
+                ZK_ACE_TEST_MAX_PROOF_BYTES,
+            );
+            let weak_vk = weak_zk_ace_verifying_key_box_for_test();
+            let weak_commitment = hash_vk(&weak_vk);
+            let weak_record = stx
+                .world
+                .verifying_keys
+                .get_mut(&fixture.vk_id)
+                .expect("ZK-ACE verifier is installed");
+            weak_record.commitment = weak_commitment;
+            weak_record.vk_len =
+                u32::try_from(weak_vk.bytes.len()).expect("weak VK length fits");
+            weak_record.key = Some(weak_vk);
+
+            let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
+                fixture.asset_def_id.clone(),
+                fixture.identity_commitment,
+                fixture.policy_hash,
+                vec![ALICE_ID.clone()],
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_ACTION_TRANSFER.to_owned(),
+                iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_DOMAIN_TAG.to_owned(),
+                fixture.vk_id,
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("downgraded ZK-ACE STARK verifier must fail");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("below production floor"),
+                "unexpected downgraded verifier error: {msg}"
+            );
+            assert!(
+                !stx.world
+                    .zk_assets
+                    .get(&fixture.asset_def_id)
+                    .is_some_and(|state| state
+                        .zk_ace_identities
+                        .contains_key(&fixture.identity_commitment)),
+                "downgraded verifier must not register ZK-ACE identity state"
             );
         }
 
