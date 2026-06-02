@@ -2,6 +2,21 @@
 
 Last updated: 2026-06-02
 
+## 2026-06-02 Offline V2 recursive schema hash export
+
+- Restored the V2-named Offline recursive public-input schema hash export in
+  `iroha_data_model::offline` as an alias of the canonical recursive note
+  schema hash, keeping Torii Offline V2 readiness smoke tests source-compatible
+  without changing the on-wire verifier schema hash.
+- Added a unit test proving the V2 alias matches the canonical Offline
+  recursive schema hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke --no-run`
+    (test binary compiled)
+
 ## 2026-06-02 Sumeragi RBC progress-state evidence proof
 
 - Added top-level Sumeragi RBC progress-state evidence obligations:
@@ -1864,10 +1879,10 @@ Last updated: 2026-06-02
   - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
     (`1 passed`)
   - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch -- --nocapture`
-    did not reach the routing tests because unrelated
-    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` currently imports
-    missing `iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash`;
-    the library-only Torii run above passed.
+    previously did not reach the routing tests because unrelated
+    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` imported the
+    missing V2 Offline recursive schema hash helper; the later Offline V2
+    schema-hash export status entry records the fix.
 
 ## 2026-06-02 SCCP EVM live evidence mainnet network-id default
 
