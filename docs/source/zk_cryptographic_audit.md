@@ -95,14 +95,14 @@ movement for a failed ZK-ACE proof.
 
 Evidence: `SubmitZkAceAuthorizedTransfer` in
 [../../crates/iroha_core/src/smartcontracts/isi/world.rs](../../crates/iroha_core/src/smartcontracts/isi/world.rs)
-performs local STARK verification and rejects a failed report unless
-`state_transaction.trust_committed_execution_results` is set. With that flag set, the
-code logs and continues with replay-nullifier insertion and transfer execution.
+performs local STARK verification and returns `invalid ZK-ACE authorization proof`
+on verifier failure. When `state_transaction.trust_committed_execution_results` is
+set, the code only logs the replay mismatch before returning the same error.
 
-Impact: if this flag is strictly limited to deterministic replay of already-committed
-execution results, it is a recovery mechanism. If it can be enabled during new block
-production, fresh transaction admission, or uncommitted ledger execution, an invalid
-ZK-ACE proof can authorize a transparent transfer and consume a replay nullifier.
+Impact: the original bypass could authorize a transparent transfer and consume a
+replay nullifier if the flag were enabled during new block production, fresh
+transaction admission, or uncommitted ledger execution. The remediated ZK-ACE path
+no longer depends on that operational boundary.
 
 Regression coverage: `zk_ace_rejects_inner_stark_tamper_even_when_committed_result_trust_is_set`
 builds a valid ZK-ACE STARK proof, tampers the inner STARK envelope after metadata
@@ -116,6 +116,10 @@ adding new proof-authorizing bypasses.
 ### ZK-AUDIT-02: Diagnostic proof endpoints require an explicit non-ledger contract
 
 Severity: Medium.
+
+Status: Guarded. Diagnostic proof submission remains report-only and does not create
+ledger proof records or mutate WSV without a separate ledger-grade `VerifyProof` or
+proof-bearing instruction path.
 
 Evidence: Torii proof submission, attachment storage, and background prover worker
 paths are app-facing and report-only. They do not mutate WSV directly, but a client
@@ -309,8 +313,9 @@ cargo test -p fastpq_prover
 Audit-driven regression coverage includes the fresh ZK-ACE trust-flag bypass,
 diagnostic success not creating ledger proof records, continued backend-label
 rejection, VK/domain binding on parameter changes, and ZK-ACE rejection of
-downgraded STARK/FRI verifier parameters. Add further regressions only for newly
-confirmed gaps.
+downgraded STARK/FRI verifier parameters. Additional trust-boundary regressions cover
+tampered Kagemusha confidential-transfer and asset-hidden transfer proofs when
+committed-result trust is set. Add further regressions only for newly confirmed gaps.
 
 ## Conclusion
 
@@ -324,4 +329,4 @@ The remaining work is the quantitative parameter proof. The historical ZK-ACE
 PoC-scale parameter profile is now rejected by ledger-grade admission, but a
 production soundness analysis is still required for exact security margins.
 Recovery-only trust and diagnostic endpoints must remain outside fresh ledger
-admission, with tests proving that separation.
+admission, with tests proving that separation across proof-bearing flows.

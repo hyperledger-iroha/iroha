@@ -2509,6 +2509,25 @@ pub mod isi {
             Hash::new(label).into()
         }
 
+        fn tamper_open_verify_envelope_inner_proof_byte(bytes: &mut Vec<u8>) {
+            let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+                norito::decode_from_bytes(bytes).expect("decode OpenVerifyEnvelope");
+            assert!(
+                envelope.proof_bytes.len() > 12,
+                "fixture proof must carry a non-empty ZK1 PROF payload"
+            );
+            assert_eq!(&envelope.proof_bytes[..4], b"ZK1\0");
+            assert_eq!(&envelope.proof_bytes[4..8], b"PROF");
+            let prof_len = u32::from_le_bytes(
+                envelope.proof_bytes[8..12]
+                    .try_into()
+                    .expect("PROF length bytes"),
+            );
+            assert!(prof_len > 0, "fixture PROF payload must not be empty");
+            envelope.proof_bytes[12] ^= 0x01;
+            *bytes = norito::to_bytes(&envelope).expect("re-encode tampered OpenVerifyEnvelope");
+        }
+
         fn lineage_record_match_test_witness(
             vk_id: VerifyingKeyId,
             record: VerifyingKeyRecord,
@@ -5169,13 +5188,8 @@ pub mod isi {
         fn kagemusha_transfer_rejects_tampered_real_halo2_ipa_proof() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
-            let last = transfer
-                .proof
-                .proof
-                .bytes
-                .last_mut()
-                .expect("fixture proof bytes must not be empty");
-            *last ^= 0x01;
+            tamper_open_verify_envelope_inner_proof_byte(&mut transfer.proof.proof.bytes);
+            transfer.proof.envelope_hash = Some(Hash::new(&transfer.proof.proof.bytes).into());
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
@@ -5190,6 +5204,42 @@ pub mod isi {
                     || message.contains("invalid OpenVerifyEnvelope payload")
                     || message.contains("invalid confidential transfer v2 public inputs"),
                 "unexpected error: {message}"
+            );
+        }
+
+        #[test]
+        fn kagemusha_transfer_trust_flag_rejects_tampered_real_halo2_ipa_proof() {
+            let (state, authority, definition_id, mut transfer, _commitments, _roots) =
+                real_kagemusha_test_state();
+            let input = transfer.inputs[0];
+            let output = transfer.outputs[0];
+            tamper_open_verify_envelope_inner_proof_byte(&mut transfer.proof.proof.bytes);
+            transfer.proof.envelope_hash = Some(Hash::new(&transfer.proof.proof.bytes).into());
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            block.trust_committed_execution_results = true;
+            let mut transaction = block.transaction();
+
+            let err = transfer
+                .execute(&authority, &mut transaction)
+                .expect_err("committed-result trust must not bypass invalid transfer proof");
+            let message = err.to_string();
+            assert!(
+                message.contains("invalid transfer proof"),
+                "unexpected error: {message}"
+            );
+            let shielded_state = transaction
+                .world
+                .zk_assets
+                .get(&definition_id)
+                .expect("Kagemusha transfer keeps shielded state");
+            assert!(
+                !shielded_state.nullifiers.contains(&input),
+                "invalid trusted replay must not consume nullifier"
+            );
+            assert!(
+                !shielded_state.commitments.contains(&output),
+                "invalid trusted replay must not append output commitment"
             );
         }
 

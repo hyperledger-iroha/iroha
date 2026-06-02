@@ -11327,13 +11327,12 @@ pub mod isi {
                     iroha_logger::warn!(
                         backend = attachment.backend.as_str(),
                         proof_len,
-                        "replay accepted committed ZK transfer result after local proof verifier rejection"
+                        "replay rejected committed ZK transfer result after local proof verifier rejection"
                     );
-                } else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "invalid transfer proof".into(),
-                    ));
                 }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid transfer proof".into(),
+                ));
             }
             for &nullifier in self.inputs() {
                 st.nullifiers.insert(nullifier);
@@ -11612,13 +11611,12 @@ pub mod isi {
                     iroha_logger::warn!(
                         backend = attachment.backend.as_str(),
                         proof_len = attachment.proof.bytes.len(),
-                        "replay accepted committed asset-hidden transfer result after local proof verifier rejection"
+                        "replay rejected committed asset-hidden transfer result after local proof verifier rejection"
                     );
-                } else {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "invalid asset-hidden transfer proof".into(),
-                    ));
                 }
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "invalid asset-hidden transfer proof".into(),
+                ));
             }
 
             for &nullifier in self.inputs() {
@@ -22364,6 +22362,165 @@ pub mod isi {
                 }
                 other => panic!("unexpected error: {other:?}"),
             }
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn pasta_scalar_word(value: u64) -> [u8; 32] {
+            let mut out = [0u8; 32];
+            out[..8].copy_from_slice(&value.to_le_bytes());
+            out
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        fn tamper_open_verify_envelope_inner_proof_byte(proof: &mut ProofAttachment) {
+            let mut envelope: OpenVerifyEnvelope =
+                norito::decode_from_bytes(&proof.proof.bytes).expect("decode OpenVerifyEnvelope");
+            assert!(
+                envelope.proof_bytes.len() > 12,
+                "fixture proof must carry a non-empty ZK1 PROF payload"
+            );
+            assert_eq!(&envelope.proof_bytes[..4], b"ZK1\0");
+            assert_eq!(&envelope.proof_bytes[4..8], b"PROF");
+            let prof_len = u32::from_le_bytes(
+                envelope.proof_bytes[8..12]
+                    .try_into()
+                    .expect("PROF length bytes"),
+            );
+            assert!(prof_len > 0, "fixture PROF payload must not be empty");
+            envelope.proof_bytes[12] ^= 0x01;
+            proof.proof.bytes =
+                norito::to_bytes(&envelope).expect("re-encode tampered OpenVerifyEnvelope");
+        }
+
+        #[cfg(feature = "zk-halo2-ipa")]
+        #[test]
+        fn asset_hidden_transfer_trust_flag_rejects_tampered_ipa_proof() {
+            let domain_id =
+                DomainId::try_new("assethidden", "universal").expect("domain id parses");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let account = new_account_in_domain(&ALICE_ID).build(&ALICE_ID);
+            let storage_asset =
+                AssetDefinitionId::new(domain_id, "pool".parse().expect("asset name"));
+            let asset_definition = AssetDefinition::numeric(storage_asset.clone())
+                .with_name(storage_asset.name().to_string())
+                .build(&ALICE_ID);
+            let world = World::with_assets([domain], [account], [asset_definition], [], []);
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new(world, kura, query_handle);
+            let mut zk = state.zk.clone();
+            zk.halo2.enabled = true;
+            zk.halo2.max_envelope_bytes = usize::MAX;
+            zk.halo2.max_proof_bytes = usize::MAX;
+            state.set_zk(zk);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            state_block.trust_committed_execution_results = true;
+            let mut stx = state_block.transaction();
+
+            let pool_id = "asset-hidden-trust-boundary".to_owned();
+            let asset_set_root = pasta_scalar_word(0x20);
+            let input_nullifier = pasta_scalar_word(0x30);
+            let output_commitment = pasta_scalar_word(0x40);
+            let root_hint = [0u8; 32];
+            let circuit_id = "halo2/pasta/asset-hidden-transfer-public-test";
+            let vk_id = VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, "asset-hidden-vk");
+            let instance_words = [
+                crate::zk::confidential_v2::derive_asset_hidden_pool_id_tag_v1(&pool_id),
+                asset_set_root,
+                pasta_scalar_word(0x50),
+                [0u8; 32],
+                input_nullifier,
+                [0u8; 32],
+                output_commitment,
+                [0u8; 32],
+                root_hint,
+                crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+                    stx.chain_id.as_str(),
+                ),
+            ];
+            let initial_fixture =
+                crate::zk::test_utils::halo2_asset_hidden_transfer_fixture_envelope(
+                    circuit_id,
+                    [0u8; 32],
+                    instance_words,
+                );
+            let vk_box = VerifyingKeyBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.into(),
+                initial_fixture.vk_bytes.expect("asset-hidden fixture VK"),
+            );
+            let vk_commitment = hash_vk(&vk_box);
+            let fixture = crate::zk::test_utils::halo2_asset_hidden_transfer_fixture_envelope(
+                circuit_id,
+                vk_commitment,
+                instance_words,
+            );
+            let mut record = VerifyingKeyRecord::new_with_owner(
+                1,
+                circuit_id.to_owned(),
+                None,
+                "asset-hidden",
+                BackendTag::Halo2IpaPasta,
+                "pallas",
+                fixture.schema_hash,
+                vk_commitment,
+            );
+            record.vk_len = u32::try_from(vk_box.bytes.len()).expect("asset-hidden VK length fits");
+            record.max_proof_bytes = 1024 * 1024;
+            record.status = ConfidentialStatus::Active;
+            record.key = Some(vk_box);
+            record.gas_schedule_id = Some("halo2_default".into());
+            stx.world.verifying_keys.insert(vk_id.clone(), record.clone());
+            stx.world
+                .verifying_keys_by_circuit
+                .insert((record.circuit_id.clone(), record.version), vk_id.clone());
+
+            iroha_data_model::isi::zk::RegisterAssetHiddenZkPool::new(
+                pool_id.clone(),
+                storage_asset.clone(),
+                asset_set_root,
+                vk_id.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register asset-hidden pool");
+
+            let proof_box =
+                ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.into(), fixture.proof_bytes);
+            let mut attachment =
+                ProofAttachment::new_ref(crate::zk::ZK_BACKEND_HALO2_IPA.into(), proof_box, vk_id);
+            attachment.vk_commitment = Some(vk_commitment);
+            attachment.envelope_hash = Some(Hash::new(&attachment.proof.bytes).into());
+            tamper_open_verify_envelope_inner_proof_byte(&mut attachment);
+            let transfer = iroha_data_model::isi::zk::AssetHiddenZkTransfer::new(
+                pool_id,
+                vec![input_nullifier],
+                vec![output_commitment],
+                attachment,
+                Some(root_hint),
+            );
+
+            let err = transfer
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("committed-result trust must not bypass invalid asset-hidden proof");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("invalid asset-hidden transfer proof"),
+                "unexpected asset-hidden proof error: {msg}"
+            );
+            let pool_state = stx
+                .world
+                .zk_assets
+                .get(&storage_asset)
+                .expect("asset-hidden pool state remains present");
+            assert!(
+                !pool_state.nullifiers.contains(&input_nullifier),
+                "invalid trusted replay must not consume asset-hidden nullifier"
+            );
+            assert!(
+                !pool_state.commitments.contains(&output_commitment),
+                "invalid trusted replay must not append asset-hidden output"
+            );
         }
 
         #[test]
