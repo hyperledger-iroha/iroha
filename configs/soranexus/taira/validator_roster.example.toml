@@ -25,6 +25,7 @@ torii_address = "0.0.0.0:18080"
 
 [[validators]]
 slug = "taira-validator-1"
+account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_1"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_1"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_1"
 public_address = "taira-validator-1.sora.org:1337"
@@ -33,6 +34,7 @@ edge_torii_upstream = "127.0.0.1:18080"
 
 [[validators]]
 slug = "taira-validator-2"
+account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_2"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_2"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_2"
 public_address = "taira-validator-2.sora.org:1337"
@@ -41,6 +43,7 @@ edge_torii_upstream = "127.0.0.1:18081"
 
 [[validators]]
 slug = "taira-validator-3"
+account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_3"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_3"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_3"
 public_address = "taira-validator-3.sora.org:1337"
@@ -49,6 +52,7 @@ edge_torii_upstream = "127.0.0.1:18082"
 
 [[validators]]
 slug = "taira-validator-4"
+account_id = "REPLACE_WITH_VALIDATOR_ACCOUNT_ID_4"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_4"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_4"
 public_address = "taira-validator-4.sora.org:1337"

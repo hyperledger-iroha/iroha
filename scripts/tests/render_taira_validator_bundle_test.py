@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -37,6 +38,11 @@ public_address = "https://taira-validator-1.sora.org"
 [torii.mcp]
 enabled = true
 
+[nexus.registry]
+manifest_directory = "configs/soranexus/taira/manifests"
+cache_directory = "configs/soranexus/taira/manifests"
+poll_interval_ms = 10000
+
 [torii.onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY"
@@ -57,6 +63,7 @@ def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: boo
         entry = [
             "[[validators]]",
             f'slug = "taira-validator-{index}"',
+            f'account_id = "test-validator-{index}"',
             f'public_key = "peer-{index}-public"',
         ]
         if inline_private_keys:
@@ -129,6 +136,20 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'private_key = "faucet-private-key"' in config
     assert 'identity_public_key = "streaming-public-key"' in config
     assert 'identity_private_key = "streaming-private-key"' in config
+    assert 'manifest_directory = "manifests"' in config
+    assert 'cache_directory = "manifests"' in config
+
+    manifest_path = output_dir / "taira-validator-3" / "manifests" / "governance.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["lane"] == "governance"
+    assert manifest["governance"] == "parliament"
+    assert manifest["quorum"] == 3
+    assert manifest["validators"] == [
+        {"validator": "test-validator-1", "peer_id": "peer-1-public"},
+        {"validator": "test-validator-2", "peer_id": "peer-2-public"},
+        {"validator": "test-validator-3", "peer_id": "peer-3-public"},
+        {"validator": "test-validator-4", "peer_id": "peer-4-public"},
+    ]
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
@@ -138,6 +159,7 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
             [
                 "[[validators]]",
                 'slug = "taira-validator-1"',
+                'account_id = "test-validator-1"',
                 'public_key = "peer-1-public"',
                 'private_key = "peer-1-private"',
                 'pop_hex = "peer-1-pop"',
@@ -145,6 +167,7 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 "",
                 "[[validators]]",
                 'slug = "taira-validator-2"',
+                'account_id = "test-validator-2"',
                 'public_key = "peer-2-public"',
                 'private_key = "peer-2-private"',
                 'pop_hex = "peer-2-pop"',
@@ -152,6 +175,7 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 "",
                 "[[validators]]",
                 'slug = "taira-validator-3"',
+                'account_id = "test-validator-3"',
                 'public_key = "peer-3-public"',
                 'private_key = "peer-3-private"',
                 'pop_hex = "peer-3-pop"',
@@ -159,6 +183,7 @@ def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> 
                 "",
                 "[[validators]]",
                 'slug = "taira-validator-4"',
+                'account_id = "test-validator-4"',
                 'public_key = "peer-4-public"',
                 'private_key = "peer-4-private"',
                 'pop_hex = "peer-4-pop"',

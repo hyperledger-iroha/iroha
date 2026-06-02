@@ -21,6 +21,17 @@ DEFAULT_CLIENT_MAX_BODY_SIZE = "1g"
 DEFAULT_UPSTREAM_KEEPALIVE = 64
 DEFAULT_UPSTREAM_FAIL_TIMEOUT = "5s"
 MIN_VALIDATORS = 4
+PUBLIC_TORII_CORS_ORIGINS = [
+    "https://test.soraswap.org",
+    "http://127.0.0.1:3000",
+    "http://localhost:3000",
+]
+PUBLIC_TORII_CORS_METHODS = "GET, POST, DELETE, OPTIONS"
+PUBLIC_TORII_CORS_HEADERS = "accept, authorization, content-type"
+PUBLIC_TORII_CORS_EXPOSED_HEADERS = (
+    "x-iroha-api-version, x-iroha-api-supported, x-iroha-api-min-proof-version"
+)
+PUBLIC_TORII_CORS_MAX_AGE = "3600"
 
 
 @dataclass(frozen=True)
@@ -171,6 +182,27 @@ def _render_upstream(name: str, server_lines: list[str], keepalive: int) -> list
     lines.append(f"  keepalive {keepalive};")
     lines.append("}")
     return lines
+
+
+def _render_public_torii_cors_server_lines() -> list[str]:
+    return [
+        "  proxy_hide_header Access-Control-Allow-Origin;",
+        "  proxy_hide_header Access-Control-Allow-Methods;",
+        "  proxy_hide_header Access-Control-Allow-Headers;",
+        "  proxy_hide_header Access-Control-Expose-Headers;",
+        "  proxy_hide_header Access-Control-Max-Age;",
+        "  add_header Access-Control-Allow-Origin $taira_public_torii_cors_origin always;",
+        f'  add_header Access-Control-Allow-Methods "{PUBLIC_TORII_CORS_METHODS}" always;',
+        f'  add_header Access-Control-Allow-Headers "{PUBLIC_TORII_CORS_HEADERS}" always;',
+        f'  add_header Access-Control-Expose-Headers "{PUBLIC_TORII_CORS_EXPOSED_HEADERS}" always;',
+        f'  add_header Access-Control-Max-Age "{PUBLIC_TORII_CORS_MAX_AGE}" always;',
+        '  add_header Vary "Origin" always;',
+        "",
+        "  if ($request_method = OPTIONS) {",
+        "    return 204;",
+        "  }",
+        "",
+    ]
 
 
 def _render_exact_proxy_location(
@@ -362,6 +394,11 @@ def render_edge_nginx_conf(
         f"  ~^(?<taira_mon_alias_host_capture>.+)\\.{escaped_mon_host_suffix}$ $taira_mon_alias_host_capture;",
         "}",
         "",
+        "map $http_origin $taira_public_torii_cors_origin {",
+        '  default "";',
+        *[f'  "{origin}" $http_origin;' for origin in PUBLIC_TORII_CORS_ORIGINS],
+        "}",
+        "",
     ]
 
     for validator in validators:
@@ -413,6 +450,7 @@ def render_edge_nginx_conf(
             "",
         ]
     )
+    lines.extend(_render_public_torii_cors_server_lines())
     lines.extend(
         _render_connect_stateful_locations(
             connect_upstream,

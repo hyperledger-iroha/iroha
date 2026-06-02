@@ -43,6 +43,7 @@ contract TairaXOR is Ownable {
     }
 
     function lockBridge() external onlyOwner {
+        require(!bridgeLocked, "Bridge is already locked");
         require(bridge != address(0), "Bridge address is required");
         bridgeLocked = true;
         emit BridgeLocked(bridge);
@@ -92,6 +93,7 @@ contract TairaXOR is Ownable {
     }
 
     function _transfer(address from, address to, uint256 value) private {
+        require(from != address(0), "Sender address is required");
         require(to != address(0), "Recipient address is required");
         balanceOf[from] = _sub(balanceOf[from], value);
         balanceOf[to] = _add(balanceOf[to], value);
