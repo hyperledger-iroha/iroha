@@ -48916,6 +48916,60 @@ mod query_endpoint_tests {
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn diagnostic_zk_submit_proof_does_not_create_ledger_proof_record() {
+        use axum::http::header::CONTENT_TYPE;
+
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let body = br#"{"backend":"halo2/ipa","proof":"diagnostic-only"}"#;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+
+        let response = handle_v1_zk_submit_proof(headers, axum::body::Bytes::from_static(body))
+            .await
+            .expect("diagnostic submit handler should respond");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect diagnostic submit response")
+            .to_bytes();
+        let json: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("diagnostic submit JSON");
+        assert_eq!(
+            json.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+        let diagnostic_id = json
+            .get("id")
+            .and_then(norito::json::Value::as_str)
+            .expect("diagnostic submit id");
+        assert_eq!(
+            diagnostic_id.len(),
+            64,
+            "diagnostic id should be a raw 32-byte body hash"
+        );
+
+        let ledger_id = format!("halo2/ipa:{diagnostic_id}");
+        let err = match handle_get_proof_record(state, axum::extract::Path(ledger_id)).await {
+            Ok(_) => panic!("diagnostic submit must not persist a ledger proof record"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
+    }
+
     #[tokio::test]
     async fn proofs_roundtrip_and_query_via_torii() {
         use axum::extract::Path as AxumPath;

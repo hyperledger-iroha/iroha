@@ -124,9 +124,12 @@ explicit.
 
 Recommendation: keep these endpoints labeled diagnostic/non-consensus in API docs and
 telemetry; never feed diagnostic success into ledger state without re-validating
-against the active VK registry, guardrails, proof attachment, and transaction context;
-add an integration test that diagnostic success alone does not create a ledger
-`ProofRecord::Verified`.
+against the active VK registry, guardrails, proof attachment, and transaction context.
+
+Regression coverage: `diagnostic_zk_submit_proof_does_not_create_ledger_proof_record`
+posts a successful diagnostic `/v1/zk/submit-proof` request, derives the corresponding
+ledger proof id, and asserts that `/v1/proofs/{id}` still reports not found because no
+ledger `VerifyProof` path ran.
 
 ### ZK-AUDIT-03: ZK-ACE v0 STARK/FRI parameters are PoC-scale
 
@@ -295,9 +298,10 @@ cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover
 ```
 
-Add audit-driven regression tests for confirmed gaps: fresh ZK-ACE trust-flag bypass,
+Audit-driven regression coverage includes the fresh ZK-ACE trust-flag bypass,
 diagnostic success not creating ledger proof records, continued backend-label
-rejection, and VK/domain binding on parameter changes.
+rejection, and VK/domain binding on parameter changes. Add further regressions only
+for newly confirmed gaps.
 
 ## Conclusion
 
