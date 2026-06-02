@@ -18672,10 +18672,24 @@ def require_ethereum_mainnet_chain_id(chain_id: Any) -> int:
     return normalized
 
 
+def _require_ethereum_mainnet_rpc_chain_id(chain_id: Any) -> int:
+    normalized = int(_normalize_evm_rpc_quantity(chain_id, "eth_chainId"), 16)
+    if normalized != SCCP_ETH_MAINNET_EVM_CHAIN_ID:
+        raise ValueError("Ethereum mainnet SCCP requires eth_chainId == 1")
+    return normalized
+
+
 def require_bsc_mainnet_chain_id(chain_id: Any) -> int:
     """Require a BSC execution chain id equal to mainnet chain id 56."""
 
     normalized = _normalize_evm_mainnet_chain_id(chain_id, "eth_chainId")
+    if normalized != SCCP_BSC_MAINNET_EVM_CHAIN_ID:
+        raise ValueError("BSC mainnet SCCP requires chain id 56 (eth_chainId == 56)")
+    return normalized
+
+
+def _require_bsc_mainnet_rpc_chain_id(chain_id: Any) -> int:
+    normalized = int(_normalize_evm_rpc_quantity(chain_id, "eth_chainId"), 16)
     if normalized != SCCP_BSC_MAINNET_EVM_CHAIN_ID:
         raise ValueError("BSC mainnet SCCP requires chain id 56 (eth_chainId == 56)")
     return normalized
@@ -26580,7 +26594,7 @@ class EthereumMainnetSccp:
             [],
             "Ethereum mainnet SCCP",
         )
-        require_ethereum_mainnet_chain_id(chain_id)
+        _require_ethereum_mainnet_rpc_chain_id(chain_id)
         return chain_id
 
     async def collect_inbound_evidence_from_receipt(
@@ -27060,7 +27074,7 @@ class BscMainnetSccp:
             [],
             "BSC mainnet SCCP",
         )
-        require_bsc_mainnet_chain_id(chain_id)
+        _require_bsc_mainnet_rpc_chain_id(chain_id)
         return chain_id
 
     async def collect_inbound_evidence_from_receipt(

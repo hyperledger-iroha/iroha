@@ -103,7 +103,7 @@ public final class EthereumMainnetSccp {
     final ExecutionProvider selectedProvider =
         Objects.requireNonNull(provider, "executionProvider");
     final Object chainId = selectedProvider.request("eth_chainId", Collections.emptyList());
-    requireMainnetChainId(normalizeMainnetChainId(chainId));
+    requireMainnetChainId(normalizeRpcChainId(chainId));
     return chainId;
   }
 
@@ -482,8 +482,13 @@ public final class EthereumMainnetSccp {
         input.destinationBinding());
   }
 
-  private static long normalizeMainnetChainId(final Object value) {
-    return normalizeUnsignedInteger(value, "eth_chainId");
+  private static long normalizeRpcChainId(final Object value) {
+    final String quantity = normalizeRpcQuantity(value, "eth_chainId");
+    final BigInteger parsed = new BigInteger(quantity.substring(2), 16);
+    if (parsed.bitLength() > 63) {
+      throw new IllegalArgumentException("eth_chainId must fit positive i64");
+    }
+    return parsed.longValue();
   }
 
   private static long normalizeUnsignedInteger(final Object value, final String label) {

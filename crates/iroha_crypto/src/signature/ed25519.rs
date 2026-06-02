@@ -567,7 +567,9 @@ impl Ed25519Sha512 {
             let mut calls = calls.borrow_mut();
             *calls = (*calls).saturating_add(1);
         });
-        Signature::try_from(signature).map_err(|_| Error::BadSignature)
+        let parsed = Signature::try_from(signature).map_err(|_| Error::BadSignature)?;
+        validate_signature_r_for_strict_batch(signature)?;
+        Ok(parsed)
     }
 
     pub(crate) fn verify_batch_preparsed_signatures_deterministic(
@@ -706,6 +708,20 @@ impl Ed25519Sha512 {
             seed32,
         )
     }
+}
+
+fn validate_signature_r_for_strict_batch(signature: &[u8]) -> Result<(), Error> {
+    let r_bytes: [u8; 32] = signature
+        .get(..32)
+        .ok_or(Error::BadSignature)?
+        .try_into()
+        .map_err(|_| Error::BadSignature)?;
+    let r_compressed = CompressedEdwardsY(r_bytes);
+    let r_point = r_compressed.decompress().ok_or(Error::BadSignature)?;
+    if r_point.is_small_order() || r_point.compress().as_bytes() != &r_bytes {
+        return Err(Error::BadSignature);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1340,6 +1356,56 @@ mod test {
         )
         .expect_err("tampered signature must fail");
         assert_eq!(err, Error::BadSignature);
+    }
+
+    #[test]
+    fn parse_signature_rejects_noncanonical_or_small_order_r() {
+        let mut small_order = [0u8; ed25519_dalek::SIGNATURE_LENGTH];
+        small_order[..32].copy_from_slice(&ED25519_SMALL_ORDER_POINT);
+        assert_eq!(
+            Ed25519Sha512::parse_signature(&small_order).expect_err("small-order R must fail"),
+            Error::BadSignature
+        );
+
+        let mut noncanonical = [0u8; ed25519_dalek::SIGNATURE_LENGTH];
+        noncanonical[..32].copy_from_slice(&ED25519_NON_CANONICAL_IDENTITY);
+        assert_eq!(
+            Ed25519Sha512::parse_signature(&noncanonical).expect_err("non-canonical R must fail"),
+            Error::BadSignature
+        );
+    }
+
+    #[test]
+    fn ed25519_batch_rejects_small_order_r_before_batch_backend() {
+        reset_batch_cache_counters_for_tests();
+        let mut triples = ed25519_batch_fixture();
+        triples[0].1[..32].copy_from_slice(&ED25519_SMALL_ORDER_POINT);
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| *public_key)
+            .collect::<Vec<_>>();
+
+        let err = Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x56; 32],
+        )
+        .expect_err("small-order R must fail before batch verification");
+        assert_eq!(err, Error::BadSignature);
+        assert_eq!(
+            uncached_batch_verify_calls_for_tests(),
+            0,
+            "strict R validation must run before the dalek batch backend"
+        );
     }
 
     #[test]

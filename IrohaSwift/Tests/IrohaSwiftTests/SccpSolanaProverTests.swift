@@ -9213,6 +9213,24 @@ final class SccpSolanaProverTests: XCTestCase {
             _ = try await EthereumMainnetSccp(executionProvider: nonMainnetProvider)
                 .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
         }
+        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+            let decimalProvider = EthereumMainnetExecutionProviderStub(
+                chainId: "1",
+                receipt: receipt,
+                block: block
+            )
+            _ = try await EthereumMainnetSccp(executionProvider: decimalProvider)
+                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
+        }
+        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+            let numericProvider = EthereumMainnetExecutionProviderStub(
+                chainId: 1,
+                receipt: receipt,
+                block: block
+            )
+            _ = try await EthereumMainnetSccp(executionProvider: numericProvider)
+                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
+        }
 
         var failedReceipt = receipt
         failedReceipt["status"] = "0x0"
@@ -9598,6 +9616,24 @@ final class SccpSolanaProverTests: XCTestCase {
                 block: block
             )
             _ = try await BscMainnetSccp(executionProvider: nonMainnetProvider)
+                .collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt: receipt))
+        }
+        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+            let decimalProvider = BscMainnetExecutionProviderStub(
+                chainId: "56",
+                receipt: receipt,
+                block: block
+            )
+            _ = try await BscMainnetSccp(executionProvider: decimalProvider)
+                .collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt: receipt))
+        }
+        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+            let numericProvider = BscMainnetExecutionProviderStub(
+                chainId: 56,
+                receipt: receipt,
+                block: block
+            )
+            _ = try await BscMainnetSccp(executionProvider: numericProvider)
                 .collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt: receipt))
         }
 

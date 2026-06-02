@@ -9,7 +9,7 @@ This spec intentionally models only the commit-critical state:
 - latched commit-certificate and commit-view evidence across view-counter resets,
 - weighted NPoS stake quorum,
 - RBC header/chunk/ready/deliver causality,
-- view-change progression and GST flip,
+- view-change quorum evidence, progression, and GST flip,
 - weak fairness assumptions over honest progress actions.
 ***************************************************************************)
 
@@ -54,6 +54,8 @@ VARIABLES
   commitEvidenceStake,
   \* @type: Int;
   newViewVotes,
+  \* @type: Int;
+  viewEvidenceVotes,
   \* @type: Str;
   rbcState,
   \* @type: Int;
@@ -80,6 +82,7 @@ vars == <<
   commitEvidenceVotes,
   commitEvidenceStake,
   newViewVotes,
+  viewEvidenceVotes,
   rbcState,
   chunkCount,
   readyVotes,
@@ -133,6 +136,7 @@ TypeInvariant ==
   /\ commitEvidenceVotes \in 0..N
   /\ commitEvidenceStake \in Nat
   /\ newViewVotes \in 0..N
+  /\ viewEvidenceVotes \in 0..N
   /\ rbcState \in RbcStates
   /\ chunkCount \in 0..MaxChunks
   /\ readyVotes \in 0..N
@@ -152,6 +156,7 @@ Init ==
   /\ commitEvidenceVotes = 0
   /\ commitEvidenceStake = 0
   /\ newViewVotes = 0
+  /\ viewEvidenceVotes = 0
   /\ rbcState = "Idle"
   /\ chunkCount = 0
   /\ readyVotes = 0
@@ -161,7 +166,7 @@ Init ==
   /\ gst = FALSE
 
 HonestProposeEnabled ==
-  phase \in {"Propose", "NewView"}
+  phase = "Propose"
 
 HonestPrepareVoteEnabled ==
   /\ phase = "Prepare"
@@ -231,6 +236,7 @@ HonestPropose ==
       stakeSigned,
       commitEvidenceVotes,
       commitEvidenceStake,
+      viewEvidenceVotes,
       committed,
       gst
      >>
@@ -248,6 +254,7 @@ HonestPrepareVote ==
       commitEvidenceVotes,
       commitEvidenceStake,
       newViewVotes,
+      viewEvidenceVotes,
       rbcState,
       chunkCount,
       readyVotes,
@@ -309,6 +316,7 @@ HonestCommitVote ==
       prepareVotes,
       commitVotesByz,
       newViewVotes,
+      viewEvidenceVotes,
       rbcState,
       chunkCount,
       readyVotes,
@@ -370,6 +378,7 @@ ByzantineEquivocateCommit ==
       prepareVotes,
       commitVotesHonest,
       newViewVotes,
+      viewEvidenceVotes,
       rbcState,
       chunkCount,
       readyVotes,
@@ -387,6 +396,7 @@ TimeoutTick ==
   /\ commitVotesHonest' = 0
   /\ commitVotesByz' = 0
   /\ stakeSigned' = 0
+  /\ viewEvidenceVotes' = 0
   /\ UNCHANGED <<
       rbcState,
       chunkCount,
@@ -404,6 +414,10 @@ HonestNewViewVote ==
   /\ HonestNewViewVoteEnabled
   /\ newViewVotes' = newViewVotes + 1
   /\ phase' = IF newViewVotes' >= ViewQuorum THEN "Propose" ELSE "NewView"
+  /\ viewEvidenceVotes' =
+      IF newViewVotes' >= ViewQuorum
+      THEN newViewVotes'
+      ELSE viewEvidenceVotes
   /\ UNCHANGED <<
       view,
       commitView,
@@ -440,6 +454,7 @@ RbcInit ==
       commitEvidenceVotes,
       commitEvidenceStake,
       newViewVotes,
+      viewEvidenceVotes,
       committed,
       gst
      >>
@@ -460,6 +475,7 @@ RbcChunkGood ==
       commitEvidenceVotes,
       commitEvidenceStake,
       newViewVotes,
+      viewEvidenceVotes,
       readyVotes,
       headerSeen,
       committed,
@@ -481,6 +497,7 @@ RbcReadyGood ==
       commitEvidenceVotes,
       commitEvidenceStake,
       newViewVotes,
+      viewEvidenceVotes,
       chunkCount,
       headerSeen,
       digestValid,
@@ -516,6 +533,7 @@ RbcDeliverGood ==
       commitVotesByz,
       stakeSigned,
       newViewVotes,
+      viewEvidenceVotes,
       chunkCount,
       readyVotes,
       headerSeen,
@@ -538,6 +556,7 @@ ByzantineFault ==
       commitEvidenceVotes,
       commitEvidenceStake,
       newViewVotes,
+      viewEvidenceVotes,
       chunkCount,
       readyVotes,
       headerSeen,
@@ -557,6 +576,7 @@ GstElapsed ==
       commitVotesByz,
       stakeSigned,
       newViewVotes,
+      viewEvidenceVotes,
       rbcState,
       chunkCount,
       readyVotes,
@@ -642,6 +662,23 @@ CommittedPhaseMatchesFinality ==
 CommitViewMatchesFinality ==
   committed => commitView = view
 
+CommitViewDoesNotLeadCurrentView ==
+  commitView <= view
+
+ViewEvidenceMatchesActiveView ==
+  /\ (view = 0 => viewEvidenceVotes = 0)
+  /\ (phase = "NewView" => viewEvidenceVotes = 0)
+  /\ ((view > 0 /\ phase # "NewView") => viewEvidenceVotes >= ViewQuorum)
+
+NewViewPhaseBelowQuorum ==
+  phase = "NewView" => newViewVotes < ViewQuorum
+
+ViewEvidenceIsCompleteOrEmpty ==
+  viewEvidenceVotes = 0 \/ viewEvidenceVotes >= ViewQuorum
+
+CommitImpliesViewQuorumEvidence ==
+  committed => (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
+
 CommitVotePhaseRequiresPrepareQuorum ==
   phase \in {"CommitVote", "Committed"} => prepareVotes >= CommitQuorum
 
@@ -662,6 +699,7 @@ VoteCountersRespectRosterBudgets ==
   /\ commitVotesHonest \in 0..(N - F)
   /\ commitVotesByz \in 0..F
   /\ newViewVotes \in 0..(N - F)
+  /\ viewEvidenceVotes \in 0..(N - F)
 
 StakeSignedMatchesVoteCounters ==
   stakeSigned =
@@ -703,6 +741,22 @@ CommittedPhaseNeverLeaves ==
 
 CommitViewNeverChanges ==
   [] (committed => [] (view = commitView))
+
+CommitViewNeverLeadsCurrentView ==
+  [] CommitViewDoesNotLeadCurrentView
+
+ViewQuorumEvidenceNeverDiverges ==
+  [] ViewEvidenceMatchesActiveView
+
+NewViewQuorumHandoffNeverStalls ==
+  [] NewViewPhaseBelowQuorum
+
+ViewEvidenceNeverPartial ==
+  [] ViewEvidenceIsCompleteOrEmpty
+
+CommitViewQuorumEvidenceNeverLost ==
+  [] (committed =>
+        [] (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum))
 
 PrepareQuorumNeverLostAfterCommit ==
   [] (committed => [] (prepareVotes >= CommitQuorum))

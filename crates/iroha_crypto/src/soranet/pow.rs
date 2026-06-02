@@ -1,7 +1,7 @@
 //! `PoW` ticket helpers for the `SoraNet` admission protocol.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fmt, fs, io,
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -168,6 +168,7 @@ impl SignedTicket {
         if decoded.ticket.version != Ticket::VERSION {
             return Err(Error::UnsupportedVersion(decoded.ticket.version));
         }
+        Self::validate_signature_len(&decoded.signature)?;
         Ok(decoded)
     }
 
@@ -180,9 +181,11 @@ impl SignedTicket {
     /// Verify the signature on this ticket against the provided public key.
     ///
     /// # Errors
-    /// Returns [`Error::InvalidSignature`] if verification fails or [`Error::PostQuantum`]
-    /// if the key/signature format is invalid.
+    /// Returns [`Error::Malformed`] if the signature length is invalid,
+    /// [`Error::InvalidSignature`] if verification fails, or [`Error::PostQuantum`]
+    /// if the key format is invalid.
     pub fn verify(&self, public_key: &[u8]) -> Result<(), Error> {
+        Self::validate_signature_len(&self.signature)?;
         let payload =
             Self::build_payload(&self.ticket, &self.relay_id, self.transcript_hash.as_ref());
         verify_mldsa(
@@ -196,6 +199,17 @@ impl SignedTicket {
             MlDsaError::VerificationFailed(_) => Error::InvalidSignature,
             other => Error::PostQuantum(other.to_string()),
         })
+    }
+
+    fn validate_signature_len(signature: &[u8]) -> Result<(), Error> {
+        let expected = MlDsaSuite::MlDsa44.signature_len();
+        if signature.len() != expected {
+            return Err(Error::Malformed(format!(
+                "signed ticket signature must be {expected} bytes, got {}",
+                signature.len()
+            )));
+        }
+        Ok(())
     }
 
     fn build_payload(
@@ -567,13 +581,33 @@ impl TicketRevocationStore {
         }
         let snapshot: TicketRevocationSnapshot = decode_from_bytes(&bytes)
             .map_err(|err| TicketRevocationStoreError::Parse(err.to_string()))?;
+        let mut seen_fingerprints = HashSet::with_capacity(snapshot.entries.len());
         for entry in snapshot.entries {
-            let expires_at = UNIX_EPOCH + Duration::from_secs(entry.expires_at_secs);
+            if !seen_fingerprints.insert(entry.fingerprint) {
+                return Err(TicketRevocationStoreError::Parse(
+                    "duplicate revocation fingerprint in snapshot".to_owned(),
+                ));
+            }
+            let expires_at = UNIX_EPOCH
+                .checked_add(Duration::from_secs(entry.expires_at_secs))
+                .ok_or_else(|| {
+                    TicketRevocationStoreError::Parse(format!(
+                        "revocation expiry timestamp {} overflows system time",
+                        entry.expires_at_secs
+                    ))
+                })?;
             if is_expired(expires_at, now) || exceeds_ttl(expires_at, now, self.limits.max_ttl) {
                 continue;
             }
             self.records
                 .insert(entry.fingerprint, RevokedTicketRecord { expires_at });
+            while self.records.len() > self.limits.max_entries {
+                if self.evict_oldest().is_none() {
+                    return Err(TicketRevocationStoreError::Parse(
+                        "revocation snapshot exceeds capacity".to_owned(),
+                    ));
+                }
+            }
         }
         self.persist()
     }
@@ -1136,6 +1170,15 @@ mod tests {
         }
     }
 
+    fn write_revocation_snapshot(
+        path: &std::path::Path,
+        entries: Vec<TicketRevocationSnapshotEntry>,
+    ) {
+        let snapshot = TicketRevocationSnapshot { entries };
+        let bytes = to_bytes(&snapshot).expect("encode revocation snapshot");
+        std::fs::write(path, bytes).expect("write revocation snapshot");
+    }
+
     fn invalid_solution_for(
         binding: &ChallengeBinding<'_>,
         client_nonce: [u8; 32],
@@ -1354,6 +1397,61 @@ mod tests {
     }
 
     #[test]
+    fn signed_ticket_decode_rejects_invalid_signature_length() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len() + 1],
+        };
+        let encoded = signed.encode();
+
+        let err = SignedTicket::decode(&encoded).expect_err("invalid signature length should fail");
+        match err {
+            Error::Malformed(message) => {
+                assert!(message.contains("signature"));
+                assert!(message.contains("bytes"));
+            }
+            other => panic!("expected malformed signature length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signed_ticket_verify_rejects_invalid_signature_length_before_backend() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len() - 1],
+        };
+
+        let err = signed
+            .verify(&[])
+            .expect_err("invalid signature length should fail before key validation");
+        match err {
+            Error::Malformed(message) => {
+                assert!(message.contains("signature"));
+                assert!(message.contains("bytes"));
+            }
+            other => panic!("expected malformed signature length, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn ticket_reuse_is_allowed_with_same_binding() {
         let params = Parameters::new(0, Duration::from_secs(600), Duration::from_secs(30));
         let mut rng = rand::rngs::StdRng::from_seed([0x77; 32]);
@@ -1446,6 +1544,98 @@ mod tests {
             0,
             "expired entries must be pruned on load"
         );
+    }
+
+    #[test]
+    fn revocation_store_load_enforces_capacity_by_evicting_oldest() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("revocations.norito");
+        let limits = TicketRevocationStoreLimits::new(2, Duration::from_secs(300)).expect("limits");
+        let old = [0x01; 32];
+        let middle = [0x02; 32];
+        let newest = [0x03; 32];
+        write_revocation_snapshot(
+            &path,
+            vec![
+                TicketRevocationSnapshotEntry {
+                    fingerprint: old,
+                    expires_at_secs: 2_120,
+                },
+                TicketRevocationSnapshotEntry {
+                    fingerprint: middle,
+                    expires_at_secs: 2_160,
+                },
+                TicketRevocationSnapshotEntry {
+                    fingerprint: newest,
+                    expires_at_secs: 2_220,
+                },
+            ],
+        );
+
+        let store = TicketRevocationStore::load(&path, limits, now).expect("load capped snapshot");
+        let active = store.active_fingerprints(now);
+        assert_eq!(active.len(), 2);
+        assert!(!active.contains(&old));
+        assert!(active.contains(&middle));
+        assert!(active.contains(&newest));
+    }
+
+    #[test]
+    fn revocation_store_load_rejects_duplicate_fingerprints() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("revocations.norito");
+        let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        let fingerprint = [0x44; 32];
+        write_revocation_snapshot(
+            &path,
+            vec![
+                TicketRevocationSnapshotEntry {
+                    fingerprint,
+                    expires_at_secs: 2_120,
+                },
+                TicketRevocationSnapshotEntry {
+                    fingerprint,
+                    expires_at_secs: 2_160,
+                },
+            ],
+        );
+
+        let err =
+            TicketRevocationStore::load(&path, limits, now).expect_err("duplicate should fail");
+        match err {
+            TicketRevocationStoreError::Parse(message) => {
+                assert!(message.contains("duplicate"));
+                assert!(message.contains("fingerprint"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revocation_store_load_rejects_overflowing_expiry() {
+        let now = UNIX_EPOCH + Duration::from_secs(2_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("revocations.norito");
+        let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
+        write_revocation_snapshot(
+            &path,
+            vec![TicketRevocationSnapshotEntry {
+                fingerprint: [0x55; 32],
+                expires_at_secs: u64::MAX,
+            }],
+        );
+
+        let err =
+            TicketRevocationStore::load(&path, limits, now).expect_err("overflow should fail");
+        match err {
+            TicketRevocationStoreError::Parse(message) => {
+                assert!(message.contains("expiry"));
+                assert!(message.contains("overflows"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 
     #[test]

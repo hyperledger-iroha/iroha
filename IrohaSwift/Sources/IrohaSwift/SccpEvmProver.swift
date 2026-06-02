@@ -941,7 +941,7 @@ public final class BscMainnetSccp {
             throw EvmSccpProverError.localProverUnavailable
         }
         let chainId = try await selectedProvider.request(method: "eth_chainId", params: [])
-        try Self.requireMainnetChainId(Self.normalizeMainnetChainId(chainId))
+        try Self.requireMainnetChainId(Self.normalizeRpcChainId(chainId))
         return chainId
     }
 
@@ -1141,37 +1141,9 @@ public final class BscMainnetSccp {
         return try await outboundSubmitFunction(submission)
     }
 
-    private static func normalizeMainnetChainId(_ value: Any) throws -> UInt64 {
-        if let value = value as? UInt64 {
-            return value
-        }
-        if let value = value as? UInt32 {
-            return UInt64(value)
-        }
-        if let value = value as? UInt {
-            return UInt64(value)
-        }
-        if let value = value as? Int {
-            guard value >= 0 else {
-                throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-            }
-            return UInt64(value)
-        }
-        guard let text = value as? String, text.trimmingCharacters(in: .whitespacesAndNewlines) == text else {
-            throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-        }
-        if text.hasPrefix("0x") {
-            let hex = String(text.dropFirst(2))
-            guard !hex.isEmpty,
-                  hex == "0" || (hex.first != "0" && hex.allSatisfy { Self.isLowerHex($0) }),
-                  let parsed = UInt64(hex, radix: 16) else {
-                throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
-            }
-            return parsed
-        }
-        guard !text.isEmpty,
-              text == "0" || (text.first != "0" && text.allSatisfy { Self.isDecimalDigit($0) }),
-              let parsed = UInt64(text, radix: 10) else {
+    private static func normalizeRpcChainId(_ value: Any) throws -> UInt64 {
+        let quantity = try Self.normalizeRpcQuantity(value, label: "eth_chainId")
+        guard let parsed = UInt64(String(quantity.dropFirst(2)), radix: 16) else {
             throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
         }
         return parsed
@@ -1509,7 +1481,7 @@ public final class EthereumMainnetSccp {
             throw EvmSccpProverError.localProverUnavailable
         }
         let chainId = try await selectedProvider.request(method: "eth_chainId", params: [])
-        try Self.requireMainnetChainId(Self.normalizeMainnetChainId(chainId))
+        try Self.requireMainnetChainId(Self.normalizeRpcChainId(chainId))
         return chainId
     }
 
@@ -1832,8 +1804,12 @@ public final class EthereumMainnetSccp {
         }
     }
 
-    private static func normalizeMainnetChainId(_ value: Any) throws -> UInt64 {
-        try Self.normalizeUnsignedInteger(value, label: "eth_chainId")
+    private static func normalizeRpcChainId(_ value: Any) throws -> UInt64 {
+        let quantity = try Self.normalizeRpcQuantity(value, label: "eth_chainId")
+        guard let parsed = UInt64(String(quantity.dropFirst(2)), radix: 16) else {
+            throw EvmSccpProverError.invalidPublicInputs("eth_chainId")
+        }
+        return parsed
     }
 
     private static func normalizeReceiptProofHash(

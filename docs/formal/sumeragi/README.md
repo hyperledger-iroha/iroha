@@ -7,6 +7,7 @@ This directory contains bounded formal models for Sumeragi safety and liveness.
 `Sumeragi.tla` captures the commit path:
 - phase progression (`Propose`, `Prepare`, `CommitVote`, `NewView`, `Committed`),
 - vote and quorum thresholds (`CommitQuorum`, `ViewQuorum`),
+- latched view-change quorum evidence for nonzero active views,
 - weighted stake quorum (`StakeQuorum`) for NPoS-style commit guards,
 - RBC causality (`Init -> Chunk -> Ready -> Deliver`) with header/digest evidence,
 - GST and weak fairness assumptions over honest progress actions.
@@ -7748,6 +7749,11 @@ Invariants:
 - `CommitDisablesProgressActions`
 - `CommittedPhaseMatchesFinality`
 - `CommitViewMatchesFinality`
+- `CommitViewDoesNotLeadCurrentView`
+- `ViewEvidenceMatchesActiveView`
+- `NewViewPhaseBelowQuorum`
+- `ViewEvidenceIsCompleteOrEmpty`
+- `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
 - `CommitImpliesPrepareQuorum`
 - `CommitEvidenceMatchesVoteCounters`
@@ -8645,6 +8651,18 @@ Temporal properties:
   the terminal committed phase after finality.
 - `CommitViewNeverChanges` proves that the latched commit-view witness remains
   the active view after finality.
+- `CommitViewNeverLeadsCurrentView` proves that the latched commit-view witness
+  never points to a future view.
+- `ViewQuorumEvidenceNeverDiverges` proves that proposals, vote phases, and
+  finality in nonzero views remain backed by a latched view-change quorum
+  witness.
+- `NewViewQuorumHandoffNeverStalls` proves that a quorum-satisfied `NewView`
+  phase immediately hands off to proposal-ready state instead of remaining in a
+  view-change phase with enough votes already collected.
+- `ViewEvidenceNeverPartial` proves that the latched view-change witness is
+  either absent or quorum-complete, never a partial vote count.
+- `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
+  their view-change quorum witness after commit.
 - `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required
   before entering commit vote remains present after finality.
 - `LiveCommitQuorumNeverLost` proves that the live vote counters and signed

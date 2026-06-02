@@ -140,7 +140,7 @@ public static class EthereumMainnetSccp
             "eth_chainId",
             Array.Empty<object?>(),
             cancellationToken).ConfigureAwait(false);
-        RequireMainnetChainId(NormalizeMainnetChainId(chainId));
+        RequireMainnetChainId(NormalizeRpcChainId(chainId));
         return chainId;
     }
 
@@ -1166,8 +1166,11 @@ public static class EthereumMainnetSccp
         return ToHex(Keccak256(payload.ToArray()));
     }
 
-    private static ulong NormalizeMainnetChainId(object? value)
-        => NormalizeUnsignedInteger(value, "eth_chainId");
+    private static ulong NormalizeRpcChainId(object? value)
+    {
+        var quantity = NormalizeRpcQuantity(value, "eth_chainId");
+        return Convert.ToUInt64(quantity[2..], 16);
+    }
 
     private static ulong NormalizeUnsignedInteger(object? value, string parameterName)
     {

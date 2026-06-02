@@ -6,7 +6,7 @@
 //! delegated issuer.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs, io,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -347,7 +347,7 @@ impl AdmissionTokenVerifier {
             .map_err(VerifyError::Clock)?
             .as_secs();
 
-        if now_secs + self.clock_skew.as_secs() < token.issued_at {
+        if now_secs.saturating_add(self.clock_skew.as_secs()) < token.issued_at {
             return Err(VerifyError::NotYetValid {
                 issued_at: token.issued_at,
                 now: now_secs,
@@ -368,6 +368,8 @@ impl AdmissionTokenVerifier {
             });
         }
 
+        self.preflight_crypto_material(token)?;
+
         verify_mldsa(
             self.suite,
             &self.public_key,
@@ -379,7 +381,14 @@ impl AdmissionTokenVerifier {
 
         if let Some(store) = &self.replay_store {
             let token_id = token.token_id();
-            let expires_at = UNIX_EPOCH + Duration::from_secs(token.expires_at());
+            let expires_at = UNIX_EPOCH
+                .checked_add(Duration::from_secs(token.expires_at()))
+                .ok_or_else(|| {
+                    VerifyError::Store(TokenStoreError::Parse(format!(
+                        "token expiry timestamp {} overflows system time",
+                        token.expires_at()
+                    )))
+                })?;
             let mut guard = store
                 .lock()
                 .map_err(|_| VerifyError::Store(TokenStoreError::Poisoned))?;
@@ -400,6 +409,15 @@ impl AdmissionTokenVerifier {
         }
 
         Ok(())
+    }
+
+    fn preflight_crypto_material(&self, token: &AdmissionToken) -> Result<(), VerifyError> {
+        self.suite
+            .validate_public_key(&self.public_key)
+            .map_err(VerifyError::Signature)?;
+        self.suite
+            .validate_signature(token.signature())
+            .map_err(VerifyError::Signature)
     }
 }
 
@@ -685,21 +703,39 @@ impl PersistentTokenStore {
         let snapshot = decode_adaptive::<TokenStoreSnapshot>(&bytes).map_err(|decode_err| {
             TokenStoreError::Parse(format!("norito decode failed: {decode_err}"))
         })?;
-        self.ingest_snapshot(snapshot, now);
+        self.ingest_snapshot(snapshot, now)?;
 
         self.prune_expired(now);
         self.enforce_capacity();
         self.persist()
     }
 
-    fn ingest_snapshot(&mut self, snapshot: TokenStoreSnapshot, now: SystemTime) {
+    fn ingest_snapshot(
+        &mut self,
+        snapshot: TokenStoreSnapshot,
+        now: SystemTime,
+    ) -> Result<(), TokenStoreError> {
+        let mut seen_ids = HashSet::with_capacity(snapshot.entries.len());
         for entry in snapshot.entries {
-            let expires_at = UNIX_EPOCH + Duration::from_secs(entry.expires_at_secs);
+            if !seen_ids.insert(entry.id) {
+                return Err(TokenStoreError::Parse(
+                    "duplicate token id in snapshot".to_string(),
+                ));
+            }
+            let expires_at = UNIX_EPOCH
+                .checked_add(Duration::from_secs(entry.expires_at_secs))
+                .ok_or_else(|| {
+                    TokenStoreError::Parse(format!(
+                        "token expiry timestamp {} overflows system time",
+                        entry.expires_at_secs
+                    ))
+                })?;
             if is_expired(expires_at, now) || exceeds_ttl(expires_at, now, self.limits.max_ttl) {
                 continue;
             }
             let _ = self.records.insert(entry.id, TokenRecord { expires_at });
         }
+        Ok(())
     }
 
     fn prune_expired(&mut self, now: SystemTime) {
@@ -953,6 +989,21 @@ mod tests {
 
     const RELAY_ID: [u8; 32] = [0xAB; 32];
     const TRANSCRIPT: [u8; 32] = [0xCD; 32];
+
+    fn write_token_store_snapshot(path: &std::path::Path, entries: Vec<TokenStoreEntry>) {
+        let snapshot = TokenStoreSnapshot { entries };
+        let content = encode_adaptive(&snapshot);
+        std::fs::write(path, content).expect("write token store snapshot");
+    }
+
+    fn assert_mldsa_bad_encoding(err: VerifyError, field: &str) {
+        match err {
+            VerifyError::Signature(MlDsaError::BadEncoding(err)) => {
+                assert!(err.to_string().contains(field));
+            }
+            other => panic!("expected ML-DSA bad encoding error, got {other:?}"),
+        }
+    }
 
     #[test]
     fn encode_decode_round_trip() {
@@ -1312,6 +1363,87 @@ mod tests {
     }
 
     #[test]
+    fn verifier_rejects_invalid_public_key_length_before_backend() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let mut bad_public_key = keypair.public_key().to_vec();
+        bad_public_key.pop();
+        let fingerprint = compute_issuer_fingerprint(&bad_public_key);
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0xA11CE);
+        let token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            bad_public_key,
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        );
+
+        let err = verifier
+            .verify(
+                &token,
+                &RELAY_ID,
+                &TRANSCRIPT,
+                issued + Duration::from_secs(5),
+            )
+            .expect_err("bad verifier public key length must fail");
+        assert_mldsa_bad_encoding(err, "public key");
+    }
+
+    #[test]
+    fn verifier_rejects_signature_length_before_replay_store() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0x51A);
+        let mut token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.signature.truncate(token.signature.len() - 1);
+
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+        let now = issued + Duration::from_secs(5);
+
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("bad signature length must fail");
+        assert_mldsa_bad_encoding(err, "signature");
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
+    }
+
+    #[test]
     fn persistent_store_blocks_replay_after_restart() {
         let limits = TokenStoreLimits::new(4, Duration::from_secs(300)).expect("limits");
         let now = UNIX_EPOCH + Duration::from_secs(10_000);
@@ -1372,8 +1504,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("valid >= epoch")
             .as_secs();
-        let snapshot = TokenStoreSnapshot {
-            entries: vec![
+        write_token_store_snapshot(
+            &path,
+            vec![
                 TokenStoreEntry {
                     id: [0xAA; 32],
                     expires_at_secs: expired_secs,
@@ -1383,14 +1516,67 @@ mod tests {
                     expires_at_secs: valid_secs,
                 },
             ],
-        };
-        let content = encode_adaptive(&snapshot);
-        std::fs::write(&path, content).expect("write snapshot");
+        );
 
         let store = PersistentTokenStore::load(&path, limits, now).expect("load");
         assert!(!store.contains(&[0xAA; 32], now));
         assert!(store.contains(&[0xBB; 32], now));
         assert_eq!(store.len(now), 1);
+    }
+
+    #[test]
+    fn persistent_store_rejects_duplicate_token_ids_on_load() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("duplicate_store.txt");
+        write_token_store_snapshot(
+            &path,
+            vec![
+                TokenStoreEntry {
+                    id: [0xAA; 32],
+                    expires_at_secs: 10_030,
+                },
+                TokenStoreEntry {
+                    id: [0xAA; 32],
+                    expires_at_secs: 10_060,
+                },
+            ],
+        );
+
+        let err =
+            PersistentTokenStore::load(&path, limits, now).expect_err("duplicate id should fail");
+        match err {
+            TokenStoreError::Parse(message) => {
+                assert!(message.contains("duplicate"));
+                assert!(message.contains("token id"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn persistent_store_rejects_overflowing_expiry_on_load() {
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(120)).expect("limits");
+        let now = UNIX_EPOCH + Duration::from_secs(10_000);
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("overflow_store.txt");
+        write_token_store_snapshot(
+            &path,
+            vec![TokenStoreEntry {
+                id: [0xBB; 32],
+                expires_at_secs: u64::MAX,
+            }],
+        );
+
+        let err = PersistentTokenStore::load(&path, limits, now).expect_err("overflow should fail");
+        match err {
+            TokenStoreError::Parse(message) => {
+                assert!(message.contains("expiry"));
+                assert!(message.contains("overflows"));
+            }
+            other => panic!("expected parse error, got {other:?}"),
+        }
     }
 
     #[test]

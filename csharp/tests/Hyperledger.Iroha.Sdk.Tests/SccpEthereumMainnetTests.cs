@@ -647,6 +647,12 @@ public sealed class SccpEthereumMainnetTests
         await Assert.ThrowsAsync<ArgumentException>(
             () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
                 new ExecutionProviderStub("0x01", receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub("1", receipt, block)).AsTask());
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ValidateExecutionProviderMainnetAsync(
+                new ExecutionProviderStub(1, receipt, block)).AsTask());
 
         var failedReceipt = new Dictionary<string, object?>(receipt)
         {

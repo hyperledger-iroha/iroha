@@ -82,7 +82,7 @@ public static partial class BscMainnetSccp
             "eth_chainId",
             Array.Empty<object?>(),
             cancellationToken).ConfigureAwait(false);
-        RequireMainnetChainId(NormalizeMainnetChainId(chainId));
+        RequireMainnetChainId(NormalizeRpcChainId(chainId));
         return chainId;
     }
 
@@ -485,35 +485,6 @@ public static partial class BscMainnetSccp
         return ToHex(Keccak256(payload.ToArray()));
     }
 
-    private static ulong NormalizeMainnetChainId(object? value)
-    {
-        switch (value)
-        {
-            case byte byteValue:
-                return byteValue;
-            case ushort ushortValue:
-                return ushortValue;
-            case uint uintValue:
-                return uintValue;
-            case ulong ulongValue:
-                return ulongValue;
-            case sbyte sbyteValue when sbyteValue >= 0:
-                return (ulong)sbyteValue;
-            case short shortValue when shortValue >= 0:
-                return (ulong)shortValue;
-            case int intValue when intValue >= 0:
-                return (ulong)intValue;
-            case long longValue when longValue >= 0:
-                return (ulong)longValue;
-            case string text:
-                return NormalizeMainnetChainIdString(text);
-            default:
-                throw new ArgumentException(
-                    "eth_chainId must be an integral JSON-RPC quantity.",
-                    nameof(value));
-        }
-    }
-
     private static ulong NormalizeMainnetChainIdString(string value)
     {
         if (!string.Equals(value.Trim(), value, StringComparison.Ordinal))
@@ -543,6 +514,12 @@ public static partial class BscMainnetSccp
         }
 
         return ulong.Parse(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static ulong NormalizeRpcChainId(object? value)
+    {
+        var quantity = NormalizeRpcQuantity(value, "eth_chainId");
+        return Convert.ToUInt64(quantity[2..], 16);
     }
 
     private static IReadOnlyDictionary<string, object?> RequireDictionary(object? value, string label)

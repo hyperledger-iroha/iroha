@@ -1635,6 +1635,40 @@ public final class EvmSccpProverTests {
 
     threw = false;
     try {
+      new EthereumMainnetSccp(null, null, (method, params) -> "1", null, null)
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    }
+    assert threw : "Ethereum inbound collection must reject decimal eth_chainId RPC";
+
+    threw = false;
+    try {
+      new EthereumMainnetSccp(null, null, (method, params) -> Long.valueOf(1L), null, null)
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    }
+    assert threw : "Ethereum inbound collection must reject numeric eth_chainId RPC";
+
+    threw = false;
+    try {
       sdk.collectInboundEvidenceFromReceipt(
           new EthereumMainnetSccp.InboundEvidence(
               EvmSccpProver.DOMAIN_ETH,
@@ -2331,6 +2365,40 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("eth_chainId == 56");
     }
     assert threw : "BSC inbound collection must reject non-mainnet RPC";
+
+    threw = false;
+    try {
+      new BscMainnetSccp(null, null, (method, params) -> "56", null, null)
+          .collectInboundEvidenceFromReceipt(
+              new BscMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_BSC,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    }
+    assert threw : "BSC inbound collection must reject decimal eth_chainId RPC";
+
+    threw = false;
+    try {
+      new BscMainnetSccp(null, null, (method, params) -> Long.valueOf(56L), null, null)
+          .collectInboundEvidenceFromReceipt(
+              new BscMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_BSC,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    }
+    assert threw : "BSC inbound collection must reject numeric eth_chainId RPC";
 
     threw = false;
     try {

@@ -112,9 +112,11 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   `MsgDefIdr`, `CreDt`, and BIC/ClrSysMmbId agents are preserved deterministically; XMLDSig/XAdES
   blocks remain skipped during IVM field materialisation. Torii profile validation verifies the
   supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles only
-  when the verified public key, leaf DER certificate, or cryptographically linked certificate-chain
-  issuer/root DER digest matches that rail profile's configured `trusted_public_key_sha256` or
-  `trusted_certificate_sha256` pins. Raw `KeyValue/ECKeyValue` public-key
+  when the verified public key or cryptographically linked terminal CA trust-anchor DER digest
+  matches that rail profile's configured `signature_public_key_sha256_pins`,
+  legacy `trusted_public_key_sha256`, or `x509_trust_anchor_sha256_pins`
+  pins; legacy `trusted_certificate_sha256` is normalized into the same
+  terminal trust-anchor policy. Raw `KeyValue/ECKeyValue` public-key
   material must decode as an uncompressed P-256 SEC1 point. Leaf certificates
   must carry critical `keyUsage` with `digitalSignature` and must not be CA
   certificates. Each chain link must bind the child issuer
@@ -124,11 +126,19 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   certificates, all supplied certificates must use ECDSA-with-SHA256 over
   id-ecPublicKey secp256r1 with uncompressed P-256 SEC1 subject public-key
   bytes, issuer `pathLenConstraint` values must allow the supplied subordinate
-  CA chain, and unknown, malformed, or unsupported parsed critical X.509
-  extensions on supplied certificates are rejected, certificate validity is
-  checked against deterministic verified signed XAdES
-  `SigningTime` or BAH `CreDt`, and ECDSA `SignatureValue` accepts both
-  fixed-width P-256 `r || s` and DER encodings only when `s` is canonical low-S.
+  CA chain, configured `x509_required_certificate_policy_oids` must remain
+  continuous through every intermediate CA below the terminal anchor unless
+  that intermediate carries `anyPolicy`, policy mappings, policy constraints,
+  and inhibit-any-policy extensions fail closed in the supported subset, and
+  unknown, malformed, or unsupported parsed critical X.509 extensions on
+  supplied certificates are rejected, certificate validity is checked against deterministic verified signed XAdES
+  `SigningTime` or BAH `CreDt`, CRL/OCSP freshness and delegated OCSP
+  responder validity use that same evaluation time, embedded CRL/OCSP values
+  are accepted only from signed `KeyInfo/X509Data`, configured and embedded OCSP
+  DER must use shortest-form lengths and minimal positive integer encodings,
+  OCSP `ResponseData` and `SingleResponse` extensions are unsupported and fail closed, and
+  ECDSA `SignatureValue` accepts both fixed-width P-256 `r || s` and DER encodings only when
+  `s` is canonical low-S.
   Unsigned signature-local `SigningTime` values are not trusted for X.509 validity.
   Reference URIs are limited to one empty URI or one
   unique same-document `#id` target using exact `Id`, `ID`, `id`, or `xml:id` attributes; selected
@@ -521,15 +531,16 @@ iroha app settlement dvp \
   one `X509Data` wrapper, with unsupported direct child elements, unsupported ordinary attributes,
   and non-whitespace wrapper text rejected.
   Profile `revoked_certificate_sha256` pins deny otherwise trusted chains.
-  Inputs outside that canonicalizer, such as DTD/general/custom entity
+  Unsupported XML or cryptographic inputs, such as DTD/general/custom entity
   expansion, malformed comments, CDATA, processing instructions, remote
   Reference URIs, duplicate reference IDs, unrelated or duplicate References,
   missing or unsupported Reference transforms, unbound prefixed attributes,
   explicit reserved namespace rebindings, malformed structural QNames,
   duplicate attributes, inherited
   namespace context beyond root declarations, raw attribute whitespace rewrites,
-  or malformed tag structure, fail closed until complete canonical XML coverage
-  is available.
+  malformed tag structure, noncanonical OCSP DER length/integer encodings, or
+  OCSP response/single-response extensions,
+  fail closed until complete canonical XML or OCSP policy coverage is available.
 
 ### Operational checklist for the bridge
 - Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  

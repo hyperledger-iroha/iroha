@@ -6988,6 +6988,13 @@ const normalizeEthereumMainnetChainId = (chainId) => {
   throw new TypeError("eth_chainId must be a hex, decimal, number, or bigint chain id");
 };
 
+const normalizeEvmRpcChainId = (chainId) => {
+  if (typeof chainId === "string" && /^0x(?:0|[1-9a-f][0-9a-f]*)$/u.test(chainId)) {
+    return BigInt(chainId);
+  }
+  throw new TypeError("eth_chainId must be a canonical JSON-RPC quantity");
+};
+
 const requireEthereumMainnetChainId = (chainId) => {
   const normalized = normalizeEthereumMainnetChainId(chainId);
   if (normalized !== BigInt(SCCP_ETH_MAINNET_EVM_CHAIN_ID)) {
@@ -6996,8 +7003,24 @@ const requireEthereumMainnetChainId = (chainId) => {
   return normalized;
 };
 
+const requireEthereumMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
+  if (normalized !== BigInt(SCCP_ETH_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("Ethereum mainnet SCCP requires eth_chainId == 0x1");
+  }
+  return normalized;
+};
+
 const requireBscMainnetChainId = (chainId) => {
   const normalized = normalizeEthereumMainnetChainId(chainId);
+  if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
+    throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
+  }
+  return normalized;
+};
+
+const requireBscMainnetRpcChainId = (chainId) => {
+  const normalized = normalizeEvmRpcChainId(chainId);
   if (normalized !== BigInt(SCCP_BSC_MAINNET_EVM_CHAIN_ID)) {
     throw new RangeError("BSC mainnet SCCP requires eth_chainId == 0x38");
   }
@@ -7888,7 +7911,7 @@ export class EthereumMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await ethereumJsonRpcRequest(provider, "eth_chainId", []);
-    requireEthereumMainnetChainId(chainId);
+    requireEthereumMainnetRpcChainId(chainId);
     return chainId;
   }
 
@@ -8185,7 +8208,7 @@ export class BscMainnetSccp {
     const provider =
       options.executionProvider ?? options.execution_provider ?? this.executionProvider;
     const chainId = await bscJsonRpcRequest(provider, "eth_chainId", []);
-    requireBscMainnetChainId(chainId);
+    requireBscMainnetRpcChainId(chainId);
     return chainId;
   }
 

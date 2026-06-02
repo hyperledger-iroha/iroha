@@ -55,6 +55,7 @@ const DILITHIUM3_SIGNATURE_LEN: usize = 2701;
 const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
+const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
 const STEP_NOTE_HYBRID_RESPONSE: &str = "Relay completes NK2 hybrid handshake";
@@ -3236,23 +3237,11 @@ fn parse_hybrid_relay_response(
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
 
-    let relay_ephemeral_bytes = cursor.read_len_prefixed()?;
-    if relay_ephemeral_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay ephemeral key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_ephemeral_pub = [0u8; NOISE_SECRET_LEN];
-    relay_ephemeral_pub.copy_from_slice(relay_ephemeral_bytes);
+    let relay_ephemeral_pub =
+        decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
 
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if relay_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_static_pub = [0u8; NOISE_SECRET_LEN];
-    relay_static_pub.copy_from_slice(&relay_static_bytes);
+    let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
 
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
@@ -3323,23 +3312,11 @@ fn parse_pqfs_relay_response(
     let mut relay_nonce = [0u8; 32];
     relay_nonce.copy_from_slice(relay_nonce_bytes);
 
-    let relay_ephemeral_bytes = cursor.read_len_prefixed()?;
-    if relay_ephemeral_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay ephemeral key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_ephemeral_pub = [0u8; NOISE_SECRET_LEN];
-    relay_ephemeral_pub.copy_from_slice(relay_ephemeral_bytes);
+    let relay_ephemeral_pub =
+        decode_noise_public_key("relay ephemeral key", cursor.read_len_prefixed()?)?;
 
     let relay_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if relay_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "relay static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut relay_static_pub = [0u8; NOISE_SECRET_LEN];
-    relay_static_pub.copy_from_slice(&relay_static_bytes);
+    let relay_static_pub = decode_noise_public_key("relay static key", &relay_static_bytes)?;
 
     let relay_capabilities = cursor.read_len_prefixed()?.to_vec();
     let descriptor_commit = cursor.read_len_prefixed()?.to_vec();
@@ -3755,17 +3732,11 @@ fn parse_client_hello_nk2(
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
 
-    let mut client_ephemeral_public = [0u8; NOISE_SECRET_LEN];
-    client_ephemeral_public.copy_from_slice(cursor.read_exact(NOISE_SECRET_LEN)?);
+    let client_ephemeral_public =
+        decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
 
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if client_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "client static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut client_static_public = [0u8; NOISE_SECRET_LEN];
-    client_static_public.copy_from_slice(&client_static_bytes);
+    let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
 
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let client_capabilities = cursor.read_len_prefixed()?.to_vec();
@@ -3840,17 +3811,11 @@ fn parse_client_hello_nk3(
     let kem_id = cursor.read_u8()?;
     let sig_id = cursor.read_u8()?;
 
-    let mut client_ephemeral_public = [0u8; NOISE_SECRET_LEN];
-    client_ephemeral_public.copy_from_slice(cursor.read_exact(NOISE_SECRET_LEN)?);
+    let client_ephemeral_public =
+        decode_noise_public_key("client ephemeral key", cursor.read_exact(NOISE_SECRET_LEN)?)?;
 
     let client_static_bytes = cursor.read_len_prefixed()?.to_vec();
-    if client_static_bytes.len() != NOISE_SECRET_LEN {
-        return Err(HarnessError::Validation(
-            "client static key must be 32 bytes".to_string(),
-        ));
-    }
-    let mut client_static_public = [0u8; NOISE_SECRET_LEN];
-    client_static_public.copy_from_slice(&client_static_bytes);
+    let client_static_public = decode_noise_public_key("client static key", &client_static_bytes)?;
 
     let client_kem_public = cursor.read_len_prefixed()?.to_vec();
     let forward_kem_public = cursor.read_len_prefixed()?.to_vec();
@@ -4633,6 +4598,35 @@ fn compute_dual_mix(
     )
 }
 
+fn decode_noise_public_key(
+    label: &str,
+    bytes: &[u8],
+) -> Result<[u8; NOISE_SECRET_LEN], HarnessError> {
+    if bytes.len() != NOISE_SECRET_LEN {
+        return Err(HarnessError::Validation(format!(
+            "{label} must be {NOISE_SECRET_LEN} bytes"
+        )));
+    }
+    let mut public = [0u8; NOISE_SECRET_LEN];
+    public.copy_from_slice(bytes);
+    if noise_public_key_is_low_order(&public) {
+        return Err(HarnessError::Validation(format!(
+            "{label} must not be low-order"
+        )));
+    }
+    Ok(public)
+}
+
+fn noise_public_key_is_low_order(public: &[u8; NOISE_SECRET_LEN]) -> bool {
+    let public_key = X25519PublicKey::from(*public);
+    let probe_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
+    probe_secret
+        .diffie_hellman(&public_key)
+        .as_bytes()
+        .iter()
+        .all(|&byte| byte == 0)
+}
+
 struct MessageCursor<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -4673,6 +4667,8 @@ impl<'a> MessageCursor<'a> {
 
 #[cfg(test)]
 mod tests {
+    use core::ops::Range;
+
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
@@ -5010,6 +5006,46 @@ mod tests {
         encode_tlvs(&entries)
     }
 
+    fn len_prefixed_payload_range(frame: &[u8], offset: &mut usize) -> Range<usize> {
+        let len = u16::from_be_bytes([frame[*offset], frame[*offset + 1]]) as usize;
+        *offset += 2;
+        let start = *offset;
+        *offset += len;
+        start..*offset
+    }
+
+    fn skip_len_prefixed_payload(frame: &[u8], offset: &mut usize) {
+        let _ = len_prefixed_payload_range(frame, offset);
+    }
+
+    fn client_hello_ephemeral_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        offset += 3;
+        offset..offset + NOISE_SECRET_LEN
+    }
+
+    fn client_hello_static_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = client_hello_ephemeral_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn relay_response_ephemeral_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = 1;
+        skip_len_prefixed_payload(frame, &mut offset);
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn relay_response_static_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = relay_response_ephemeral_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn overwrite_noise_key(frame: &mut [u8], range: Range<usize>, replacement: [u8; 32]) {
+        assert_eq!(range.len(), NOISE_SECRET_LEN);
+        frame[range].copy_from_slice(&replacement);
+    }
+
     #[test]
     fn ensure_nk3_negotiation_accepts_forward_secure_suite() {
         let Nk3Fixture {
@@ -5027,6 +5063,176 @@ mod tests {
             sig_id,
         )
         .expect("nk3 negotiation succeeds");
+    }
+
+    #[test]
+    fn parse_client_hello_nk2_rejects_low_order_ephemeral_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng = StdRng::seed_from_u64(7301);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("build nk2 client hello");
+
+        let range = client_hello_ephemeral_range(&client_hello);
+        overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
+        let err = parse_client_hello(&client_hello, params.resume_hash)
+            .err()
+            .expect("low-order client ephemeral key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("client ephemeral key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_client_hello_nk3_rejects_low_order_static_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng = StdRng::seed_from_u64(7302);
+        let (mut client_hello, _state) =
+            build_client_hello(&params, &mut rng).expect("build nk3 client hello");
+
+        let range = client_hello_static_range(&client_hello);
+        overwrite_noise_key(&mut client_hello, range, [0u8; NOISE_SECRET_LEN]);
+        let err = parse_client_hello(&client_hello, params.resume_hash)
+            .err()
+            .expect("low-order client static key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("client static key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_hybrid_relay_response_rejects_low_order_ephemeral_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(7303);
+        let mut rng_relay = StdRng::seed_from_u64(7304);
+        let relay_keys = KeyPair::random();
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("build nk2 client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("build nk2 relay response");
+
+        let range = relay_response_ephemeral_range(&relay_response);
+        overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err =
+            parse_hybrid_relay_response(&relay_response, params.descriptor_commit, profile.suite())
+                .err()
+                .expect("low-order relay ephemeral key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("relay ephemeral key must not be low-order")
+        );
+    }
+
+    #[test]
+    fn parse_pqfs_relay_response_rejects_low_order_static_key() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(7305);
+        let mut rng_relay = StdRng::seed_from_u64(7306);
+        let relay_keys = KeyPair::random();
+        let (client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("build nk3 client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("build nk3 relay response");
+
+        let range = relay_response_static_range(&relay_response);
+        overwrite_noise_key(&mut relay_response, range, [0u8; NOISE_SECRET_LEN]);
+        let profile = kem_profile(params.kem_id).expect("kem profile");
+        let err =
+            parse_pqfs_relay_response(&relay_response, params.descriptor_commit, profile.suite())
+                .err()
+                .expect("low-order relay static key must be rejected");
+        assert!(
+            err.to_string()
+                .contains("relay static key must not be low-order")
+        );
     }
 
     #[test]

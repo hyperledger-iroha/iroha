@@ -1114,6 +1114,16 @@ class EvmSccpProverTest {
             ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
         }
         assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "1" },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> 1L },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(receipt = receipt + ("status" to "0x0")),
             )
@@ -1347,6 +1357,16 @@ class EvmSccpProverTest {
         assertFailsWith<IllegalArgumentException> {
             BscMainnetSccp(
                 executionProvider = BscMainnetExecutionProvider { _, _ -> "0x1" },
+            ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                executionProvider = BscMainnetExecutionProvider { _, _ -> "56" },
+            ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BscMainnetSccp(
+                executionProvider = BscMainnetExecutionProvider { _, _ -> 56L },
             ).collectInboundEvidenceFromReceipt(BscMainnetInboundEvidence(receipt = receipt))
         }
         assertFailsWith<IllegalArgumentException> {

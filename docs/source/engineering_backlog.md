@@ -16,8 +16,10 @@ track detailed unfinished engineering work.
   all byte values in the `F_257` RAM-LFE profile, and keeps evaluators
   secret-key free. Soracloud RotateLeft now requires public rotation-key
   refresh material for the outer ciphertext-slot envelope, and Bootstrap
-  applies a validated public encrypted-zero refresh key. Those refresh paths
-  are still not a complete BFV-RNS bootstrap or packed-polynomial
+  applies a validated public encrypted-zero refresh key. BFV evaluation-key
+  metadata now caps rotation-key bundles and requires canonical bounded
+  bootstrap key ids. Those refresh paths are still not a complete BFV-RNS
+  bootstrap or packed-polynomial
   Galois-switching circuit.
 - Broaden the cross-SDK deterministic BFV-RNS vector corridor: Kotlin, Java,
   Swift, and JavaScript now require `RamLfeOutputOpening` on identifier
@@ -76,6 +78,61 @@ track detailed unfinished engineering work.
   core ZK-ACE rotated/revoked identity state, unsupported action classes,
   transaction digest/account substitution, and mutated ZK-ACE/STARK public
   inputs;
+  RAM-LFE proof-verifier metadata now rejects noncanonical backend/circuit
+  identifiers, zero schema hashes, empty/all-zero verifier keys, and oversized
+  verifier keys before proof-carrying programmed policies are admitted;
+  programmed BFV public-parameter admission now rejects zero hidden-program
+  digests and relinearization-only violations where unused rotation/bootstrap
+  refresh keys are smuggled into identifier-program metadata;
+  BFV evaluation-key metadata now rejects noncanonical bootstrap key ids and
+  oversized rotation-key bundles before key-bundle digests are admitted;
+  generic RAM-LFE and identifier receipt proof verifiers now have focused
+  pre-parse regressions for public-input schema drift and non-zero mismatched
+  verifier-key hashes;
+  secp256k1 recoverable prehash signing now normalizes low-S output and the
+  public-key recovery primitive rejects high-S malleable encodings before
+  deriving EVM addresses;
+  Ed25519 uncached batch verification now rejects noncanonical or small-order
+  signature `R` encodings before entering the dalek batch backend;
+  X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
+  keys, and the standalone key-exchange surface now reject low-order encodings
+  before ECDH while retaining all-zero shared-secret fallback checks;
+  SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
+  ephemeral public keys in decoded client and relay frames;
+  SoraNet signed-ticket decode and direct verification now reject ML-DSA-44
+  signature vectors whose length disagrees with the suite metadata before
+  accepting tokens or entering backend verification;
+  SoraNet revocation-store reload now rejects duplicate persisted
+  fingerprints, rejects overflowing expiry timestamps, and bounds loaded active
+  records to the configured capacity;
+  SoraNet guard-directory snapshot decode now rejects duplicate or
+  key-mismatched issuer fingerprints and enforces ML-DSA-65 issuer public-key
+  length/phase requirements before snapshots are admitted;
+  SoraNet admission-token replay-store reload now rejects duplicate persisted
+  token IDs and overflowing expiry timestamps, and admission-token verification
+  preflights ML-DSA issuer public-key and detached-signature lengths before
+  backend verification or replay-store mutation; SoraNet SRCv2 bundle
+  verification rejects weak Ed25519 verifier keys and preflights ML-DSA-65
+  issuer public-key and detached-signature lengths before backend verification;
+  SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
+  key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
+  relay public keys, rejects malformed/noncanonical/weak Ed25519 identity
+  public keys, rejects ML-DSA-65 detached signature length drift, and its
+  canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest
+  integer/length encodings and duplicate nested
+  bundle/signature/endpoint/KEM-policy fields; guard-directory relay entries
+  now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
+  snapshot directory hash, and a unique relay ID, with relay certificate
+  signatures verified against embedded issuer keys under the snapshot
+  validation phase; SRCv2 role/capability bitmask decode rejects unsupported
+  bits instead of masking them away and validity windows fail closed when they
+  are inverted or published after expiry; KEM rotation policies reject static
+  fallback/rotation/grace metadata, staged policies without fallbacks, rolling
+  policies without nonzero cadence, and preferred/fallback suite equality;
+  handshake-suite preference lists and endpoint URL lists must be non-empty and
+  duplicate-free, and endpoint URL strings reject empty,
+  whitespace-bearing, or control-character values; endpoint tags, when present,
+  reject empty, whitespace-bearing, control-character, or duplicate values;
   remaining breadth should emphasize full cross-SDK RNS vectors and broader
   release validation.
 
@@ -282,11 +339,12 @@ track detailed unfinished engineering work.
   namespace declarations. No-comments C14N now omits
   valid XML comments from `SignedInfo` and referenced payload bytes while
   rejecting malformed comments. The verifier still rejects processing
-  instructions, CDATA, DTD/general/custom entity expansion, carriage returns,
-  duplicate attributes, unbound prefixed attributes, explicit reserved namespace
+  instructions, CDATA/CDEnd tokens, uppercase `#X` numeric character
+  references, DTD/general/custom entity expansion, carriage returns, duplicate
+  attributes, unbound prefixed attributes, explicit reserved namespace
   rebindings, malformed structural QNames such as double-colon local-name
-  matches, inherited namespace context beyond root declarations, raw
-  attribute whitespace rewrites, and malformed tag structure.
+  matches, inherited namespace context beyond root declarations, raw attribute
+  whitespace rewrites, and malformed tag structure.
 - Completed 2026-06-02: broadened XMLDSig ECDSA `SignatureValue`
   interoperability. Torii now accepts the fixed-width P-256 `r || s` signature
   encoding used by XMLDSig profiles while retaining DER fixture compatibility,
@@ -325,11 +383,26 @@ track detailed unfinished engineering work.
   trust pins; Torii validates the SHA-256 deny list at startup and rejects an
   otherwise trusted XMLDSig chain when any verified leaf/issuer DER digest is
   explicitly revoked.
+- Completed 2026-06-02: tightened ISO XMLDSig X.509 production admission so
+  Torii config and shared profile JSON SHA-256 trust/revocation pins must
+  already be canonical lowercase hex, `x509_trust_anchor_sha256_pins` and
+  legacy certificate pins require a linked issuer certificate beyond the leaf,
+  and CRL/OCSP freshness plus delegated OCSP responder certificate validity are
+  evaluated at verified XAdES `SigningTime` or BAH `CreDt` rather than local
+  wall clock.
 - Completed 2026-06-02: documented the XMLDSig trust-anchor rotation pattern
   for operators: overlap current and next certificate pins during upstream
   cutover, remove the retired pin after cutover, and use
   `revoked_certificate_sha256` only for compromised leaf/anchor digests that
   must override otherwise valid trust pins.
+- Completed 2026-06-02: tightened the ISO OCSP DER parser used by
+  `require-verified` XMLDSig/XAdES revocation checks. Torii now rejects
+  non-shortest long-form DER lengths and non-minimal positive integer encodings
+  before OCSP status, responder, or signature validation.
+- Completed 2026-06-02: tightened the supported ISO OCSP subset so
+  `ResponseData` and `SingleResponse` extensions fail closed instead of being
+  ignored by the local parser. Full OCSP extension-policy processing remains
+  outside the first-release subset.
 - Completed 2026-06-02: extended ISO bridge idempotency to business message
   identifiers. Torii now indexes trimmed `BizMsgIdr`/BAH business-message IDs
   alongside payload hashes and normalized UETRs, rejects replay by business
@@ -432,10 +505,18 @@ track detailed unfinished engineering work.
   identifiers must match before the trust-anchor path can authorize the leaf
   key; issuer-name/signature-valid chains with mismatched key identifiers fail
   closed.
-- Remaining ISO signature work is path-policy processing beyond policy OID
-  presence/name constraints/path length/end-entity signer admission/
-  unknown-critical extension handling/signer validity enforcement/signer EKU
-  purpose binding/AKI-SKI issuer binding.
+- Completed 2026-06-02: added conservative required certificate-policy path
+  continuity for X.509 trust-anchor XMLDSig chains. When a profile requires
+  certificate policy OIDs, every intermediate CA below the pinned terminal
+  anchor must carry all required OIDs or `anyPolicy`; generated chain tests
+  cover matching, `anyPolicy`, missing, and unrelated intermediate policies.
+- Completed 2026-06-02: fail closed on policy mappings, policy constraints,
+  and inhibit-any-policy extensions in XMLDSig X.509 material until full RFC
+  5280 policy-tree processing is implemented.
+- Remaining ISO signature work is optional full RFC 5280 policy-tree processing
+  if production profiles need to accept policy mappings, policy constraints, or
+  inhibit-any-policy instead of rejecting those extensions in the supported
+  subset.
 - Completed 2026-06-01: tightened ISO idempotency so replayed Business
   Application Header `BizMsgIdr` values are rejected across different durable
   message identifiers, including after durable-store reload. Live-profile

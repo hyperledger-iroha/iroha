@@ -135,8 +135,8 @@ test("EthereumMainnetSccp rejects non-mainnet execution providers", async () => 
   );
 });
 
-test("EthereumMainnetSccp rejects padded JSON-RPC chain ids", async () => {
-  for (const chainId of ["0x01", "0X1", " 0x1", "0x1 "]) {
+test("EthereumMainnetSccp rejects noncanonical JSON-RPC chain ids", async () => {
+  for (const chainId of ["1", 1, "0x01", "0X1", " 0x1", "0x1 "]) {
     const sdk = new EthereumMainnetSccp({
       executionProvider: {
         async request() {
@@ -147,7 +147,7 @@ test("EthereumMainnetSccp rejects padded JSON-RPC chain ids", async () => {
 
     await assert.rejects(
       () => sdk.validateExecutionProviderMainnet(),
-      /hex, decimal, number, or bigint chain id/u,
+      /canonical JSON-RPC quantity/u,
     );
   }
 });
