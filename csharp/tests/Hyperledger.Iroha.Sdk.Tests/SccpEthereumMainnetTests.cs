@@ -135,6 +135,7 @@ public sealed class SccpEthereumMainnetTests
             if (expectedSourceEventDigest is not null)
             {
                 Assert.Equal(expectedSourceEventDigest, evidence.ReceiptProof?.SourceEventDigest);
+                Assert.Equal(expectedSourceEventDigest, evidence.SourceEventDigest);
             }
 
             return ValueTask.FromResult(new byte[] { 1, 2, 3 });
@@ -464,6 +465,9 @@ public sealed class SccpEthereumMainnetTests
         var sourceEventLog = new Dictionary<string, object?>
         {
             ["address"] = sourceBridgeEmitterAddress,
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
             ["topics"] = new object?[] { EthereumMainnetSccp.SourceEventTopic, sourceEventDigest },
             ["data"] = "0x",
         };
@@ -526,19 +530,15 @@ public sealed class SccpEthereumMainnetTests
             ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"],
             provider.Calls);
 
-        var proofBytes = await EthereumMainnetSccp.ProveInboundToSoraAsync(
+        var missingSourceEvent = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ProveInboundToSoraAsync(
             evidence with
             {
                 ReceiptProof = receiptProof,
                 ReceiptProofHash = ExpectedReceiptProofHash,
             },
-            new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest));
-        Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
-        Assert.Equal(
-            "submitted",
-            await EthereumMainnetSccp.SubmitInboundToIrohaAsync(
-                proofBytes,
-                new InboundSubmitterStub()));
+            new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest)).AsTask());
+        Assert.Contains("receipt source event validation", missingSourceEvent.Message);
 
         var sourceEventEvidence = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
             new EthereumMainnetInboundEvidence
@@ -560,6 +560,20 @@ public sealed class SccpEthereumMainnetTests
                 SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
             });
         Assert.Equal(sourceEventDigest, explicitSourceEventEvidence.SourceEventDigest);
+
+        var proofBytes = await EthereumMainnetSccp.ProveInboundToSoraAsync(
+            sourceEventEvidence with
+            {
+                ReceiptProof = receiptProof,
+                ReceiptProofHash = ExpectedReceiptProofHash,
+            },
+            new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest));
+        Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
+        Assert.Equal(
+            "submitted",
+            await EthereumMainnetSccp.SubmitInboundToIrohaAsync(
+                proofBytes,
+                new InboundSubmitterStub()));
 
         var receiptProofEvidence = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
             new EthereumMainnetInboundEvidence
@@ -592,10 +606,11 @@ public sealed class SccpEthereumMainnetTests
         var typedFinalityProof = await EthereumMainnetSccp.ProveInboundToSoraAsync(
             new EthereumMainnetInboundEvidence
             {
-                Receipt = receipt,
+                Receipt = receiptWithSourceEvent,
                 Block = block,
                 ReceiptProof = receiptProof,
                 ReceiptProofHash = ExpectedReceiptProofHash,
+                SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
             }.WithBeaconFinalityEvidence(
                 beaconFinalityEvidence,
                 [new KeyValuePair<string, object?>("finalizedHeaderRoot", "0x" + new string('d', 64))]),
@@ -860,6 +875,95 @@ public sealed class SccpEthereumMainnetTests
                     BeaconFinality = beaconFinality,
                     SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 }).AsTask());
+
+        var nonObjectLogReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { "not-a-log" },
+        };
+        var nonObjectLog = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    Receipt = nonObjectLogReceipt,
+                    Block = block,
+                    BeaconFinality = beaconFinality,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("receipt.logs[0] must be an object", nonObjectLog.Message);
+
+        var missingDataLog = new Dictionary<string, object?>(sourceEventLog);
+        missingDataLog.Remove("data");
+        var missingDataReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { missingDataLog },
+        };
+        var missingData = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    Receipt = missingDataReceipt,
+                    Block = block,
+                    BeaconFinality = beaconFinality,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("receipt.logs[0].data", missingData.Message);
+
+        var driftedLogTransaction = new Dictionary<string, object?>(sourceEventLog)
+        {
+            ["transactionHash"] = "0x" + new string('a', 64),
+        };
+        var driftedLogTransactionReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { driftedLogTransaction },
+        };
+        var driftedLogTransactionError = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    Receipt = driftedLogTransactionReceipt,
+                    Block = block,
+                    BeaconFinality = beaconFinality,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("transactionHash must match", driftedLogTransactionError.Message);
+
+        var driftedLogBlockHash = new Dictionary<string, object?>(sourceEventLog)
+        {
+            ["blockHash"] = "0x" + new string('a', 64),
+        };
+        var driftedLogBlockHashReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { driftedLogBlockHash },
+        };
+        var driftedLogBlockHashError = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    Receipt = driftedLogBlockHashReceipt,
+                    Block = block,
+                    BeaconFinality = beaconFinality,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("blockHash must match", driftedLogBlockHashError.Message);
+
+        var driftedLogBlockNumber = new Dictionary<string, object?>(sourceEventLog)
+        {
+            ["blockNumber"] = "0x1235",
+        };
+        var driftedLogBlockNumberReceipt = new Dictionary<string, object?>(receipt)
+        {
+            ["logs"] = new object?[] { driftedLogBlockNumber },
+        };
+        var driftedLogBlockNumberError = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    Receipt = driftedLogBlockNumberReceipt,
+                    Block = block,
+                    BeaconFinality = beaconFinality,
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                }).AsTask());
+        Assert.Contains("blockNumber must match", driftedLogBlockNumberError.Message);
 
         await Assert.ThrowsAsync<ArgumentException>(
             () => EthereumMainnetSccp.SubmitInboundToIrohaAsync(

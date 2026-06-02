@@ -1,17 +1,22 @@
 use core::marker::PhantomData;
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
     vec::Vec,
 };
 
-use blstrs::{G1Affine, G1Projective, G2Affine, G2Prepared, G2Projective};
-use group::{Curve, Group as _, prime::PrimeCurveAffine};
-use pairing::{MillerLoopResult as _, MultiMillerLoop};
-use parking_lot::Mutex;
 #[cfg(feature = "rand")]
-use rand::rngs::OsRng;
-use w3f_bls::SerializableToBytes as _;
+use crate::rng::os_rng;
+#[cfg(test)]
+use blstrs::G2Prepared;
+use blstrs::{G1Affine, G2Affine};
+use group::prime::PrimeCurveAffine;
+use parking_lot::Mutex;
+use w3f_bls::{
+    EngineBLS, PublicKey as W3fPublicKey, SerializableToBytes as _, Signature as W3fSignature,
+};
 use zeroize::Zeroize as _;
 
 pub(super) const MESSAGE_CONTEXT: &[u8; 20] = b"for signing messages";
@@ -23,6 +28,13 @@ pub trait BlsConfiguration {
     // true: Normal (pk in G1, sig in G2); false: Small (pk in G2, sig in G1)
     const NORMAL: bool;
 }
+
+#[doc(hidden)]
+#[cfg(test)]
+pub trait PreparedPublicKeyCacheAccess: BlsConfiguration {}
+
+#[cfg(test)]
+impl<C: BlsConfiguration> PreparedPublicKeyCacheAccess for C {}
 
 // Public key wrapper stores compressed bytes; orientation depends on C::NORMAL
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,9 +80,9 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
                 let bytes = if C::NORMAL {
-                    w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::generate(OsRng).to_bytes()
+                    w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::generate(os_rng()).to_bytes()
                 } else {
-                    w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::generate(OsRng).to_bytes()
+                    w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::generate(os_rng()).to_bytes()
                 };
                 let mut arr = [0u8; 32];
                 arr.copy_from_slice(&bytes);
@@ -124,40 +136,10 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey<C>) -> Result<(), Error> {
-        // Verify with the same pairing-based check used by aggregate paths and
-        // reject non-canonical or identity encodings up front.
         if C::NORMAL {
-            let sig = to_g2(signature)
-                .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
-            let pk = to_g1_public_key(&pk.bytes)
-                .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
-            let h = hash_msg_to_g2(message);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&G1Affine::generator(), &G2Prepared::from(sig)),
-                (&(-G1Projective::from(pk)).to_affine(), &G2Prepared::from(h)),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_w3f::<w3f_bls::ZBLS>(message, signature, &pk.bytes)
         } else {
-            let sig = to_g1(signature)
-                .ok_or_else(|| ParseError("invalid BLS signature encoding".to_string()))?;
-            let pk = to_g2_prepared(&pk.bytes)
-                .ok_or_else(|| ParseError("invalid BLS public key encoding".to_string()))?;
-            let h = hash_msg_to_g1(message);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, g2_prepared_generator().as_ref()),
-                (&(-G1Projective::from(h)).to_affine(), pk.as_ref()),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_w3f::<w3f_bls::TinyBLS381>(message, signature, &pk.bytes)
         }
     }
 
@@ -166,87 +148,14 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
     ) -> Result<(), Error> {
-        if signatures.is_empty() || signatures.len() != public_keys.len() {
-            return Err(Error::BadSignature);
-        }
-        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         if C::NORMAL {
-            // Aggregate sigs in G2, PKs in G1
-            let mut agg_sig: Option<G2Projective> = None;
-            for s in signatures {
-                let s = to_g2(s).ok_or(Error::BadSignature)?;
-                agg_sig =
-                    Some(agg_sig.unwrap_or_else(G2Projective::identity) + G2Projective::from(s));
-            }
-            let mut agg_pk: Option<G1Projective> = None;
-            for pk in public_keys {
-                let pk = to_g1_public_key(pk).ok_or(Error::BadSignature)?;
-                if !seen_pks.insert(pk.to_compressed().to_vec()) {
-                    return Err(Error::BadSignature);
-                }
-                agg_pk =
-                    Some(agg_pk.unwrap_or_else(G1Projective::identity) + G1Projective::from(pk));
-            }
-            let sig = agg_sig.unwrap();
-            if sig.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            let pk = agg_pk.unwrap();
-            if pk.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            let sig = sig.to_affine();
-            let pk = pk.to_affine();
-            let h = hash_msg_to_g2(message);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&G1Affine::generator(), &G2Prepared::from(sig)),
-                (&(-G1Projective::from(pk)).to_affine(), &G2Prepared::from(h)),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_aggregate_same_message_w3f::<w3f_bls::ZBLS>(message, signatures, public_keys)
         } else {
-            // Aggregate sigs in G1, PKs in G2
-            let mut agg_sig: Option<G1Projective> = None;
-            for s in signatures {
-                let s = to_g1(s).ok_or(Error::BadSignature)?;
-                agg_sig =
-                    Some(agg_sig.unwrap_or_else(G1Projective::identity) + G1Projective::from(s));
-            }
-            let mut agg_pk: Option<G2Projective> = None;
-            for pk in public_keys {
-                let pk = to_g2_public_key(pk).ok_or(Error::BadSignature)?;
-                if !seen_pks.insert(pk.to_compressed().to_vec()) {
-                    return Err(Error::BadSignature);
-                }
-                agg_pk =
-                    Some(agg_pk.unwrap_or_else(G2Projective::identity) + G2Projective::from(pk));
-            }
-            let sig = agg_sig.unwrap();
-            if sig.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            let pk = agg_pk.unwrap();
-            if pk.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            let sig = sig.to_affine();
-            let pk = pk.to_affine();
-            let h = hash_msg_to_g1(message);
-            let prepared_pk = G2Prepared::from(pk);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, g2_prepared_generator().as_ref()),
-                (&(-G1Projective::from(h)).to_affine(), &prepared_pk),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_aggregate_same_message_w3f::<w3f_bls::TinyBLS381>(
+                message,
+                signatures,
+                public_keys,
+            )
         }
     }
 
@@ -254,29 +163,12 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     /// The caller is responsible for ensuring all signatures are valid and from the same suite.
     /// Rejects aggregates that cancel to the identity element.
     pub fn aggregate_signatures(signatures: &[&[u8]]) -> Result<Vec<u8>, Error> {
-        if signatures.is_empty() {
-            return Err(Error::BadSignature);
-        }
         if C::NORMAL {
-            let mut agg_sig = G2Projective::identity();
-            for s in signatures {
-                let sig = to_g2(s).ok_or(Error::BadSignature)?;
-                agg_sig += G2Projective::from(sig);
-            }
-            if agg_sig.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            Ok(agg_sig.to_affine().to_compressed().to_vec())
+            aggregate_w3f_signatures::<w3f_bls::ZBLS>(signatures)
+                .map(|signature| signature.to_bytes())
         } else {
-            let mut agg_sig = G1Projective::identity();
-            for s in signatures {
-                let sig = to_g1(s).ok_or(Error::BadSignature)?;
-                agg_sig += G1Projective::from(sig);
-            }
-            if agg_sig.is_identity().into() {
-                return Err(Error::BadSignature);
-            }
-            Ok(agg_sig.to_affine().to_compressed().to_vec())
+            aggregate_w3f_signatures::<w3f_bls::TinyBLS381>(signatures)
+                .map(|signature| signature.to_bytes())
         }
     }
 
@@ -286,55 +178,18 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         aggregated_signature: &[u8],
         public_keys: &[&[u8]],
     ) -> Result<(), Error> {
-        if public_keys.is_empty() {
-            return Err(Error::BadSignature);
-        }
-        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         if C::NORMAL {
-            let sig = to_g2(aggregated_signature).ok_or(Error::BadSignature)?;
-            let mut agg_pk = G1Projective::identity();
-            for pk in public_keys {
-                let pk = to_g1_public_key(pk).ok_or(Error::BadSignature)?;
-                if !seen_pks.insert(pk.to_compressed().to_vec()) {
-                    return Err(Error::BadSignature);
-                }
-                agg_pk += G1Projective::from(pk);
-            }
-            let pk = agg_pk.to_affine();
-            let h = hash_msg_to_g2(message);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&G1Affine::generator(), &G2Prepared::from(sig)),
-                (&(-G1Projective::from(pk)).to_affine(), &G2Prepared::from(h)),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_preaggregated_same_message_w3f::<w3f_bls::ZBLS>(
+                message,
+                aggregated_signature,
+                public_keys,
+            )
         } else {
-            let sig = to_g1(aggregated_signature).ok_or(Error::BadSignature)?;
-            let mut agg_pk = G2Projective::identity();
-            for pk in public_keys {
-                let pk = to_g2_public_key(pk).ok_or(Error::BadSignature)?;
-                if !seen_pks.insert(pk.to_compressed().to_vec()) {
-                    return Err(Error::BadSignature);
-                }
-                agg_pk += G2Projective::from(pk);
-            }
-            let pk = agg_pk.to_affine();
-            let h = hash_msg_to_g1(message);
-            let prepared_pk = G2Prepared::from(pk);
-            let terms: [(&G1Affine, &G2Prepared); 2] = [
-                (&sig, g2_prepared_generator().as_ref()),
-                (&(-G1Projective::from(h)).to_affine(), &prepared_pk),
-            ];
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_preaggregated_same_message_w3f::<w3f_bls::TinyBLS381>(
+                message,
+                aggregated_signature,
+                public_keys,
+            )
         }
     }
 
@@ -343,64 +198,14 @@ impl<C: BlsConfiguration> BlsImpl<C> {
         signatures: &[&[u8]],
         public_keys: &[&[u8]],
     ) -> Result<(), Error> {
-        if !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
-            || messages.is_empty()
-        {
-            return Err(Error::BadSignature);
-        }
-        {
-            use std::collections::BTreeSet;
-            let mut seen = BTreeSet::new();
-            for &msg in messages {
-                if !seen.insert(msg) {
-                    return Err(Error::BadSignature);
-                }
-            }
-        }
-
         if C::NORMAL {
-            let mut pairs: Vec<(G1Affine, G2Prepared)> = Vec::with_capacity(messages.len() * 2);
-            for ((m, s_bytes), pk_bytes) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                let sig = to_g2(s_bytes).ok_or(Error::BadSignature)?;
-                let pk = to_g1_public_key(pk_bytes).ok_or(Error::BadSignature)?;
-                let h = hash_msg_to_g2(m);
-                pairs.push((G1Affine::generator(), G2Prepared::from(sig)));
-                pairs.push(((-G1Projective::from(pk)).to_affine(), G2Prepared::from(h)));
-            }
-            let terms: Vec<(&G1Affine, &G2Prepared)> = pairs.iter().map(|(p, q)| (p, q)).collect();
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_aggregate_multi_message_w3f::<w3f_bls::ZBLS>(messages, signatures, public_keys)
         } else {
-            let generator = g2_prepared_generator();
-            let mut pairs: Vec<(G1Affine, Arc<G2Prepared>)> =
-                Vec::with_capacity(messages.len() * 2);
-            for ((m, s_bytes), pk_bytes) in messages
-                .iter()
-                .zip(signatures.iter())
-                .zip(public_keys.iter())
-            {
-                let sig = to_g1(s_bytes).ok_or(Error::BadSignature)?;
-                let pk = to_g2_prepared(pk_bytes).ok_or(Error::BadSignature)?;
-                let h = hash_msg_to_g1(m);
-                pairs.push((sig, Arc::clone(generator)));
-                pairs.push(((-G1Projective::from(h)).to_affine(), pk));
-            }
-            let terms: Vec<(&G1Affine, &G2Prepared)> =
-                pairs.iter().map(|(p, q)| (p, q.as_ref())).collect();
-            let gt = blstrs::Bls12::multi_miller_loop(&terms).final_exponentiation();
-            if gt.is_identity().into() {
-                Ok(())
-            } else {
-                Err(Error::BadSignature)
-            }
+            verify_aggregate_multi_message_w3f::<w3f_bls::TinyBLS381>(
+                messages,
+                signatures,
+                public_keys,
+            )
         }
     }
 
@@ -440,6 +245,199 @@ impl<C: BlsConfiguration> BlsImpl<C> {
     }
 }
 
+fn parse_w3f_signature<E: EngineBLS>(bytes: &[u8]) -> Result<W3fSignature<E>, Error> {
+    let signature = W3fSignature::<E>::from_bytes(bytes)
+        .map_err(|_| ParseError("Failed to parse signature.".to_string()))?;
+    let canonical = signature.to_bytes();
+    if canonical.as_slice() != bytes {
+        return Err(ParseError("non-canonical BLS signature encoding".to_string()).into());
+    }
+    let identity = W3fSignature::<E>(Default::default()).to_bytes();
+    if canonical == identity {
+        return Err(ParseError("BLS signature is identity".to_string()).into());
+    }
+    Ok(signature)
+}
+
+fn parse_w3f_public_key<E: EngineBLS>(bytes: &[u8]) -> Result<W3fPublicKey<E>, Error> {
+    let public_key =
+        W3fPublicKey::<E>::from_bytes(bytes).map_err(|err| ParseError(err.to_string()))?;
+    let canonical = public_key.to_bytes();
+    if canonical.as_slice() != bytes {
+        return Err(ParseError("non-canonical BLS public key encoding".to_string()).into());
+    }
+    let identity = W3fPublicKey::<E>(Default::default()).to_bytes();
+    if canonical == identity {
+        return Err(ParseError("BLS public key is identity".to_string()).into());
+    }
+    Ok(public_key)
+}
+
+fn aggregate_w3f_signatures<E: EngineBLS>(signatures: &[&[u8]]) -> Result<W3fSignature<E>, Error> {
+    use core::ops::AddAssign as _;
+
+    let mut signatures = signatures.iter();
+    let first = signatures.next().ok_or(Error::BadSignature)?;
+    let first = parse_w3f_signature::<E>(first)?;
+    let mut aggregate = first.0;
+    for signature in signatures {
+        let signature = parse_w3f_signature::<E>(signature)?;
+        aggregate.add_assign(&signature.0);
+    }
+    let aggregate = W3fSignature::<E>(aggregate);
+    let identity = W3fSignature::<E>(Default::default()).to_bytes();
+    if aggregate.to_bytes() == identity {
+        return Err(Error::BadSignature);
+    }
+    Ok(aggregate)
+}
+
+fn aggregate_w3f_public_keys<E: EngineBLS>(
+    public_keys: &[&[u8]],
+) -> Result<W3fPublicKey<E>, Error> {
+    use core::ops::AddAssign as _;
+
+    let mut seen = BTreeSet::new();
+    let mut public_keys = public_keys.iter();
+    let first = public_keys.next().ok_or(Error::BadSignature)?;
+    let first = parse_w3f_public_key::<E>(first)?;
+    if !seen.insert(first.to_bytes()) {
+        return Err(Error::BadSignature);
+    }
+    let mut aggregate = first.0;
+    for public_key in public_keys {
+        let public_key = parse_w3f_public_key::<E>(public_key)?;
+        if !seen.insert(public_key.to_bytes()) {
+            return Err(Error::BadSignature);
+        }
+        aggregate.add_assign(&public_key.0);
+    }
+    let aggregate = W3fPublicKey::<E>(aggregate);
+    let identity = W3fPublicKey::<E>(Default::default()).to_bytes();
+    if aggregate.to_bytes() == identity {
+        return Err(Error::BadSignature);
+    }
+    Ok(aggregate)
+}
+
+fn verify_w3f<E: EngineBLS>(
+    message: &[u8],
+    signature: &[u8],
+    public_key: &[u8],
+) -> Result<(), Error> {
+    let signature = parse_w3f_signature::<E>(signature)?;
+    let public_key = parse_w3f_public_key::<E>(public_key)?;
+    let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+    if signature.verify(&message, &public_key) {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+fn verify_aggregate_same_message_w3f<E: EngineBLS>(
+    message: &[u8],
+    signatures: &[&[u8]],
+    public_keys: &[&[u8]],
+) -> Result<(), Error> {
+    if signatures.is_empty() || signatures.len() != public_keys.len() {
+        return Err(Error::BadSignature);
+    }
+    let signature = aggregate_w3f_signatures::<E>(signatures)?;
+    let public_key = aggregate_w3f_public_keys::<E>(public_keys)?;
+    let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+    if signature.verify(&message, &public_key) {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+fn verify_preaggregated_same_message_w3f<E: EngineBLS>(
+    message: &[u8],
+    aggregated_signature: &[u8],
+    public_keys: &[&[u8]],
+) -> Result<(), Error> {
+    if public_keys.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    let signature = parse_w3f_signature::<E>(aggregated_signature)?;
+    let public_key = aggregate_w3f_public_keys::<E>(public_keys)?;
+    let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+    if signature.verify(&message, &public_key) {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+fn ensure_distinct_messages(messages: &[&[u8]]) -> Result<(), Error> {
+    let mut seen = BTreeSet::new();
+    for &message in messages {
+        if !seen.insert(message) {
+            return Err(Error::BadSignature);
+        }
+    }
+    Ok(())
+}
+
+fn verify_aggregate_multi_message_w3f<E: EngineBLS>(
+    messages: &[&[u8]],
+    signatures: &[&[u8]],
+    public_keys: &[&[u8]],
+) -> Result<(), Error> {
+    if !(messages.len() == signatures.len() && signatures.len() == public_keys.len())
+        || messages.is_empty()
+    {
+        return Err(Error::BadSignature);
+    }
+    ensure_distinct_messages(messages)?;
+
+    let signature = aggregate_w3f_signatures::<E>(signatures)?;
+    let mut decoded_messages = Vec::with_capacity(messages.len());
+    let mut decoded_public_keys = Vec::with_capacity(messages.len());
+    for (message, public_key) in messages.iter().zip(public_keys.iter()) {
+        decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
+        decoded_public_keys.push(parse_w3f_public_key::<E>(public_key)?);
+    }
+
+    let batch = MultiMessageBatch {
+        signature,
+        messages: decoded_messages,
+        public_keys: decoded_public_keys,
+    };
+
+    if w3f_bls::verifiers::verify_with_distinct_messages(&batch, false) {
+        Ok(())
+    } else {
+        Err(Error::BadSignature)
+    }
+}
+
+struct MultiMessageBatch<E: EngineBLS> {
+    signature: W3fSignature<E>,
+    messages: Vec<w3f_bls::Message>,
+    public_keys: Vec<W3fPublicKey<E>>,
+}
+
+impl<'a, E: EngineBLS> w3f_bls::Signed for &'a MultiMessageBatch<E> {
+    type E = E;
+    type M = &'a w3f_bls::Message;
+    type PKG = &'a W3fPublicKey<E>;
+    type PKnM = std::iter::Zip<
+        std::slice::Iter<'a, w3f_bls::Message>,
+        std::slice::Iter<'a, W3fPublicKey<E>>,
+    >;
+
+    fn signature(&self) -> W3fSignature<E> {
+        W3fSignature(self.signature.0)
+    }
+
+    fn messages_and_publickeys(self) -> Self::PKnM {
+        self.messages.iter().zip(self.public_keys.iter())
+    }
+}
+
 const PUBKEY_CACHE_MAX: usize = 4096;
 
 fn g1_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G1Affine>> {
@@ -452,18 +450,20 @@ fn g2_pubkey_cache() -> &'static Mutex<BTreeMap<Vec<u8>, G2Affine>> {
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+#[cfg(test)]
 fn g2_prepared_cache() -> &'static Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>> {
     static CACHE: OnceLock<Mutex<BTreeMap<Vec<u8>, Arc<G2Prepared>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
+#[cfg(test)]
 fn g2_prepared_generator() -> &'static Arc<G2Prepared> {
     static GENERATOR: OnceLock<Arc<G2Prepared>> = OnceLock::new();
     GENERATOR.get_or_init(|| Arc::new(G2Prepared::from(G2Affine::generator())))
 }
 
 fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
-    if let Some(point) = g1_pubkey_cache().lock().get(bytes).cloned() {
+    if let Some(point) = g1_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
     let point = to_g1(bytes)?;
@@ -476,7 +476,7 @@ fn to_g1_public_key(bytes: &[u8]) -> Option<G1Affine> {
 }
 
 fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
-    if let Some(point) = g2_pubkey_cache().lock().get(bytes).cloned() {
+    if let Some(point) = g2_pubkey_cache().lock().get(bytes).copied() {
         return Some(point);
     }
     let point = to_g2(bytes)?;
@@ -488,6 +488,7 @@ fn to_g2_public_key(bytes: &[u8]) -> Option<G2Affine> {
     Some(point)
 }
 
+#[cfg(test)]
 fn to_g2_prepared(bytes: &[u8]) -> Option<Arc<G2Prepared>> {
     if let Some(point) = g2_prepared_cache().lock().get(bytes).cloned() {
         return Some(point);
@@ -509,11 +510,11 @@ fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
     let ct = G1Affine::from_compressed(&arr);
-    if !ct.is_some().into() {
+    if !bool::from(ct.is_some()) {
         return None;
     }
     let point = ct.unwrap();
-    if point.is_identity().into() {
+    if bool::from(point.is_identity()) {
         return None;
     }
     if point.to_compressed() != arr {
@@ -528,33 +529,17 @@ fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
     let mut arr = [0u8; 96];
     arr.copy_from_slice(bytes);
     let ct = G2Affine::from_compressed(&arr);
-    if !ct.is_some().into() {
+    if !bool::from(ct.is_some()) {
         return None;
     }
     let point = ct.unwrap();
-    if point.is_identity().into() {
+    if bool::from(point.is_identity()) {
         return None;
     }
     if point.to_compressed() != arr {
         return None;
     }
     Some(point)
-}
-
-fn hash_msg_to_g2(msg: &[u8]) -> G2Affine {
-    // Concatenation variant: MESSAGE_CONTEXT || msg with standard RO ciphersuite
-    const DST: &[u8] = b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_";
-    let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
-    buf.extend_from_slice(MESSAGE_CONTEXT);
-    buf.extend_from_slice(msg);
-    G2Projective::hash_to_curve(&buf, DST, &[]).to_affine()
-}
-fn hash_msg_to_g1(msg: &[u8]) -> G1Affine {
-    const DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_";
-    let mut buf = Vec::with_capacity(MESSAGE_CONTEXT.len() + msg.len());
-    buf.extend_from_slice(MESSAGE_CONTEXT);
-    buf.extend_from_slice(msg);
-    G1Projective::hash_to_curve(&buf, DST, &[]).to_affine()
 }
 
 #[cfg(test)]

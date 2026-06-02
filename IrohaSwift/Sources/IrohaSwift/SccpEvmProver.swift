@@ -1488,7 +1488,10 @@ public final class EthereumMainnetSccp {
     private static func ethereumReceiptSourceEvent(
         receipt: [String: Any],
         sourceEventDigest inputDigest: String?,
-        sourceBridgeEmitterAddress inputAddress: String?
+        sourceBridgeEmitterAddress inputAddress: String?,
+        transactionHash expectedTransactionHash: String?,
+        blockHash expectedBlockHash: String?,
+        blockNumber expectedBlockNumber: String?
     ) throws -> (sourceEventDigest: String?, sourceBridgeEmitterAddress: String?) {
         let expectedDigest = try inputDigest.map {
             try normalizeRpcHex($0, label: "sourceEventDigest", byteLength: 32)
@@ -1531,6 +1534,32 @@ public final class EthereumMainnetSccp {
             if address == expectedAddress,
                normalizedTopics.count == 2,
                normalizedTopics[0] == sourceEventTopic {
+                let logTransactionHash = try normalizeRpcHex(
+                    firstPresent(log, "transactionHash", "transaction_hash"),
+                    label: "receipt.logs[\(index)].transactionHash",
+                    byteLength: 32
+                )
+                if let expectedTransactionHash, logTransactionHash != expectedTransactionHash {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                let logBlockHash = try normalizeRpcHex(
+                    firstPresent(log, "blockHash", "block_hash"),
+                    label: "receipt.logs[\(index)].blockHash",
+                    byteLength: 32
+                )
+                if let expectedBlockHash, logBlockHash != expectedBlockHash {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                let logBlockNumber = try normalizePositiveRpcQuantity(
+                    firstPresent(log, "blockNumber", "block_number"),
+                    label: "receipt.logs[\(index)].blockNumber"
+                )
+                if let expectedBlockNumber, logBlockNumber != expectedBlockNumber {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs")
+                }
+                guard let data = log["data"] as? String else {
+                    throw EvmSccpProverError.invalidPublicInputs("receipt.logs[\(index)].data")
+                }
                 let candidateDigest = normalizedTopics[1]
                 guard !candidateDigest.dropFirst(2).allSatisfy({ $0 == "0" }) else {
                     continue
@@ -1538,7 +1567,7 @@ public final class EthereumMainnetSccp {
                 if let expectedDigest, candidateDigest != expectedDigest {
                     continue
                 }
-                if (log["data"] as? String ?? "0x") != "0x" {
+                if data != "0x" {
                     continue
                 }
                 if matchedDigest != nil {
@@ -1619,7 +1648,10 @@ public final class EthereumMainnetSccp {
             let sourceEvent = try Self.ethereumReceiptSourceEvent(
                 receipt: currentReceipt,
                 sourceEventDigest: input.sourceEventDigest,
-                sourceBridgeEmitterAddress: input.sourceBridgeEmitterAddress
+                sourceBridgeEmitterAddress: input.sourceBridgeEmitterAddress,
+                transactionHash: transactionHash,
+                blockHash: blockHash,
+                blockNumber: receiptBlockNumber
             )
             sourceEventDigest = sourceEvent.sourceEventDigest
             sourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress
@@ -1728,6 +1760,9 @@ public final class EthereumMainnetSccp {
         }
         guard evidence.receiptProof != nil else {
             throw EvmSccpProverError.invalidPublicInputs("receiptProof")
+        }
+        if evidence.receipt != nil, evidence.sourceEventDigest == nil {
+            throw EvmSccpProverError.invalidPublicInputs("receipt.sourceEvent")
         }
         let proofBytes = try await inboundProveFunction(evidence)
         guard !proofBytes.isEmpty else {

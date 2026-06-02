@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-02
+Last updated: 2026-06-03
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -93,30 +93,99 @@ track detailed unfinished engineering work.
   public-key recovery primitive rejects high-S malleable encodings before
   deriving EVM addresses;
   Ed25519 uncached batch verification now rejects noncanonical or small-order
-  signature `R` encodings before entering the dalek batch backend;
+  signature `R` encodings before entering the dalek batch backend, and direct
+  byte-key/preparsed batch APIs now filter exact verify-cache hits before
+  signature parsing and backend setup; the thread-local exact verify-ok cache
+  now keeps two entries per exact slot to reduce collision churn for 32-byte
+  transaction-hash verification tuples without returning to a process-wide
+  cache;
+  ML-DSA public-key reconstruction from private-key material now has a
+  fallible API, and `KeyPair::from_private_key` uses it so length-valid but
+  internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
+  `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
+  public/private key formatting, and ML-DSA import plus `Signature::try_new`
+  reject secrets whose recomputed public material or embedded `tr = H(pk)`
+  public hash is inconsistent before signing;
+  BLS same-message aggregate and preaggregated verification now reject
+  duplicate public keys and public-key aggregates that cancel to the identity
+  before verification, and the public PoP-gated same-message wrappers reject
+  duplicate signer keys before PoP verification/cache work and no longer fall
+  back to per-signature verification after aggregate rejection; distinct-message
+  aggregate verification rejects duplicate messages and aggregate signatures
+  that cancel to the identity before batch verification. The blstrs feature
+  backend also reuses the w3f signing/message semantics for normal, small,
+  same-message, preaggregated, and distinct-message aggregate verification so
+  backend choice does not change accepted signatures;
   X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
   keys, and the standalone key-exchange surface now reject low-order encodings
   before ECDH while retaining all-zero shared-secret fallback checks;
+  Soracloud uploaded-model `X25519HkdfSha256` admission now requires exact
+  32-byte recipient and ephemeral public keys and routes both through the same
+  low-order decoder before bundle registration;
+  Norito streaming X25519 key updates now reject low-order remote ephemeral
+  public keys before key-counter recording or transport-key derivation, signed
+  remote key updates stage key-counter and transport-key derivation before
+  resetting or committing session state, outbound key-update construction
+  stages ephemeral generation, transcript signing, and Kyber transport
+  derivation before committing session state and rejects same-session
+  non-increasing counters before ephemeral generation, and
+  Norito streaming content-key updates now authenticate and unwrap the GCK
+  before recording accepted rotation state so malformed wrapped keys cannot
+  poison replay windows, while outbound content-key construction rejects
+  regressed rotations before nonce generation or AEAD wrapping, and streaming
+  snapshot restore stages KEM-suite id validation and transport-key derivation
+  before replacing live session state and rejects partial content-key metadata;
   SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
   ephemeral public keys in decoded client and relay frames, reject malformed
   Dilithium3/Ed25519 handshake signature field lengths, require 1024-byte
   zero-padded frames, and reject selected KEM/signature ids that are absent
-  from either peer's advertised capability TLVs; unsupported KEM ids fail at
-  the KEM profile gate before downgrade telemetry is built;
-  SoraNet signed-ticket decode and direct verification now reject ML-DSA-44
-  signature vectors whose length disagrees with the suite metadata before
-  accepting tokens or entering backend verification;
-  SoraNet revocation-store reload now rejects duplicate persisted
-  fingerprints, rejects overflowing expiry timestamps, and bounds loaded active
-  records to the configured capacity;
+  from either peer's advertised capability TLVs, including the relay capability
+  vector echoed in `RelayHello`; unsupported KEM ids fail at the KEM profile
+  gate before downgrade telemetry is built;
+  SoraNet signed-ticket signing now preflights ML-DSA-44 secret-key lengths,
+  and signed-ticket decode/direct verification now reject ML-DSA-44 verifier
+  public-key and signature vectors whose lengths disagree with the suite
+  metadata before signing payloads, accepting tokens, or entering backend
+  verification, while signed-ticket relay/transcript binding checks now run
+  before signature work in the full verifier, and signed-ticket policy metadata
+  now rejects unsupported versions, difficulty mismatches, expiry, and TTL
+  window failures before signature work; SoraNet PQ helpers now validate ML-KEM
+  encapsulation public-key lengths and ML-DSA signing context/secret-key
+  lengths before drawing direct or OS-backed randomness for malformed inputs;
+  SoraNet runtime client-hello processing now preflights NK2/NK3 client ML-KEM
+  public keys before capability telemetry, relay Noise key generation, OS-backed
+  ML-KEM key generation, or encapsulation; runtime handshake descriptor
+  commitments and resume hashes must now be 32-byte transcript-binding fields
+  before client RNG, relay RNG, transcript hashing, KEM key generation, or
+  encapsulation; PoW ticket verification,
+  signed-ticket verification, ticket
+  minting, and Argon2 puzzle verification/minting now reject malformed
+  descriptor, relay-id, or transcript binding field lengths before challenge
+  derivation, solution search, Argon2 work, or public-key validation;
+  PoW and Argon2 puzzle policy parameters now expose fallible constructors for
+  runtime config loaders so zero minimum TTLs and inverted future-skew bounds
+  fail closed without panicking; SoraNet CID blinding key derivation now rejects
+  all-zero epoch salts or all-zero circuit secrets before HKDF; SoraNet
+  revocation-store reload now rejects duplicate persisted fingerprints, rejects
+  overflowing expiry timestamps, and bounds loaded active records to the
+  configured capacity;
   SoraNet guard-directory snapshot decode now rejects duplicate or
   key-mismatched issuer fingerprints and enforces ML-DSA-65 issuer public-key
-  length/phase requirements before snapshots are admitted;
+  length/phase requirements before snapshots are admitted, and rejects empty
+  issuer or relay sets before trust-map construction or relay certificate
+  verification;
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
-  preflights ML-DSA issuer public-key and detached-signature lengths before
-  backend verification or replay-store mutation; SoraNet SRCv2 bundle
-  verification rejects weak Ed25519 verifier keys and preflights ML-DSA-65
+  rejects zero-length or inverted validity windows and preflights ML-DSA issuer
+  public-key and detached-signature lengths before backend verification or
+  replay-store mutation; admission-token verifier construction exposes a
+  fallible path that rejects malformed issuer public keys before fingerprint
+  derivation or runtime state admission;
+  admission-token minting now
+  preflights issuer ML-DSA secret-key length before nonce generation, body
+  construction, or backend signing; SoraNet SRCv2 bundle
+  verification re-runs canonical certificate-payload admission for in-memory
+  bundles, rejects weak Ed25519 verifier keys, and preflights ML-DSA-65
   issuer public-key and detached-signature lengths before backend verification;
   local SRCv2 issuance reuses certificate-payload admission and ML-DSA-65
   issuer secret-key length preflight before signing bundles; Phase 2 SRCv2
@@ -1582,7 +1651,16 @@ track detailed unfinished engineering work.
     deterministic batch corridor for the Torii/direct-ingress single-key
     Ed25519 authority path as the next crypto follow-up after the
     Poseidon/source-attribution and Norito allocation work. Gossip-side
-    deterministic Ed25519 batch precheck is already implemented.
+    deterministic Ed25519 batch precheck is already implemented, and the
+    crypto-layer direct/preparsed Ed25519 batch APIs now filter exact
+    verify-cache hits before signature parsing; the thread-local exact
+    verify-ok cache also keeps two colliding entries per slot. The ML-DSA key
+    path now rejects inconsistent imported secrets and exposes
+    `KeyPair::try_from_seed`, `KeyPair::try_random`,
+    `KeyPair::try_random_with_algorithm`, `PublicKey::try_to_*`,
+    `ExposedPrivateKey::try_to_*`, `Signature::try_new`, plus typed
+    `SignatureOf::try_*` constructors, so remaining crypto follow-ups should
+    focus on hot verification boundaries rather than ML-DSA panic replacement.
   - Rerun 4-peer no-fault prebuilt `5k` and `10k TPS` rows as needed to locate
     the new knee after the conservative cache pass.
   - The targeted built-in overlay path now avoids the full `InstructionBox`

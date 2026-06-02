@@ -145,6 +145,21 @@ pub mod mldsa65 {
             PQCLEAN_MLDSA65_CLEAN_pack_pk(pk_bytes.as_mut_ptr(), rho.as_ptr(), addr_of!(t1));
         }
 
+        let mut expected_tr = Zeroizing::new([0u8; TRBYTES]);
+        unsafe {
+            shake256(
+                expected_tr.as_mut_ptr(),
+                expected_tr.len(),
+                pk_bytes.as_ptr(),
+                pk_bytes.len(),
+            );
+        }
+        if expected_tr.as_ref() != tr.as_ref() {
+            return Err(Error::KeyGen(String::from(
+                "Inconsistent ML-DSA secret key public hash",
+            )));
+        }
+
         PublicKey::from_bytes(Algorithm::MlDsa, &pk_bytes)
             .map_err(|err| Error::KeyGen(err.to_string()))
     }
@@ -344,6 +359,53 @@ pub mod mldsa65 {
             let err = public_key_from_secret(&secret).expect_err("tampered secret is inconsistent");
 
             assert!(matches!(err, Error::KeyGen(message) if message.contains("Inconsistent")));
+        }
+
+        #[test]
+        #[allow(unsafe_code)]
+        fn public_key_from_secret_rejects_tampered_public_hash() {
+            let (_, private) =
+                keypair_from_seed(b"iroha:ml-dsa-seed:tamper-tr").expect("seeded keypair");
+            let secret_bytes = private.to_bytes().1;
+
+            let mut rho = Zeroizing::new([0u8; SEEDBYTES]);
+            let mut tr = Zeroizing::new([0u8; TRBYTES]);
+            let mut key = Zeroizing::new([0u8; SEEDBYTES]);
+            let mut t0 = Polyveck::default();
+            let mut s1 = Polyvecl::default();
+            let mut s2 = Polyveck::default();
+            unsafe {
+                PQCLEAN_MLDSA65_CLEAN_unpack_sk(
+                    rho.as_mut_ptr(),
+                    tr.as_mut_ptr(),
+                    key.as_mut_ptr(),
+                    addr_of_mut!(t0),
+                    addr_of_mut!(s1),
+                    addr_of_mut!(s2),
+                    secret_bytes.as_ptr(),
+                );
+            }
+            tr[0] ^= 0x01;
+
+            let mut tampered =
+                Zeroizing::new([0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES]);
+            unsafe {
+                PQCLEAN_MLDSA65_CLEAN_pack_sk(
+                    tampered.as_mut_ptr(),
+                    rho.as_ptr(),
+                    tr.as_ptr(),
+                    key.as_ptr(),
+                    addr_of!(t0),
+                    addr_of!(s1),
+                    addr_of!(s2),
+                );
+            }
+            let secret = mldsa65::SecretKey::from_bytes(tampered.as_ref())
+                .expect("length-valid ML-DSA secret bytes");
+
+            let err = public_key_from_secret(&secret).expect_err("tampered tr is inconsistent");
+
+            assert!(matches!(err, Error::KeyGen(message) if message.contains("public hash")));
         }
 
         #[test]

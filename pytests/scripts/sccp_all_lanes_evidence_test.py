@@ -452,7 +452,7 @@ def fake_tron_live_opener(module):
 def fake_evm_live_opener(module, *, domain):
     bridge = "0x" + "11" * 20
     verifier = "0x" + "22" * 20
-    network_id = bytes.fromhex("33" * 32)
+    network_id = module.evidence.evm_mainnet_network_id_for_domain(domain)
     bridge_runtime = bytes.fromhex("60806040526001")
     verifier_runtime = bytes.fromhex("60806040526002")
     verifier_code_hash = module.evidence.runtime_bytecode_hash(verifier_runtime)
@@ -582,6 +582,11 @@ def fake_evm_live_opener(module, *, domain):
                             {
                                 "address": bridge,
                                 "logIndex": "0x0",
+                                "transactionHash": (
+                                    "0x" + route_canary_transaction_hash.hex()
+                                ),
+                                "blockHash": "0x" + route_canary_receipt_block_hash.hex(),
+                                "blockNumber": "0x1234",
                                 "topics": [
                                     "0x" + module.EVM_MESSAGE_PROOF_ACCEPTED_TOPIC.hex(),
                                     "0x" + route_canary_message_id.hex(),
@@ -626,6 +631,8 @@ def fake_evm_live_opener(module, *, domain):
                     "id": payload["id"],
                     "result": {
                         "hash": "0x" + route_canary_transaction_hash.hex(),
+                        "blockHash": "0x" + route_canary_receipt_block_hash.hex(),
+                        "blockNumber": "0x1234",
                         "to": bridge,
                         "input": "0x" + route_canary_call_data.hex(),
                     },
@@ -668,6 +675,7 @@ def fake_evm_source_live_opener(module, *, domain):
     bridge_code_hash = module._load_evidence_module(domain).runtime_bytecode_hash(
         bridge_runtime
     )
+    deployment_input = bytes.fromhex("60016002")
 
     def opener(request, timeout):
         del timeout
@@ -705,6 +713,20 @@ def fake_evm_source_live_opener(module, *, domain):
                     },
                 }
             )
+        if method == "eth_getTransactionByHash":
+            return FakeResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload["id"],
+                    "result": {
+                        "hash": params[0],
+                        "blockHash": "0x" + "99" * 32,
+                        "blockNumber": "0x1234",
+                        "to": None,
+                        "input": "0x" + deployment_input.hex(),
+                    },
+                }
+            )
         if method == "eth_getBlockByNumber":
             assert params == ["0x1234", False]
             return FakeResponse(
@@ -725,6 +747,7 @@ def fake_evm_source_live_opener(module, *, domain):
         bridge=bridge,
         bridge_runtime=bridge_runtime,
         bridge_code_hash=bridge_code_hash,
+        deployment_input=deployment_input,
     )
 
 
@@ -925,6 +948,15 @@ def source_material(module, profile, seed):
                 "0x" + source_runtime.hex()
             )
             record["_comment_evm_source_deployment_transaction_hash"] = hex32(seed + 27)
+            record["_comment_evm_source_deployment_transaction_block_hash"] = hex32(
+                seed + 28
+            )
+            record["_comment_evm_source_deployment_transaction_block_number"] = str(
+                1000 + seed
+            )
+            record["_comment_evm_source_deployment_transaction_input_sha256"] = hex32(
+                seed + 30
+            )[2:]
             record["_comment_evm_source_deployment_receipt_status"] = "0x1"
             record["_comment_evm_source_deployment_contract_address"] = record[
                 "source_bridge_emitter_address"
@@ -1270,6 +1302,12 @@ def route_allowlist(
         route["_comment_route_canary_evidence_hash"] = "0x" + canary_hash.hex()
         route["_comment_evm_route_canary_transaction_hash"] = (
             "0x" + transaction_hash.hex()
+        )
+        route["_comment_evm_route_canary_transaction_block_number"] = str(
+            receipt_block_number
+        )
+        route["_comment_evm_route_canary_transaction_block_hash"] = (
+            "0x" + receipt_block_hash.hex()
         )
         route["_comment_evm_route_canary_log_index"] = "0"
         route["_comment_evm_route_canary_receipt_block_number"] = str(
@@ -1863,6 +1901,12 @@ def source_material_comment_lines(entry):
         + toml_value(entry["_comment_evm_source_bridge_runtime_bytecode_hex"]),
         "# sccp_evm_source_deployment_transaction_hash = "
         + toml_value(entry["_comment_evm_source_deployment_transaction_hash"]),
+        "# sccp_evm_source_deployment_transaction_block_hash = "
+        + toml_value(entry["_comment_evm_source_deployment_transaction_block_hash"]),
+        "# sccp_evm_source_deployment_transaction_block_number = "
+        + toml_value(entry["_comment_evm_source_deployment_transaction_block_number"]),
+        "# sccp_evm_source_deployment_transaction_input_sha256 = "
+        + toml_value(entry["_comment_evm_source_deployment_transaction_input_sha256"]),
         "# sccp_evm_source_deployment_receipt_status = "
         + toml_value(entry["_comment_evm_source_deployment_receipt_status"]),
         "# sccp_evm_source_deployment_contract_address = "
@@ -1911,6 +1955,14 @@ def route_comment_lines(entry):
         (
             "sccp_evm_route_canary_transaction_hash",
             "_comment_evm_route_canary_transaction_hash",
+        ),
+        (
+            "sccp_evm_route_canary_transaction_block_number",
+            "_comment_evm_route_canary_transaction_block_number",
+        ),
+        (
+            "sccp_evm_route_canary_transaction_block_hash",
+            "_comment_evm_route_canary_transaction_block_hash",
         ),
         ("sccp_evm_route_canary_log_index", "_comment_evm_route_canary_log_index"),
         (
@@ -2818,6 +2870,12 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
         route_canary_transaction_hash=raw_hex(
             route["_comment_evm_route_canary_transaction_hash"]
         ),
+        route_canary_transaction_block_number=int(
+            route["_comment_evm_route_canary_transaction_block_number"]
+        ),
+        route_canary_transaction_block_hash=raw_hex(
+            route["_comment_evm_route_canary_transaction_block_hash"]
+        ),
         route_canary_log_index=int(route["_comment_evm_route_canary_log_index"]),
         route_canary_receipt_block_number=int(
             route["_comment_evm_route_canary_receipt_block_number"]
@@ -2863,8 +2921,11 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
     assert "# sccp_evm_verifier_runtime_bytecode_hex" in evm_toml
     assert "# sccp_evm_verifier_key_hash" in evm_toml
     assert "# sccp_evm_route_canary_transaction_hash" in evm_toml
+    assert "# sccp_evm_route_canary_transaction_block_number" in evm_toml
+    assert "# sccp_evm_route_canary_transaction_block_hash" in evm_toml
     assert "# sccp_evm_route_canary_receipt_block_hash" in evm_toml
     assert "evm_route_canary_transaction_hash = " in evm_toml
+    assert "evm_route_canary_transaction_block_hash = " in evm_toml
     assert "evm_route_canary_block_receipts_root = " in evm_toml
     evm_path = tmp_path / "eth-direct.toml"
     evm_path.write_text(evm_toml, encoding="utf-8")
@@ -2971,6 +3032,9 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     eth_material.pop("_comment_evm_source_bridge_code_hash")
     eth_material.pop("_comment_evm_source_bridge_runtime_bytecode_hex")
     eth_material.pop("_comment_evm_source_deployment_transaction_hash")
+    eth_material.pop("_comment_evm_source_deployment_transaction_block_hash")
+    eth_material.pop("_comment_evm_source_deployment_transaction_block_number")
+    eth_material.pop("_comment_evm_source_deployment_transaction_input_sha256")
     eth_material.pop("_comment_evm_source_deployment_receipt_status")
     eth_material.pop("_comment_evm_source_deployment_contract_address")
     eth_material.pop("_comment_evm_source_deployment_block_hash")
@@ -2986,11 +3050,53 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     assert "EVM source bridge runtime code hash metadata must be a non-zero" in blockers
     assert "EVM source bridge runtime bytecode metadata must be present" in blockers
     assert "EVM source deployment transaction hash metadata must be a non-zero" in blockers
+    assert (
+        "EVM source deployment transaction block hash metadata must be a non-zero"
+        in blockers
+    )
+    assert (
+        "EVM source deployment transaction block number metadata must be a positive"
+        in blockers
+    )
+    assert (
+        "EVM source deployment transaction input SHA-256 metadata must be a non-zero"
+        in blockers
+    )
     assert "EVM source deployment receipt status metadata must be 0x1" in blockers
     assert "EVM source deployment contract address metadata must be a non-zero" in blockers
     assert "EVM source deployment block hash metadata must be a non-zero" in blockers
     assert "EVM source deployment block number metadata must be a positive" in blockers
     assert "EVM source deployment block receiptsRoot metadata must be a non-zero" in blockers
+
+
+def test_all_lanes_rejects_evm_source_deployment_transaction_readback_drift():
+    module = load_evidence_module()
+    cases = [
+        (
+            "_comment_evm_source_deployment_transaction_block_hash",
+            "0x" + "ab" * 32,
+            "EVM source deployment transaction block hash metadata must match",
+        ),
+        (
+            "_comment_evm_source_deployment_transaction_block_number",
+            "999999",
+            "EVM source deployment transaction block number metadata must match",
+        ),
+        (
+            "_comment_evm_source_deployment_transaction_input_sha256",
+            "0x" + "00" * 32,
+            "EVM source deployment transaction input SHA-256 metadata must be a non-zero",
+        ),
+    ]
+    for field, value, expected in cases:
+        records = complete_bundle(module)
+        eth_material = records["sccp_source_verifier_materials"][0]
+        eth_material[field] = value
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        assert expected in "\n".join(summary["blockers"])
 
 
 def test_all_lanes_rejects_evm_source_with_invalid_runtime_bytecode_metadata():
@@ -3098,6 +3204,22 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
         in source_toml
     )
     assert '# sccp_evm_source_deployment_receipt_status = "0x1"' in source_toml
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_hash = "0x'
+        + "99" * 32
+        + '"'
+        in source_toml
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_number = "4660"'
+        in source_toml
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        + hashlib.sha256(fake.deployment_input).hexdigest()
+        + '"'
+        in source_toml
+    )
     assert '# sccp_evm_source_deployment_block_number = "4660"' in source_toml
     assert "# sccp_evm_source_deployment_block_receipts_root" in source_toml
 
@@ -3222,6 +3344,15 @@ def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata(tmp_path
     args.deployment_transaction_hash = raw_hex(
         material["_comment_evm_source_deployment_transaction_hash"]
     )
+    args.deployment_transaction_block_hash = raw_hex(
+        material["_comment_evm_source_deployment_transaction_block_hash"]
+    )
+    args.deployment_transaction_block_number = int(
+        material["_comment_evm_source_deployment_transaction_block_number"]
+    )
+    args.deployment_transaction_input_sha256 = raw_hex(
+        "0x" + material["_comment_evm_source_deployment_transaction_input_sha256"]
+    )
     args.deployment_receipt_contract_address = raw_hex(
         material["_comment_evm_source_deployment_contract_address"]
     )
@@ -3244,6 +3375,9 @@ def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata(tmp_path
     assert "# sccp_evm_source_bridge_runtime_code_hash" in source_toml
     assert "# sccp_evm_source_bridge_runtime_bytecode_hex" in source_toml
     assert "# sccp_evm_source_deployment_transaction_hash" in source_toml
+    assert "# sccp_evm_source_deployment_transaction_block_hash" in source_toml
+    assert "# sccp_evm_source_deployment_transaction_block_number" in source_toml
+    assert "# sccp_evm_source_deployment_transaction_input_sha256" in source_toml
     assert "# sccp_evm_source_deployment_block_number" in source_toml
     assert "# sccp_evm_source_deployment_block_receipts_root" in source_toml
     source_path = tmp_path / "eth-source-direct.toml"
@@ -3785,6 +3919,32 @@ def test_all_lanes_rejects_evm_route_canary_transaction_metadata_drift():
         "EVM route canary evidence hash must match "
         "MessageProofAccepted transaction metadata"
     ) in "\n".join(summary["blockers"])
+
+
+def test_all_lanes_rejects_evm_route_canary_transaction_readback_drift():
+    module = load_evidence_module()
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    cases = (
+        (
+            "_comment_evm_route_canary_transaction_block_number",
+            "999999",
+            "EVM route canary transaction block number metadata must match",
+        ),
+        (
+            "_comment_evm_route_canary_transaction_block_hash",
+            hex32(0xFB),
+            "EVM route canary transaction block hash metadata must match",
+        ),
+    )
+    for field, value, expected in cases:
+        records = complete_bundle(module)
+        route = records["sccp_route_allowlists"][eth_index]
+        route[field] = value
+
+        summary = module.validate_evidence_bundle(records)
+
+        assert summary["production_ready"] is False
+        assert expected in "\n".join(summary["blockers"])
 
 
 def test_all_lanes_rejects_evm_route_canary_call_transcript_metadata_drift():

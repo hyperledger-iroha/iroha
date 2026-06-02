@@ -15,7 +15,11 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 
-use iroha_crypto::{Hash, PublicKey, Signature, fhe_bfv::BfvEvaluationKeyBundle};
+use iroha_crypto::{
+    Hash, PublicKey, Signature,
+    fhe_bfv::BfvEvaluationKeyBundle,
+    kex::{KeyExchangeScheme as _, X25519Sha256},
+};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -94,6 +98,7 @@ pub const SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1: u16 = 1;
 pub const SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraUploadedModelWrappedKeyV1`].
 pub const SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1: u16 = 1;
+const SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES: usize = 32;
 /// Schema version for [`SoraPrivateModelArtifactRefV1`].
 pub const SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraPrivateUploadedModelExecutionReceiptV1`].
@@ -6336,6 +6341,32 @@ pub enum SoraUploadedModelKeyWrapAeadV1 {
     Aes256Gcm,
 }
 
+fn validate_uploaded_model_x25519_public_key(
+    manifest: &'static str,
+    field: &'static str,
+    public_key: &[u8],
+) -> Result<(), SoracloudManifestError> {
+    if public_key.len() != SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "X25519-HKDF-SHA256 public key must be {} bytes, found {}",
+                SORA_UPLOADED_MODEL_X25519_PUBLIC_KEY_BYTES,
+                public_key.len()
+            ),
+        });
+    }
+    X25519Sha256::decode_public_key(public_key).map_err(|err| {
+        SoracloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!("invalid X25519-HKDF-SHA256 public key: {err}"),
+        }
+    })?;
+    Ok(())
+}
+
 /// Soracloud-upload recipient metadata advertised for model bundle encryption.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -6397,6 +6428,15 @@ impl SoraUploadedModelEncryptionRecipientV1 {
                     Self::MAX_PUBLIC_KEY_BYTES
                 ),
             });
+        }
+        match self.kem {
+            SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 => {
+                validate_uploaded_model_x25519_public_key(
+                    "sora uploaded model encryption recipient",
+                    "public_key_bytes",
+                    self.public_key_bytes.as_slice(),
+                )?;
+            }
         }
         if Hash::new(self.public_key_bytes.as_slice()) != self.public_key_fingerprint {
             return Err(SoracloudManifestError::InvalidField {
@@ -6480,6 +6520,15 @@ impl SoraUploadedModelWrappedKeyV1 {
                     Self::MAX_PUBLIC_KEY_BYTES
                 ),
             });
+        }
+        match self.kem {
+            SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 => {
+                validate_uploaded_model_x25519_public_key(
+                    "sora uploaded model wrapped key",
+                    "ephemeral_public_key",
+                    self.ephemeral_public_key.as_slice(),
+                )?;
+            }
         }
         if self.nonce.is_empty() {
             return Err(SoracloudManifestError::EmptyField {
@@ -16013,6 +16062,96 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn uploaded_model_recipient_validation_rejects_x25519_length_drift() {
+        let mut recipient = sample_uploaded_model_encryption_recipient();
+        recipient.public_key_bytes = vec![7u8; 31];
+        recipient.public_key_fingerprint = Hash::new(recipient.public_key_bytes.as_slice());
+
+        let error = recipient
+            .validate()
+            .expect_err("X25519 upload recipient keys must be exactly 32 bytes");
+        match error {
+            SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason,
+            } => {
+                assert_eq!(manifest, "sora uploaded model encryption recipient");
+                assert_eq!(field, "public_key_bytes");
+                assert!(reason.contains("32 bytes"), "unexpected reason: {reason}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uploaded_model_recipient_validation_rejects_low_order_x25519_public_key() {
+        let mut recipient = sample_uploaded_model_encryption_recipient();
+        recipient.public_key_bytes = vec![0u8; 32];
+        recipient.public_key_fingerprint = Hash::new(recipient.public_key_bytes.as_slice());
+
+        let error = recipient
+            .validate()
+            .expect_err("low-order X25519 upload recipient keys must fail closed");
+        match error {
+            SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason,
+            } => {
+                assert_eq!(manifest, "sora uploaded model encryption recipient");
+                assert_eq!(field, "public_key_bytes");
+                assert!(reason.contains("low-order"), "unexpected reason: {reason}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uploaded_model_wrapped_key_validation_rejects_x25519_length_drift() {
+        let mut wrapped_key = sample_uploaded_model_wrapped_key();
+        wrapped_key.ephemeral_public_key = vec![8u8; 33];
+
+        let error = wrapped_key
+            .validate()
+            .expect_err("X25519 ephemeral upload keys must be exactly 32 bytes");
+        match error {
+            SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason,
+            } => {
+                assert_eq!(manifest, "sora uploaded model wrapped key");
+                assert_eq!(field, "ephemeral_public_key");
+                assert!(reason.contains("32 bytes"), "unexpected reason: {reason}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn uploaded_model_wrapped_key_validation_rejects_low_order_x25519_ephemeral() {
+        let mut wrapped_key = sample_uploaded_model_wrapped_key();
+        wrapped_key.ephemeral_public_key = vec![0u8; 32];
+
+        let error = wrapped_key
+            .validate()
+            .expect_err("low-order X25519 ephemeral upload keys must fail closed");
+        match error {
+            SoracloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason,
+            } => {
+                assert_eq!(manifest, "sora uploaded model wrapped key");
+                assert_eq!(field, "ephemeral_public_key");
+                assert!(reason.contains("low-order"), "unexpected reason: {reason}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

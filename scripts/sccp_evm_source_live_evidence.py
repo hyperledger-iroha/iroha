@@ -34,6 +34,12 @@ EXPECTED_RPC_CHAIN_IDS = {
 EVM_SOURCE_ALLOWED_BLOCK_TAGS = frozenset(("latest", "safe", "finalized"))
 
 
+def default_block_tag_for_domain(domain: int) -> str:
+    """Return the default live-code block tag for an EVM-family source lane."""
+
+    return "finalized" if domain == SCCP_DOMAIN_ETH else "latest"
+
+
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
@@ -477,8 +483,58 @@ def _receipt_summary(
     )
     if block_number_value <= 0:
         raise RuntimeError("deployment receipt blockNumber must be non-zero")
+    transaction = _json_rpc(
+        rpc_url,
+        "eth_getTransactionByHash",
+        [_hex(deployment_transaction_hash)],
+        opener=opener,
+        timeout=timeout,
+    )
+    if not isinstance(transaction, dict):
+        raise RuntimeError("eth_getTransactionByHash returned a non-object transaction")
+    parsed_transaction_hash = _rpc_fixed_hex_data(
+        transaction.get("hash"),
+        method="eth_getTransactionByHash hash",
+        byte_length=32,
+    )
+    if parsed_transaction_hash != deployment_transaction_hash:
+        raise RuntimeError(
+            "deployment transaction hash does not match requested deployment transaction"
+        )
+    transaction_block_hash = _rpc_fixed_hex_data(
+        transaction.get("blockHash"),
+        method="eth_getTransactionByHash blockHash",
+        byte_length=32,
+    )
+    if transaction_block_hash != parsed_block_hash:
+        raise RuntimeError(
+            "deployment transaction blockHash does not match deployment receipt blockHash"
+        )
+    transaction_block_number = _rpc_quantity(
+        transaction.get("blockNumber"),
+        method="eth_getTransactionByHash blockNumber",
+    )
+    if transaction_block_number != block_number_value:
+        raise RuntimeError(
+            "deployment transaction blockNumber does not match deployment receipt blockNumber"
+        )
+    if transaction.get("to") is not None:
+        raise RuntimeError("deployment transaction to must be null for contract creation")
+    transaction_input = _rpc_hex_data(
+        transaction.get("input", transaction.get("data")),
+        method="eth_getTransactionByHash input",
+    )
+    if not transaction_input or not any(transaction_input):
+        raise RuntimeError("deployment transaction input must not be empty or zero")
     return {
         "deployment_transaction_hash": _hex(deployment_transaction_hash),
+        "deployment_transaction_block_hash": _hex(transaction_block_hash),
+        "deployment_transaction_block_number": transaction_block_number,
+        "deployment_transaction_contract_creation": True,
+        "deployment_transaction_input_sha256": hashlib.sha256(
+            transaction_input
+        ).hexdigest(),
+        "deployment_transaction_block_matches": True,
         "deployment_receipt_status": status,
         "deployment_receipt_contract_address": _hex(parsed_contract_address),
         "deployment_receipt_block_hash": _hex(parsed_block_hash),
@@ -553,6 +609,13 @@ def collect_source_bridge_evidence(
         ),
         method="eth_chainId",
     )
+    expected_chain_id = EXPECTED_RPC_CHAIN_IDS[domain]
+    if chain_id != expected_chain_id:
+        chain = "eth" if domain == SCCP_DOMAIN_ETH else "bsc"
+        raise ValueError(
+            f"eth_chainId for {chain} lane must be canonical mainnet chain id "
+            f"{expected_chain_id}, got {chain_id}"
+        )
     bridge_code_hash, bridge_runtime_bytecode_hex = _runtime_code_hash(
         evidence,
         rpc_url,
@@ -824,16 +887,32 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
         return False
     if source_bridge.get("deployment_receipt_block_receipts_root_verified") is not True:
         return False
+    if source_bridge.get("deployment_transaction_block_matches") is not True:
+        return False
+    if source_bridge.get("deployment_transaction_contract_creation") is not True:
+        return False
     try:
         _parse_hex32(
             source_bridge.get("deployment_transaction_hash"),
             label="deployment transaction hash",
         )
+        transaction_block_hash = _parse_hex32(
+            source_bridge.get("deployment_transaction_block_hash"),
+            label="deployment transaction block hash",
+        )
+        transaction_block_number = _require_exact_positive_u64(
+            source_bridge.get("deployment_transaction_block_number"),
+            label="deployment transaction block number",
+        )
+        _parse_hex32(
+            "0x" + str(source_bridge.get("deployment_transaction_input_sha256")),
+            label="deployment transaction input SHA-256",
+        )
         _parse_hex32(
             source_bridge.get("deployment_receipt_block_hash"),
             label="deployment receipt block hash",
         )
-        _require_exact_positive_u64(
+        receipt_block_number = _require_exact_positive_u64(
             source_bridge.get("deployment_receipt_block_number"),
             label="deployment receipt block number",
         )
@@ -861,7 +940,15 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
         )
     except (argparse.ArgumentTypeError, AttributeError, TypeError, ValueError):
         return False
-    return receipt_address == bridge_address
+    return (
+        receipt_address == bridge_address
+        and transaction_block_hash
+        == _parse_hex32(
+            source_bridge.get("deployment_receipt_block_hash"),
+            label="deployment receipt block hash",
+        )
+        and transaction_block_number == receipt_block_number
+    )
 
 
 def _validate_source_summary(summary: dict[str, Any]) -> None:
@@ -1139,11 +1226,17 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
             missing.append("deployment receipt block receiptsRoot verification")
         if source_bridge.get("deployment_receipt_block_code_hash_matches") is not True:
             missing.append("deployment receipt block code hash verification")
+        if source_bridge.get("deployment_transaction_block_matches") is not True:
+            missing.append("deployment transaction readback verification")
+        if source_bridge.get("deployment_transaction_contract_creation") is not True:
+            missing.append("deployment transaction contract-creation verification")
         if (
             source_bridge.get("deployment_receipt_block_hash_matches") is True
             and source_bridge.get("deployment_receipt_block_receipts_root_verified")
             is True
             and source_bridge.get("deployment_receipt_block_code_hash_matches") is True
+            and source_bridge.get("deployment_transaction_block_matches") is True
+            and source_bridge.get("deployment_transaction_contract_creation") is True
             and not _source_bridge_deployment_receipt_is_verified(source_bridge)
         ):
             missing.append("--deployment-transaction-hash")
@@ -1171,8 +1264,20 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     _validate_source_summary(summary)
     args = summary["_source_args"]
     evidence = _load_evidence_module(args.source_domain)
-    rendered = evidence.render_toml(args)
     source_bridge = summary["source_bridge"]
+    args.deployment_transaction_block_hash = _parse_hex32(
+        source_bridge["deployment_transaction_block_hash"],
+        label="deployment transaction block hash",
+    )
+    args.deployment_transaction_block_number = _require_exact_positive_u64(
+        source_bridge["deployment_transaction_block_number"],
+        label="deployment transaction block number",
+    )
+    args.deployment_transaction_input_sha256 = _parse_hex32(
+        "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+        label="deployment transaction input SHA-256",
+    )
+    rendered = evidence.render_toml(args)
     comments = [
         "# sccp_evm_source_rpc_chain_id = "
         + json.dumps(str(source_bridge["rpc_chain_id"])),
@@ -1187,6 +1292,12 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
         [
             "# sccp_evm_source_deployment_transaction_hash = "
             + json.dumps(str(source_bridge["deployment_transaction_hash"])),
+            "# sccp_evm_source_deployment_transaction_block_hash = "
+            + json.dumps(str(source_bridge["deployment_transaction_block_hash"])),
+            "# sccp_evm_source_deployment_transaction_block_number = "
+            + json.dumps(str(source_bridge["deployment_transaction_block_number"])),
+            "# sccp_evm_source_deployment_transaction_input_sha256 = "
+            + json.dumps(str(source_bridge["deployment_transaction_input_sha256"])),
             "# sccp_evm_source_deployment_receipt_status = "
             + json.dumps(str(source_bridge["deployment_receipt_status"])),
             "# sccp_evm_source_deployment_contract_address = "
@@ -1223,12 +1334,26 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect live EVM-family source evidence and return a JSON summary."""
 
-    block_tag = parse_block_tag(args.block_tag)
+    block_tag = parse_block_tag(
+        args.block_tag
+        if args.block_tag is not None
+        else default_block_tag_for_domain(args.domain)
+    )
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
         "block_tag": block_tag,
     }
+    canonical_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[args.domain]
+    expected_rpc_chain_id = args.expected_rpc_chain_id
+    if expected_rpc_chain_id is None:
+        expected_rpc_chain_id = canonical_rpc_chain_id
+    elif expected_rpc_chain_id != canonical_rpc_chain_id:
+        chain = "eth" if args.domain == SCCP_DOMAIN_ETH else "bsc"
+        raise ValueError(
+            "--expected-rpc-chain-id must match the canonical "
+            f"{chain} mainnet chain id {canonical_rpc_chain_id}"
+        )
     source_bridge = collect_source_bridge_evidence(
         args.rpc_url,
         domain=args.domain,
@@ -1238,15 +1363,6 @@ def collect_live_evidence(
         opener=opener,
         timeout=args.timeout,
     )
-    canonical_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[args.domain]
-    expected_rpc_chain_id = args.expected_rpc_chain_id
-    if expected_rpc_chain_id is None:
-        expected_rpc_chain_id = canonical_rpc_chain_id
-    elif expected_rpc_chain_id != canonical_rpc_chain_id:
-        raise ValueError(
-            "--expected-rpc-chain-id must match the canonical "
-            f"{source_bridge['chain']} mainnet chain id {canonical_rpc_chain_id}"
-        )
     if expected_rpc_chain_id != source_bridge["rpc_chain_id"]:
         raise ValueError(
             "--expected-rpc-chain-id does not match eth_chainId for "
@@ -1397,12 +1513,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--block-tag",
-        default="latest",
+        default=None,
         type=parse_block_tag,
         help=(
             "JSON-RPC block tag for eth_getCode. Must be latest, safe, "
             "finalized, or a positive canonical lowercase 0x block number. "
-            "Defaults to latest."
+            "Defaults to finalized for Ethereum mainnet and latest for BSC."
         ),
     )
     parser.add_argument(

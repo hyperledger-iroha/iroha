@@ -232,6 +232,9 @@ impl AdmissionToken {
         if flags & !TOKEN_FLAG_MASK != 0 {
             return Err(MintError::InvalidFlags(flags));
         }
+        suite
+            .validate_secret_key(issuer_secret_key)
+            .map_err(MintError::Signature)?;
 
         let mut nonce = [0u8; 16];
         rng.fill_bytes(&mut nonce);
@@ -286,22 +289,46 @@ pub struct AdmissionTokenVerifier {
 }
 
 impl AdmissionTokenVerifier {
-    /// Construct a new verifier.
+    /// Construct a new verifier, panicking when the issuer public key is invalid.
+    ///
+    /// # Panics
+    /// Panics if the configured issuer public key does not match the selected
+    /// ML-DSA suite. Runtime configuration loaders should prefer
+    /// [`AdmissionTokenVerifier::try_new`] so invalid key material can fail
+    /// closed without unwinding.
     pub fn new(
         suite: MlDsaSuite,
         public_key: Vec<u8>,
         max_ttl: Duration,
         clock_skew: Duration,
     ) -> Self {
+        Self::try_new(suite, public_key, max_ttl, clock_skew)
+            .expect("admission token verifier public key must match the selected ML-DSA suite")
+    }
+
+    /// Construct a new verifier.
+    ///
+    /// # Errors
+    /// Returns [`VerifierConfigError`] if the configured issuer public key does
+    /// not match the selected ML-DSA suite.
+    pub fn try_new(
+        suite: MlDsaSuite,
+        public_key: Vec<u8>,
+        max_ttl: Duration,
+        clock_skew: Duration,
+    ) -> Result<Self, VerifierConfigError> {
+        suite
+            .validate_public_key(&public_key)
+            .map_err(VerifierConfigError::PublicKey)?;
         let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
-        Self {
+        Ok(Self {
             suite,
             public_key,
             issuer_fingerprint,
             max_ttl,
             clock_skew,
             replay_store: None,
-        }
+        })
     }
 
     /// Attach a replay store used to enforce single-use semantics.
@@ -341,6 +368,9 @@ impl AdmissionTokenVerifier {
         }
         if token.transcript_hash != *transcript_hash {
             return Err(VerifyError::TranscriptMismatch);
+        }
+        if token.expires_at <= token.issued_at {
+            return Err(VerifyError::InvalidTemporalBounds);
         }
         let now_secs = now
             .duration_since(UNIX_EPOCH)
@@ -419,6 +449,14 @@ impl AdmissionTokenVerifier {
             .validate_signature(token.signature())
             .map_err(VerifyError::Signature)
     }
+}
+
+/// Errors surfaced while constructing an admission-token verifier.
+#[derive(Debug, Error)]
+pub enum VerifierConfigError {
+    /// The configured issuer public key does not match the selected suite.
+    #[error("admission token issuer public key is invalid: {0}")]
+    PublicKey(MlDsaError),
 }
 
 /// Compute the canonical issuer fingerprint from a public key.
@@ -959,6 +997,9 @@ pub enum VerifyError {
         /// Maximum allowed validity window.
         max: Duration,
     },
+    /// Token validity bounds were inverted or zero-length.
+    #[error("token expires_at must be greater than issued_at")]
+    InvalidTemporalBounds,
     /// Clock error while obtaining the current time.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -999,6 +1040,15 @@ mod tests {
     fn assert_mldsa_bad_encoding(err: VerifyError, field: &str) {
         match err {
             VerifyError::Signature(MlDsaError::BadEncoding(err)) => {
+                assert!(err.to_string().contains(field));
+            }
+            other => panic!("expected ML-DSA bad encoding error, got {other:?}"),
+        }
+    }
+
+    fn assert_mint_mldsa_bad_encoding(err: MintError, field: &str) {
+        match err {
+            MintError::Signature(MlDsaError::BadEncoding(err)) => {
                 assert!(err.to_string().contains(field));
             }
             other => panic!("expected ML-DSA bad encoding error, got {other:?}"),
@@ -1063,6 +1113,24 @@ mod tests {
         verifier
             .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
             .expect("verify");
+    }
+
+    #[test]
+    fn verifier_try_new_rejects_invalid_public_key_before_fingerprint() {
+        let err = AdmissionTokenVerifier::try_new(
+            MlDsaSuite::MlDsa44,
+            Vec::new(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .expect_err("invalid issuer public key must fail at verifier construction");
+
+        match err {
+            VerifierConfigError::PublicKey(MlDsaError::BadEncoding(err)) => {
+                assert!(err.to_string().contains("public key"));
+            }
+            other => panic!("expected ML-DSA public-key config error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1143,6 +1211,46 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_invalid_temporal_bounds_before_signature_preflight() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let mut rng = StdRng::seed_from_u64(0x0BAD_5EED);
+        let mut token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        token.expires_at = token.issued_at;
+        token.signature.clear();
+
+        let verifier = AdmissionTokenVerifier::new(
+            MlDsaSuite::MlDsa44,
+            keypair.public_key().to_vec(),
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        );
+        let err = verifier
+            .verify(
+                &token,
+                &RELAY_ID,
+                &TRANSCRIPT,
+                issued + Duration::from_secs(1),
+            )
+            .expect_err("invalid temporal bounds must fail before signature checks");
+        assert!(matches!(err, VerifyError::InvalidTemporalBounds));
+    }
+
+    #[test]
     fn frame_detection() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -1207,6 +1315,28 @@ mod tests {
         )
         .expect_err("mint should reject non-zero flags");
         assert!(matches!(err, MintError::InvalidFlags(0x01)));
+    }
+
+    #[test]
+    fn mint_rejects_invalid_secret_key_length_before_backend() {
+        let suite = MlDsaSuite::MlDsa44;
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let mut rng = StdRng::seed_from_u64(0x5EC);
+
+        let err = AdmissionToken::mint(
+            suite,
+            &[],
+            [0xEF; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect_err("invalid secret key length must fail before signing");
+        assert_mint_mldsa_bad_encoding(err, "secret key");
     }
 
     #[test]
@@ -1368,38 +1498,21 @@ mod tests {
         let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
         let mut bad_public_key = keypair.public_key().to_vec();
         bad_public_key.pop();
-        let fingerprint = compute_issuer_fingerprint(&bad_public_key);
-        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        let expires = issued + Duration::from_secs(300);
-        let mut rng = StdRng::seed_from_u64(0xA11CE);
-        let token = AdmissionToken::mint(
-            suite,
-            keypair.secret_key(),
-            fingerprint,
-            RELAY_ID,
-            TRANSCRIPT,
-            issued,
-            expires,
-            0,
-            &mut rng,
-        )
-        .expect("mint");
-        let verifier = AdmissionTokenVerifier::new(
+
+        let err = AdmissionTokenVerifier::try_new(
             suite,
             bad_public_key,
             Duration::from_secs(900),
             Duration::from_secs(5),
-        );
+        )
+        .expect_err("bad verifier public key length must fail during construction");
 
-        let err = verifier
-            .verify(
-                &token,
-                &RELAY_ID,
-                &TRANSCRIPT,
-                issued + Duration::from_secs(5),
-            )
-            .expect_err("bad verifier public key length must fail");
-        assert_mldsa_bad_encoding(err, "public key");
+        match err {
+            VerifierConfigError::PublicKey(MlDsaError::BadEncoding(err)) => {
+                assert!(err.to_string().contains("public key"));
+            }
+            other => panic!("expected ML-DSA public-key config error, got {other:?}"),
+        }
     }
 
     #[test]

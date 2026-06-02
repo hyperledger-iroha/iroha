@@ -7170,6 +7170,7 @@ const ethereumMainnetReceiptSourceEventOptions = (input, options, sdk) => {
 const ethereumMainnetReceiptLogSourceEventDigest = (
   receipt,
   { sourceEventDigest, sourceBridgeEmitterAddress },
+  { transactionHash, blockHash, blockNumber } = {},
 ) => {
   if (sourceEventDigest === undefined && sourceBridgeEmitterAddress === undefined) {
     return {};
@@ -7213,19 +7214,45 @@ const ethereumMainnetReceiptLogSourceEventDigest = (
         { nonzero: false },
       ),
     );
-    const data = log.data ?? "0x";
     if (
       logAddress === sourceBridgeEmitterAddress &&
       normalizedTopics.length === 2 &&
       normalizedTopics[0] === sourceEventTopic
     ) {
+      const logTransactionHash = requireEthereumRpcHexData(
+        log.transactionHash ?? log.transaction_hash,
+        `receipt.logs[${index}].transactionHash`,
+        32,
+      );
+      if (transactionHash !== undefined && logTransactionHash !== transactionHash) {
+        throw new TypeError("receipt.logs transactionHash must match receipt.transactionHash");
+      }
+      const logBlockHash = requireEthereumRpcHexData(
+        log.blockHash ?? log.block_hash,
+        `receipt.logs[${index}].blockHash`,
+        32,
+      );
+      if (blockHash !== undefined && logBlockHash !== blockHash) {
+        throw new TypeError("receipt.logs blockHash must match receipt.blockHash");
+      }
+      const logBlockNumberValue = requireEthereumRpcQuantity(
+        log.blockNumber ?? log.block_number,
+        `receipt.logs[${index}].blockNumber`,
+      );
+      const logBlockNumber = `0x${logBlockNumberValue.toString(16)}`;
+      if (blockNumber !== undefined && logBlockNumber !== blockNumber) {
+        throw new TypeError("receipt.logs blockNumber must match receipt.blockNumber");
+      }
+      if (typeof log.data !== "string") {
+        throw new TypeError(`receipt.logs[${index}].data is required`);
+      }
       const candidateDigest = normalizedTopics[1];
       if (
         hexToBytes(candidateDigest, `receipt.logs[${index}].topics[1]`, 32).every(
           (byte) => byte === 0,
         ) ||
         (sourceEventDigest !== undefined && candidateDigest !== sourceEventDigest) ||
-        data !== "0x"
+        log.data !== "0x"
       ) {
         continue;
       }
@@ -7755,6 +7782,17 @@ const requireEthereumMainnetInboundReceiptProof = (evidence) => {
   return receiptProof;
 };
 
+const requireEthereumMainnetReceiptSourceEventForProof = (evidence) => {
+  if ((evidence.receipt ?? evidence.receipt_proof_receipt) === undefined) {
+    return;
+  }
+  if ((evidence.sourceEventDigest ?? evidence.source_event_digest) === undefined) {
+    throw new TypeError(
+      "Ethereum mainnet SCCP inbound proof requires receipt source event validation",
+    );
+  }
+};
+
 const requireEthereumMainnetOutboundRequest = (request) => {
   requireProductionEvmProofRequest(request);
   if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
@@ -7986,6 +8024,11 @@ export class EthereumMainnetSccp {
       const sourceEvent = ethereumMainnetReceiptLogSourceEventDigest(
         receipt,
         ethereumMainnetReceiptSourceEventOptions(input, options, this),
+        {
+          transactionHash,
+          blockHash,
+          blockNumber: receiptBlockNumber,
+        },
       );
       sourceEventDigest = sourceEvent.sourceEventDigest;
       sourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress;
@@ -8062,6 +8105,7 @@ export class EthereumMainnetSccp {
       throw new TypeError("Ethereum mainnet SCCP inbound proof requires beaconFinality");
     }
     requireEthereumMainnetInboundReceiptProof(evidence);
+    requireEthereumMainnetReceiptSourceEventForProof(evidence);
     return normalizeInboundProofBytes(await prove(evidence, options), "proofBytes");
   }
 

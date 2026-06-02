@@ -273,6 +273,9 @@ EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_bridge_code_hash",
     "_comment_evm_source_bridge_runtime_bytecode_hex",
     "_comment_evm_source_deployment_transaction_hash",
+    "_comment_evm_source_deployment_transaction_block_hash",
+    "_comment_evm_source_deployment_transaction_block_number",
+    "_comment_evm_source_deployment_transaction_input_sha256",
     "_comment_evm_source_deployment_receipt_status",
     "_comment_evm_source_deployment_contract_address",
     "_comment_evm_source_deployment_block_hash",
@@ -427,6 +430,9 @@ SOURCE_MATERIAL_FIELDS = frozenset(
         "_comment_evm_source_bridge_code_hash",
         "_comment_evm_source_bridge_runtime_bytecode_hex",
         "_comment_evm_source_deployment_transaction_hash",
+        "_comment_evm_source_deployment_transaction_block_hash",
+        "_comment_evm_source_deployment_transaction_block_number",
+        "_comment_evm_source_deployment_transaction_input_sha256",
         "_comment_evm_source_deployment_receipt_status",
         "_comment_evm_source_deployment_contract_address",
         "_comment_evm_source_deployment_block_hash",
@@ -559,6 +565,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "route_canary_route_allowlist_hash",
         "route_canary_destination_binding_hash",
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -604,6 +612,8 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "_comment_route_canary_route_allowlist_hash",
         "_comment_route_canary_destination_binding_hash",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",
@@ -757,6 +767,15 @@ SOURCE_RECORD_COMMENT_KEYS = {
     "sccp_evm_source_deployment_transaction_hash": (
         "_comment_evm_source_deployment_transaction_hash"
     ),
+    "sccp_evm_source_deployment_transaction_block_hash": (
+        "_comment_evm_source_deployment_transaction_block_hash"
+    ),
+    "sccp_evm_source_deployment_transaction_block_number": (
+        "_comment_evm_source_deployment_transaction_block_number"
+    ),
+    "sccp_evm_source_deployment_transaction_input_sha256": (
+        "_comment_evm_source_deployment_transaction_input_sha256"
+    ),
     "sccp_evm_source_deployment_receipt_status": (
         "_comment_evm_source_deployment_receipt_status"
     ),
@@ -818,6 +837,12 @@ ROUTE_ALLOWLIST_COMMENT_KEYS = {
     ),
     "sccp_evm_route_canary_transaction_hash": (
         "_comment_evm_route_canary_transaction_hash"
+    ),
+    "sccp_evm_route_canary_transaction_block_number": (
+        "_comment_evm_route_canary_transaction_block_number"
+    ),
+    "sccp_evm_route_canary_transaction_block_hash": (
+        "_comment_evm_route_canary_transaction_block_hash"
     ),
     "sccp_evm_route_canary_log_index": "_comment_evm_route_canary_log_index",
     "sccp_evm_route_canary_receipt_block_number": (
@@ -1777,6 +1802,32 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment transaction hash metadata must be a non-zero "
             "32-byte hex value"
         )
+    transaction_block_hash = _hex_bytes(
+        record.get("_comment_evm_source_deployment_transaction_block_hash"),
+        byte_length=32,
+    )
+    if transaction_block_hash is None or not any(transaction_block_hash):
+        errors.append(
+            "EVM source deployment transaction block hash metadata must be a "
+            "non-zero 32-byte hex value"
+        )
+    transaction_block_number = record.get(
+        "_comment_evm_source_deployment_transaction_block_number"
+    )
+    if not _is_canonical_decimal_text(transaction_block_number, positive=True):
+        errors.append(
+            "EVM source deployment transaction block number metadata must be a "
+            "positive integer"
+        )
+    transaction_input_sha256 = _hex_bytes(
+        record.get("_comment_evm_source_deployment_transaction_input_sha256"),
+        byte_length=32,
+    )
+    if transaction_input_sha256 is None or not any(transaction_input_sha256):
+        errors.append(
+            "EVM source deployment transaction input SHA-256 metadata must be a "
+            "non-zero 32-byte hex value"
+        )
     receipt_status = record.get("_comment_evm_source_deployment_receipt_status")
     if receipt_status != "0x1":
         errors.append("EVM source deployment receipt status metadata must be 0x1")
@@ -1799,6 +1850,15 @@ def _check_evm_live_source_bridge_evidence(
             "EVM source deployment block hash metadata must be a non-zero "
             "32-byte hex value"
         )
+    elif (
+        transaction_block_hash is not None
+        and any(transaction_block_hash)
+        and transaction_block_hash != block_hash
+    ):
+        errors.append(
+            "EVM source deployment transaction block hash metadata must match "
+            "deployment receipt block hash metadata"
+        )
     receipt_block_number = record.get("_comment_evm_source_deployment_block_number")
     if not _is_canonical_decimal_text(receipt_block_number, positive=True):
         errors.append(
@@ -1807,6 +1867,14 @@ def _check_evm_live_source_bridge_evidence(
     elif int(receipt_block_number, 10) <= 0:
         errors.append(
             "EVM source deployment block number metadata must be a positive integer"
+        )
+    elif (
+        _is_canonical_decimal_text(transaction_block_number, positive=True)
+        and transaction_block_number != receipt_block_number
+    ):
+        errors.append(
+            "EVM source deployment transaction block number metadata must match "
+            "deployment receipt block number metadata"
         )
     receipt_block_receipts_root = record.get(
         "_comment_evm_source_deployment_block_receipts_root"
@@ -4226,6 +4294,8 @@ def _check_evm_route_canary_transaction_evidence(
 ) -> list[str]:
     fields = (
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -4242,6 +4312,8 @@ def _check_evm_route_canary_transaction_evidence(
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",
@@ -4278,6 +4350,11 @@ def _check_evm_route_canary_transaction_evidence(
             "evm_route_canary_receipt_block_hash",
             "_comment_evm_route_canary_receipt_block_hash",
             "EVM route canary receipt block hash",
+        ),
+        (
+            "evm_route_canary_transaction_block_hash",
+            "_comment_evm_route_canary_transaction_block_hash",
+            "EVM route canary transaction block hash",
         ),
         (
             "evm_route_canary_block_receipts_root",
@@ -4360,6 +4437,14 @@ def _check_evm_route_canary_transaction_evidence(
         label="EVM route canary receipt block number",
         positive=True,
     )
+    _check_route_canary_decimal_comment_matches_record(
+        errors,
+        record,
+        "evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_number",
+        label="EVM route canary transaction block number",
+        positive=True,
+    )
     _check_route_canary_bool_comment_matches_record(
         errors,
         record,
@@ -4378,6 +4463,31 @@ def _check_evm_route_canary_transaction_evidence(
     if transaction_hash is None or not any(transaction_hash):
         errors.append(
             "EVM route canary transaction hash metadata must be a non-zero bytes32"
+        )
+    transaction_block_number = _canonical_decimal_int(
+        _first_record_value(
+            record,
+            "evm_route_canary_transaction_block_number",
+            "_comment_evm_route_canary_transaction_block_number",
+        ),
+        positive=True,
+    )
+    if transaction_block_number is None:
+        errors.append(
+            "EVM route canary transaction block number metadata must be a "
+            "canonical positive decimal"
+        )
+    transaction_block_hash = _exact_hex_bytes(
+        _first_record_value(
+            record,
+            "evm_route_canary_transaction_block_hash",
+            "_comment_evm_route_canary_transaction_block_hash",
+        ),
+        byte_length=32,
+    )
+    if transaction_block_hash is None or not any(transaction_block_hash):
+        errors.append(
+            "EVM route canary transaction block hash metadata must be a non-zero bytes32"
         )
     log_index = _canonical_route_canary_log_index(
         _first_record_value(
@@ -4411,6 +4521,24 @@ def _check_evm_route_canary_transaction_evidence(
     if receipt_block_hash is None or not any(receipt_block_hash):
         errors.append(
             "EVM route canary receipt block hash metadata must be a non-zero bytes32"
+        )
+    elif (
+        transaction_block_hash is not None
+        and any(transaction_block_hash)
+        and transaction_block_hash != receipt_block_hash
+    ):
+        errors.append(
+            "EVM route canary transaction block hash metadata must match "
+            "receipt block hash metadata"
+        )
+    if (
+        transaction_block_number is not None
+        and receipt_block_number is not None
+        and transaction_block_number != receipt_block_number
+    ):
+        errors.append(
+            "EVM route canary transaction block number metadata must match "
+            "receipt block number metadata"
         )
     block_receipts_root = _exact_hex_bytes(
         _first_record_value(
@@ -6139,6 +6267,8 @@ def _check_route_canary_evidence(
             errors.append(f"{field} is only valid for TRON route canary evidence")
     for field in (
         "evm_route_canary_transaction_hash",
+        "evm_route_canary_transaction_block_number",
+        "evm_route_canary_transaction_block_hash",
         "evm_route_canary_log_index",
         "evm_route_canary_receipt_block_number",
         "evm_route_canary_receipt_block_hash",
@@ -6155,6 +6285,8 @@ def _check_route_canary_evidence(
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
         "_comment_evm_route_canary_transaction_hash",
+        "_comment_evm_route_canary_transaction_block_number",
+        "_comment_evm_route_canary_transaction_block_hash",
         "_comment_evm_route_canary_log_index",
         "_comment_evm_route_canary_receipt_block_number",
         "_comment_evm_route_canary_receipt_block_hash",

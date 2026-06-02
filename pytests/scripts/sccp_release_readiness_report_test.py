@@ -115,8 +115,13 @@ BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS = {
     "snarkjs": re.compile(r"\bsnarkjs\b", re.IGNORECASE),
     "remoteProver": re.compile(r"\bremoteProver\b"),
     "remote prover": re.compile(r"\bremote prover\b", re.IGNORECASE),
+    "remote_prover": re.compile(r"\bremote_prover\b", re.IGNORECASE),
+    "remote-prover": re.compile(r"\bremote-prover\b", re.IGNORECASE),
     "proverUrl": re.compile(r"\bproverUrl\b"),
+    "proverURL": re.compile(r"\bproverURL\b"),
+    "prover_url": re.compile(r"\bprover_url\b", re.IGNORECASE),
     "proverEndpoint": re.compile(r"\bproverEndpoint\b"),
+    "prover_endpoint": re.compile(r"\bprover_endpoint\b", re.IGNORECASE),
 }
 ETHEREUM_DATA_COLLECTION_FORBIDDEN_PATTERNS = {
     "Torii": re.compile(r"\bTorii\b"),
@@ -355,15 +360,15 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, evidence_payload
 
 
-def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
-    """The release-readiness script must advertise the Ethereum launch lane."""
+def test_release_readiness_active_launch_policy_is_bsc_mainnet() -> None:
+    """The release-readiness script must advertise the BSC launch lane."""
 
     report = load_report_module()
 
-    assert report.ACTIVE_LAUNCH_DOMAIN == 1
-    assert report.ACTIVE_LAUNCH_CHAIN == "eth"
-    assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
-    assert report.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+    assert report.ACTIVE_LAUNCH_DOMAIN == 2
+    assert report.ACTIVE_LAUNCH_CHAIN == "bsc"
+    assert report.ACTIVE_LAUNCH_POLICY == "BscMainnetLane"
+    assert report.ACTIVE_LAUNCH_DISPLAY == "BSC mainnet"
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
@@ -593,6 +598,33 @@ def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_o
                     )
 
     assert violations == []
+
+
+def test_release_readiness_native_local_prover_guard_covers_identifier_variants() -> None:
+    """The native/local-prover guard must catch common remote-prover spellings."""
+
+    samples = {
+        "WebAssembly": "const engine = WebAssembly.compile(bytes)",
+        "wasm": "import './prover.wasm'",
+        "snarkjs": "import snarkjs from 'snarkjs'",
+        "remoteProver": "const remoteProver = endpoint",
+        "remote prover": "fall back to a remote prover",
+        "remote_prover": "remote_prover = 'https://example.invalid'",
+        "remote-prover": "remote-prover endpoint",
+        "proverUrl": "const proverUrl = config.prover",
+        "proverURL": "const proverURL = config.prover",
+        "prover_url": "prover_url = config.prover",
+        "proverEndpoint": "const proverEndpoint = config.prover",
+        "prover_endpoint": "prover_endpoint = config.prover",
+    }
+
+    missing = [
+        label
+        for label, sample in samples.items()
+        if not BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS[label].search(sample)
+    ]
+
+    assert missing == []
 
 
 def test_release_readiness_sdk_helper_symbols_are_unique() -> None:

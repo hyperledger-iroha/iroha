@@ -55,6 +55,7 @@ const DILITHIUM3_SIGNATURE_LEN: usize = 2701;
 const ED25519_SIGNATURE_LEN: usize = 64;
 const NOISE_SECRET_LEN: usize = 32;
 const NOISE_PADDING_BLOCK: usize = 1024;
+const TRANSCRIPT_BINDING_LEN: usize = 32;
 const X25519_LOW_ORDER_CHECK_SECRET: [u8; NOISE_SECRET_LEN] = [1_u8; NOISE_SECRET_LEN];
 
 const STEP_NOTE_HYBRID_INIT: &str = "Client sends NK2 hybrid init";
@@ -1914,7 +1915,7 @@ fn validate_noise_padding(
     frame_len: usize,
     padding: &[u8],
 ) -> Result<(), HarnessError> {
-    if frame_len % NOISE_PADDING_BLOCK != 0 {
+    if !frame_len.is_multiple_of(NOISE_PADDING_BLOCK) {
         return Err(HarnessError::Validation(format!(
             "{context} frame length must be a multiple of {NOISE_PADDING_BLOCK} bytes, got {frame_len}"
         )));
@@ -3066,6 +3067,7 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
     params: &RuntimeParams<'_>,
     rng: &mut R,
 ) -> Result<(Vec<u8>, ClientState), HarnessError> {
+    validate_runtime_params(params)?;
     let kem_profile = kem_profile(params.kem_id)?;
     let (handshake_suite, _) = verify_capabilities_alignment(
         params.kem_id,
@@ -3467,9 +3469,10 @@ pub fn client_handle_relay_hello<R: CryptoRng + RngCore>(
     state: ClientState,
     relay_hello: &[u8],
     _key_pair: &KeyPair,
-    _params: &RuntimeParams<'_>,
+    params: &RuntimeParams<'_>,
     _rng: &mut R,
 ) -> Result<(Option<Vec<u8>>, SessionSecrets), HarnessError> {
+    validate_runtime_params(params)?;
     match state.handshake_suite {
         HandshakeSuite::Nk2Hybrid => handle_nk2_client_finish(state, relay_hello),
         HandshakeSuite::Nk3PqForwardSecure => handle_nk3_client_finish(state, relay_hello),
@@ -3505,8 +3508,8 @@ fn handle_nk2_client_finish(
             "relay negotiated {} but NK2 Hybrid response was received",
             selected.label()
         ));
-        let telemetry = build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning))
-            .ok();
+        let telemetry =
+            build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning)).ok();
         return Err(HarnessError::Downgrade {
             warnings: vec![warning],
             telemetry,
@@ -3577,8 +3580,8 @@ fn ensure_nk3_negotiation(
             "relay negotiated {} but NK3 PQ-FS response was received",
             selected.label()
         ));
-        let telemetry = build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning))
-            .ok();
+        let telemetry =
+            build_telemetry_payload(kem_id, sig_id, std::slice::from_ref(&warning)).ok();
         return Err(HarnessError::Downgrade {
             warnings: vec![warning],
             telemetry,
@@ -4480,8 +4483,10 @@ pub fn process_client_hello<R: CryptoRng + RngCore>(
     _key_pair: &KeyPair,
     rng: &mut R,
 ) -> Result<(Vec<u8>, RelayState), HarnessError> {
+    validate_runtime_params(params)?;
     let parsed = parse_client_hello(client_hello, params.resume_hash)?;
     let profile = ensure_kem_profile(params, parsed.kem_id)?;
+    validate_client_kem_publics(&parsed, profile.suite())?;
     let (negotiated_suite, _warnings) = verify_capabilities_alignment(
         parsed.kem_id,
         parsed.sig_id,
@@ -4511,6 +4516,43 @@ pub fn process_client_hello<R: CryptoRng + RngCore>(
             process_nk3_client_hello(client_hello, parsed, params, rng, profile.suite())
         }
     }
+}
+
+fn validate_runtime_params(params: &RuntimeParams<'_>) -> Result<(), HarnessError> {
+    validate_transcript_field_len("descriptor commitment", params.descriptor_commit)?;
+    if let Some(resume_hash) = params.resume_hash {
+        validate_transcript_field_len("resume hash", resume_hash)?;
+    }
+    Ok(())
+}
+
+fn validate_transcript_field_len(label: &str, bytes: &[u8]) -> Result<(), HarnessError> {
+    if bytes.len() != TRANSCRIPT_BINDING_LEN {
+        return Err(HarnessError::Validation(format!(
+            "{label} must be {TRANSCRIPT_BINDING_LEN} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_client_kem_publics(
+    parsed: &ClientHelloParsed,
+    kem_suite: MlKemSuite,
+) -> Result<(), HarnessError> {
+    validate_mlkem_public_key(kem_suite, &parsed.client_kem_public)
+        .map_err(|err| HarnessError::Kem(format!("client ML-KEM public key is invalid: {err}")))?;
+    if parsed.handshake_suite == HandshakeSuite::Nk3PqForwardSecure {
+        let forward = parsed.forward_kem_public.as_deref().ok_or_else(|| {
+            HarnessError::Validation("NK3 handshake requires forward ML-KEM public key".into())
+        })?;
+        validate_mlkem_public_key(kem_suite, forward).map_err(|err| {
+            HarnessError::Kem(format!(
+                "client forward ML-KEM public key is invalid: {err}"
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// Finalise the relay side of the handshake after the relay response is sent.
@@ -4777,6 +4819,25 @@ mod tests {
     use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
+
+    struct PanicRng;
+
+    impl RngCore for PanicRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("relay RNG must not be consumed before KEM preflight");
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("relay RNG must not be consumed before KEM preflight");
+        }
+
+        fn fill_bytes(&mut self, _dest: &mut [u8]) {
+            panic!("relay RNG must not be consumed before KEM preflight");
+        }
+    }
+
+    impl CryptoRng for PanicRng {}
+
     #[test]
     fn update_suite_list_sets_required_flag() {
         let suites = [HandshakeSuite::Nk3PqForwardSecure];
@@ -5122,6 +5183,26 @@ mod tests {
         encode_tlvs(&entries)
     }
 
+    fn capabilities_with_required_flag(base: &[u8], ty: u16, id: u8, required: bool) -> Vec<u8> {
+        let mut entries = parse_capabilities(base).expect("parse base capabilities");
+        let cap = entries
+            .iter_mut()
+            .find(|cap| cap.ty == ty && cap.value.first().copied() == Some(id))
+            .expect("selected capability present");
+        cap.required = required;
+        encode_tlvs(&entries)
+    }
+
+    fn capabilities_with_replaced_id(base: &[u8], ty: u16, from_id: u8, to_id: u8) -> Vec<u8> {
+        let mut entries = parse_capabilities(base).expect("parse base capabilities");
+        let cap = entries
+            .iter_mut()
+            .find(|cap| cap.ty == ty && cap.value.first().copied() == Some(from_id))
+            .expect("selected capability present");
+        cap.value[0] = to_id;
+        encode_tlvs(&entries)
+    }
+
     fn len_prefixed_payload_range(frame: &[u8], offset: &mut usize) -> Range<usize> {
         let len = u16::from_be_bytes([frame[*offset], frame[*offset + 1]]) as usize;
         *offset += 2;
@@ -5153,6 +5234,16 @@ mod tests {
         len_prefixed_payload_range(frame, &mut offset)
     }
 
+    fn client_hello_primary_kem_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = client_hello_static_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
+    fn client_hello_forward_kem_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = client_hello_primary_kem_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
     fn relay_response_ephemeral_range(frame: &[u8]) -> Range<usize> {
         let mut offset = 1;
         skip_len_prefixed_payload(frame, &mut offset);
@@ -5164,9 +5255,23 @@ mod tests {
         len_prefixed_payload_range(frame, &mut offset)
     }
 
+    fn relay_response_capabilities_range(frame: &[u8]) -> Range<usize> {
+        let mut offset = relay_response_static_range(frame).end;
+        len_prefixed_payload_range(frame, &mut offset)
+    }
+
     fn overwrite_noise_key(frame: &mut [u8], range: Range<usize>, replacement: [u8; 32]) {
         assert_eq!(range.len(), NOISE_SECRET_LEN);
         frame[range].copy_from_slice(&replacement);
+    }
+
+    fn shorten_len_prefixed_payload_by_one(frame: &mut Vec<u8>, payload: Range<usize>) {
+        assert!(payload.len() > 1);
+        let header_start = payload.start - 2;
+        let new_len = u16::try_from(payload.len() - 1).expect("payload length fits u16");
+        frame[header_start..payload.start].copy_from_slice(&new_len.to_be_bytes());
+        frame.remove(payload.end - 1);
+        frame.push(0);
     }
 
     fn overwrite_len_prefix(frame: &mut [u8], range: Range<usize>, replacement_len: usize) {
@@ -5561,6 +5666,68 @@ mod tests {
             err.to_string().contains("Ed25519 signature"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn client_handle_relay_hello_rejects_unadvertised_selected_relay_kem_id() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_required_flag(
+            defaults.client_capabilities,
+            CAPABILITY_PQKEM,
+            defaults.kem_id,
+            false,
+        );
+        let relay_caps = capabilities_with_required_flag(
+            defaults.relay_capabilities,
+            CAPABILITY_PQKEM,
+            defaults.kem_id,
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(7314);
+        let mut rng_relay = StdRng::seed_from_u64(7315);
+        let client_keys = KeyPair::random();
+        let relay_keys = KeyPair::random();
+
+        let (client_hello, client_state) =
+            build_client_hello(&params, &mut rng_client).expect("client hello");
+        let (mut relay_response, _relay_state) =
+            process_client_hello(&client_hello, &params, &relay_keys, &mut rng_relay)
+                .expect("relay response");
+
+        let mutated_relay_caps =
+            capabilities_with_replaced_id(&relay_caps, CAPABILITY_PQKEM, defaults.kem_id, 2);
+        let range = relay_response_capabilities_range(&relay_response);
+        assert_eq!(range.len(), mutated_relay_caps.len());
+        relay_response[range].copy_from_slice(&mutated_relay_caps);
+
+        let err = match client_handle_relay_hello(
+            client_state,
+            &relay_response,
+            &client_keys,
+            &params,
+            &mut rng_client,
+        ) {
+            Ok(_) => panic!("relay response missing selected KEM id must fail"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Downgrade { warnings, .. } => assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.capability_type == CAPABILITY_PQKEM
+                        && warning.message.contains("selected id 0x01")),
+                "missing selected KEM warning: {warnings:?}"
+            ),
+            other => panic!("expected downgrade, got {other:?}"),
+        }
     }
 
     #[test]
@@ -6160,6 +6327,47 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_malformed_nk2_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[HandshakeSuite::Nk2Hybrid],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6102);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk2 client");
+        let primary_range = client_hello_primary_kem_range(&client_hello);
+        shorten_len_prefixed_payload_by_one(&mut client_hello, primary_range);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("malformed primary KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => assert!(
+                message.contains("client ML-KEM public key"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn build_client_hello_supports_nk3_preference() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_caps = capabilities_with_suites(
@@ -6279,6 +6487,53 @@ mod tests {
     }
 
     #[test]
+    fn process_client_hello_rejects_malformed_nk3_forward_kem_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let client_caps = capabilities_with_suites(
+            defaults.client_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let relay_caps = capabilities_with_suites(
+            defaults.relay_capabilities,
+            &[
+                HandshakeSuite::Nk3PqForwardSecure,
+                HandshakeSuite::Nk2Hybrid,
+            ],
+            false,
+        );
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: client_caps.as_slice(),
+            relay_capabilities: relay_caps.as_slice(),
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+        let mut rng_client = StdRng::seed_from_u64(6103);
+        let relay_keys = KeyPair::random();
+        let (mut client_hello, _client_state) =
+            build_client_hello(&params, &mut rng_client).expect("nk3 client");
+        let forward_range = client_hello_forward_kem_range(&client_hello);
+        shorten_len_prefixed_payload_by_one(&mut client_hello, forward_range);
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("malformed forward KEM key must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Kem(message) => assert!(
+                message.contains("forward ML-KEM public key"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected KEM preflight error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn runtime_handshake_roundtrip_supports_mlkem1024() {
         let defaults = RuntimeParams::soranet_defaults();
         let client_capabilities =
@@ -6347,6 +6602,58 @@ mod tests {
     }
 
     #[test]
+    fn build_client_hello_rejects_short_descriptor_before_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let short_descriptor = [0x44; TRANSCRIPT_BINDING_LEN - 1];
+        let params = RuntimeParams {
+            descriptor_commit: &short_descriptor,
+            client_capabilities: defaults.client_capabilities,
+            relay_capabilities: defaults.relay_capabilities,
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: defaults.resume_hash,
+        };
+
+        let err = match build_client_hello(&params, &mut PanicRng) {
+            Ok(_) => panic!("short descriptor must fail before client RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Validation(message) => assert!(
+                message.contains("descriptor commitment"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("expected descriptor validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_client_hello_rejects_short_resume_hash_before_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let short_resume = [0x55; TRANSCRIPT_BINDING_LEN - 1];
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: defaults.client_capabilities,
+            relay_capabilities: defaults.relay_capabilities,
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: Some(&short_resume),
+        };
+
+        let err = match build_client_hello(&params, &mut PanicRng) {
+            Ok(_) => panic!("short resume hash must fail before client RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Validation(message) => assert!(
+                message.contains("resume hash"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("expected resume validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn process_client_hello_errors_on_missing_capability() {
         let defaults = RuntimeParams::soranet_defaults();
         let bad_relay_caps = hex_literal::hex!(
@@ -6380,6 +6687,36 @@ mod tests {
             }
             Err(err) => panic!("expected downgrade error, got {err:?}"),
             Ok(_) => panic!("expected downgrade error, got Ok"),
+        }
+    }
+
+    #[test]
+    fn process_client_hello_rejects_short_resume_hash_before_relay_rng() {
+        let defaults = RuntimeParams::soranet_defaults();
+        let mut rng_client = StdRng::seed_from_u64(7320);
+        let (client_hello, _client_state) =
+            build_client_hello(&defaults, &mut rng_client).expect("client hello");
+        let short_resume = [0x66; TRANSCRIPT_BINDING_LEN - 1];
+        let params = RuntimeParams {
+            descriptor_commit: defaults.descriptor_commit,
+            client_capabilities: defaults.client_capabilities,
+            relay_capabilities: defaults.relay_capabilities,
+            kem_id: defaults.kem_id,
+            sig_id: defaults.sig_id,
+            resume_hash: Some(&short_resume),
+        };
+        let relay_keys = KeyPair::random();
+
+        let err = match process_client_hello(&client_hello, &params, &relay_keys, &mut PanicRng) {
+            Ok(_) => panic!("short expected resume hash must fail before relay RNG"),
+            Err(err) => err,
+        };
+        match err {
+            HarnessError::Validation(message) => assert!(
+                message.contains("resume hash"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("expected resume validation error, got {other:?}"),
         }
     }
 

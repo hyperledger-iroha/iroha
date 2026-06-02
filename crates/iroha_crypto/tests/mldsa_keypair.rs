@@ -1,7 +1,10 @@
 //! Regression tests for ML-DSA key pair construction.
 
 mod mldsa_tests {
-    use iroha_crypto::{Algorithm, Error, KeyPair, PrivateKey, PublicKey, Signature};
+    use iroha_crypto::{
+        Algorithm, Error, ExposedPrivateKey, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
+        SignatureOf,
+    };
     use pqcrypto_mldsa::mldsa65;
     use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
@@ -61,6 +64,32 @@ mod mldsa_tests {
     }
 
     #[test]
+    fn fallible_keypair_from_seed_matches_compat_constructor() {
+        let seed = b"fallible-deterministic-ml-dsa-seed".to_vec();
+        let infallible = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
+        let fallible =
+            KeyPair::try_from_seed(seed, Algorithm::MlDsa).expect("fallible seeded keypair");
+
+        assert_eq!(fallible.public_key(), infallible.public_key());
+        assert_eq!(fallible.private_key(), infallible.private_key());
+    }
+
+    #[cfg(feature = "rand")]
+    #[test]
+    fn fallible_random_keypair_signs_and_verifies() {
+        let kp = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("fallible random ML-DSA keypair");
+        let message = b"ml-dsa fallible random keypair";
+
+        let signature =
+            Signature::try_new(kp.private_key(), message).expect("random ML-DSA keypair signs");
+
+        signature
+            .verify(kp.public_key(), message)
+            .expect("random ML-DSA signature verifies");
+    }
+
+    #[test]
     fn keypair_from_seed_changes_with_seed() {
         let first = KeyPair::from_seed(b"ml-dsa-seed-a".to_vec(), Algorithm::MlDsa);
         let second = KeyPair::from_seed(b"ml-dsa-seed-b".to_vec(), Algorithm::MlDsa);
@@ -83,6 +112,37 @@ mod mldsa_tests {
             signature.verify(kp.public_key(), message).is_ok(),
             "ML-DSA signature generated from seeded key should verify"
         );
+    }
+
+    #[test]
+    fn fallible_signature_constructor_signs_and_verifies() {
+        let kp = KeyPair::from_seed(b"ml-dsa-try-sign".to_vec(), Algorithm::MlDsa);
+        let message = b"ml-dsa fallible signing smoke test";
+
+        let signature =
+            Signature::try_new(kp.private_key(), message).expect("fallible signing should pass");
+
+        signature
+            .verify(kp.public_key(), message)
+            .expect("fallible signature should verify");
+    }
+
+    #[test]
+    fn typed_fallible_signature_constructors_sign_and_verify() {
+        let kp = KeyPair::from_seed(b"ml-dsa-typed-try-sign".to_vec(), Algorithm::MlDsa);
+        let value = ();
+
+        let signature =
+            SignatureOf::<()>::try_new(kp.private_key(), &value).expect("typed signing passes");
+        signature
+            .verify(kp.public_key(), &value)
+            .expect("typed signature verifies");
+
+        let from_hash = SignatureOf::<()>::try_from_hash(kp.private_key(), HashOf::new(&value))
+            .expect("typed hash signing passes");
+        from_hash
+            .verify(kp.public_key(), &value)
+            .expect("typed hash signature verifies");
     }
 
     #[test]
@@ -151,6 +211,46 @@ mod mldsa_tests {
 
         assert_eq!(decoded, kp.public_key().clone());
         assert!(encoded.starts_with("ml-dsa:"));
+    }
+
+    #[test]
+    fn fallible_multihash_formatters_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-fallible-multihash".to_vec(), Algorithm::MlDsa);
+        let public_bare = kp
+            .public_key()
+            .try_to_multihash_string()
+            .expect("public key multihash");
+        let public_prefixed = kp
+            .public_key()
+            .try_to_prefixed_string()
+            .expect("prefixed public key multihash");
+
+        let public_from_bare: PublicKey = public_bare.parse().expect("bare public key multihash");
+        let public_from_prefixed: PublicKey = public_prefixed
+            .parse()
+            .expect("prefixed public key multihash");
+        assert_eq!(public_from_bare, kp.public_key().clone());
+        assert_eq!(public_from_prefixed, kp.public_key().clone());
+        assert_eq!(public_prefixed, kp.public_key().to_prefixed_string());
+        assert!(public_prefixed.starts_with("ml-dsa:"));
+
+        let exposed = ExposedPrivateKey(kp.private_key().clone());
+        let private_bare = exposed
+            .try_to_multihash_string()
+            .expect("private key multihash");
+        let private_prefixed = exposed
+            .try_to_prefixed_string()
+            .expect("prefixed private key multihash");
+
+        let private_from_bare: ExposedPrivateKey =
+            private_bare.parse().expect("bare private key multihash");
+        let private_from_prefixed: ExposedPrivateKey = private_prefixed
+            .parse()
+            .expect("prefixed private key multihash");
+        assert_eq!(private_from_bare.0, kp.private_key().clone());
+        assert_eq!(private_from_prefixed.0, kp.private_key().clone());
+        assert_eq!(private_prefixed, exposed.to_prefixed_string());
+        assert!(private_prefixed.starts_with("ml-dsa:"));
     }
 
     #[test]
@@ -231,6 +331,24 @@ mod mldsa_tests {
             private,
             keypair.private_key().clone(),
             "KeyPair::from(PrivateKey) should preserve the original ML-DSA private key"
+        );
+    }
+
+    #[test]
+    fn private_key_import_rejects_inconsistent_private_key() {
+        let (_, sk) = seeded_pair(b"iroha:ml-dsa:keypair-from-private:tampered");
+        let mut secret_bytes = sk.as_bytes().to_vec();
+        let last = secret_bytes
+            .last_mut()
+            .expect("ML-DSA secret key has at least one byte");
+        *last ^= 0x01;
+
+        let parse_err = PrivateKey::from_bytes(Algorithm::MlDsa, &secret_bytes)
+            .expect_err("tampered secret must fail during import");
+
+        assert!(
+            parse_err.to_string().contains("Inconsistent"),
+            "unexpected private-key import error: {parse_err:?}"
         );
     }
 }

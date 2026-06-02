@@ -486,6 +486,7 @@ pub fn encapsulate_mlkem(
     public_key: &[u8],
     rng: &mut HedgedChaCha20Rng,
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
     encapsulate_mlkem_from_coins(suite, public_key, &coins)
@@ -500,6 +501,7 @@ pub fn encapsulate_mlkem_from_os(
     suite: MlKemSuite,
     public_key: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mlkem:encapsulate")?;
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
@@ -514,6 +516,7 @@ pub fn encapsulate_mlkem_from_seed(
     seed: HedgedRngSeed,
     personalization: &[u8],
 ) -> Result<(MlKemSharedSecret, MlKemCiphertext), MlKemError> {
+    suite.validate_public_key(public_key)?;
     let mut rng = deterministic_chacha20_rng(seed, personalization);
     encapsulate_mlkem(suite, public_key, &mut rng)
 }
@@ -853,6 +856,41 @@ mod tests {
         match err {
             MlKemError::BadEncoding { kind, .. } => assert!(kind.contains("public key")),
             MlKemError::Rng(_) => panic!("unexpected RNG error"),
+        }
+    }
+
+    #[test]
+    fn encapsulation_helpers_reject_invalid_public_key_before_entropy() {
+        let suite = MlKemSuite::MlKem512;
+        let short_public_key = [0u8; 8];
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xF1; 32]),
+            b"mlkem-invalid-public-key-preflight",
+        );
+
+        for (label, result) in [
+            (
+                "direct",
+                encapsulate_mlkem(suite, &short_public_key, &mut rng),
+            ),
+            (
+                "seeded",
+                encapsulate_mlkem_from_seed(
+                    suite,
+                    &short_public_key,
+                    HedgedRngSeed::from_entropy([0xF2; 32]),
+                    b"invalid-public-key",
+                ),
+            ),
+            ("os", encapsulate_mlkem_from_os(suite, &short_public_key)),
+        ] {
+            match result {
+                Err(MlKemError::BadEncoding { kind, .. }) => assert!(
+                    kind.contains("public key"),
+                    "{label} helper should reject the public key length"
+                ),
+                other => panic!("unexpected {label} result: {other:?}"),
+            }
         }
     }
 

@@ -214,7 +214,12 @@ public final class EthereumMainnetSccp {
                 rawBeaconFinality, blockHash, receiptBlockNumber, blockReceiptsRoot);
     final SourceEvent sourceEvent =
         normalizeEthereumReceiptSourceEvent(
-            receipt, input.sourceEventDigest(), input.sourceBridgeEmitterAddress());
+            receipt,
+            input.sourceEventDigest(),
+            input.sourceBridgeEmitterAddress(),
+            transactionHash,
+            blockHash,
+            receiptBlockNumber);
     requireReceiptProofMatchesEvidence(
         input.receiptProof(),
         blockHash,
@@ -257,6 +262,10 @@ public final class EthereumMainnetSccp {
     if (evidence.receiptProof() == null) {
       throw new IllegalArgumentException(
           "Ethereum mainnet SCCP inbound proof requires receiptProof");
+    }
+    if (evidence.receipt() != null && evidence.sourceEventDigest() == null) {
+      throw new IllegalArgumentException(
+          "Ethereum mainnet SCCP inbound proof requires receipt source event validation");
     }
     final byte[] proofBytes = inboundProver.prove(evidence);
     if (proofBytes == null || proofBytes.length == 0) {
@@ -763,7 +772,10 @@ public final class EthereumMainnetSccp {
   private static SourceEvent normalizeEthereumReceiptSourceEvent(
       final Map<String, Object> receipt,
       final String sourceEventDigestInput,
-      final String sourceBridgeEmitterAddressInput) {
+      final String sourceBridgeEmitterAddressInput,
+      final String transactionHash,
+      final String blockHash,
+      final String blockNumber) {
     final String sourceEventDigest =
         sourceEventDigestInput == null
             ? null
@@ -814,10 +826,39 @@ public final class EthereumMainnetSccp {
                 32,
                 true));
       }
-      final Object data = log.get("data") == null ? "0x" : log.get("data");
       if (sourceBridgeEmitterAddress.equals(logAddress)
           && normalizedTopics.size() == 2
           && SOURCE_EVENT_TOPIC_V1.equals(normalizedTopics.get(0))) {
+        final String logTransactionHash =
+            normalizeRpcHex(
+                firstPresent(log, "transactionHash", "transaction_hash"),
+                "receipt.logs[" + index + "].transactionHash",
+                32);
+        if (transactionHash != null && !transactionHash.equals(logTransactionHash)) {
+          throw new IllegalArgumentException(
+              "receipt.logs transactionHash must match receipt.transactionHash");
+        }
+        final String logBlockHash =
+            normalizeRpcHex(
+                firstPresent(log, "blockHash", "block_hash"),
+                "receipt.logs[" + index + "].blockHash",
+                32);
+        if (blockHash != null && !blockHash.equals(logBlockHash)) {
+          throw new IllegalArgumentException(
+              "receipt.logs blockHash must match receipt.blockHash");
+        }
+        final String logBlockNumber =
+            normalizePositiveRpcQuantity(
+                firstPresent(log, "blockNumber", "block_number"),
+                "receipt.logs[" + index + "].blockNumber");
+        if (blockNumber != null && !blockNumber.equals(logBlockNumber)) {
+          throw new IllegalArgumentException(
+              "receipt.logs blockNumber must match receipt.blockNumber");
+        }
+        if (!(log.get("data") instanceof String)) {
+          throw new IllegalArgumentException("receipt.logs[" + index + "].data is required");
+        }
+        final Object data = log.get("data");
         final String candidateDigest = normalizedTopics.get(1);
         if (isZeroRpcHex(candidateDigest)
             || (sourceEventDigest != null && !sourceEventDigest.equals(candidateDigest))

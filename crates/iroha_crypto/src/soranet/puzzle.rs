@@ -20,6 +20,7 @@ use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 
 const OUTPUT_LEN: usize = 32;
 const TTL_GRACE: Duration = Duration::from_secs(1);
+const BINDING_FIELD_LEN: usize = 32;
 
 /// Binding inputs mixed into the puzzle challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +63,32 @@ pub struct Parameters {
     min_ticket_ttl: Duration,
 }
 
+/// Errors surfaced while constructing Argon2 puzzle policy parameters.
+#[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
+pub enum ParameterError {
+    /// The minimum ticket TTL must be non-zero.
+    #[error("puzzle min_ticket_ttl must be greater than zero")]
+    MinTicketTtlZero,
+    /// The maximum future skew must cover the minimum ticket TTL.
+    #[error(
+        "puzzle max_future_skew {max_future_skew:?} is shorter than min_ticket_ttl {min_ticket_ttl:?}"
+    )]
+    MaxFutureSkewTooShort {
+        /// Configured maximum future skew.
+        max_future_skew: Duration,
+        /// Configured minimum ticket TTL.
+        min_ticket_ttl: Duration,
+    },
+}
+
 impl Parameters {
-    /// Construct a new parameter set.
+    /// Construct a new parameter set, panicking when bounds are invalid.
     ///
     /// # Panics
-    /// Panics when `min_ticket_ttl` is zero or when `max_future_skew` is shorter than the minimum TTL.
+    /// Panics when `min_ticket_ttl` is zero or when `max_future_skew` is
+    /// shorter than the minimum TTL. Runtime configuration loaders should
+    /// prefer [`Parameters::try_new`] so invalid policy input can fail closed
+    /// without unwinding.
     #[must_use]
     pub fn new(
         memory_kib: NonZeroU32,
@@ -76,22 +98,54 @@ impl Parameters {
         max_future_skew: Duration,
         min_ticket_ttl: Duration,
     ) -> Self {
-        assert!(
-            min_ticket_ttl > Duration::ZERO,
-            "min_ticket_ttl must be greater than zero"
-        );
-        assert!(
-            max_future_skew >= min_ticket_ttl,
-            "max_future_skew must be at least min_ticket_ttl"
-        );
-        Self {
+        Self::try_new(
             memory_kib,
             time_cost,
             lanes,
             difficulty,
             max_future_skew,
             min_ticket_ttl,
+        )
+        .unwrap_or_else(|err| match err {
+            ParameterError::MinTicketTtlZero => {
+                panic!("min_ticket_ttl must be greater than zero")
+            }
+            ParameterError::MaxFutureSkewTooShort { .. } => {
+                panic!("max_future_skew must be at least min_ticket_ttl")
+            }
+        })
+    }
+
+    /// Construct a new parameter set.
+    ///
+    /// # Errors
+    /// Returns [`ParameterError`] if the minimum ticket TTL is zero or if the
+    /// maximum future skew is shorter than the minimum ticket TTL.
+    pub fn try_new(
+        memory_kib: NonZeroU32,
+        time_cost: NonZeroU32,
+        lanes: NonZeroU32,
+        difficulty: u8,
+        max_future_skew: Duration,
+        min_ticket_ttl: Duration,
+    ) -> Result<Self, ParameterError> {
+        if min_ticket_ttl.is_zero() {
+            return Err(ParameterError::MinTicketTtlZero);
         }
+        if max_future_skew < min_ticket_ttl {
+            return Err(ParameterError::MaxFutureSkewTooShort {
+                max_future_skew,
+                min_ticket_ttl,
+            });
+        }
+        Ok(Self {
+            memory_kib,
+            time_cost,
+            lanes,
+            difficulty,
+            max_future_skew,
+            min_ticket_ttl,
+        })
     }
 
     /// Returns the configured memory cost (in KiB).
@@ -169,6 +223,9 @@ pub enum Error {
     /// Ticket failed the Argon2 digest predicate.
     #[error("puzzle ticket solution invalid")]
     InvalidSolution,
+    /// Binding material has an invalid field length.
+    #[error("malformed puzzle binding: {0}")]
+    MalformedBinding(String),
     /// System clock could not be queried.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -202,6 +259,9 @@ pub enum MintError {
     /// Argon2 hashing failed.
     #[error("argon2 hashing error: {0}")]
     Hash(String),
+    /// Binding material has an invalid field length.
+    #[error("malformed puzzle binding: {0}")]
+    MalformedBinding(String),
 }
 
 /// Verify a puzzle ticket using the supplied policy.
@@ -229,6 +289,7 @@ pub fn verify_at(
     params: &Parameters,
     now: SystemTime,
 ) -> Result<(), Error> {
+    validate_binding(binding).map_err(Error::MalformedBinding)?;
     if ticket.version != 1 {
         return Err(Error::UnsupportedVersion(ticket.version));
     }
@@ -280,6 +341,7 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
     ttl: Duration,
     rng: &mut R,
 ) -> Result<Ticket, MintError> {
+    validate_binding(binding).map_err(MintError::MalformedBinding)?;
     if ttl < params.min_ticket_ttl {
         return Err(MintError::TtlTooShort {
             requested: ttl,
@@ -318,6 +380,30 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
             });
         }
     }
+}
+
+fn validate_binding(binding: &ChallengeBinding<'_>) -> Result<(), String> {
+    if binding.descriptor_commit.len() != BINDING_FIELD_LEN {
+        return Err(format!(
+            "descriptor_commit must be {BINDING_FIELD_LEN} bytes, got {}",
+            binding.descriptor_commit.len()
+        ));
+    }
+    if binding.relay_id.len() != BINDING_FIELD_LEN {
+        return Err(format!(
+            "relay_id must be {BINDING_FIELD_LEN} bytes, got {}",
+            binding.relay_id.len()
+        ));
+    }
+    if let Some(transcript_hash) = binding.transcript_hash
+        && transcript_hash.len() != BINDING_FIELD_LEN
+    {
+        return Err(format!(
+            "transcript_hash must be {BINDING_FIELD_LEN} bytes, got {}",
+            transcript_hash.len()
+        ));
+    }
+    Ok(())
 }
 
 fn derive_challenge(
@@ -426,6 +512,53 @@ mod tests {
             Duration::from_secs(30),
             Duration::from_secs(5),
         )
+    }
+
+    #[test]
+    fn parameters_try_new_rejects_invalid_runtime_bounds() {
+        let memory = NonZeroU32::new(8 * 1024).expect("non-zero memory");
+        let time = NonZeroU32::new(2).expect("non-zero time");
+        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
+
+        let valid = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            4,
+            Duration::from_secs(30),
+            Duration::from_secs(5),
+        )
+        .expect("valid bounds");
+        assert_eq!(valid.difficulty(), 4);
+
+        let zero_ttl = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            4,
+            Duration::from_secs(30),
+            Duration::ZERO,
+        )
+        .expect_err("zero min ttl must fail");
+        assert!(matches!(zero_ttl, ParameterError::MinTicketTtlZero));
+
+        let inverted = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            4,
+            Duration::from_secs(4),
+            Duration::from_secs(5),
+        )
+        .expect_err("max future skew shorter than min ttl must fail");
+        assert!(matches!(
+            inverted,
+            ParameterError::MaxFutureSkewTooShort {
+                max_future_skew,
+                min_ticket_ttl
+            } if max_future_skew == Duration::from_secs(4)
+                && min_ticket_ttl == Duration::from_secs(5)
+        ));
     }
 
     fn binding() -> ChallengeBinding<'static> {
@@ -567,6 +700,47 @@ mod tests {
         )
         .expect_err("expired");
         assert!(matches!(err, Error::Expired(_, _)));
+    }
+
+    #[test]
+    fn verify_rejects_malformed_binding_before_argon2_work() {
+        let params = test_parameters().with_difficulty(0);
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: params.difficulty(),
+            expires_at: 1_700_000_120,
+            client_nonce: [0x66; 32],
+            solution: [0x77; 32],
+        };
+        let short_transcript = [0x33; 31];
+        let malformed = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&short_transcript));
+        let err = verify_at(&ticket, &malformed, &params, now)
+            .expect_err("malformed binding must fail before Argon2 derivation");
+        match err {
+            Error::MalformedBinding(message) => assert!(
+                message.contains("transcript_hash"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected malformed binding error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mint_rejects_malformed_binding_before_solution_search() {
+        let params = test_parameters().with_difficulty(0);
+        let mut rng = ChaCha20Rng::from_seed([0x66; 32]);
+        let short_descriptor = [0x11; 31];
+        let malformed = ChallengeBinding::new(&short_descriptor, &RELAY, None);
+        let err = mint_ticket(&params, &malformed, Duration::from_secs(12), &mut rng)
+            .expect_err("malformed binding must fail before minting");
+        match err {
+            MintError::MalformedBinding(message) => assert!(
+                message.contains("descriptor_commit"),
+                "unexpected error: {message}"
+            ),
+            other => panic!("expected malformed binding error, got {other:?}"),
+        }
     }
 
     #[test]

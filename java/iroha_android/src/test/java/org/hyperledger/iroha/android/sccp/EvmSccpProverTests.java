@@ -1199,6 +1199,9 @@ public final class EvmSccpProverTests {
         "data", "0x1234");
     final Map<String, Object> sourceEventLog = linkedMap(
         "address", sourceBridgeEmitterAddress,
+        "transactionHash", txHash,
+        "blockHash", blockHash,
+        "blockNumber", "0x1234",
         "topics", Arrays.asList(EthereumMainnetSccp.sourceEventTopic(), sourceEventDigest),
         "data", "0x");
     final Map<String, Object> receipt = linkedMap(
@@ -1294,6 +1297,8 @@ public final class EvmSccpProverTests {
                   : "inbound evidence must carry receipt proof hash";
               assert receiptProof.sourceEventDigest().equals(evidence.receiptProof().sourceEventDigest())
                   : "inbound evidence must carry receipt proof material";
+              assert sourceEventDigest.equals(evidence.sourceEventDigest())
+                  : "inbound evidence must carry validated source event digest";
               return new byte[] {1, 2, 3};
             },
             proof -> {
@@ -1373,7 +1378,7 @@ public final class EvmSccpProverTests {
         : "Ethereum inbound collection must derive receiptProofHash from receiptProof";
     assert receiptProof == receiptProofEvidence.receiptProof()
         : "Ethereum inbound collection must retain app-collected receiptProof";
-    final EthereumMainnetSccp.InboundEvidence proofReadyEvidence =
+    final EthereumMainnetSccp.InboundEvidence unanchoredProofEvidence =
         new EthereumMainnetSccp.InboundEvidence(
             EvmSccpProver.DOMAIN_ETH,
             EvmSccpProver.DOMAIN_SORA,
@@ -1385,6 +1390,25 @@ public final class EvmSccpProverTests {
             receiptProofHash,
             null,
             null);
+    threw = false;
+    try {
+      sdk.proveInboundToSora(unanchoredProofEvidence);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt source event validation");
+    }
+    assert threw : "Ethereum inbound proving must reject receipt proofs without source event validation";
+    final EthereumMainnetSccp.InboundEvidence proofReadyEvidence =
+        new EthereumMainnetSccp.InboundEvidence(
+            EvmSccpProver.DOMAIN_ETH,
+            EvmSccpProver.DOMAIN_SORA,
+            sourceEventEvidence.transactionHash(),
+            sourceEventEvidence.receipt(),
+            sourceEventEvidence.block(),
+            sourceEventEvidence.beaconFinality(),
+            receiptProof,
+            receiptProofHash,
+            sourceEventEvidence.sourceEventDigest(),
+            sourceEventEvidence.sourceBridgeEmitterAddress());
     assert Arrays.equals(
             new byte[] {1, 2, 3}, sdk.proveInboundToSora(proofReadyEvidence))
         : "inbound prover must receive receipt-proof-backed validated evidence";
@@ -1473,15 +1497,17 @@ public final class EvmSccpProverTests {
                     },
                     null)
                 .proveInboundToSora(
-                    EthereumMainnetSccp.InboundEvidence.withBeaconFinalityEvidence(
+                    new EthereumMainnetSccp.InboundEvidence(
                         EvmSccpProver.DOMAIN_ETH,
                         EvmSccpProver.DOMAIN_SORA,
                         null,
-                        receipt,
+                        receiptWithSourceEvent,
                         block,
-                        beaconFinalityEvidence,
+                        beaconFinalityEvidence.toMap(),
                         receiptProof,
-                        receiptProofHash)))
+                        receiptProofHash,
+                        null,
+                        sourceBridgeEmitterAddress)))
         : "typed beacon finality evidence must feed inbound proof collection";
 
     final ArrayList<String> perCallProviderCalls = new ArrayList<>();
@@ -1513,14 +1539,14 @@ public final class EvmSccpProverTests {
                     receiptProof,
                     receiptProofHash,
                     null,
-                    null),
+                    sourceBridgeEmitterAddress),
                 (method, params) -> {
                   perCallProviderCalls.add(method);
                   if ("eth_chainId".equals(method)) {
                     return "0x1";
                   }
                   if ("eth_getTransactionReceipt".equals(method)) {
-                    return receipt;
+                    return receiptWithSourceEvent;
                   }
                   if ("eth_getBlockByHash".equals(method)) {
                     return block;
@@ -2030,6 +2056,114 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("removed logs");
     }
     assert threw : "Ethereum source-event validation must reject removed logs";
+
+    final Map<String, Object> nonObjectLogReceipt = new LinkedHashMap<>(receipt);
+    nonObjectLogReceipt.put("logs", Arrays.asList("not-a-log"));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              nonObjectLogReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.logs[0] must be an object");
+    }
+    assert threw : "Ethereum source-event validation must reject non-object logs";
+
+    final Map<String, Object> missingDataLog = new LinkedHashMap<>(sourceEventLog);
+    missingDataLog.remove("data");
+    final Map<String, Object> missingDataReceipt = new LinkedHashMap<>(receipt);
+    missingDataReceipt.put("logs", Arrays.asList(missingDataLog));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              missingDataReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receipt.logs[0].data");
+    }
+    assert threw : "Ethereum source-event validation must reject source logs without data";
+
+    final Map<String, Object> driftedLogTransaction = new LinkedHashMap<>(sourceEventLog);
+    driftedLogTransaction.put("transactionHash", "0x" + repeat("ab", 32));
+    final Map<String, Object> driftedLogTransactionReceipt = new LinkedHashMap<>(receipt);
+    driftedLogTransactionReceipt.put("logs", Arrays.asList(driftedLogTransaction));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              driftedLogTransactionReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("transactionHash must match");
+    }
+    assert threw : "Ethereum source-event validation must reject log transaction hash drift";
+
+    final Map<String, Object> driftedLogBlockHash = new LinkedHashMap<>(sourceEventLog);
+    driftedLogBlockHash.put("blockHash", "0x" + repeat("ab", 32));
+    final Map<String, Object> driftedLogBlockHashReceipt = new LinkedHashMap<>(receipt);
+    driftedLogBlockHashReceipt.put("logs", Arrays.asList(driftedLogBlockHash));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              driftedLogBlockHashReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("blockHash must match");
+    }
+    assert threw : "Ethereum source-event validation must reject log block hash drift";
+
+    final Map<String, Object> driftedLogBlockNumber = new LinkedHashMap<>(sourceEventLog);
+    driftedLogBlockNumber.put("blockNumber", "0x1235");
+    final Map<String, Object> driftedLogBlockNumberReceipt = new LinkedHashMap<>(receipt);
+    driftedLogBlockNumberReceipt.put("logs", Arrays.asList(driftedLogBlockNumber));
+    threw = false;
+    try {
+      sdk.collectInboundEvidenceFromReceipt(
+          new EthereumMainnetSccp.InboundEvidence(
+              EvmSccpProver.DOMAIN_ETH,
+              EvmSccpProver.DOMAIN_SORA,
+              null,
+              driftedLogBlockNumberReceipt,
+              block,
+              beaconFinality,
+              null,
+              null,
+              sourceBridgeEmitterAddress));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("blockNumber must match");
+    }
+    assert threw : "Ethereum source-event validation must reject log block number drift";
 
     threw = false;
     try {

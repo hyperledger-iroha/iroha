@@ -928,7 +928,7 @@ object SccpEthereumMainnet {
         require(request.destinationBinding?.sourceDomain == DOMAIN_SORA) {
             "Ethereum mainnet proof results require SORA source destinationBinding"
         }
-        require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
+        require(request.destinationBinding.networkId == MAINNET_NETWORK_ID) {
             "Ethereum mainnet proof results require chain id 1 destinationBinding"
         }
         return SccpEvm.wrapProofResult(proofBytes, request)
@@ -2170,6 +2170,9 @@ class EthereumMainnetSccp(
             receipt = receipt,
             sourceEventDigestInput = input.sourceEventDigest,
             sourceBridgeEmitterAddressInput = input.sourceBridgeEmitterAddress,
+            transactionHash = transactionHash,
+            blockHash = blockHash,
+            blockNumber = receiptBlockNumber,
         )
         val beaconFinality = input.beaconFinality
             ?: consensusProvider?.collectFinalityEvidence(receipt, block, transactionHash)
@@ -2217,6 +2220,9 @@ class EthereumMainnetSccp(
         }
         require(evidence.receiptProof != null) {
             "Ethereum mainnet SCCP inbound proof requires receiptProof"
+        }
+        require(evidence.receipt == null || evidence.sourceEventDigest != null) {
+            "Ethereum mainnet SCCP inbound proof requires receipt source event validation"
         }
         val proofBytes = prover.prove(evidence)
         require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
@@ -2447,6 +2453,9 @@ class EthereumMainnetSccp(
         receipt: Map<String, Any?>?,
         sourceEventDigestInput: String?,
         sourceBridgeEmitterAddressInput: String?,
+        transactionHash: String?,
+        blockHash: String?,
+        blockNumber: String?,
     ): Pair<String?, String?> {
         val sourceEventDigest = sourceEventDigestInput?.let {
             normalizeRpcHex(it, "sourceEventDigest", 32)
@@ -2488,12 +2497,36 @@ class EthereumMainnetSccp(
                     allowZero = true,
                 )
             }
-            val data = log["data"] ?: "0x"
             if (
                 logAddress == sourceBridgeEmitterAddress &&
                 normalizedTopics.size == 2 &&
                 normalizedTopics[0] == SccpEthereumMainnet.SOURCE_EVENT_TOPIC_V1
             ) {
+                val logTransactionHash = normalizeRpcHex(
+                    log["transactionHash"] ?: log["transaction_hash"],
+                    "receipt.logs[$index].transactionHash",
+                    32,
+                )
+                require(transactionHash == null || logTransactionHash == transactionHash) {
+                    "receipt.logs transactionHash must match receipt.transactionHash"
+                }
+                val logBlockHash = normalizeRpcHex(
+                    log["blockHash"] ?: log["block_hash"],
+                    "receipt.logs[$index].blockHash",
+                    32,
+                )
+                require(blockHash == null || logBlockHash == blockHash) {
+                    "receipt.logs blockHash must match receipt.blockHash"
+                }
+                val logBlockNumber = normalizePositiveRpcQuantity(
+                    log["blockNumber"] ?: log["block_number"],
+                    "receipt.logs[$index].blockNumber",
+                )
+                require(blockNumber == null || logBlockNumber == blockNumber) {
+                    "receipt.logs blockNumber must match receipt.blockNumber"
+                }
+                val data = log["data"] as? String
+                    ?: throw IllegalArgumentException("receipt.logs[$index].data is required")
                 val candidateDigest = normalizedTopics[1]
                 if (
                     candidateDigest == "0x" + "0".repeat(64) ||

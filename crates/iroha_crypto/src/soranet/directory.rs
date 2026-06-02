@@ -109,6 +109,11 @@ impl GuardDirectorySnapshotV2 {
         &self,
         validation_phase: CertificateValidationPhase,
     ) -> Result<IssuersByFingerprint<'_>, norito::Error> {
+        if self.issuers.is_empty() {
+            return Err(norito::Error::Message(
+                "guard directory snapshot must contain at least one issuer".to_string(),
+            ));
+        }
         let mut issuer_fingerprints = HashSet::with_capacity(self.issuers.len());
         let mut issuers_by_fingerprint = HashMap::with_capacity(self.issuers.len());
         for issuer in &self.issuers {
@@ -163,6 +168,11 @@ impl GuardDirectorySnapshotV2 {
         validation_phase: CertificateValidationPhase,
         issuers_by_fingerprint: &IssuersByFingerprint<'_>,
     ) -> Result<(), norito::Error> {
+        if self.relays.is_empty() {
+            return Err(norito::Error::Message(
+                "guard directory snapshot must contain at least one relay".to_string(),
+            ));
+        }
         let mut relay_ids = HashSet::with_capacity(self.relays.len());
         for relay in &self.relays {
             let bundle =
@@ -375,7 +385,7 @@ mod tests {
 
     fn replace_first_relay_bundle(
         snapshot: &mut GuardDirectorySnapshotV2,
-        bundle: RelayCertificateBundleV2,
+        bundle: &RelayCertificateBundleV2,
     ) {
         snapshot.relays[0].certificate = bundle.to_cbor();
     }
@@ -387,7 +397,7 @@ mod tests {
         let mut bundle = RelayCertificateBundleV2::from_cbor(&snapshot.relays[0].certificate)
             .expect("sample relay bundle decodes");
         mutate(&mut bundle);
-        replace_first_relay_bundle(snapshot, bundle);
+        replace_first_relay_bundle(snapshot, &bundle);
     }
 
     fn sample_snapshot() -> GuardDirectorySnapshotV2 {
@@ -511,6 +521,28 @@ mod tests {
         snapshot.version = 1;
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn snapshot_rejects_empty_issuer_set() {
+        let mut snapshot = sample_snapshot();
+        snapshot.issuers.clear();
+        let bytes = snapshot.to_bytes().expect("serialize");
+
+        let err =
+            GuardDirectorySnapshotV2::from_bytes(&bytes).expect_err("empty issuer set must fail");
+        assert!(err.to_string().contains("at least one issuer"));
+    }
+
+    #[test]
+    fn snapshot_rejects_empty_relay_set() {
+        let mut snapshot = sample_snapshot();
+        snapshot.relays.clear();
+        let bytes = snapshot.to_bytes().expect("serialize");
+
+        let err =
+            GuardDirectorySnapshotV2::from_bytes(&bytes).expect_err("empty relay set must fail");
+        assert!(err.to_string().contains("at least one relay"));
     }
 
     #[test]

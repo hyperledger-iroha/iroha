@@ -247,6 +247,18 @@ mod normal {
             BlsImpl::<NormalConfiguration>::aggregate_signatures(&signatures).is_err(),
             "identity aggregate must be rejected"
         );
+        let non_identity_aggregate =
+            BlsImpl::<NormalConfiguration>::aggregate_signatures(&[sig_bytes.as_ref()])
+                .expect("single non-identity aggregate");
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_preaggregated_same_message(
+                msg,
+                &non_identity_aggregate,
+                &public_keys,
+            )
+            .is_err(),
+            "canceling aggregate public key must be rejected"
+        );
     }
 
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -306,6 +318,32 @@ mod normal {
             )
             .is_err(),
             "duplicate messages must be rejected"
+        );
+    }
+
+    #[test]
+    fn aggregate_multi_message_rejects_canceling_signatures() {
+        let msg1 = b"canceling-multi-message-a";
+        let msg2 = b"canceling-multi-message-b";
+        let sig = G2Affine::generator() * Scalar::from(11u64);
+        let pk1 = G1Affine::generator() * Scalar::from(17u64);
+        let pk2 = G1Affine::generator() * Scalar::from(19u64);
+        let sig_bytes = G2Affine::from(sig).to_compressed();
+        let sig_neg_bytes = G2Affine::from(-sig).to_compressed();
+        let pk1_bytes = G1Affine::from(pk1).to_compressed();
+        let pk2_bytes = G1Affine::from(pk2).to_compressed();
+        let messages: [&[u8]; 2] = [msg1.as_ref(), msg2.as_ref()];
+        let signatures: [&[u8]; 2] = [sig_bytes.as_ref(), sig_neg_bytes.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk1_bytes.as_ref(), pk2_bytes.as_ref()];
+
+        assert!(
+            BlsImpl::<NormalConfiguration>::verify_aggregate_multi_message(
+                &messages,
+                &signatures,
+                &public_keys,
+            )
+            .is_err(),
+            "identity aggregate signature must be rejected before pairing"
         );
     }
 }
@@ -440,6 +478,18 @@ mod small {
             BlsImpl::<SmallConfiguration>::aggregate_signatures(&signatures).is_err(),
             "identity aggregate must be rejected"
         );
+        let non_identity_aggregate =
+            BlsImpl::<SmallConfiguration>::aggregate_signatures(&[sig_bytes.as_ref()])
+                .expect("single non-identity aggregate");
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_preaggregated_same_message(
+                msg,
+                &non_identity_aggregate,
+                &public_keys,
+            )
+            .is_err(),
+            "canceling aggregate public key must be rejected"
+        );
     }
 
     #[test]
@@ -463,6 +513,32 @@ mod small {
             )
             .is_err(),
             "duplicate messages must be rejected"
+        );
+    }
+
+    #[test]
+    fn aggregate_multi_message_rejects_canceling_signatures() {
+        let msg1 = b"canceling-multi-message-small-a";
+        let msg2 = b"canceling-multi-message-small-b";
+        let sig = G1Affine::generator() * Scalar::from(13u64);
+        let pk1 = G2Affine::generator() * Scalar::from(23u64);
+        let pk2 = G2Affine::generator() * Scalar::from(29u64);
+        let sig_bytes = G1Affine::from(sig).to_compressed();
+        let sig_neg_bytes = G1Affine::from(-sig).to_compressed();
+        let pk1_bytes = G2Affine::from(pk1).to_compressed();
+        let pk2_bytes = G2Affine::from(pk2).to_compressed();
+        let messages: [&[u8]; 2] = [msg1.as_ref(), msg2.as_ref()];
+        let signatures: [&[u8]; 2] = [sig_bytes.as_ref(), sig_neg_bytes.as_ref()];
+        let public_keys: [&[u8]; 2] = [pk1_bytes.as_ref(), pk2_bytes.as_ref()];
+
+        assert!(
+            BlsImpl::<SmallConfiguration>::verify_aggregate_multi_message(
+                &messages,
+                &signatures,
+                &public_keys,
+            )
+            .is_err(),
+            "identity aggregate signature must be rejected before pairing"
         );
     }
 }

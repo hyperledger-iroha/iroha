@@ -368,6 +368,9 @@ SOURCE_BRIDGE_ADDRESS = "0x" + "44" * 20
 def source_event_log(**overrides: Any) -> Dict[str, Any]:
     log: Dict[str, Any] = {
         "address": SOURCE_BRIDGE_ADDRESS,
+        "transactionHash": HEX32_A,
+        "blockHash": HEX32_B,
+        "blockNumber": "0x1234",
         "topics": [evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST],
         "data": "0x",
     }
@@ -11961,6 +11964,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
                     "blockHash": HEX32_B,
                     "blockNumber": "0x1234",
                     "status": "0x1",
+                    "logs": [source_event_log()],
                 }
             if method == "eth_getBlockByHash":
                 assert params == [HEX32_B, False]
@@ -12013,6 +12017,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         assert evidence["beacon_finality"]["execution_receipts_root"] == HEX32_C
         assert evidence["receipt_proof_hash"] == receipt_proof_hash
         assert evidence["receipt_proof"]["execution_block_hash"] == HEX32_B
+        assert evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
         return b"\x07\x08\x09"
 
     submitted: list[bytes] = []
@@ -12025,6 +12030,7 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
     sdk = EthereumMainnetSccp(
         execution_provider=provider,
         consensus_provider=ConsensusProvider(),
+        source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
         prove_inbound=prove_inbound,
         submit_inbound_to_iroha=submit_inbound,
     )
@@ -12044,6 +12050,31 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
         )
     )
     assert proof == b"\x07\x08\x09"
+
+    with pytest.raises(TypeError, match="receipt source event validation"):
+        asyncio.run(
+            EthereumMainnetSccp(prove_inbound=prove_inbound).prove_inbound_to_sora(
+                {
+                    "receipt": {
+                        "transactionHash": HEX32_A,
+                        "blockHash": HEX32_B,
+                        "blockNumber": "0x1234",
+                        "status": "0x1",
+                    },
+                    "block": {
+                        "hash": HEX32_B,
+                        "number": "0x1234",
+                        "receiptsRoot": HEX32_C,
+                    },
+                    "beacon_finality": {
+                        "executionBlockNumber": "0x1234",
+                        "executionBlockHash": HEX32_B,
+                        "executionReceiptsRoot": HEX32_C,
+                    },
+                    "receipt_proof": receipt_proof,
+                }
+            )
+        )
 
     mutable_proof = bytearray(b"\x0a\x0b\x0c")
     assert asyncio.run(sdk.submit_inbound_to_iroha(mutable_proof)) == "submitted"
@@ -12156,6 +12187,73 @@ def test_ethereum_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proof
                     "receipt": {
                         **source_receipt,
                         "logs": [source_event_log(removed=True)],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match=r"receipt\.logs\[0\] must be an object"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": ["not-a-log"],
+                    }
+                }
+            )
+        )
+    missing_data_log = source_event_log()
+    del missing_data_log["data"]
+    with pytest.raises(TypeError, match=r"receipt\.logs\[0\]\.data is required"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [missing_data_log],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match=r"receipt\.logs transactionHash"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [source_event_log(transactionHash=HEX32_D)],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match=r"receipt\.logs blockHash"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [source_event_log(blockHash=HEX32_D)],
+                    }
+                }
+            )
+        )
+    with pytest.raises(TypeError, match=r"receipt\.logs blockNumber"):
+        asyncio.run(
+            EthereumMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        **source_receipt,
+                        "logs": [source_event_log(blockNumber="0x1235")],
                     }
                 }
             )

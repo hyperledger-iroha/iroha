@@ -18839,6 +18839,9 @@ def _ethereum_mainnet_receipt_log_source_event_digest(
     *,
     source_event_digest: Optional[str],
     source_bridge_emitter_address: Optional[str],
+    transaction_hash: Optional[str],
+    block_hash: Optional[str],
+    block_number: Optional[str],
 ) -> Dict[str, str]:
     if source_event_digest is None and source_bridge_emitter_address is None:
         return {}
@@ -18881,6 +18884,47 @@ def _ethereum_mainnet_receipt_log_source_event_digest(
             and len(normalized_topics) == 2
             and normalized_topics[0] == source_event_topic
         ):
+            log_transaction_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    log,
+                    f"receipt.logs[{index}].transactionHash",
+                    "transactionHash",
+                    "transaction_hash",
+                ),
+                f"receipt.logs[{index}].transactionHash",
+                32,
+            )
+            if transaction_hash is not None and log_transaction_hash != transaction_hash:
+                raise TypeError(
+                    "receipt.logs transactionHash must match receipt.transactionHash"
+                )
+            log_block_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    log,
+                    f"receipt.logs[{index}].blockHash",
+                    "blockHash",
+                    "block_hash",
+                ),
+                f"receipt.logs[{index}].blockHash",
+                32,
+            )
+            if block_hash is not None and log_block_hash != block_hash:
+                raise TypeError("receipt.logs blockHash must match receipt.blockHash")
+            log_block_number = _normalize_evm_rpc_quantity(
+                _mapping_value_without_aliases(
+                    log,
+                    f"receipt.logs[{index}].blockNumber",
+                    "blockNumber",
+                    "block_number",
+                ),
+                f"receipt.logs[{index}].blockNumber",
+            )
+            if block_number is not None and log_block_number != block_number:
+                raise TypeError(
+                    "receipt.logs blockNumber must match receipt.blockNumber"
+                )
+            if not isinstance(log.get("data"), str):
+                raise TypeError(f"receipt.logs[{index}].data is required")
             candidate_digest = normalized_topics[1]
             if (
                 not any(bytes.fromhex(candidate_digest.removeprefix("0x")))
@@ -18888,7 +18932,7 @@ def _ethereum_mainnet_receipt_log_source_event_digest(
                     source_event_digest is not None
                     and candidate_digest != source_event_digest
                 )
-                or log.get("data", "0x") != "0x"
+                or log.get("data") != "0x"
             ):
                 continue
             if matched_digest is not None:
@@ -26771,6 +26815,9 @@ class EthereumMainnetSccp:
             normalized_receipt = dict(receipt_mapping)
             source_event = _ethereum_mainnet_receipt_log_source_event_digest(
                 normalized_receipt,
+                transaction_hash=transaction_hash,
+                block_hash=receipt_block_hash,
+                block_number=receipt_block_number,
                 **_ethereum_mainnet_receipt_source_event_options(
                     value,
                     options,
@@ -26943,6 +26990,10 @@ class EthereumMainnetSccp:
         if evidence.get("receipt_proof") is None:
             raise TypeError(
                 "Ethereum mainnet SCCP inbound proof requires receiptProof"
+            )
+        if evidence.get("receipt") is not None and evidence.get("source_event_digest") is None:
+            raise TypeError(
+                "Ethereum mainnet SCCP inbound proof requires receipt source event validation"
             )
         proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))

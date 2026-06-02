@@ -10425,7 +10425,7 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
-    fn destination_binding_query_respects_ethereum_lane_launch_policy() {
+    fn destination_binding_query_respects_bsc_lane_launch_policy() {
         let bundle = sample_tron_message_bundle(49);
         let mut fields = SccpEvmDestinationQuery {
             network_id_hex: Some(format!("0x{}", "71".repeat(32))),

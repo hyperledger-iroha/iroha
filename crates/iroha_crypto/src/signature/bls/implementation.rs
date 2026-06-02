@@ -444,6 +444,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         if canonical == identity_sig {
             return Err(ParseError("BLS signature is identity".to_string()).into());
         }
+        let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
         // Aggregate public keys; enforce unique signers.
         let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
         let mut pk_it = public_keys.iter();
@@ -461,6 +462,9 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             agg_pk_group.add_assign(&pk.0);
         }
         let agg_pk = PublicKey::<C::Engine>(agg_pk_group);
+        if agg_pk.to_bytes() == identity_pk {
+            return Err(Error::BadSignature);
+        }
         let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if !sig.verify(&message, &agg_pk) {
             return Err(Error::BadSignature);
@@ -538,8 +542,13 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             decoded_messages.push(w3f_bls::Message::new(MESSAGE_CONTEXT, message));
         }
 
+        let aggregated_signature = BlsSignature(aggregated_group);
+        if aggregated_signature.to_bytes() == identity_sig {
+            return Err(Error::BadSignature);
+        }
+
         let batch = MultiMessageBatch {
-            signature: BlsSignature(aggregated_group),
+            signature: aggregated_signature,
             messages: decoded_messages,
             public_keys: decoded_public_keys,
         };

@@ -167,31 +167,43 @@ ffi::ffi_item! {
 
 #[cfg(feature = "rand")]
 impl KeyPair {
-    /// Generate a random key pair using a default [`Algorithm`].
-    pub fn random() -> Self {
-        Self::random_with_algorithm(Algorithm::default())
+    /// Fallibly generate a random key pair using a default [`Algorithm`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] when the selected algorithm cannot generate an
+    /// internally consistent key pair.
+    pub fn try_random() -> Result<Self, Error> {
+        Self::try_random_with_algorithm(Algorithm::default())
     }
 
-    /// Generate a random key pair
-    pub fn random_with_algorithm(algorithm: Algorithm) -> Self {
+    /// Generate a random key pair using a default [`Algorithm`].
+    pub fn random() -> Self {
+        Self::try_random().expect("random key generation should succeed for the default algorithm")
+    }
+
+    /// Fallibly generate a random key pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] when the selected algorithm cannot generate an
+    /// internally consistent key pair.
+    pub fn try_random_with_algorithm(algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
-            Algorithm::Ed25519 => ed25519::Ed25519Sha512::keypair(KeyGenOption::Random).into(),
+            Algorithm::Ed25519 => Ok(ed25519::Ed25519Sha512::keypair(KeyGenOption::Random).into()),
             Algorithm::Secp256k1 => {
-                secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into()
+                Ok(secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into())
             }
             Algorithm::MlDsa => {
                 use pqcrypto_mldsa::mldsa65;
-                use pqcrypto_traits::sign::PublicKey as _;
+                use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
+
                 let (pk, sk) = mldsa65::keypair();
                 let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes())
-                    .expect("valid mldsa public key bytes");
-                let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::MlDsa(
-                    MlDsaSecretKey::new(&sk),
-                ))));
-                KeyPair {
-                    public_key,
-                    private_key,
-                }
+                    .map_err(|err| Error::KeyGen(err.to_string()))?;
+                let private_key = PrivateKey::from_bytes(Algorithm::MlDsa, sk.as_bytes())
+                    .map_err(|err| Error::KeyGen(err.to_string()))?;
+                KeyPair::new(public_key, private_key)
             }
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
@@ -199,8 +211,7 @@ impl KeyPair {
             | Algorithm::Gost3410_2012_256ParamSetC
             | Algorithm::Gost3410_2012_512ParamSetA
             | Algorithm::Gost3410_2012_512ParamSetB => {
-                let (public, secret) = signature::gost::generate_random_keypair(algorithm)
-                    .expect("random GOST key generation must succeed for supported parameter sets");
+                let (public, secret) = signature::gost::generate_random_keypair(algorithm)?;
                 let public_key = PublicKey::new(PublicKeyFull::Gost {
                     algorithm,
                     key: public,
@@ -210,48 +221,53 @@ impl KeyPair {
                     secret,
                 })));
                 KeyPair::new(public_key, private_key)
-                    .expect("freshly generated GOST key pair should be internally consistent")
             }
             #[cfg(feature = "bls")]
-            Algorithm::BlsNormal => bls::BlsNormal::keypair(KeyGenOption::Random).into(),
+            Algorithm::BlsNormal => Ok(bls::BlsNormal::keypair(KeyGenOption::Random).into()),
             #[cfg(feature = "bls")]
-            Algorithm::BlsSmall => bls::BlsSmall::keypair(KeyGenOption::Random).into(),
+            Algorithm::BlsSmall => Ok(bls::BlsSmall::keypair(KeyGenOption::Random).into()),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
                 let mut rng = sm2::elliptic_curve::rand_core::OsRng;
                 let private =
                     sm::Sm2PrivateKey::random(sm::Sm2PublicKey::default_distid(), &mut rng)
-                        .expect("sm2 default distid must be valid");
+                        .map_err(|err| Error::KeyGen(err.to_string()))?;
                 let public_key = PublicKey::new(PublicKeyFull::Sm2(private.public_key()));
                 let private_key = PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private))));
-                KeyPair {
-                    public_key,
-                    private_key,
-                }
+                KeyPair::new(public_key, private_key)
             }
         }
+    }
+
+    /// Generate a random key pair
+    pub fn random_with_algorithm(algorithm: Algorithm) -> Self {
+        Self::try_random_with_algorithm(algorithm)
+            .expect("random key generation should succeed for supported algorithms")
     }
 }
 
 #[ffi_impl_opaque]
 impl KeyPair {
-    /// Derive a key pair from seed material.
+    /// Fallibly derive a key pair from seed material.
     ///
     /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
     /// hashed with SHA-256 to obtain a canonical 32-byte seed.
-    pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] when the selected algorithm cannot derive an
+    /// internally consistent key pair from the seed material.
+    pub fn try_from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
             Algorithm::Ed25519 => {
-                ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed)).into()
+                Ok(ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed)).into())
             }
             Algorithm::Secp256k1 => {
-                secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into()
+                Ok(secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into())
             }
             Algorithm::MlDsa => {
-                let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(&seed)
-                    .expect("seeded ML-DSA key generation must produce a valid key pair");
+                let (public, private) = mldsa_seed::mldsa65::keypair_from_seed(&seed)?;
                 KeyPair::new(public, private)
-                    .expect("seeded ML-DSA key pair should pass validation")
             }
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
@@ -259,8 +275,7 @@ impl KeyPair {
             | Algorithm::Gost3410_2012_256ParamSetC
             | Algorithm::Gost3410_2012_512ParamSetA
             | Algorithm::Gost3410_2012_512ParamSetB => {
-                let (public, secret) = signature::gost::generate_seeded_keypair(algorithm, &seed)
-                    .expect("seeded GOST key generation must succeed for supported parameter sets");
+                let (public, secret) = signature::gost::generate_seeded_keypair(algorithm, &seed)?;
                 let public_key = PublicKey::new(PublicKeyFull::Gost {
                     algorithm,
                     key: public,
@@ -270,24 +285,31 @@ impl KeyPair {
                     secret,
                 })));
                 KeyPair::new(public_key, private_key)
-                    .expect("seed-derived GOST key pair should be internally consistent")
             }
             #[cfg(feature = "bls")]
-            Algorithm::BlsNormal => bls::BlsNormal::keypair(KeyGenOption::UseSeed(seed)).into(),
+            Algorithm::BlsNormal => Ok(bls::BlsNormal::keypair(KeyGenOption::UseSeed(seed)).into()),
             #[cfg(feature = "bls")]
-            Algorithm::BlsSmall => bls::BlsSmall::keypair(KeyGenOption::UseSeed(seed)).into(),
+            Algorithm::BlsSmall => Ok(bls::BlsSmall::keypair(KeyGenOption::UseSeed(seed)).into()),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
                 let private_inner =
                     sm::Sm2PrivateKey::from_seed(Sm2PublicKey::default_distid(), &seed)
-                        .expect("SM2 seed derivation must succeed");
+                        .map_err(|err| Error::KeyGen(err.to_string()))?;
                 let public_key = PublicKey::new(PublicKeyFull::Sm2(private_inner.public_key()));
                 let private_key =
                     PrivateKey(Box::new(Secret::new(PrivateKeyInner::Sm2(private_inner))));
                 KeyPair::new(public_key, private_key)
-                    .expect("seed-derived SM2 key pair should be internally consistent")
             }
         }
+    }
+
+    /// Derive a key pair from seed material.
+    ///
+    /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
+    /// hashed with SHA-256 to obtain a canonical 32-byte seed.
+    pub fn from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Self {
+        Self::try_from_seed(seed, algorithm)
+            .expect("seeded key generation should succeed for supported algorithms")
     }
 
     /// Algorithm
@@ -408,7 +430,7 @@ impl KeyPair {
             return KeyPair::new(public_key, private_key);
         }
 
-        let public_key = PublicKey::from(private_key.clone());
+        let public_key = PublicKey::from_private_key(&private_key)?;
         Self::new(public_key, private_key)
     }
 }
@@ -1028,6 +1050,9 @@ fn bls_collect_pks_with_pop<'a>(
             return Err(Error::BadSignature);
         }
         let (_, bytes) = pk.to_bytes();
+        if !seen.insert(bytes) {
+            return Err(Error::BadSignature);
+        }
         let cache_key = pop_cache_key(bytes, pop);
         let cached = pop_cache()
             .lock()
@@ -1039,9 +1064,6 @@ fn bls_collect_pks_with_pop<'a>(
                 cache.insert(cache_key);
             }
         }
-        if !seen.insert(bytes) {
-            return Err(Error::BadSignature);
-        }
         pk_bytes.push(bytes);
     }
     Ok(pk_bytes)
@@ -1049,7 +1071,7 @@ fn bls_collect_pks_with_pop<'a>(
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
 /// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
-/// Fallback: per-signature verify inside this function. Deterministic and hardware-stable.
+/// Aggregate-only check, no per-signature fallback. Deterministic and hardware-stable.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
@@ -1070,19 +1092,7 @@ pub fn bls_normal_verify_aggregate_same_message(
         Algorithm::BlsNormal,
         bls_normal_pop_verify,
     )?;
-    // Preferred: aggregate-style helper; internal path may be per-sig today.
-    if let Ok(()) =
-        signature::bls::verify_aggregate_same_message_normal(message, signatures, &pk_bytes)
-    {
-        Ok(())
-    } else {
-        // Fallback: per-signature
-        for (s, pk) in signatures.iter().zip(pk_bytes.iter()) {
-            let vk = signature::bls::BlsNormal::parse_public_key(pk)?;
-            signature::bls::BlsNormal::verify(message, s, &vk)?;
-        }
-        Ok(())
-    }
+    signature::bls::verify_aggregate_same_message_normal(message, signatures, &pk_bytes)
 }
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
@@ -1112,11 +1122,13 @@ pub fn bls_normal_verify_aggregate_same_message_fast(
 }
 
 /// Aggregate verification across distinct messages (multi-message) for BLS (normal).
-/// Attempts the shared aggregate verifier and falls back to per-signature checks when it rejects.
+/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
+/// helpers. Attempts the shared aggregate verifier and falls back to per-signature checks only for
+/// distinct-message inputs when the aggregate path rejects.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// if input slice lengths are inconsistent, or if messages are duplicated.
 #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
 pub fn bls_normal_verify_aggregate_multi_message(
     messages: &[&[u8]],
@@ -1158,10 +1170,12 @@ pub fn bls_normal_verify_aggregate_multi_message(
 /// Aggregate verification across distinct messages (multi-message) for BLS (normal).
 /// Uses a single pairing-product when `bls-multi-pairing` is enabled; falls back
 /// to per-signature verification on any parsing/hashing failure to preserve correctness.
+/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
+/// helpers.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// if input slice lengths are inconsistent, or if messages are duplicated.
 #[cfg(all(feature = "bls", feature = "bls-multi-pairing"))]
 pub fn bls_normal_verify_aggregate_multi_message(
     messages: &[&[u8]],
@@ -1204,11 +1218,12 @@ pub fn bls_normal_verify_aggregate_multi_message(
 /// Aggregate verification across distinct messages (multi-message) for BLS (small).
 /// With the basic `bls` feature (without `bls-multi-pairing`) this helper verifies each
 /// signature independently; a multi-pairing batch path is tracked for the `bls-small`
-/// backend and will land alongside the multi-pairing feature.
+/// backend and will land alongside the multi-pairing feature. Requires pairwise-distinct
+/// messages; same-message inputs must use the same-message aggregate helpers.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// if input slice lengths are inconsistent, or if messages are duplicated.
 #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing")))]
 pub fn bls_small_verify_aggregate_multi_message(
     messages: &[&[u8]],
@@ -1244,10 +1259,12 @@ pub fn bls_small_verify_aggregate_multi_message(
 /// Aggregate verification across distinct messages (multi-message) for BLS (small).
 /// Uses a single pairing-product when `bls-multi-pairing` is enabled; falls back
 /// to per-signature verification on any parsing/hashing failure to preserve correctness.
+/// Requires pairwise-distinct messages; same-message inputs must use the same-message aggregate
+/// helpers.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
-/// or if input slice lengths are inconsistent.
+/// if input slice lengths are inconsistent, or if messages are duplicated.
 #[cfg(all(feature = "bls", feature = "bls-multi-pairing"))]
 pub fn bls_small_verify_aggregate_multi_message(
     messages: &[&[u8]],
@@ -1287,7 +1304,7 @@ pub fn bls_small_verify_aggregate_multi_message(
 }
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
 /// Requires a valid Proof-of-Possession (`PoP`) per public key to prevent rogue-key attacks.
-/// Fallback: per-signature verify inside this function.
+/// Aggregate-only check, no per-signature fallback.
 ///
 /// # Errors
 /// Returns `Err(Error::BadSignature)` if any signature/public key fails to parse or verify,
@@ -1304,17 +1321,7 @@ pub fn bls_small_verify_aggregate_same_message(
     }
     let pk_bytes =
         bls_collect_pks_with_pop(public_keys, pops, Algorithm::BlsSmall, bls_small_pop_verify)?;
-    if let Ok(()) =
-        signature::bls::verify_aggregate_same_message_small(message, signatures, &pk_bytes)
-    {
-        Ok(())
-    } else {
-        for (s, pk) in signatures.iter().zip(pk_bytes.iter()) {
-            let vk = signature::bls::BlsSmall::parse_public_key(pk)?;
-            signature::bls::BlsSmall::verify(message, s, &vk)?;
-        }
-        Ok(())
-    }
+    signature::bls::verify_aggregate_same_message_small(message, signatures, &pk_bytes)
 }
 
 /// Attempt aggregate verification for BLS (small) when all messages are identical.
@@ -1698,6 +1705,52 @@ impl PublicKey {
         Ok(Self::new(inner))
     }
 
+    /// Derive a public key from private-key material.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::KeyGen`] when public-key derivation fails for algorithms
+    /// whose private-key encodings contain consistency-checked public material.
+    pub fn from_private_key(private_key: &PrivateKey) -> Result<Self, Error> {
+        use crate::secrecy::ExposeSecret;
+
+        let inner = match private_key.0.expose_secret() {
+            PrivateKeyInner::Ed25519(secret) => PublicKeyFull::Ed25519(
+                ed25519::Ed25519Sha512::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
+            ),
+            PrivateKeyInner::Secp256k1(secret) => PublicKeyFull::Secp256k1(
+                secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(
+                    secret.clone(),
+                ))
+                .0,
+            ),
+            PrivateKeyInner::MlDsa(secret) => {
+                return mldsa_seed::mldsa65::public_key_from_secret(secret.as_secret());
+            }
+            #[cfg(feature = "gost")]
+            PrivateKeyInner::Gost { algorithm, secret } => {
+                let derived = signature::gost::derive_public_key(*algorithm, secret)
+                    .map_err(|err| Error::KeyGen(err.to_string()))?;
+                PublicKeyFull::Gost {
+                    algorithm: *algorithm,
+                    key: derived,
+                }
+            }
+            #[cfg(feature = "bls")]
+            PrivateKeyInner::BlsNormal(secret) => PublicKeyFull::BlsNormal(
+                bls::BlsNormal::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
+            ),
+            #[cfg(feature = "bls")]
+            PrivateKeyInner::BlsSmall(secret) => PublicKeyFull::BlsSmall(
+                bls::BlsSmall::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
+            ),
+            #[cfg(feature = "sm")]
+            PrivateKeyInner::Sm2(key) => PublicKeyFull::Sm2(key.public_key()),
+        };
+
+        Ok(Self::new(inner))
+    }
+
     /// Extracts raw bytes from the public key, copying the payload.
     ///
     /// `into_bytes()` without copying is not provided because underlying crypto
@@ -1726,21 +1779,43 @@ impl PublicKey {
 
 #[cfg(not(feature = "ffi_import"))]
 impl PublicKey {
-    fn normalize(&self) -> String {
+    /// Format as a canonical bare multihash hex string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
+    /// canonical multihash string.
+    pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
         let (algorithm, payload) = self.to_bytes();
         let bytes = multihash::encode_public_key(algorithm, payload)
-            .expect("Failed to convert multihash to bytes.");
+            .map_err(|err| ParseError(err.to_string()))?;
 
         multihash::multihash_to_hex_string(&bytes)
-            .expect("Failed to convert multihash to hex string.")
+    }
+
+    fn normalize(&self) -> String {
+        self.try_to_multihash_string()
+            .expect("public key must encode to a canonical multihash string")
+    }
+
+    #[cfg(not(feature = "ffi_import"))]
+    /// Fallibly format as an algorithm-prefixed multihash string (e.g., "ed25519:...").
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
+    /// canonical multihash string.
+    pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
+        let (algorithm, payload) = self.to_bytes();
+        multihash::encode_public_key_prefixed(algorithm, payload)
+            .map_err(|err| ParseError(err.to_string()))
     }
 
     #[cfg(not(feature = "ffi_import"))]
     /// Format as an algorithm-prefixed multihash string (e.g., "ed25519:...").
     pub fn to_prefixed_string(&self) -> String {
-        let (algorithm, payload) = self.to_bytes();
-        multihash::encode_public_key_prefixed(algorithm, payload)
-            .expect("Failed to convert multihash to prefixed string.")
+        self.try_to_prefixed_string()
+            .expect("public key must encode to an algorithm-prefixed multihash string")
     }
 }
 
@@ -1911,52 +1986,8 @@ impl IntoSchema for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl From<PrivateKey> for PublicKey {
     fn from(private_key: PrivateKey) -> Self {
-        use crate::secrecy::ExposeSecret;
-        if private_key.algorithm() == Algorithm::MlDsa {
-            let derived = {
-                let secret = match private_key.0.expose_secret() {
-                    PrivateKeyInner::MlDsa(sk) => sk.as_secret(),
-                    _ => unreachable!("algorithm() returned MlDsa"),
-                };
-                mldsa_seed::mldsa65::public_key_from_secret(secret)
-                    .expect("ML-DSA secret key should derive a valid public key")
-            };
-            return derived;
-        }
-
-        let inner = match private_key.0.expose_secret() {
-            PrivateKeyInner::Ed25519(secret) => PublicKeyFull::Ed25519(
-                ed25519::Ed25519Sha512::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
-            ),
-            PrivateKeyInner::Secp256k1(secret) => PublicKeyFull::Secp256k1(
-                secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::FromPrivateKey(
-                    secret.clone(),
-                ))
-                .0,
-            ),
-            PrivateKeyInner::MlDsa(_) => unreachable!("handled ML-DSA earlier"),
-            #[cfg(feature = "gost")]
-            PrivateKeyInner::Gost { algorithm, secret } => {
-                let derived = signature::gost::derive_public_key(*algorithm, secret)
-                    .expect("GOST public key derivation must succeed for valid private keys");
-                PublicKeyFull::Gost {
-                    algorithm: *algorithm,
-                    key: derived,
-                }
-            }
-            #[cfg(feature = "bls")]
-            PrivateKeyInner::BlsNormal(secret) => PublicKeyFull::BlsNormal(
-                bls::BlsNormal::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
-            ),
-            #[cfg(feature = "bls")]
-            PrivateKeyInner::BlsSmall(secret) => PublicKeyFull::BlsSmall(
-                bls::BlsSmall::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
-            ),
-            #[cfg(feature = "sm")]
-            PrivateKeyInner::Sm2(key) => PublicKeyFull::Sm2(key.public_key()),
-        };
-
-        Self::new(inner)
+        Self::from_private_key(&private_key)
+            .expect("deriving a public key from a private key should succeed for valid keys")
     }
 }
 
@@ -1998,6 +2029,12 @@ impl MlDsaSecretKey {
 
         let sig = mldsa65::detached_sign(payload, self.as_secret());
         sig.as_bytes().to_vec()
+    }
+
+    fn try_sign(&self, payload: &[u8]) -> Result<Vec<u8>, Error> {
+        mldsa_seed::mldsa65::public_key_from_secret(self.as_secret())
+            .map_err(|err| Error::Signing(err.to_string()))?;
+        Ok(self.sign(payload))
     }
 
     #[cfg(test)]
@@ -2114,7 +2151,11 @@ impl PrivateKey {
             }
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_private_key(payload)
                 .map(PrivateKeyInner::Secp256k1),
-            Algorithm::MlDsa => MlDsaSecretKey::from_bytes(payload).map(PrivateKeyInner::MlDsa),
+            Algorithm::MlDsa => MlDsaSecretKey::from_bytes(payload).and_then(|secret| {
+                mldsa_seed::mldsa65::public_key_from_secret(secret.as_secret())
+                    .map_err(|err| ParseError(err.to_string()))?;
+                Ok(PrivateKeyInner::MlDsa(secret))
+            }),
             #[cfg(feature = "gost")]
             Algorithm::Gost3410_2012_256ParamSetA
             | Algorithm::Gost3410_2012_256ParamSetB
@@ -2361,21 +2402,43 @@ impl FromStr for ExposedPrivateKey {
 }
 
 impl ExposedPrivateKey {
-    fn normalize(&self) -> String {
+    /// Format as a canonical bare private-key multihash hex string.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the private-key payload cannot be encoded as a
+    /// canonical multihash string.
+    pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
         let (algorithm, payload) = self.0.to_bytes();
         let bytes = multihash::encode_private_key(algorithm, &payload)
-            .expect("Failed to convert multihash to bytes.");
+            .map_err(|err| ParseError(err.to_string()))?;
 
         multihash::multihash_to_hex_string(&bytes)
-            .expect("Failed to convert multihash to hex string.")
+    }
+
+    fn normalize(&self) -> String {
+        self.try_to_multihash_string()
+            .expect("private key must encode to a canonical multihash string")
+    }
+
+    #[cfg(not(feature = "ffi_import"))]
+    /// Fallibly format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the private-key payload cannot be encoded as a
+    /// canonical multihash string.
+    pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
+        let (algorithm, payload) = self.0.to_bytes();
+        multihash::encode_private_key_prefixed(algorithm, &payload)
+            .map_err(|err| ParseError(err.to_string()))
     }
 
     #[cfg(not(feature = "ffi_import"))]
     /// Format as an algorithm-prefixed multihash string (e.g., "ml-dsa:...").
     pub fn to_prefixed_string(&self) -> String {
-        let (algorithm, payload) = self.0.to_bytes();
-        multihash::encode_private_key_prefixed(algorithm, &payload)
-            .expect("Failed to convert multihash to prefixed string.")
+        self.try_to_prefixed_string()
+            .expect("private key must encode to an algorithm-prefixed multihash string")
     }
 }
 
@@ -2750,6 +2813,80 @@ mod tests {
 
     #[cfg(feature = "bls")]
     #[test]
+    fn bls_normal_same_message_wrappers_reject_duplicate_public_keys() {
+        let msg = b"bls-normal-duplicate-public-key";
+        let key_pair = KeyPair::from_seed(vec![9; 32], Algorithm::BlsNormal);
+        let (public_key, private_key) = key_pair.into_parts();
+        let signature = Signature::new(&private_key, msg);
+        let signatures: Vec<&[u8]> = vec![signature.payload(), signature.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
+        let pop = bls_normal_pop_prove(&private_key).expect("pop");
+        let pops: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
+
+        assert!(
+            bls_normal_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "duplicate signer keys must be rejected in fallback wrapper"
+        );
+        assert!(
+            bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "duplicate signer keys must be rejected in fast wrapper"
+        );
+        assert!(
+            bls_normal_verify_preaggregated_same_message(
+                msg,
+                signature.payload(),
+                &public_keys,
+                &pops,
+            )
+            .is_err(),
+            "duplicate signer keys must be rejected in preaggregated wrapper"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_normal_same_message_rejects_canceling_key_aggregate_with_valid_pops() {
+        use w3f_bls::SerializableToBytes as _;
+
+        let secret =
+            w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(b"iroha:test:canceling-bls-normal");
+        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>(-secret.0.clone());
+        let sk1 =
+            PrivateKey::from_bytes(Algorithm::BlsNormal, &secret.to_bytes()).expect("secret key");
+        let sk2 = PrivateKey::from_bytes(Algorithm::BlsNormal, &opposite.to_bytes())
+            .expect("opposite secret key");
+        let pk1 = PublicKey::from(sk1.clone());
+        let pk2 = PublicKey::from(sk2.clone());
+        let pop1 = bls_normal_pop_prove(&sk1).expect("pop 1");
+        let pop2 = bls_normal_pop_prove(&sk2).expect("pop 2");
+        bls_normal_pop_verify(&pk1, &pop1).expect("pop 1 verifies");
+        bls_normal_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
+
+        let msg = b"canceling-wrapper-normal";
+        let sig1 = Signature::new(&sk1, msg);
+        let sig2 = Signature::new(&sk2, msg);
+        sig1.verify(&pk1, msg).expect("signature 1 verifies");
+        sig2.verify(&pk2, msg).expect("signature 2 verifies");
+        let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
+        let pops: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+
+        assert!(
+            bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "fast aggregate wrapper must reject identity aggregate"
+        );
+        assert!(
+            bls_normal_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "fallback wrapper must not bypass identity aggregate rejection"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn bls_small_aggregate_fast_accepts_valid_and_rejects_bad() {
         let msg = b"bls-small-fast";
         let kp1 = KeyPair::from_seed(vec![3; 32], Algorithm::BlsSmall);
@@ -2781,6 +2918,69 @@ mod tests {
             )
             .is_err(),
             "bad signature must be rejected"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_small_same_message_wrappers_reject_duplicate_public_keys() {
+        let msg = b"bls-small-duplicate-public-key";
+        let key_pair = KeyPair::from_seed(vec![10; 32], Algorithm::BlsSmall);
+        let (public_key, private_key) = key_pair.into_parts();
+        let signature = Signature::new(&private_key, msg);
+        let signatures: Vec<&[u8]> = vec![signature.payload(), signature.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&public_key, &public_key];
+        let pop = bls_small_pop_prove(&private_key).expect("pop");
+        let pops: Vec<&[u8]> = vec![pop.as_slice(), pop.as_slice()];
+
+        assert!(
+            bls_small_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops).is_err(),
+            "duplicate signer keys must be rejected in fallback wrapper"
+        );
+        assert!(
+            bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "duplicate signer keys must be rejected in fast wrapper"
+        );
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_small_same_message_rejects_canceling_key_aggregate_with_valid_pops() {
+        use w3f_bls::SerializableToBytes as _;
+
+        let secret = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(
+            b"iroha:test:canceling-bls-small",
+        );
+        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>(-secret.0.clone());
+        let sk1 =
+            PrivateKey::from_bytes(Algorithm::BlsSmall, &secret.to_bytes()).expect("secret key");
+        let sk2 = PrivateKey::from_bytes(Algorithm::BlsSmall, &opposite.to_bytes())
+            .expect("opposite secret key");
+        let pk1 = PublicKey::from(sk1.clone());
+        let pk2 = PublicKey::from(sk2.clone());
+        let pop1 = bls_small_pop_prove(&sk1).expect("pop 1");
+        let pop2 = bls_small_pop_prove(&sk2).expect("pop 2");
+        bls_small_pop_verify(&pk1, &pop1).expect("pop 1 verifies");
+        bls_small_pop_verify(&pk2, &pop2).expect("pop 2 verifies");
+
+        let msg = b"canceling-wrapper-small";
+        let sig1 = Signature::new(&sk1, msg);
+        let sig2 = Signature::new(&sk2, msg);
+        sig1.verify(&pk1, msg).expect("signature 1 verifies");
+        sig2.verify(&pk2, msg).expect("signature 2 verifies");
+        let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
+        let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
+        let pops: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+
+        assert!(
+            bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
+                .is_err(),
+            "fast aggregate wrapper must reject identity aggregate"
+        );
+        assert!(
+            bls_small_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops).is_err(),
+            "fallback wrapper must not bypass identity aggregate rejection"
         );
     }
 
@@ -3007,8 +3207,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "bls", not(feature = "bls-multi-pairing"), feature = "rand"))]
-    fn bls_normal_multi_message_duplicates_fallbacks_to_per_sig() {
+    #[cfg(all(feature = "bls", feature = "rand"))]
+    fn bls_normal_multi_message_duplicates_are_rejected() {
         let (pk1, sk1) = signature::bls::BlsNormal::keypair(super::KeyGenOption::Random);
         let (pk2, sk2) = signature::bls::BlsNormal::keypair(super::KeyGenOption::Random);
         let message = b"duplicate-multi-msg".to_vec();
@@ -3026,10 +3226,36 @@ mod tests {
             &signature_refs,
             &pk_refs,
         )
-        .expect("aggregate verifier should accept duplicate messages");
+        .expect_err("aggregate verifier must reject duplicate messages");
 
         super::bls_normal_verify_aggregate_multi_message(&msgs, &signature_refs, &pk_refs)
-            .expect("wrapper should accept duplicate messages");
+            .expect_err("wrapper must reject duplicate messages");
+    }
+
+    #[test]
+    #[cfg(all(feature = "bls", feature = "rand"))]
+    fn bls_small_multi_message_duplicates_are_rejected() {
+        let (pk1, sk1) = signature::bls::BlsSmall::keypair(super::KeyGenOption::Random);
+        let (pk2, sk2) = signature::bls::BlsSmall::keypair(super::KeyGenOption::Random);
+        let message = b"duplicate-multi-msg-small".to_vec();
+        let sig1 = signature::bls::BlsSmall::sign(&message, &sk1);
+        let sig2 = signature::bls::BlsSmall::sign(&message, &sk2);
+        let pk1_bytes = pk1.to_bytes();
+        let pk2_bytes = pk2.to_bytes();
+
+        let msgs: Vec<&[u8]> = vec![message.as_slice(), message.as_slice()];
+        let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
+        let pk_refs: Vec<&[u8]> = vec![pk1_bytes.as_slice(), pk2_bytes.as_slice()];
+
+        super::signature::bls::verify_aggregate_multi_message_small(
+            &msgs,
+            &signature_refs,
+            &pk_refs,
+        )
+        .expect_err("aggregate verifier must reject duplicate messages");
+
+        super::bls_small_verify_aggregate_multi_message(&msgs, &signature_refs, &pk_refs)
+            .expect_err("wrapper must reject duplicate messages");
     }
 
     #[test]

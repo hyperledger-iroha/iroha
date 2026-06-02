@@ -31,6 +31,9 @@ const CIRCUIT_DOMAIN: &[u8] = b"soranet.blinding.circuit.v1";
 /// Errors surfaced while deriving or applying `SoraNet` CID blinding.
 #[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
 pub enum BlindingError {
+    /// A required entropy-bearing input was all zero.
+    #[error("soranet blinding input {0} must not be all zero")]
+    WeakInput(&'static str),
     /// HKDF expansion failed. This should only occur if the requested output
     /// length is unsupported by the underlying hash function.
     #[error("soranet hkdf expansion failed")]
@@ -52,8 +55,16 @@ impl CircuitBlindingKey {
     /// # Errors
     ///
     /// Returns [`BlindingError::Hkdf`] when HKDF cannot expand into a 32-byte
-    /// key. This is not expected under normal operation.
+    /// key. Returns [`BlindingError::WeakInput`] when either entropy-bearing
+    /// input is all zero.
     pub fn derive(epoch_salt: &[u8; 32], circuit_secret: &[u8; 32]) -> Result<Self, BlindingError> {
+        if epoch_salt.iter().all(|byte| *byte == 0) {
+            return Err(BlindingError::WeakInput("epoch_salt"));
+        }
+        if circuit_secret.iter().all(|byte| *byte == 0) {
+            return Err(BlindingError::WeakInput("circuit_secret"));
+        }
+
         let mut ikm = Zeroizing::new([0_u8; 64]);
         ikm[..32].copy_from_slice(epoch_salt);
         ikm[32..].copy_from_slice(circuit_secret);
@@ -222,6 +233,20 @@ mod tests {
         // Same nonce => same digest to support deterministic retries.
         let blinded_a_again = key.request_scoped_blinded(cid, &nonce_a);
         assert_eq!(blinded_a, blinded_a_again);
+    }
+
+    #[test]
+    fn derive_rejects_all_zero_epoch_salt() {
+        let err = CircuitBlindingKey::derive(&[0_u8; 32], &[0x24_u8; 32])
+            .expect_err("all-zero epoch salt must fail before HKDF");
+        assert!(matches!(err, BlindingError::WeakInput("epoch_salt")));
+    }
+
+    #[test]
+    fn derive_rejects_all_zero_circuit_secret() {
+        let err = CircuitBlindingKey::derive(&[0x42_u8; 32], &[0_u8; 32])
+            .expect_err("all-zero circuit secret must fail before HKDF");
+        assert!(matches!(err, BlindingError::WeakInput("circuit_secret")));
     }
 
     #[test]

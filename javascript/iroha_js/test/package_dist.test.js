@@ -954,8 +954,13 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
     /\bsnarkjs\b/iu,
     /\bremoteProver\b/u,
     /\bremote prover\b/iu,
+    /\bremote_prover\b/iu,
+    /\bremote-prover\b/iu,
     /\bproverUrl\b/u,
+    /\bproverURL\b/u,
+    /\bprover_url\b/iu,
     /\bproverEndpoint\b/u,
+    /\bprover_endpoint\b/iu,
   ];
   for (const [artifact, source] of Object.entries(artifacts)) {
     for (const pattern of forbidden) {
@@ -963,6 +968,43 @@ function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned() {
     }
   }
 }
+
+test("browser SCCP no-WASM guard catches remote-prover identifier variants", () => {
+  const samples = [
+    "WebAssembly.compile(bytes)",
+    "import './proof.wasm'",
+    "import snarkjs from 'snarkjs'",
+    "const remoteProver = endpoint",
+    "fallback remote prover",
+    "const remote_prover = endpoint",
+    "remote-prover endpoint",
+    "const proverUrl = endpoint",
+    "const proverURL = endpoint",
+    "const prover_url = endpoint",
+    "const proverEndpoint = endpoint",
+    "const prover_endpoint = endpoint",
+  ];
+  const forbidden = [
+    /\bWebAssembly\b/u,
+    /\bwasm\b/iu,
+    /\bsnarkjs\b/iu,
+    /\bremoteProver\b/u,
+    /\bremote prover\b/iu,
+    /\bremote_prover\b/iu,
+    /\bremote-prover\b/iu,
+    /\bproverUrl\b/u,
+    /\bproverURL\b/u,
+    /\bprover_url\b/iu,
+    /\bproverEndpoint\b/u,
+    /\bprover_endpoint\b/iu,
+  ];
+  for (const sample of samples) {
+    assert(
+      forbidden.some((pattern) => pattern.test(sample)),
+      `${sample} must match a browser SCCP no-WASM guard`,
+    );
+  }
+});
 
 test("browser Ethereum mainnet SCCP artifacts stay JS-only and local-prover owned", () => {
   assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned();

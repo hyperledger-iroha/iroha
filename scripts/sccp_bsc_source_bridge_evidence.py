@@ -605,6 +605,15 @@ def _require_toml_receipt_metadata(
 ) -> None:
     for field, flag in (
         ("deployment_transaction_hash", "--deployment-transaction-hash"),
+        ("deployment_transaction_block_hash", "--deployment-transaction-block-hash"),
+        (
+            "deployment_transaction_block_number",
+            "--deployment-transaction-block-number",
+        ),
+        (
+            "deployment_transaction_input_sha256",
+            "--deployment-transaction-input-sha256",
+        ),
         ("deployment_receipt_contract_address", "--deployment-receipt-contract-address"),
         ("deployment_receipt_block_hash", "--deployment-receipt-block-hash"),
         ("deployment_receipt_block_number", "--deployment-receipt-block-number"),
@@ -623,6 +632,19 @@ def _require_toml_receipt_metadata(
     block_number = args.deployment_receipt_block_number
     if type(block_number) is not int or block_number <= 0:
         raise ValueError("--deployment-receipt-block-number must be positive")
+    transaction_block_number = args.deployment_transaction_block_number
+    if type(transaction_block_number) is not int or transaction_block_number <= 0:
+        raise ValueError("--deployment-transaction-block-number must be positive")
+    if args.deployment_transaction_block_hash != args.deployment_receipt_block_hash:
+        raise ValueError(
+            "--deployment-transaction-block-hash must match "
+            "--deployment-receipt-block-hash"
+        )
+    if args.deployment_transaction_block_number != args.deployment_receipt_block_number:
+        raise ValueError(
+            "--deployment-transaction-block-number must match "
+            "--deployment-receipt-block-number"
+        )
 
 
 def _toml_receipt_metadata_ready(args: argparse.Namespace) -> bool:
@@ -815,6 +837,12 @@ def render_toml(args: argparse.Namespace) -> str:
         [
             "# sccp_evm_source_deployment_transaction_hash = "
             + json.dumps(_hex(args.deployment_transaction_hash)),
+            "# sccp_evm_source_deployment_transaction_block_hash = "
+            + json.dumps(_hex(args.deployment_transaction_block_hash)),
+            "# sccp_evm_source_deployment_transaction_block_number = "
+            + json.dumps(str(args.deployment_transaction_block_number)),
+            "# sccp_evm_source_deployment_transaction_input_sha256 = "
+            + json.dumps(args.deployment_transaction_input_sha256.hex()),
             "# sccp_evm_source_deployment_receipt_status = " + json.dumps("0x1"),
             "# sccp_evm_source_deployment_contract_address = "
             + json.dumps(_hex(args.deployment_receipt_contract_address)),
@@ -886,6 +914,21 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     )
     if runtime_bytecode_hex is not None:
         summary["source_bridge_runtime_bytecode_hex"] = runtime_bytecode_hex
+    if toml_metadata_ready:
+        summary.update(
+            {
+                "deployment_transaction_hash": _hex(args.deployment_transaction_hash),
+                "deployment_transaction_block_hash": _hex(
+                    args.deployment_transaction_block_hash
+                ),
+                "deployment_transaction_block_number": (
+                    args.deployment_transaction_block_number
+                ),
+                "deployment_transaction_input_sha256": (
+                    args.deployment_transaction_input_sha256.hex()
+                ),
+            }
+        )
     return summary
 
 
@@ -976,6 +1019,41 @@ def build_parser() -> argparse.ArgumentParser:
             byte_length=32,
         ),
         help="Audited source bridge deployment transaction hash; required for TOML.",
+    )
+    parser.add_argument(
+        "--deployment-transaction-block-hash",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="deployment transaction block hash",
+            byte_length=32,
+        ),
+        help=(
+            "Audited deployment transaction block hash. Must match the deployment "
+            "receipt block hash and is required for TOML."
+        ),
+    )
+    parser.add_argument(
+        "--deployment-transaction-block-number",
+        type=lambda value: parse_positive_u64(
+            value,
+            label="deployment transaction block number",
+        ),
+        help=(
+            "Audited positive deployment transaction block number. Must match the "
+            "deployment receipt block number and is required for TOML."
+        ),
+    )
+    parser.add_argument(
+        "--deployment-transaction-input-sha256",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="deployment transaction input SHA-256",
+            byte_length=32,
+        ),
+        help=(
+            "SHA-256 of the audited non-empty contract-creation transaction input; "
+            "required for TOML."
+        ),
     )
     parser.add_argument(
         "--deployment-receipt-contract-address",

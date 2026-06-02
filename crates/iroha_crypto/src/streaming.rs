@@ -39,6 +39,7 @@ const FEEDBACK_OFFSET_FP: u32 = 327;
 const FEEDBACK_CEIL_BIAS: u32 = 0xFFFF;
 const FEC_WINDOW_CHUNKS: u32 = 12;
 const MAX_PARITY_CHUNKS: u8 = 6;
+const X25519_LOW_ORDER_CHECK_SECRET: [u8; 32] = [1u8; 32];
 /// Default ML-KEM suite used for streaming key material when no explicit override is configured.
 pub const STREAMING_DEFAULT_KEM_SUITE: MlKemSuite = MlKemSuite::MlKem768;
 
@@ -96,6 +97,9 @@ pub enum HandshakeError {
         /// Length observed in the frame.
         found: usize,
     },
+    /// The remote X25519 ephemeral public key is low-order and would derive an all-zero secret.
+    #[error("x25519 ephemeral public key is low-order")]
+    InvalidX25519EphemeralPublicKey,
     /// The remote Kyber public key had the wrong length.
     #[error("kyber public key length mismatch (expected {expected}, found {found})")]
     InvalidKyberPublicKeyLength {
@@ -146,6 +150,9 @@ pub enum HandshakeError {
         /// Role stored inside the snapshot being restored.
         found: CapabilityRole,
     },
+    /// Persisted snapshot metadata was internally inconsistent.
+    #[error("invalid streaming session snapshot: {0}")]
+    InvalidSnapshot(&'static str),
 }
 
 const KYBER_FINGERPRINT_DOMAIN: &[u8] = b"nsc_kyber_pk";
@@ -451,12 +458,25 @@ impl X25519Ephemeral {
         Self { secret, public }
     }
 
-    fn shared_secret(&self, peer: &X25519PublicKey) -> [u8; 32] {
+    fn shared_secret(&self, peer: &X25519PublicKey) -> Result<[u8; 32], HandshakeError> {
         let shared = self.secret.diffie_hellman(peer);
         let mut out = [0u8; 32];
         out.copy_from_slice(shared.as_bytes());
-        out
+        if out.iter().all(|byte| *byte == 0) {
+            return Err(HandshakeError::InvalidX25519EphemeralPublicKey);
+        }
+        Ok(out)
     }
+}
+
+fn decode_x25519_ephemeral_public_key(bytes: [u8; 32]) -> Result<X25519PublicKey, HandshakeError> {
+    let public_key = X25519PublicKey::from(bytes);
+    let check_secret = StaticSecret::from(X25519_LOW_ORDER_CHECK_SECRET);
+    let check_shared = check_secret.diffie_hellman(&public_key);
+    if check_shared.as_bytes().iter().all(|byte| *byte == 0) {
+        return Err(HandshakeError::InvalidX25519EphemeralPublicKey);
+    }
+    Ok(public_key)
 }
 
 /// In-memory state machine for a single NSC control-stream pairing.
@@ -1009,30 +1029,54 @@ impl StreamingSession {
             });
         }
 
+        Self::validate_snapshot_content_key_fields(
+            latest_gck.as_deref(),
+            last_content_key_id,
+            last_content_key_valid_from,
+        )?;
+        let restored_kem_suite = mlkem_suite_from_id(kem_suite_id)
+            .ok_or(HandshakeError::UnsupportedKemSuite(kem_suite_id))?;
+        let transport =
+            streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
+        let transport_resolution =
+            transport_capabilities_snapshot.map(TransportCapabilityResolution::from);
+        let transport_capabilities_hash = transport_resolution
+            .as_ref()
+            .map(TransportCapabilityResolution::capabilities_hash);
+
         self.reset_for_new_session();
         self.session_id = Some(session_id);
         self.key_state.restore(Some(key_counter), Some(suite));
         self.suite = Some(suite);
-        self.kem_suite = mlkem_suite_from_id(kem_suite_id)
-            .ok_or(HandshakeError::UnsupportedKemSuite(kem_suite_id))?;
+        self.kem_suite = restored_kem_suite;
         self.sts_root = Some(sts_root);
-        let transport =
-            streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
         self.transport_keys = Some(transport);
         self.latest_gck = latest_gck;
         self.content_state
             .restore(last_content_key_id, last_content_key_valid_from);
         self.cadence = cadence.map(SessionCadence::from_snapshot);
-        let transport_resolution =
-            transport_capabilities_snapshot.map(TransportCapabilityResolution::from);
-        self.transport_capabilities_hash = transport_resolution
-            .as_ref()
-            .map(TransportCapabilityResolution::capabilities_hash);
+        self.transport_capabilities_hash = transport_capabilities_hash;
         self.transport_resolution = transport_resolution;
         self.negotiated_capabilities = negotiated_capabilities_snapshot;
         self.kyber_remote_public = kyber_remote_public;
         self.kyber_remote_fingerprint = kyber_remote_fingerprint;
         Ok(())
+    }
+
+    fn validate_snapshot_content_key_fields(
+        latest_gck: Option<&[u8]>,
+        last_content_key_id: Option<u64>,
+        last_content_key_valid_from: Option<u64>,
+    ) -> Result<(), HandshakeError> {
+        let has_latest_gck = latest_gck.is_some();
+        let has_content_key_id = last_content_key_id.is_some();
+        let has_valid_from = last_content_key_valid_from.is_some();
+        if has_latest_gck == has_content_key_id && has_content_key_id == has_valid_from {
+            return Ok(());
+        }
+        Err(HandshakeError::InvalidSnapshot(
+            "content key metadata must be all present or all absent",
+        ))
     }
 
     /// Return the local ephemeral public key for the negotiated suite, generating it if needed.
@@ -1045,13 +1089,25 @@ impl StreamingSession {
         &mut self,
         suite: &EncryptionSuite,
     ) -> Result<Vec<u8>, HandshakeError> {
+        let (public, shared_secret) = self.outbound_ephemeral_material(suite)?;
+        if let Some(shared_secret) = shared_secret {
+            self.apply_shared_secret_for_suite(suite, &shared_secret)?;
+        }
+        Ok(public)
+    }
+
+    fn outbound_ephemeral_material(
+        &mut self,
+        suite: &EncryptionSuite,
+    ) -> Result<(Vec<u8>, Option<[u8; 32]>), HandshakeError> {
         match suite_ephemeral_mechanism(suite)? {
             EphemeralMechanism::X25519 => {
                 let eph = self.ensure_x25519_ephemeral();
-                Ok(eph.public.to_vec())
+                Ok((eph.public.to_vec(), None))
             }
             EphemeralMechanism::Kyber768 { fingerprint } => {
-                self.kyber_encapsulate(suite, fingerprint)
+                let (ciphertext, shared_secret) = self.kyber_encapsulate(fingerprint)?;
+                Ok((ciphertext, Some(shared_secret)))
             }
         }
     }
@@ -1141,8 +1197,8 @@ impl StreamingSession {
         if signer.algorithm() != Algorithm::Ed25519 {
             return Err(HandshakeError::UnsupportedAlgorithm(signer.algorithm()));
         }
-        self.record_outbound_key_update(session_id, suite, key_counter);
-        let pub_ephemeral = self.local_ephemeral_public(suite)?;
+        self.validate_outbound_key_counter(session_id, key_counter)?;
+        let (pub_ephemeral, shared_secret) = self.outbound_ephemeral_material(suite)?;
         let mut frame = KeyUpdate {
             session_id,
             suite: *suite,
@@ -1154,6 +1210,22 @@ impl StreamingSession {
         let transcript = key_update_transcript_bytes(&frame)?;
         let signature = Signature::new(signer, &transcript);
         frame.signature.copy_from_slice(signature.payload());
+
+        let transport_material = shared_secret
+            .as_ref()
+            .map(|shared| {
+                let sts_root = streaming_crypto::derive_sts_root(shared)?;
+                let transport =
+                    streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
+                Ok::<_, HandshakeError>((sts_root, transport))
+            })
+            .transpose()?;
+
+        self.record_outbound_key_update(session_id, suite, key_counter);
+        if let Some((sts_root, transport)) = transport_material {
+            self.sts_root = Some(sts_root);
+            self.transport_keys = Some(transport);
+        }
         Ok(frame)
     }
 
@@ -1170,6 +1242,24 @@ impl StreamingSession {
         let negotiated_suite = self.key_state.suite().copied();
         self.key_state.restore(Some(key_counter), negotiated_suite);
         self.suite = Some(*suite);
+    }
+
+    fn validate_outbound_key_counter(
+        &self,
+        session_id: Hash,
+        key_counter: u64,
+    ) -> Result<(), HandshakeError> {
+        if self.session_id == Some(session_id)
+            && let Some(previous) = self.key_state.last_counter()
+            && key_counter <= previous
+        {
+            return Err(StreamingCryptoError::NonMonotonicKeyCounter {
+                previous,
+                found: key_counter,
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// Process a remote `KeyUpdate` frame, verifying its signature and updating transport keys.
@@ -1195,11 +1285,6 @@ impl StreamingSession {
             .map_err(|_| HandshakeError::BadSignature)?;
 
         let session_changed = self.session_id != Some(frame.session_id);
-        if session_changed {
-            self.reset_for_new_session();
-            self.session_id = Some(frame.session_id);
-        }
-
         let suite = frame.suite;
 
         let shared_secret_bytes = match suite_ephemeral_mechanism(&suite)? {
@@ -1213,15 +1298,31 @@ impl StreamingSession {
                             found: frame.pub_ephemeral.len(),
                         }
                     })?;
-                let remote = X25519PublicKey::from(remote_bytes);
-                state.shared_secret(&remote)
+                let remote = decode_x25519_ephemeral_public_key(remote_bytes)?;
+                state.shared_secret(&remote)?
             }
             EphemeralMechanism::Kyber768 { fingerprint } => self
                 .kyber_shared_secret_from_ciphertext(fingerprint, frame.pub_ephemeral.as_slice())?,
         };
 
-        self.key_state.record(frame)?;
-        self.apply_shared_secret_for_suite(&suite, &shared_secret_bytes)?;
+        let mut next_key_state = if session_changed {
+            KeyUpdateState::default()
+        } else {
+            self.key_state
+        };
+        next_key_state.record(frame)?;
+        let sts_root = streaming_crypto::derive_sts_root(&shared_secret_bytes)?;
+        let transport =
+            streaming_crypto::derive_transport_keys_from_sts_root(&sts_root, self.role)?;
+
+        if session_changed {
+            self.reset_for_new_session();
+            self.session_id = Some(frame.session_id);
+        }
+        self.key_state = next_key_state;
+        self.suite = Some(suite);
+        self.sts_root = Some(sts_root);
+        self.transport_keys = Some(transport);
 
         Ok(self.transport_keys.as_ref().expect("transport keys set"))
     }
@@ -1251,8 +1352,7 @@ impl StreamingSession {
                 found: frame.gck_wrapped.len(),
             });
         }
-
-        self.content_state.record(frame)?;
+        self.validate_content_key_progression(frame)?;
 
         let (nonce, ciphertext) = frame.gck_wrapped.split_at(nonce_len);
         let gck = streaming_crypto::unwrap_gck(
@@ -1263,6 +1363,7 @@ impl StreamingSession {
             frame.content_key_id,
             frame.valid_from_segment,
         )?;
+        self.content_state.record(frame)?;
         self.latest_gck = Some(gck.clone());
         Ok(gck)
     }
@@ -1285,6 +1386,7 @@ impl StreamingSession {
             .transport_keys
             .as_ref()
             .ok_or(HandshakeError::MissingTransportKeys)?;
+        self.validate_content_key_progression_values(content_key_id, valid_from_segment)?;
         let nonce_len = streaming_crypto::nonce_len_for_suite(&suite);
         let mut nonce = vec![0u8; nonce_len];
         let mut rng = rng::os_rng();
@@ -1307,6 +1409,39 @@ impl StreamingSession {
         Ok(update)
     }
 
+    fn validate_content_key_progression(
+        &self,
+        frame: &ContentKeyUpdate,
+    ) -> Result<(), HandshakeError> {
+        self.validate_content_key_progression_values(frame.content_key_id, frame.valid_from_segment)
+    }
+
+    fn validate_content_key_progression_values(
+        &self,
+        content_key_id: u64,
+        valid_from_segment: u64,
+    ) -> Result<(), HandshakeError> {
+        if let Some(previous) = self.content_state.last_id()
+            && content_key_id <= previous
+        {
+            return Err(StreamingCryptoError::ContentKeyRegression {
+                previous,
+                found: content_key_id,
+            }
+            .into());
+        }
+        if let Some(previous) = self.content_state.last_valid_from()
+            && valid_from_segment < previous
+        {
+            return Err(StreamingCryptoError::InvalidValidFrom {
+                previous,
+                found: valid_from_segment,
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     fn ensure_x25519_ephemeral(&mut self) -> &mut X25519Ephemeral {
         let state = self
             .local_ephemeral
@@ -1317,10 +1452,9 @@ impl StreamingSession {
     }
 
     fn kyber_encapsulate(
-        &mut self,
-        suite: &EncryptionSuite,
+        &self,
         _fingerprint: &Hash,
-    ) -> Result<Vec<u8>, HandshakeError> {
+    ) -> Result<(Vec<u8>, [u8; 32]), HandshakeError> {
         let public_bytes = self
             .kyber_remote_public
             .as_ref()
@@ -1338,8 +1472,7 @@ impl StreamingSession {
         debug_assert_eq!(ciphertext.as_bytes().len(), self.kem_suite.ciphertext_len());
         let mut secret_bytes = [0u8; 32];
         secret_bytes.copy_from_slice(shared_secret.as_bytes());
-        self.apply_shared_secret_for_suite(suite, &secret_bytes)?;
-        Ok(ciphertext.as_bytes().to_vec())
+        Ok((ciphertext.as_bytes().to_vec(), secret_bytes))
     }
 
     fn kyber_shared_secret_from_ciphertext(

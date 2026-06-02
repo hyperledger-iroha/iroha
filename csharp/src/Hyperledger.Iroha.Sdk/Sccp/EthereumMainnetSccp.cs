@@ -283,7 +283,10 @@ public static class EthereumMainnetSccp
         var sourceEvent = NormalizeEthereumReceiptSourceEvent(
             receipt,
             input.SourceEventDigest,
-            input.SourceBridgeEmitterAddress);
+            input.SourceBridgeEmitterAddress,
+            transactionHash,
+            blockHash,
+            receiptBlockNumber);
         RequireReceiptProofMatchesEvidence(
             receiptProof,
             blockHash,
@@ -331,6 +334,12 @@ public static class EthereumMainnetSccp
         {
             throw new ArgumentException(
                 "Ethereum mainnet SCCP inbound proof requires receiptProof.",
+                nameof(input));
+        }
+        if (evidence.Receipt is not null && evidence.SourceEventDigest is null)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet SCCP inbound proof requires receipt source event validation.",
                 nameof(input));
         }
 
@@ -1289,7 +1298,10 @@ public static class EthereumMainnetSccp
     private static SourceEvent NormalizeEthereumReceiptSourceEvent(
         IReadOnlyDictionary<string, object?>? receipt,
         string? sourceEventDigestInput,
-        string? sourceBridgeEmitterAddressInput)
+        string? sourceBridgeEmitterAddressInput,
+        string? transactionHash,
+        string? blockHash,
+        string? blockNumber)
     {
         var sourceEventDigest = sourceEventDigestInput is null
             ? null
@@ -1353,16 +1365,54 @@ public static class EthereumMainnetSccp
                     32,
                     allowZero: true))
                 .ToArray();
-            var data = FirstPresent(log, "data") ?? "0x";
             if (string.Equals(logAddress, sourceBridgeEmitterAddress, StringComparison.Ordinal)
                 && normalizedTopics.Length == 2
                 && string.Equals(normalizedTopics[0], SourceEventTopic, StringComparison.Ordinal))
             {
+                var logTransactionHash = NormalizeRpcHex(
+                    FirstPresent(log, "transactionHash", "transaction_hash"),
+                    $"receipt.logs[{index}].transactionHash",
+                    32);
+                if (transactionHash is not null
+                    && !string.Equals(logTransactionHash, transactionHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs transactionHash must match receipt.transactionHash.",
+                        nameof(receipt));
+                }
+
+                var logBlockHash = NormalizeRpcHex(
+                    FirstPresent(log, "blockHash", "block_hash"),
+                    $"receipt.logs[{index}].blockHash",
+                    32);
+                if (blockHash is not null
+                    && !string.Equals(logBlockHash, blockHash, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs blockHash must match receipt.blockHash.",
+                        nameof(receipt));
+                }
+
+                var logBlockNumber = NormalizePositiveRpcQuantity(
+                    FirstPresent(log, "blockNumber", "block_number"),
+                    $"receipt.logs[{index}].blockNumber");
+                if (blockNumber is not null
+                    && !string.Equals(logBlockNumber, blockNumber, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        "receipt.logs blockNumber must match receipt.blockNumber.",
+                        nameof(receipt));
+                }
+
+                var data = FirstPresent(log, "data") as string
+                    ?? throw new ArgumentException(
+                        $"receipt.logs[{index}].data is required.",
+                        nameof(receipt));
                 var candidateDigest = normalizedTopics[1];
                 if (IsZeroRpcHex(candidateDigest)
                     || (sourceEventDigest is not null
                         && !string.Equals(sourceEventDigest, candidateDigest, StringComparison.Ordinal))
-                    || !string.Equals(data as string, "0x", StringComparison.Ordinal))
+                    || !string.Equals(data, "0x", StringComparison.Ordinal))
                 {
                     continue;
                 }

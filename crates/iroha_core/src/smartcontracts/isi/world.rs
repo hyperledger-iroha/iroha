@@ -11094,14 +11094,11 @@ pub mod isi {
                 ConfidentialPolicyMode::ShieldedOnly => {}
             }
             let asset_id = shield_public_asset_id(state_transaction, &def_id, self.from())?;
-            if !self.enc_payload().is_supported() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(format!(
-                        "unsupported confidential payload version: {}",
-                        self.enc_payload().version()
-                    )),
-                ));
-            }
+            self.enc_payload().validate().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string(),
+                ))
+            })?;
             let burn = Burn::asset_numeric(
                 iroha_primitives::numeric::Numeric::new(*self.amount(), 0),
                 asset_id,
@@ -17963,14 +17960,37 @@ pub mod isi {
             asset_def_id: &AssetDefinitionId,
             amount: u128,
         ) -> Result<(), InstructionExecutionError> {
+            shield_amount_with_payload(
+                stx,
+                asset_def_id,
+                amount,
+                valid_confidential_encrypted_payload_for_tests(),
+            )
+        }
+
+        fn shield_amount_with_payload(
+            stx: &mut StateTransaction<'_, '_>,
+            asset_def_id: &AssetDefinitionId,
+            amount: u128,
+            enc_payload: iroha_data_model::confidential::ConfidentialEncryptedPayload,
+        ) -> Result<(), InstructionExecutionError> {
             iroha_data_model::isi::zk::Shield::new(
                 asset_def_id.clone(),
                 ALICE_ID.clone(),
                 amount,
                 [3; 32],
-                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                enc_payload,
             )
             .execute(&ALICE_ID, stx)
+        }
+
+        fn valid_confidential_encrypted_payload_for_tests()
+        -> iroha_data_model::confidential::ConfidentialEncryptedPayload {
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                [0x07; 32],
+                [0x08; 24],
+                vec![0x09, 0x0A],
+            )
         }
 
         fn numeric_balance(stx: &StateTransaction<'_, '_>, asset_id: &AssetId) -> Numeric {
@@ -19108,6 +19128,47 @@ pub mod isi {
                 msg.contains("max_proof_bytes"),
                 "unexpected oversized proof error: {msg}"
             );
+        }
+
+        #[test]
+        fn shield_rejects_invalid_confidential_payload_before_state_change() {
+            let dataspace = DataSpaceId::new(7);
+            let (state, asset_def_id, asset_ids) = restricted_shield_fixture(
+                None,
+                &[],
+                &[(AssetBalanceScope::Dataspace(dataspace), 10)],
+            );
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.current_dataspace_id = Some(dataspace);
+            stx.world.current_dataspace_id = Some(dataspace);
+
+            for (payload, expected) in [
+                (
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                        [0u8; 32],
+                        [0x08; 24],
+                        vec![0x09],
+                    ),
+                    "low-order",
+                ),
+                (
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                        [0x07; 32],
+                        [0x08; 24],
+                        Vec::new(),
+                    ),
+                    "ciphertext must not be empty",
+                ),
+            ] {
+                let err = shield_amount_with_payload(&mut stx, &asset_def_id, 3, payload)
+                    .expect_err("invalid confidential payload must fail closed");
+                let msg = smart_contract_instruction_error_message(err);
+                assert!(msg.contains(expected), "expected `{expected}` in `{msg}`");
+                assert_eq!(numeric_balance(&stx, &asset_ids[0]), Numeric::new(10, 0));
+                assert_eq!(commitment_count(&stx, &asset_def_id), 0);
+            }
         }
 
         #[test]

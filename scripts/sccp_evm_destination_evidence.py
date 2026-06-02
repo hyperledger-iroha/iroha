@@ -865,6 +865,8 @@ def _route_canary_toml_lines(
 
 _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_transaction_hash",
+    "route_canary_transaction_block_number",
+    "route_canary_transaction_block_hash",
     "route_canary_log_index",
     "route_canary_receipt_block_number",
     "route_canary_receipt_block_hash",
@@ -904,6 +906,14 @@ def _route_canary_transaction_toml_lines(args: argparse.Namespace) -> list[str]:
         _toml_line(
             "evm_route_canary_transaction_hash",
             _hex(values["transaction_hash"]),
+        ),
+        _toml_line(
+            "evm_route_canary_transaction_block_number",
+            values["transaction_block_number"],
+        ),
+        _toml_line(
+            "evm_route_canary_transaction_block_hash",
+            _hex(values["transaction_block_hash"]),
         ),
         _toml_line("evm_route_canary_log_index", values["log_index"]),
         _toml_line(
@@ -1007,19 +1017,41 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
     )
     if receipt_block_number == 0:
         raise ValueError("EVM route canary receipt block number must be positive")
+    transaction_block_number = parse_u64_decimal(
+        str(getattr(args, "route_canary_transaction_block_number")),
+        label="route_canary_transaction_block_number",
+    )
+    if transaction_block_number == 0:
+        raise ValueError("EVM route canary transaction block number must be positive")
+    transaction_block_hash = _require_fixed_bytes(
+        getattr(args, "route_canary_transaction_block_hash"),
+        label="route_canary_transaction_block_hash",
+        byte_length=32,
+    )
+    receipt_block_hash = _require_fixed_bytes(
+        getattr(args, "route_canary_receipt_block_hash"),
+        label="route_canary_receipt_block_hash",
+        byte_length=32,
+    )
+    if transaction_block_number != receipt_block_number:
+        raise ValueError(
+            "EVM route canary transaction block number must match receipt block number"
+        )
+    if transaction_block_hash != receipt_block_hash:
+        raise ValueError(
+            "EVM route canary transaction block hash must match receipt block hash"
+        )
     values = {
         "transaction_hash": _require_fixed_bytes(
             getattr(args, "route_canary_transaction_hash"),
             label="route_canary_transaction_hash",
             byte_length=32,
         ),
+        "transaction_block_number": transaction_block_number,
+        "transaction_block_hash": transaction_block_hash,
         "log_index": log_index,
         "receipt_block_number": receipt_block_number,
-        "receipt_block_hash": _require_fixed_bytes(
-            getattr(args, "route_canary_receipt_block_hash"),
-            label="route_canary_receipt_block_hash",
-            byte_length=32,
-        ),
+        "receipt_block_hash": receipt_block_hash,
         "block_receipts_root": _require_fixed_bytes(
             getattr(args, "route_canary_block_receipts_root"),
             label="route_canary_block_receipts_root",
@@ -1119,6 +1151,10 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
     return [
         "# sccp_evm_route_canary_transaction_hash = "
         + json.dumps(_hex(values["transaction_hash"])),
+        "# sccp_evm_route_canary_transaction_block_number = "
+        + json.dumps(str(values["transaction_block_number"])),
+        "# sccp_evm_route_canary_transaction_block_hash = "
+        + json.dumps(_hex(values["transaction_block_hash"])),
         "# sccp_evm_route_canary_log_index = "
         + json.dumps(str(values["log_index"])),
         "# sccp_evm_route_canary_receipt_block_number = "
@@ -1741,6 +1777,29 @@ def build_parser() -> argparse.ArgumentParser:
             label="route canary log index",
         ),
         help="Canonical decimal log index of the MessageProofAccepted canary event.",
+    )
+    parser.add_argument(
+        "--route-canary-transaction-block-number",
+        type=lambda value: parse_u64_decimal(
+            value,
+            label="route canary transaction block number",
+        ),
+        help=(
+            "Canonical decimal block number returned by eth_getTransactionByHash "
+            "for the canary transaction. Must match the receipt block number."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-transaction-block-hash",
+        type=lambda value: parse_hex_bytes(
+            value,
+            label="route canary transaction block hash",
+            byte_length=32,
+        ),
+        help=(
+            "Block hash returned by eth_getTransactionByHash for the canary "
+            "transaction. Must match the receipt block hash."
+        ),
     )
     parser.add_argument(
         "--route-canary-receipt-block-number",

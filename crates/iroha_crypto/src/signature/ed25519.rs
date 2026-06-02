@@ -173,22 +173,52 @@ fn public_key_parse_fast_index(bytes: &[u8; 32]) -> usize {
     masked_cache_index(mixed, PUBLIC_KEY_PARSE_FAST_CACHE_SIZE)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct VerifyOkExactEntry {
     pk: [u8; 32],
     message: [u8; 32],
     signature: [u8; 64],
 }
 
+#[derive(Clone, Copy, Default)]
+struct VerifyOkExactBucket {
+    primary: Option<VerifyOkExactEntry>,
+    secondary: Option<VerifyOkExactEntry>,
+}
+
+impl VerifyOkExactBucket {
+    fn contains(&self, key: &VerifyOkExactEntry) -> bool {
+        self.primary.is_some_and(|entry| entry == *key)
+            || self.secondary.is_some_and(|entry| entry == *key)
+    }
+
+    fn insert(&mut self, entry: VerifyOkExactEntry) {
+        if self.contains(&entry) {
+            return;
+        }
+        if self.primary.is_none() {
+            self.primary = Some(entry);
+            return;
+        }
+        if self.secondary.is_none() {
+            self.secondary = Some(entry);
+            return;
+        }
+        self.secondary = self.primary;
+        self.primary = Some(entry);
+    }
+}
+
 struct VerifyOkCache {
-    exact: Box<[Option<VerifyOkExactEntry>]>,
+    exact: Box<[VerifyOkExactBucket]>,
     map: Option<HashSet<[u8; 32]>>,
 }
 
 impl VerifyOkCache {
     fn new() -> Self {
         Self {
-            exact: vec![None; VERIFY_OK_EXACT_CACHE_SIZE].into_boxed_slice(),
+            exact: vec![VerifyOkExactBucket::default(); VERIFY_OK_EXACT_CACHE_SIZE]
+                .into_boxed_slice(),
             map: None,
         }
     }
@@ -197,11 +227,7 @@ impl VerifyOkCache {
         let Some(key) = exact_verify_key(pk, message, signature) else {
             return false;
         };
-        let Some(entry) = self.exact[verify_ok_exact_index(&key.pk, &key.message, &key.signature)]
-        else {
-            return false;
-        };
-        entry.pk == key.pk && entry.message == key.message && entry.signature == key.signature
+        self.exact[verify_ok_exact_index(&key.pk, &key.message, &key.signature)].contains(&key)
     }
 
     fn insert_exact_32(&mut self, pk: &PublicKey, message: &[u8], signature: &[u8]) -> bool {
@@ -209,7 +235,7 @@ impl VerifyOkCache {
             return false;
         };
         let slot = verify_ok_exact_index(&entry.pk, &entry.message, &entry.signature);
-        self.exact[slot] = Some(entry);
+        self.exact[slot].insert(entry);
         true
     }
 
@@ -537,28 +563,48 @@ impl Ed25519Sha512 {
         }
         let _ = seed32;
 
+        let mut miss_messages = Vec::new();
+        let mut miss_raw_signatures = Vec::new();
+        let mut miss_public_keys = Vec::new();
         let mut parsed_signatures = Vec::new();
-        Self::parse_signatures_into(signatures, &mut parsed_signatures)?;
-        Self::verify_batch_preparsed_signatures_deterministic(
-            messages,
-            signatures,
-            &parsed_signatures,
-            public_keys,
-            seed32,
-        )
-    }
 
-    pub(crate) fn parse_signatures_into(
-        signatures: &[&[u8]],
-        out: &mut Vec<Signature>,
-    ) -> Result<(), Error> {
-        out.clear();
-        out.try_reserve(signatures.len())
+        miss_messages
+            .try_reserve(messages.len())
             .map_err(|_| Error::BadSignature)?;
-        for signature in signatures {
-            out.push(Self::parse_signature(signature)?);
+        miss_raw_signatures
+            .try_reserve(signatures.len())
+            .map_err(|_| Error::BadSignature)?;
+        miss_public_keys
+            .try_reserve(public_keys.len())
+            .map_err(|_| Error::BadSignature)?;
+        parsed_signatures
+            .try_reserve(signatures.len())
+            .map_err(|_| Error::BadSignature)?;
+
+        for ((message, signature), public_key) in messages
+            .iter()
+            .zip(signatures.iter())
+            .zip(public_keys.iter())
+        {
+            if is_verify_ok_cached(public_key, message, signature) {
+                continue;
+            }
+            miss_messages.push(*message);
+            miss_raw_signatures.push(*signature);
+            miss_public_keys.push(*public_key);
+            parsed_signatures.push(Self::parse_signature(signature)?);
         }
-        Ok(())
+
+        if miss_messages.is_empty() {
+            return Ok(());
+        }
+
+        Self::verify_batch_preparsed_signatures_uncached(
+            &miss_messages,
+            &miss_raw_signatures,
+            &parsed_signatures,
+            &miss_public_keys,
+        )
     }
 
     pub(crate) fn parse_signature(signature: &[u8]) -> Result<Signature, Error> {
@@ -570,76 +616,6 @@ impl Ed25519Sha512 {
         let parsed = Signature::try_from(signature).map_err(|_| Error::BadSignature)?;
         validate_signature_r_for_strict_batch(signature)?;
         Ok(parsed)
-    }
-
-    pub(crate) fn verify_batch_preparsed_signatures_deterministic(
-        messages: &[&[u8]],
-        raw_signatures: &[&[u8]],
-        parsed_signatures: &[Signature],
-        public_keys: &[PublicKey],
-        seed32: [u8; 32],
-    ) -> Result<(), Error> {
-        if messages.is_empty()
-            || !(messages.len() == raw_signatures.len()
-                && raw_signatures.len() == parsed_signatures.len()
-                && parsed_signatures.len() == public_keys.len())
-        {
-            return Err(Error::BadSignature);
-        }
-        let _ = seed32;
-
-        let first_cached = messages
-            .iter()
-            .zip(raw_signatures.iter())
-            .zip(public_keys.iter())
-            .position(|((message, signature), public_key)| {
-                is_verify_ok_cached(public_key, message, signature)
-            });
-
-        if let Some(first_cached) = first_cached {
-            let mut miss_messages = Vec::with_capacity(messages.len().saturating_sub(1));
-            let mut miss_raw_signatures =
-                Vec::with_capacity(raw_signatures.len().saturating_sub(1));
-            let mut miss_parsed_signatures =
-                Vec::with_capacity(parsed_signatures.len().saturating_sub(1));
-            let mut miss_public_keys = Vec::with_capacity(public_keys.len().saturating_sub(1));
-
-            for idx in 0..first_cached {
-                miss_messages.push(messages[idx]);
-                miss_raw_signatures.push(raw_signatures[idx]);
-                miss_parsed_signatures.push(parsed_signatures[idx]);
-                miss_public_keys.push(public_keys[idx]);
-            }
-
-            for idx in first_cached.saturating_add(1)..messages.len() {
-                if is_verify_ok_cached(&public_keys[idx], messages[idx], raw_signatures[idx]) {
-                    continue;
-                }
-                miss_messages.push(messages[idx]);
-                miss_raw_signatures.push(raw_signatures[idx]);
-                miss_parsed_signatures.push(parsed_signatures[idx]);
-                miss_public_keys.push(public_keys[idx]);
-            }
-
-            if miss_messages.is_empty() {
-                return Ok(());
-            }
-
-            Self::verify_batch_preparsed_signatures_uncached(
-                &miss_messages,
-                &miss_raw_signatures,
-                &miss_parsed_signatures,
-                &miss_public_keys,
-            )?;
-            return Ok(());
-        }
-
-        Self::verify_batch_preparsed_signatures_uncached(
-            messages,
-            raw_signatures,
-            parsed_signatures,
-            public_keys,
-        )
     }
 
     pub(crate) fn verify_batch_preparsed_signatures_uncached(
@@ -891,6 +867,78 @@ mod test {
 
         assert!(public_key_parse_fast_index(&pk) < PUBLIC_KEY_PARSE_FAST_CACHE_SIZE);
         assert!(verify_ok_exact_index(&pk, &message, &signature) < VERIFY_OK_EXACT_CACHE_SIZE);
+    }
+
+    #[test]
+    fn ed25519_exact_verify_cache_keeps_two_colliding_entries() {
+        use std::collections::HashMap as StdHashMap;
+
+        reset_verify_ok_cache_for_tests();
+        let mut seen = StdHashMap::<usize, (Vec<u8>, Vec<u8>, PublicKey)>::new();
+        let ((msg_a, sig_a, pk_a), (msg_b, sig_b, pk_b), slot) = (0u32..4096)
+            .find_map(|idx| {
+                let mut secret_seed = [0u8; 32];
+                secret_seed[..4].copy_from_slice(&idx.to_le_bytes());
+                secret_seed[4..8].copy_from_slice(&idx.rotate_left(13).to_le_bytes());
+                let (public_key, private_key) =
+                    Ed25519Sha512::keypair(KeyGenOption::UseSeed(secret_seed.to_vec()));
+
+                let mut message = [0u8; 32];
+                message[..4].copy_from_slice(&idx.to_le_bytes());
+                message[4..8].copy_from_slice(&idx.rotate_left(7).to_le_bytes());
+                message[8..12].copy_from_slice(&idx.rotate_left(19).to_le_bytes());
+
+                let signature = Ed25519Sha512::sign(&message, &private_key);
+                let signature_bytes: [u8; 64] =
+                    signature.as_slice().try_into().expect("signature length");
+                let slot = verify_ok_exact_index(public_key.as_bytes(), &message, &signature_bytes);
+                let current = (message.to_vec(), signature, public_key);
+                seen.insert(slot, current.clone())
+                    .map(|previous| (previous, current, slot))
+            })
+            .expect("deterministic fixture should find an exact-cache collision");
+
+        Ed25519Sha512::verify(&msg_a, &sig_a, &pk_a).expect("first collision tuple verifies");
+        Ed25519Sha512::verify(&msg_b, &sig_b, &pk_b).expect("second collision tuple verifies");
+
+        assert_eq!(
+            verify_ok_exact_index(
+                pk_a.as_bytes(),
+                msg_a.as_slice().try_into().expect("message length"),
+                sig_a.as_slice().try_into().expect("signature length"),
+            ),
+            slot
+        );
+        assert_eq!(
+            verify_ok_exact_index(
+                pk_b.as_bytes(),
+                msg_b.as_slice().try_into().expect("message length"),
+                sig_b.as_slice().try_into().expect("signature length"),
+            ),
+            slot
+        );
+        assert!(
+            is_verify_ok_cached(&pk_a, &msg_a, &sig_a),
+            "first colliding exact-cache entry should survive the second insert"
+        );
+        assert!(
+            is_verify_ok_cached(&pk_b, &msg_b, &sig_b),
+            "second colliding exact-cache entry should be cached"
+        );
+
+        reset_batch_cache_counters_for_tests();
+        let messages = [msg_a.as_slice(), msg_b.as_slice()];
+        let signatures = [sig_a.as_slice(), sig_b.as_slice()];
+        let public_keys = [pk_a, pk_b];
+        Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x75; 32],
+        )
+        .expect("colliding all-cached batch verifies");
+        assert_eq!(signature_parse_calls_for_tests(), 0);
+        assert_eq!(uncached_batch_verify_calls_for_tests(), 0);
     }
 
     #[test]
@@ -1529,6 +1577,84 @@ mod test {
             &mut scratch,
         )
         .expect("all cached batch verifies");
+
+        assert_eq!(signature_parse_calls_for_tests(), 0);
+        assert_eq!(uncached_batch_verify_calls_for_tests(), 0);
+    }
+
+    #[test]
+    fn ed25519_batch_preparsed_api_parses_only_cache_misses() {
+        reset_verify_ok_cache_for_tests();
+        let triples = ed25519_hash_message_batch_fixture();
+        for (message, signature, public_key) in [0usize, 2]
+            .into_iter()
+            .map(|idx| (&triples[idx].0, &triples[idx].1, &triples[idx].2))
+        {
+            Ed25519Sha512::verify(message, signature, public_key).expect("seed verify-ok cache");
+        }
+        reset_batch_cache_counters_for_tests();
+
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| *public_key)
+            .collect::<Vec<_>>();
+
+        Ed25519Sha512::verify_batch_preparsed_deterministic(
+            &messages,
+            &signatures,
+            &public_keys,
+            [0x73; 32],
+        )
+        .expect("mixed cached batch verifies");
+
+        assert!(
+            signature_parse_calls_for_tests() < triples.len(),
+            "cached hits should avoid parsing every tuple"
+        );
+        assert_eq!(
+            uncached_batch_verify_calls_for_tests(),
+            1,
+            "uncached misses should be verified in one backend pass"
+        );
+    }
+
+    #[test]
+    fn ed25519_batch_raw_api_all_cached_skips_signature_parse_and_verifier_setup() {
+        reset_verify_ok_cache_for_tests();
+        let triples = ed25519_hash_message_batch_fixture();
+        for (message, signature, public_key) in &triples {
+            Ed25519Sha512::verify(message, signature, public_key).expect("seed verify-ok cache");
+        }
+        reset_batch_cache_counters_for_tests();
+
+        let messages = triples
+            .iter()
+            .map(|(message, _, _)| message.as_slice())
+            .collect::<Vec<_>>();
+        let signatures = triples
+            .iter()
+            .map(|(_, signature, _)| signature.as_slice())
+            .collect::<Vec<_>>();
+        let raw_public_keys = triples
+            .iter()
+            .map(|(_, _, public_key)| public_key.as_bytes().as_slice())
+            .collect::<Vec<_>>();
+
+        Ed25519Sha512::verify_batch_deterministic(
+            &messages,
+            &signatures,
+            &raw_public_keys,
+            [0x74; 32],
+        )
+        .expect("raw all-cached batch verifies");
 
         assert_eq!(signature_parse_calls_for_tests(), 0);
         assert_eq!(uncached_batch_verify_calls_for_tests(), 0);

@@ -920,6 +920,7 @@ impl RelayCertificateBundleV2 {
         phase: CertificateValidationPhase,
     ) -> Result<(), CertificateError> {
         let payload = self.certificate.to_cbor();
+        parse_certificate_payload(&payload)?;
         let ed_digest = compute_signing_digest(SRC_V2_ED25519_DOMAIN, &payload);
         if ed25519_public.is_weak() {
             return Err(CertificateError::SignatureFailure(
@@ -2179,7 +2180,7 @@ mod tests {
     #[test]
     fn parse_certificate_payload_rejects_invalid_endpoint_tags() {
         for tags in [
-            vec!["".to_string()],
+            vec![String::new()],
             vec!["nk 3".to_string()],
             vec!["nk\n3".to_string()],
             vec!["nk3".to_string(), "nk3".to_string()],
@@ -2225,31 +2226,31 @@ mod tests {
     fn parse_certificate_payload_rejects_inconsistent_kem_policies() {
         let mut certificate = sample_certificate();
         certificate.kem_policy.fallback_suite = Some(MlKemSuite::MlKem512.kem_id());
-        assert_kem_policy_error(certificate, "kem_policy.fallback_suite");
+        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
 
         let mut certificate = sample_certificate();
         certificate.kem_policy.rotation_interval_hours = 1;
-        assert_kem_policy_error(certificate, "kem_policy.rotation_interval_hours");
+        assert_kem_policy_error(&certificate, "kem_policy.rotation_interval_hours");
 
         let mut certificate = sample_certificate();
         certificate.kem_policy.grace_period_hours = 1;
-        assert_kem_policy_error(certificate, "kem_policy.grace_period_hours");
+        assert_kem_policy_error(&certificate, "kem_policy.grace_period_hours");
 
         let mut certificate = sample_certificate();
         certificate.kem_policy.mode = KemRotationModeV1::Staged;
-        assert_kem_policy_error(certificate, "kem_policy.fallback_suite");
+        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
 
         let mut certificate = sample_certificate();
         certificate.kem_policy.mode = KemRotationModeV1::Staged;
         certificate.kem_policy.fallback_suite = Some(certificate.kem_policy.preferred_suite);
-        assert_kem_policy_error(certificate, "kem_policy.fallback_suite");
+        assert_kem_policy_error(&certificate, "kem_policy.fallback_suite");
 
         let mut certificate = sample_certificate();
         certificate.kem_policy.mode = KemRotationModeV1::Rolling;
-        assert_kem_policy_error(certificate, "kem_policy.rotation_interval_hours");
+        assert_kem_policy_error(&certificate, "kem_policy.rotation_interval_hours");
     }
 
-    fn assert_kem_policy_error(certificate: RelayCertificateV2, expected_field: &'static str) {
+    fn assert_kem_policy_error(certificate: &RelayCertificateV2, expected_field: &'static str) {
         let err = parse_certificate_payload(&certificate.to_cbor())
             .expect_err("inconsistent KEM policy must fail");
         match err {
@@ -2417,6 +2418,35 @@ mod tests {
         let err = certificate
             .issue(&signing_key, mldsa_keys.secret_key())
             .expect_err("invalid certificates must not be signed into bundles");
+        match err {
+            CertificateError::InvalidFieldValue { field, .. } => {
+                assert_eq!(field, "certificate.endpoints");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verification_rejects_invalid_certificate_payload_before_signature_math() {
+        let certificate = sample_certificate();
+
+        let signing_key = SigningKey::from_bytes(&[0x8A; SECRET_KEY_LENGTH]);
+        let verifying_key = VerifyingKey::from(&signing_key);
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+
+        let mut bundle = certificate
+            .issue(&signing_key, mldsa_keys.secret_key())
+            .expect("issue valid certificate");
+        bundle.certificate.endpoints.clear();
+
+        let err = bundle
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase3RequireDual,
+            )
+            .expect_err("invalid certificate payload must fail before signature math");
         match err {
             CertificateError::InvalidFieldValue { field, .. } => {
                 assert_eq!(field, "certificate.endpoints");

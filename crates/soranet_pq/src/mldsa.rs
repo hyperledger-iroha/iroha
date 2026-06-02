@@ -298,6 +298,10 @@ pub fn sign_mldsa(
     message: &[u8],
     rng: &mut HedgedChaCha20Rng,
 ) -> Result<MlDsaSignature, MlDsaError> {
+    if context.len() > ML_DSA_CONTEXT_MAX_LEN {
+        return Err(MlDsaError::ContextTooLong { len: context.len() });
+    }
+    validate_mldsa_secret_key_len(suite, secret_key)?;
     let mut coins = Zeroizing::new([0u8; 32]);
     rng.fill_bytes(coins.as_mut());
     backend::sign(suite, secret_key, context, message, &coins).map(MlDsaSignature::new)
@@ -314,6 +318,10 @@ pub fn sign_mldsa_from_os(
     context: &[u8],
     message: &[u8],
 ) -> Result<MlDsaSignature, MlDsaError> {
+    if context.len() > ML_DSA_CONTEXT_MAX_LEN {
+        return Err(MlDsaError::ContextTooLong { len: context.len() });
+    }
+    validate_mldsa_secret_key_len(suite, secret_key)?;
     let mut rng = hedged_chacha20_rng_from_os(b"soranet-pq:mldsa:sign")?;
     sign_mldsa(suite, secret_key, context, message, &mut rng)
 }
@@ -630,6 +638,55 @@ mod tests {
             MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn sign_helpers_reject_invalid_inputs_before_entropy() {
+        let suite = MlDsaSuite::MlDsa44;
+        let mut rng = deterministic_chacha20_rng(
+            HedgedRngSeed::from_entropy([0xE7; 32]),
+            b"invalid-sign-preflight",
+        );
+        let short_secret = [0u8; 8];
+        let oversized_context = vec![0xA5; ML_DSA_CONTEXT_MAX_LEN + 1];
+
+        let err = sign_mldsa(suite, &short_secret, b"", b"message", &mut rng)
+            .expect_err("short direct secret must fail before signing coins are used");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
+            other => panic!("unexpected direct secret result: {other:?}"),
+        }
+
+        let err = sign_mldsa_from_os(suite, &short_secret, b"", b"message")
+            .expect_err("short OS helper secret must fail before OS entropy");
+        match err {
+            MlDsaError::BadEncoding(err) => assert!(err.kind.contains("secret key")),
+            other => panic!("unexpected OS helper secret result: {other:?}"),
+        }
+
+        let err = sign_mldsa(
+            suite,
+            &short_secret,
+            &oversized_context,
+            b"message",
+            &mut rng,
+        )
+        .expect_err("oversized context must fail before secret decoding");
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
+
+        let err = sign_mldsa_from_os(suite, &short_secret, &oversized_context, b"message")
+            .expect_err("oversized OS helper context must fail before OS entropy");
+        assert!(matches!(
+            err,
+            MlDsaError::ContextTooLong {
+                len
+            } if len == ML_DSA_CONTEXT_MAX_LEN + 1
+        ));
     }
 
     #[test]

@@ -55463,6 +55463,26 @@ mod tests {
             &source_material_hash,
             &source_deployment_hash,
         ));
+        let mut mismatched_route_hash = decode_fixed_hex_bytes::<32>(
+            allowlist
+                .route_allowlist_hash
+                .as_deref()
+                .expect("route allowlist hash"),
+        )
+        .expect("decode route allowlist hash");
+        mismatched_route_hash[0] ^= 0x01;
+        assert!(
+            !sccp_route_allowlist_canary_evidence_is_bound(
+                SCCP_DOMAIN_ETH,
+                &allowlist,
+                &destination_rollout,
+                &mismatched_route_hash,
+                &destination_binding_hash,
+                &source_material_hash,
+                &source_deployment_hash,
+            ),
+            "EVM route canary evidence must reject changed source/deployment-bound route hashes"
+        );
     }
 
     #[test]

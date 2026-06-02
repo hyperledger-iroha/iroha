@@ -117,6 +117,8 @@ def evm_runtime_material(module, *, domain=1):
         destination_binding_hash=destination_binding_hash,
         route_allowlist_hash=route_allowlist_hash,
         route_canary_transaction_hash=route_canary_transaction_hash,
+        route_canary_transaction_block_number=route_canary_receipt_block_number,
+        route_canary_transaction_block_hash=route_canary_receipt_block_hash,
         route_canary_log_index=0,
         route_canary_receipt_block_number=route_canary_receipt_block_number,
         route_canary_receipt_block_hash=route_canary_receipt_block_hash,
@@ -138,6 +140,10 @@ def evm_runtime_material(module, *, domain=1):
 def add_route_canary_args(args, material):
     args.route_canary_evidence_hash = material.route_canary_evidence_hash
     args.route_canary_transaction_hash = material.route_canary_transaction_hash
+    args.route_canary_transaction_block_number = (
+        material.route_canary_transaction_block_number
+    )
+    args.route_canary_transaction_block_hash = material.route_canary_transaction_block_hash
     args.route_canary_log_index = material.route_canary_log_index
     args.route_canary_receipt_block_number = material.route_canary_receipt_block_number
     args.route_canary_receipt_block_hash = material.route_canary_receipt_block_hash
@@ -654,6 +660,8 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         route_allowlist_hash=route_allowlist_hash,
         route_canary_evidence_hash=route_canary_evidence_hash,
         route_canary_transaction_hash=route_canary_transaction_hash,
+        route_canary_transaction_block_number=route_canary_receipt_block_number,
+        route_canary_transaction_block_hash=route_canary_receipt_block_hash,
         route_canary_log_index=0,
         route_canary_receipt_block_number=route_canary_receipt_block_number,
         route_canary_receipt_block_hash=route_canary_receipt_block_hash,
@@ -733,6 +741,12 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
             route_allowlist_hash=material.route_allowlist_hash,
             route_canary_evidence_hash=material.route_canary_evidence_hash,
             route_canary_transaction_hash=material.route_canary_transaction_hash,
+            route_canary_transaction_block_number=(
+                material.route_canary_transaction_block_number
+            ),
+            route_canary_transaction_block_hash=(
+                material.route_canary_transaction_block_hash
+            ),
             route_canary_log_index=material.route_canary_log_index,
             route_canary_receipt_block_number=material.route_canary_receipt_block_number,
             route_canary_receipt_block_hash=material.route_canary_receipt_block_hash,
@@ -846,8 +860,24 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         in rendered
     )
     assert (
+        '# sccp_evm_route_canary_transaction_block_number = "4660"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_route_canary_transaction_block_hash = "0x'
+        + eth.route_canary_transaction_block_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
         'evm_route_canary_transaction_hash = "0x'
         + eth.route_canary_transaction_hash.hex()
+        + '"'
+        in rendered
+    )
+    assert (
+        'evm_route_canary_transaction_block_hash = "0x'
+        + eth.route_canary_transaction_block_hash.hex()
         + '"'
         in rendered
     )
@@ -917,6 +947,8 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
             **eth_args.__dict__,
                 "route_canary_evidence_hash": None,
                 "route_canary_transaction_hash": None,
+                "route_canary_transaction_block_number": None,
+                "route_canary_transaction_block_hash": None,
                 "route_canary_log_index": None,
                 "route_canary_receipt_block_number": None,
                 "route_canary_receipt_block_hash": None,
@@ -985,6 +1017,33 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         raise AssertionError("EVM destination JSON accepted forged route canary hash")
 
 
+def test_evm_full_toml_rejects_route_canary_transaction_readback_drift():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+    cases = [
+        (
+            "route_canary_transaction_block_number",
+            eth.route_canary_receipt_block_number + 1,
+            "transaction block number must match receipt block number",
+        ),
+        (
+            "route_canary_transaction_block_hash",
+            bytes.fromhex("fe" * 32),
+            "transaction block hash must match receipt block hash",
+        ),
+    ]
+    for field, value, expected in cases:
+        args = full_toml_args(eth)
+        setattr(args, field, value)
+
+        try:
+            module.render_toml(args, eth.destination_binding_hash)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"EVM destination TOML accepted drifted {field}")
+
+
 def test_evm_full_toml_rejects_route_canary_transcript_hash_reuse():
     module = load_evidence_module()
     eth = evm_runtime_material(module, domain=1)
@@ -1049,6 +1108,10 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
         "0x" + eth.route_canary_evidence_hash.hex(),
         "--route-canary-transaction-hash",
         "0x" + eth.route_canary_transaction_hash.hex(),
+        "--route-canary-transaction-block-number",
+        str(eth.route_canary_transaction_block_number),
+        "--route-canary-transaction-block-hash",
+        "0x" + eth.route_canary_transaction_block_hash.hex(),
         "--route-canary-log-index",
         str(eth.route_canary_log_index),
         "--route-canary-receipt-block-number",

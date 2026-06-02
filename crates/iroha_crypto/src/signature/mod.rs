@@ -217,7 +217,12 @@ fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {
 
 impl Signature {
     /// Creates new signature by signing payload via [`crate::KeyPair::private_key`].
-    pub fn new(private_key: &PrivateKey, payload: &[u8]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Signing`] when an algorithm-specific signing backend
+    /// rejects the private-key material or message.
+    pub fn try_new(private_key: &PrivateKey, payload: &[u8]) -> Result<Self, Error> {
         use crate::secrecy::ExposeSecret;
 
         let signature = match private_key.0.expose_secret() {
@@ -225,11 +230,10 @@ impl Signature {
             crate::PrivateKeyInner::Secp256k1(sk) => {
                 secp256k1::EcdsaSecp256k1Sha256::sign(payload, sk)
             }
-            crate::PrivateKeyInner::MlDsa(sk) => sk.sign(payload),
+            crate::PrivateKeyInner::MlDsa(sk) => sk.try_sign(payload)?,
             #[cfg(feature = "gost")]
             crate::PrivateKeyInner::Gost { algorithm, secret } => {
-                gost::sign(*algorithm, payload, secret)
-                    .expect("GOST signing should succeed for a valid private key")
+                gost::sign(*algorithm, payload, secret)?
             }
             #[cfg(feature = "bls")]
             crate::PrivateKeyInner::BlsSmall(sk) => bls::BlsSmall::sign(payload, sk),
@@ -239,9 +243,15 @@ impl Signature {
             crate::PrivateKeyInner::Sm2(sk) => sk.sign(payload).as_bytes().to_vec(),
         };
 
-        Self {
+        Ok(Self {
             payload: ConstVec::new(signature),
-        }
+        })
+    }
+
+    /// Creates new signature by signing payload via [`crate::KeyPair::private_key`].
+    pub fn new(private_key: &PrivateKey, payload: &[u8]) -> Self {
+        Self::try_new(private_key, payload)
+            .expect("signing should succeed for a valid private key and payload")
     }
 
     /// Get the raw payload of the signature.
@@ -573,13 +583,23 @@ impl<'a, T> DecodeFromSlice<'a> for SignatureOf<T> {
 }
 
 impl<T> SignatureOf<T> {
-    /// Create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
+    /// Fallibly create [`SignatureOf`] from the given hash with
+    /// [`crate::KeyPair::private_key`].
     ///
     /// # Errors
-    /// Fails if signing fails
+    ///
+    /// Returns [`Error::Signing`] when an algorithm-specific signing backend
+    /// rejects the private-key material or hash payload.
+    #[inline]
+    pub fn try_from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Result<Self, Error> {
+        Signature::try_new(private_key, hash.as_ref()).map(|signature| Self(signature, PhantomData))
+    }
+
+    /// Create [`SignatureOf`] from the given hash with [`crate::KeyPair::private_key`].
     #[inline]
     pub fn from_hash(private_key: &PrivateKey, hash: HashOf<T>) -> Self {
-        Self(Signature::new(private_key, hash.as_ref()), PhantomData)
+        Self::try_from_hash(private_key, hash)
+            .expect("signing should succeed for a valid private key and hash payload")
     }
 
     /// Construct [`SignatureOf`] from an already-produced [`Signature`].
@@ -599,16 +619,28 @@ impl<T> SignatureOf<T> {
 }
 
 impl<T: norito::codec::Encode> SignatureOf<T> {
+    /// Fallibly create [`SignatureOf`] by signing the given value with
+    /// [`crate::KeyPair::private_key`].
+    /// The value provided will be hashed before being signed. If you already have the
+    /// hash of the value you can sign it with [`SignatureOf::try_from_hash`] instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Signing`] when an algorithm-specific signing backend
+    /// rejects the private-key material or hash payload.
+    #[inline]
+    pub fn try_new(private_key: &PrivateKey, value: &T) -> Result<Self, Error> {
+        let h = HashOf::new(value);
+        Self::try_from_hash(private_key, h)
+    }
+
     /// Create [`SignatureOf`] by signing the given value with [`crate::KeyPair::private_key`].
     /// The value provided will be hashed before being signed. If you already have the
     /// hash of the value you can sign it with [`SignatureOf::from_hash`] instead.
-    ///
-    /// # Errors
-    /// Fails if signing fails
     #[inline]
     pub fn new(private_key: &PrivateKey, value: &T) -> Self {
-        let h = HashOf::new(value);
-        Self::from_hash(private_key, h)
+        Self::try_new(private_key, value)
+            .expect("signing should succeed for a valid private key and value")
     }
 
     /// Verifies signature for this item

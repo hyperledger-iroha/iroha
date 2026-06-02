@@ -43,6 +43,9 @@ def bsc_args(module):
         ),
         deployment_receipt_hash=bytes.fromhex("aa" * 32),
         deployment_transaction_hash=bytes.fromhex("bd" * 32),
+        deployment_transaction_block_hash=bytes.fromhex("bb" * 32),
+        deployment_transaction_block_number=4660,
+        deployment_transaction_input_sha256=bytes.fromhex("cd" * 32),
         deployment_receipt_contract_address=bytes.fromhex("11" * 20),
         deployment_receipt_block_hash=bytes.fromhex("bb" * 32),
         deployment_receipt_block_number=4660,
@@ -344,6 +347,22 @@ def test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         + '"'
         in rendered
     )
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_hash = "0x'
+        + "bb" * 32
+        + '"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_block_number = "4660"'
+        in rendered
+    )
+    assert (
+        '# sccp_evm_source_deployment_transaction_input_sha256 = "'
+        + "cd" * 32
+        + '"'
+        in rendered
+    )
     assert '# sccp_evm_source_deployment_receipt_status = "0x1"' in rendered
     assert (
         '# sccp_evm_source_deployment_contract_address = "0x'
@@ -421,6 +440,39 @@ def test_bsc_source_evidence_rejects_boolean_receipt_block_number():
         raise AssertionError("boolean BSC source deployment block number was accepted")
 
     assert module._toml_receipt_metadata_ready(args) is False
+
+
+def test_bsc_source_evidence_rejects_deployment_transaction_readback_drift():
+    module = load_evidence_module()
+    cases = [
+        (
+            "deployment_transaction_block_hash",
+            bytes.fromhex("ab" * 32),
+            "--deployment-transaction-block-hash must match",
+        ),
+        (
+            "deployment_transaction_block_number",
+            4661,
+            "--deployment-transaction-block-number must match",
+        ),
+        (
+            "deployment_transaction_input_sha256",
+            None,
+            "--deployment-transaction-input-sha256",
+        ),
+    ]
+    for field, value, expected in cases:
+        args = bsc_args(module)
+        setattr(args, field, value)
+
+        try:
+            module.render_toml(args)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"BSC source TOML accepted drifted {field}")
+
+        assert module._toml_receipt_metadata_ready(args) is False
 
 
 def test_bsc_source_evidence_requires_receipt_block_receipts_root_for_toml():
@@ -636,6 +688,12 @@ def test_bsc_cli_json_summary_and_toml_output(capsys):
         "0x" + "aa" * 32,
         "--deployment-transaction-hash",
         "0x" + "bd" * 32,
+        "--deployment-transaction-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-transaction-block-number",
+        "4660",
+        "--deployment-transaction-input-sha256",
+        "0x" + "cd" * 32,
         "--deployment-receipt-contract-address",
         "0x" + "11" * 20,
         "--deployment-receipt-block-hash",
@@ -705,6 +763,12 @@ def test_bsc_cli_json_summary_and_toml_output(capsys):
         "0x" + "aa" * 32,
         "--deployment-transaction-hash",
         "0x" + "bd" * 32,
+        "--deployment-transaction-block-hash",
+        "0x" + "bb" * 32,
+        "--deployment-transaction-block-number",
+        "4660",
+        "--deployment-transaction-input-sha256",
+        "0x" + "cd" * 32,
         "--deployment-receipt-contract-address",
         "0x" + "11" * 20,
         "--deployment-receipt-block-hash",
@@ -730,6 +794,9 @@ def test_bsc_cli_json_summary_and_toml_output(capsys):
     assert output["source_bridge_runtime_bytecode_hex"] == (
         "0x" + runtime_bytecode.hex()
     )
+    assert output["deployment_transaction_block_hash"] == "0x" + "bb" * 32
+    assert output["deployment_transaction_block_number"] == 4660
+    assert output["deployment_transaction_input_sha256"] == "cd" * 32
     assert (
         output["adapter_verifier_vk_hash"]
         == "0x" + BSC_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR
@@ -756,6 +823,8 @@ def test_bsc_cli_json_summary_and_toml_output(capsys):
         in rendered
     )
     assert '# sccp_evm_source_deployment_transaction_hash = "0x' + "bd" * 32 in rendered
+    assert "# sccp_evm_source_deployment_transaction_block_hash" in rendered
+    assert "# sccp_evm_source_deployment_transaction_input_sha256" in rendered
     assert '# sccp_evm_source_deployment_block_number = "4660"' in rendered
     assert "[[zk.sccp_source_verifier_materials]]" in rendered
     assert "[[zk.sccp_source_adapter_engine_deployments]]" in rendered

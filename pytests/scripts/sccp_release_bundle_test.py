@@ -102,17 +102,17 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, payload
 
 
-def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
-    """Readiness and verifier constants must pin the Ethereum launch lane."""
+def test_release_bundle_active_launch_policy_is_bsc_mainnet() -> None:
+    """Readiness and verifier constants must pin the BSC launch lane."""
 
     report = load_report_module()
     verifier = load_verify_helpers()
 
     for module in (report, verifier):
-        assert module.ACTIVE_LAUNCH_DOMAIN == 1
-        assert module.ACTIVE_LAUNCH_CHAIN == "eth"
-        assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
-        assert module.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+        assert module.ACTIVE_LAUNCH_DOMAIN == 2
+        assert module.ACTIVE_LAUNCH_CHAIN == "bsc"
+        assert module.ACTIVE_LAUNCH_POLICY == "BscMainnetLane"
+        assert module.ACTIVE_LAUNCH_DISPLAY == "BSC mainnet"
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:

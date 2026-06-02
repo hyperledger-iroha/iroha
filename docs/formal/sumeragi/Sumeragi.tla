@@ -642,6 +642,25 @@ CommitImpliesRbcEvidence ==
     /\ headerSeen
     /\ digestValid
 
+FinalityCertificateStackComplete ==
+  committed =>
+    /\ phase = "Committed"
+    /\ prepareVotes >= CommitQuorum
+    /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+    /\ commitVotesHonest >= HonestCommitSupportThreshold
+    /\ stakeSigned >= StakeQuorum
+    /\ commitEvidenceVotes = commitVotesHonest + commitVotesByz
+    /\ commitEvidenceStake = stakeSigned
+    /\ commitEvidenceVotes >= CommitQuorum
+    /\ commitEvidenceStake >= StakeQuorum
+    /\ rbcState = "Delivered"
+    /\ readyVotes >= CommitQuorum
+    /\ chunkCount >= MaxChunks
+    /\ headerSeen
+    /\ digestValid
+    /\ commitView = view
+    /\ (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
+
 CommitDisablesProgressActions ==
   committed =>
     /\ ~HonestProposeEnabled
@@ -681,6 +700,9 @@ PreCommitPhasesHaveNoCommitVotes ==
     /\ commitVotesHonest = 0
     /\ commitVotesByz = 0
     /\ stakeSigned = 0
+
+PrePreparePhasesHaveNoPrepareVotes ==
+  phase \in {"NewView", "Propose"} => prepareVotes = 0
 
 CommitImpliesViewQuorumEvidence ==
   committed => (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
@@ -762,6 +784,15 @@ ViewEvidenceNeverPartial ==
 
 PreCommitVotesNeverCarryAcrossViews ==
   [] PreCommitPhasesHaveNoCommitVotes
+
+PrePrepareVotesNeverCarryAcrossViews ==
+  [] PrePreparePhasesHaveNoPrepareVotes
+
+PreFinalityCommitArtifactsNeverAppear ==
+  [] (NoCommitEvidenceBeforeCommit /\ NoCommitViewBeforeCommit)
+
+FinalityCertificateStackNeverIncomplete ==
+  [] FinalityCertificateStackComplete
 
 CommitViewQuorumEvidenceNeverLost ==
   [] (committed =>

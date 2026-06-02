@@ -8703,7 +8703,7 @@ final class SccpSolanaProverTests: XCTestCase {
             ))
             XCTFail("Ethereum outbound facade must reject non-SORA source domains")
         } catch let error as EvmSccpProverError {
-            XCTAssertEqual(error, .invalidPublicInputs("request.sourceDomain"))
+            XCTAssertEqual(error, .invalidPublicInputs("sourceDomain"))
         }
     }
 
@@ -8902,6 +8902,31 @@ final class SccpSolanaProverTests: XCTestCase {
             "blockNumber": "0x1234",
             "status": "0x1",
         ]
+        let sourceEventDigest = "0x" + String(repeating: "ee", count: 32)
+        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
+        func sourceEventLog(_ overrides: [String: Any] = [:]) -> [String: Any] {
+            var log: [String: Any] = [
+                "address": sourceBridgeAddress,
+                "transactionHash": txHash,
+                "blockHash": blockHash,
+                "blockNumber": "0x1234",
+                "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
+                "data": "0x",
+            ]
+            for (key, value) in overrides {
+                log[key] = value
+            }
+            return log
+        }
+        var sourceReceipt = receipt
+        sourceReceipt["logs"] = [
+            [
+                "address": "0x" + String(repeating: "00", count: 20),
+                "topics": ["0x" + String(repeating: "00", count: 32)],
+                "data": "0x1234",
+            ],
+            sourceEventLog(),
+        ]
         let block: [String: Any] = [
             "hash": blockHash,
             "number": "0x1234",
@@ -8917,7 +8942,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         let beaconFinality = beaconFinalityEvidence.dictionary
         let receiptProof = EthereumMainnetReceiptProof(
-            sourceEventDigest: "0x" + String(repeating: "ee", count: 32),
+            sourceEventDigest: sourceEventDigest,
             beaconSlot: 32,
             executionBlockNumber: 0x1234,
             executionBlockHash: blockHash,
@@ -8958,6 +8983,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 XCTAssertEqual(evidence.beaconFinality?["executionBlockHash"] as? String, blockHash)
                 XCTAssertEqual(evidence.receiptProofHash, receiptProofHash)
                 XCTAssertEqual(evidence.receiptProof?.sourceEventDigest, receiptProof.sourceEventDigest)
+                XCTAssertEqual(evidence.sourceEventDigest, sourceEventDigest)
                 return Data([1, 2, 3])
             },
             inboundSubmitFunction: { proofBytes in
@@ -8976,24 +9002,38 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(evidence.beaconFinality?["executionReceiptsRoot"] as? String, "0x" + String(repeating: "cc", count: 32))
         XCTAssertEqual(consensusProvider.calls, 1)
         XCTAssertEqual(provider.calls, ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"])
+        await assertEvmError(.invalidPublicInputs("receipt.sourceEvent")) {
+            _ = try await sdk.proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    transactionHash: evidence.transactionHash,
+                    receipt: evidence.receipt,
+                    block: evidence.block,
+                    beaconFinality: evidence.beaconFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash
+                )
+            )
+        }
         let proofBytes = try await sdk.proveInboundToSora(
             EthereumMainnetInboundEvidence(
                 transactionHash: evidence.transactionHash,
-                receipt: evidence.receipt,
+                receipt: sourceReceipt,
                 block: evidence.block,
                 beaconFinality: evidence.beaconFinality,
                 receiptProof: receiptProof,
-                receiptProofHash: receiptProofHash
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
             )
         )
         XCTAssertEqual(proofBytes, Data([1, 2, 3]))
         let proofReadyEvidence = EthereumMainnetInboundEvidence(
             transactionHash: evidence.transactionHash,
-            receipt: evidence.receipt,
+            receipt: sourceReceipt,
             block: evidence.block,
             beaconFinality: evidence.beaconFinality,
             receiptProof: receiptProof,
-            receiptProofHash: receiptProofHash
+            receiptProofHash: receiptProofHash,
+            sourceBridgeEmitterAddress: sourceBridgeAddress
         )
         await assertEvmError(.emptyProof) {
             _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in Data() })
@@ -9014,11 +9054,12 @@ final class SccpSolanaProverTests: XCTestCase {
             }
         ).proveInboundToSora(
             EthereumMainnetInboundEvidence(
-                receipt: receipt,
+                receipt: sourceReceipt,
                 block: block,
                 beaconFinalityEvidence: beaconFinalityEvidence,
                 receiptProof: receiptProof,
-                receiptProofHash: receiptProofHash
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
             )
         )
         XCTAssertEqual(typedFinalityProof, Data([7, 8, 9]))
@@ -9058,29 +9099,6 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
-
-        let sourceEventDigest = "0x" + String(repeating: "34", count: 32)
-        let sourceBridgeAddress = "0x" + String(repeating: "44", count: 20)
-        func sourceEventLog(_ overrides: [String: Any] = [:]) -> [String: Any] {
-            var log: [String: Any] = [
-                "address": sourceBridgeAddress,
-                "topics": [evmSccpSourceEventTopic(), sourceEventDigest],
-                "data": "0x",
-            ]
-            for (key, value) in overrides {
-                log[key] = value
-            }
-            return log
-        }
-        var sourceReceipt = receipt
-        sourceReceipt["logs"] = [
-            [
-                "address": "0x" + String(repeating: "00", count: 20),
-                "topics": ["0x" + String(repeating: "00", count: 32)],
-                "data": "0x1234",
-            ],
-            sourceEventLog(),
-        ]
         let sourceEvidence = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
             EthereumMainnetInboundEvidence(
                 receipt: sourceReceipt,
@@ -9155,8 +9173,71 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
+        var nonObjectLogReceipt = sourceReceipt
+        nonObjectLogReceipt["logs"] = ["not-a-log"]
+        await assertEvmError(.invalidPublicInputs("receipt.logs")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: nonObjectLogReceipt,
+                    block: block,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var missingDataLog = sourceEventLog()
+        missingDataLog.removeValue(forKey: "data")
+        var missingDataReceipt = sourceReceipt
+        missingDataReceipt["logs"] = [missingDataLog]
+        await assertEvmError(.invalidPublicInputs("receipt.logs[0].data")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: missingDataReceipt,
+                    block: block,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var driftedLogTransactionReceipt = sourceReceipt
+        driftedLogTransactionReceipt["logs"] = [
+            sourceEventLog(["transactionHash": "0x" + String(repeating: "ab", count: 32)]),
+        ]
+        await assertEvmError(.invalidPublicInputs("receipt.logs")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: driftedLogTransactionReceipt,
+                    block: block,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var driftedLogBlockHashReceipt = sourceReceipt
+        driftedLogBlockHashReceipt["logs"] = [
+            sourceEventLog(["blockHash": "0x" + String(repeating: "ab", count: 32)]),
+        ]
+        await assertEvmError(.invalidPublicInputs("receipt.logs")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: driftedLogBlockHashReceipt,
+                    block: block,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
+        var driftedLogBlockNumberReceipt = sourceReceipt
+        driftedLogBlockNumberReceipt["logs"] = [
+            sourceEventLog(["blockNumber": "0x1235"]),
+        ]
+        await assertEvmError(.invalidPublicInputs("receipt.logs")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receipt: driftedLogBlockNumberReceipt,
+                    block: block,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
+                )
+            )
+        }
 
-        let perCallProvider = EthereumMainnetExecutionProviderStub(receipt: receipt, block: block)
+        let perCallProvider = EthereumMainnetExecutionProviderStub(receipt: sourceReceipt, block: block)
         let perCallConsensusProvider = EthereumMainnetConsensusProviderStub(finality: beaconFinality)
         let perCallSdk = EthereumMainnetSccp(
             inboundProveFunction: { evidence in
@@ -9169,7 +9250,8 @@ final class SccpSolanaProverTests: XCTestCase {
             EthereumMainnetInboundEvidence(
                 transactionHash: txHash,
                 receiptProof: receiptProof,
-                receiptProofHash: receiptProofHash
+                receiptProofHash: receiptProofHash,
+                sourceBridgeEmitterAddress: sourceBridgeAddress
             ),
             executionProvider: perCallProvider,
             consensusProvider: perCallConsensusProvider

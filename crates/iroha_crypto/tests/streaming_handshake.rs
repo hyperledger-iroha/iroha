@@ -433,6 +433,222 @@ fn x25519_process_remote_key_update_resets_on_session_change() {
 }
 
 #[test]
+fn x25519_process_remote_key_update_rejects_low_order_ephemeral() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAB; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+    let mut key_update = publisher_session
+        .build_key_update([0x03; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("key update");
+    key_update.pub_ephemeral = vec![0u8; 32];
+    let transcript = key_update_transcript_bytes(&key_update).expect("serialize mutated frame");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    key_update.signature.copy_from_slice(signature.payload());
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+    let err = viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect_err("low-order x25519 ephemeral must be rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::InvalidX25519EphemeralPublicKey
+    ));
+    assert!(viewer_session.transport_keys().is_none());
+    assert!(viewer_session.negotiated_suite().is_none());
+}
+
+#[test]
+fn x25519_content_key_update_authenticates_before_recording_state() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xBC; 32]);
+
+    let publisher_secret_bytes = [0x31u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let key_update = publisher_session
+        .build_key_update([0x04; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x42u8; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let nonce = vec![0x54; nonce_len_for_suite(&suite)];
+    let gck = [0x63u8; 32];
+    let content_key_id = 31;
+    let valid_from_segment = 640;
+    let wrapped = wrap_gck(
+        &suite,
+        &publisher_transport.send,
+        &nonce,
+        &gck,
+        content_key_id,
+        valid_from_segment,
+    )
+    .expect("wrap gck");
+    let update = ContentKeyUpdate {
+        content_key_id,
+        gck_wrapped: wrapped,
+        valid_from_segment,
+    };
+    let mut tampered = update.clone();
+    *tampered
+        .gck_wrapped
+        .last_mut()
+        .expect("wrapped key contains authentication tag") ^= 0x01;
+
+    let err = viewer_session
+        .process_content_key_update(&tampered)
+        .expect_err("tampered wrapped gck rejected");
+    assert!(matches!(err, HandshakeError::Crypto(_)));
+    assert!(viewer_session.latest_gck().is_none());
+
+    let unwrapped = viewer_session
+        .process_content_key_update(&update)
+        .expect("valid update with same id still accepted");
+    assert_eq!(unwrapped.as_slice(), gck);
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+}
+
+#[test]
+fn x25519_key_update_rejects_malformed_restart_without_resetting_session() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xCD; 32]);
+
+    let publisher_secret_bytes = [0x51u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let first_update = publisher_session
+        .build_key_update([0x05; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("first key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x62u8; 32]);
+    let initial_transport = *viewer_session
+        .process_remote_key_update(&first_update, publisher_keys.public_key())
+        .expect("initial key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let gck = [0x73u8; 32];
+    let nonce = vec![0x84; nonce_len_for_suite(&suite)];
+    let wrapped =
+        wrap_gck(&suite, &publisher_transport.send, &nonce, &gck, 41, 900).expect("wrap gck");
+    let content_update = ContentKeyUpdate {
+        content_key_id: 41,
+        gck_wrapped: wrapped,
+        valid_from_segment: 900,
+    };
+    viewer_session
+        .process_content_key_update(&content_update)
+        .expect("content key accepted");
+
+    let mut restarted_session = StreamingSession::new(CapabilityRole::Publisher);
+    restarted_session.set_local_ephemeral_x25519([0x91; 32]);
+    let mut malformed_restart = restarted_session
+        .build_key_update([0x06; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("restart key update");
+    malformed_restart.pub_ephemeral = vec![0u8; 32];
+    let transcript =
+        key_update_transcript_bytes(&malformed_restart).expect("serialize malformed restart");
+    let signature = Signature::new(publisher_keys.private_key(), &transcript);
+    malformed_restart
+        .signature
+        .copy_from_slice(signature.payload());
+
+    let err = viewer_session
+        .process_remote_key_update(&malformed_restart, publisher_keys.public_key())
+        .expect_err("malformed restart rejected");
+    assert!(matches!(
+        err,
+        HandshakeError::InvalidX25519EphemeralPublicKey
+    ));
+    assert_eq!(viewer_session.transport_keys(), Some(&initial_transport));
+    assert_eq!(viewer_session.negotiated_suite(), Some(&suite));
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+}
+
+#[test]
+fn outbound_key_update_failure_preserves_existing_session() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let viewer_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xEF; 32]);
+
+    let publisher_secret_bytes = [0x71u8; 32];
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519(publisher_secret_bytes);
+    let key_update = publisher_session
+        .build_key_update([0x08; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    let viewer_public_bytes = viewer_session.set_local_ephemeral_x25519([0x82u8; 32]);
+    let initial_transport = *viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let viewer_public = X25519PublicKey::from(
+        <[u8; 32]>::try_from(viewer_public_bytes.as_slice()).expect("viewer public length"),
+    );
+    let publisher_secret = StaticSecret::from(publisher_secret_bytes);
+    let shared = publisher_secret.diffie_hellman(&viewer_public);
+    let mut shared_secret = [0u8; 32];
+    shared_secret.copy_from_slice(shared.as_bytes());
+    let publisher_transport =
+        streaming_crypto::derive_transport_keys_for_role(&shared_secret, CapabilityRole::Publisher)
+            .expect("publisher transport keys");
+
+    let gck = [0x93u8; 32];
+    let nonce = vec![0xA4; nonce_len_for_suite(&suite)];
+    let wrapped =
+        wrap_gck(&suite, &publisher_transport.send, &nonce, &gck, 61, 1_200).expect("wrap gck");
+    viewer_session
+        .process_content_key_update(&ContentKeyUpdate {
+            content_key_id: 61,
+            gck_wrapped: wrapped,
+            valid_from_segment: 1_200,
+        })
+        .expect("content key accepted");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("established session snapshot");
+
+    let kyber_suite = EncryptionSuite::Kyber768XChaCha20Poly1305([0xAA; 32]);
+    let err = viewer_session
+        .build_key_update([0x09; 32], &kyber_suite, 1, 2, viewer_keys.private_key())
+        .expect_err("missing Kyber remote public must fail");
+    assert!(matches!(err, HandshakeError::MissingKyberRemotePublic));
+    assert_eq!(viewer_session.transport_keys(), Some(&initial_transport));
+    assert_eq!(viewer_session.latest_gck(), Some(gck.as_ref()));
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
 fn set_kyber_remote_public_rejects_fingerprint_mismatch() {
     let MlKemKeyPair {
         public_key: pk_bytes,
@@ -616,6 +832,82 @@ fn build_key_update_records_outbound_snapshot_for_kyber() {
     assert_eq!(snapshot.session_id, session_id);
     assert_eq!(snapshot.key_counter, key_counter);
     assert_eq!(snapshot.suite, suite);
+}
+
+#[test]
+fn outbound_key_update_rejects_key_counter_regression() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let (viewer_hpke_public, _viewer_hpke_secret) = mlkem_keypair_bytes();
+    let session_id = [0xCB; 32];
+    let fingerprint = fingerprint(viewer_hpke_public.as_slice());
+    let suite = EncryptionSuite::Kyber768XChaCha20Poly1305(fingerprint);
+
+    let mut session = StreamingSession::new(CapabilityRole::Publisher);
+    session
+        .set_kyber_remote_public(fingerprint, viewer_hpke_public.as_slice())
+        .expect("viewer kyber public configured");
+    session
+        .build_key_update(session_id, &suite, 1, 7, publisher_keys.private_key())
+        .expect("initial kyber key update");
+    let snapshot_before = session.snapshot_state().expect("snapshot recorded");
+
+    let err = session
+        .build_key_update(session_id, &suite, 1, 7, publisher_keys.private_key())
+        .expect_err("same counter rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::NonMonotonicKeyCounter {
+            previous,
+            found,
+        }) => {
+            assert_eq!(previous, 7);
+            assert_eq!(found, 7);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn outbound_content_key_update_rejects_regression_before_state_change() {
+    let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAC; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x19; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x0A; 32], &suite, 1, 1, publisher_keys.private_key())
+        .expect("publisher key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x29; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, publisher_keys.public_key())
+        .expect("viewer processes key update");
+
+    let first_gck = [0x39u8; 32];
+    viewer_session
+        .build_content_key_update(&first_gck, 71, 1_400)
+        .expect("initial content key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot after content key");
+
+    let regressed_gck = [0x49u8; 32];
+    let err = viewer_session
+        .build_content_key_update(&regressed_gck, 71, 1_401)
+        .expect_err("same content key id rejected");
+    match err {
+        HandshakeError::Crypto(streaming_crypto::CryptoError::ContentKeyRegression {
+            previous,
+            found,
+        }) => {
+            assert_eq!(previous, 71);
+            assert_eq!(found, 71);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.latest_gck(), Some(first_gck.as_ref()));
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
 }
 
 #[test]
@@ -811,6 +1103,72 @@ fn streaming_session_snapshot_roundtrip() {
         restored_session.latest_gck().expect("restored gck"),
         viewer_session.latest_gck().expect("original gck"),
     );
+}
+
+#[test]
+fn restore_from_snapshot_rejects_invalid_kem_suite_without_resetting_session() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x24; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x14; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x44; 32], &suite, 1, 3, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x34; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.kem_suite_id = u8::MAX;
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("invalid kem suite rejected");
+    match err {
+        HandshakeError::UnsupportedKemSuite(found) => assert_eq!(found, u8::MAX),
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
+}
+
+#[test]
+fn restore_from_snapshot_rejects_partial_content_key_metadata() {
+    let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x25; 32]);
+
+    let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+    publisher_session.set_local_ephemeral_x25519([0x15; 32]);
+    let key_update = publisher_session
+        .build_key_update([0x45; 32], &suite, 1, 4, key_pair.private_key())
+        .expect("build key update");
+
+    let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+    viewer_session.set_local_ephemeral_x25519([0x35; 32]);
+    viewer_session
+        .process_remote_key_update(&key_update, key_pair.public_key())
+        .expect("process key update");
+    let snapshot_before = viewer_session
+        .snapshot_state()
+        .expect("snapshot before invalid restore");
+
+    let mut invalid_snapshot = snapshot_before.clone();
+    invalid_snapshot.last_content_key_id = Some(11);
+    let err = viewer_session
+        .restore_from_snapshot(invalid_snapshot)
+        .expect_err("partial content-key metadata rejected");
+    match err {
+        HandshakeError::InvalidSnapshot(reason) => {
+            assert!(reason.contains("content key metadata"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+    assert_eq!(viewer_session.snapshot_state(), Some(snapshot_before));
 }
 
 #[test]

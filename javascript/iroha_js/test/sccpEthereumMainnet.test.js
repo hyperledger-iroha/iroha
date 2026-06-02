@@ -39,6 +39,9 @@ const sampleReceiptProof = {
 
 const sourceEventLog = (overrides = {}) => ({
   address: SOURCE_BRIDGE_ADDRESS,
+  transactionHash: TX_HASH,
+  blockHash: BLOCK_HASH,
+  blockNumber: "0x1234",
   topics: [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST],
   data: "0x",
   ...overrides,
@@ -221,6 +224,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
             blockHash: BLOCK_HASH,
             blockNumber: "0x1234",
             status: "0x1",
+            logs: [sourceEventLog()],
           };
         }
         if (method === "eth_getBlockByHash") {
@@ -229,6 +233,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
         throw new Error(`unexpected RPC method ${method}`);
       },
     },
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
     consensusProvider: {
       collectFinalityEvidence() {
         return {
@@ -243,6 +248,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
       assert.equal(evidence.transactionHash, TX_HASH);
       assert.equal(evidence.beaconFinality.executionBlockHash, BLOCK_HASH);
       assert.equal(evidence.receiptProofHash, evmSccpReceiptProofHash(sampleReceiptProof));
+      assert.equal(evidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
       return [1, 2, 3];
     },
   });
@@ -250,6 +256,32 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
   assert.deepEqual(
     await sdk.proveInboundToSora({ transactionHash: TX_HASH, receiptProof: sampleReceiptProof }),
     new Uint8Array([1, 2, 3]),
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: sampleReceiptProof,
+      }),
+    /requires receipt source event validation/u,
   );
   assert.equal(proveCalls, 1);
 
@@ -625,6 +657,51 @@ test("EthereumMainnetSccp validates source bridge logs in receipt evidence", asy
         block,
       }),
     /removed logs/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: ["not-a-log"] },
+        block,
+      }),
+    /receipt\.logs\[0\] must be an object/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog({ data: undefined })] },
+        block,
+      }),
+    /receipt\.logs\[0\]\.data is required/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog({ transactionHash: hex32("ab") })] },
+        block,
+      }),
+    /receipt\.logs transactionHash must match receipt\.transactionHash/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog({ blockHash: hex32("ab") })] },
+        block,
+      }),
+    /receipt\.logs blockHash must match receipt\.blockHash/u,
+  );
+
+  await assert.rejects(
+    () =>
+      sdk.collectInboundEvidenceFromReceipt({
+        receipt: { ...receipt, logs: [sourceEventLog({ blockNumber: "0x1235" })] },
+        block,
+      }),
+    /receipt\.logs blockNumber must match receipt\.blockNumber/u,
   );
 });
 

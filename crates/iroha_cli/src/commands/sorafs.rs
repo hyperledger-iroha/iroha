@@ -12131,7 +12131,9 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
+    use soranet_pq::{
+        MlDsaSuite, MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
+    };
     use std::{
         fmt::Display,
         fs,
@@ -12276,6 +12278,7 @@ mod tests {
         let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public);
 
         let directory_hash = [0xAB; 32];
+        let preferred_kem_suite = MlKemSuite::MlKem1024;
         let certificate = RelayCertificateV2 {
             relay_id: [0x11; 32],
             identity_ed25519: ed_public,
@@ -12302,7 +12305,7 @@ mod tests {
             ),
             kem_policy: KemRotationPolicyV1 {
                 mode: KemRotationModeV1::Static,
-                preferred_suite: 2,
+                preferred_suite: preferred_kem_suite.kem_id(),
                 fallback_suite: None,
                 rotation_interval_hours: 0,
                 grace_period_hours: 0,
@@ -12316,7 +12319,7 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash,
             issuer_fingerprint: fingerprint,
-            pq_kem_public: vec![0x55; ML_KEM_768_PUBLIC_LEN],
+            pq_kem_public: vec![0x55; preferred_kem_suite.public_key_len()],
         };
 
         let published_at = certificate.published_at;
