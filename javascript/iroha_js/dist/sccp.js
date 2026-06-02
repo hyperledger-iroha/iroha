@@ -116,6 +116,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1 = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1 = 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1 = "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1 = "xor";
+export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 = 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1 =
   "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1 = "burn_and_record";
@@ -19567,6 +19568,232 @@ const protobufFieldNumber = (key, label) => {
   return Number(fieldNumber);
 };
 
+const normalizeTronAddress20Bytes = (value, label) => {
+  const bytes = toBytes(value, label);
+  if (bytes.length === 21 && bytes[0] === 0x41 && isNonZeroTronAddress(bytes)) {
+    return bytes.slice(1);
+  }
+  if (bytes.length === 20 && bytes.some((byte) => byte !== 0)) {
+    return Uint8Array.from(bytes);
+  }
+  throw new TypeError(`${label} must be a non-zero TRON address as 20 bytes or 0x41-prefixed 21 bytes`);
+};
+
+const normalizeOptionalTronAddress20Bytes = (options, label, ...names) => {
+  const selected = strictOptionalResultField(options, label, ...names);
+  return selected === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : normalizeTronAddress20Bytes(selected, label);
+};
+
+const parseTronTriggerSmartContractParameter = (trigger, label) => {
+  const cursor = { offset: 0 };
+  let ownerAddress = null;
+  let contractAddress = null;
+  let data = null;
+  let callValueSeen = false;
+  let callTokenValueSeen = false;
+  let tokenIdSeen = false;
+  while (cursor.offset < trigger.length) {
+    const key = readCanonicalProtobufVarint(trigger, cursor, label);
+    const fieldNumber = protobufFieldNumber(key, label);
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && ownerAddress === null) {
+      ownerAddress = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 2 && wireType === 2 && contractAddress === null) {
+      contractAddress = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 3 && wireType === 0 && !callValueSeen) {
+      callValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} call_value must be zero`);
+      }
+    } else if (fieldNumber === 4 && wireType === 2 && data === null) {
+      data = readProtobufBytesField(trigger, cursor, label);
+    } else if (fieldNumber === 5 && wireType === 0 && !callTokenValueSeen) {
+      callTokenValueSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} call_token_value must be zero`);
+      }
+    } else if (fieldNumber === 6 && wireType === 0 && !tokenIdSeen) {
+      tokenIdSeen = true;
+      if (readCanonicalProtobufVarint(trigger, cursor, label) !== 0n) {
+        throw new TypeError(`${label} token_id must be zero`);
+      }
+    } else {
+      throw new TypeError(`${label} contains an unsupported protobuf field`);
+    }
+  }
+  if (!isNonZeroTronAddress(ownerAddress ?? new Uint8Array())) {
+    throw new TypeError(`${label} owner_address must be a non-zero TRON address`);
+  }
+  if (!isNonZeroTronAddress(contractAddress ?? new Uint8Array())) {
+    throw new TypeError(`${label} contract_address must be a non-zero TRON address`);
+  }
+  if (data === null || data.length === 0) {
+    throw new TypeError(`${label} data must not be empty`);
+  }
+  return {
+    ownerAddress,
+    contractAddress,
+    data,
+  };
+};
+
+const parseTronTriggerSmartContractContract = (contract, label) => {
+  const cursor = { offset: 0 };
+  let contractType = null;
+  let parameter = null;
+  while (cursor.offset < contract.length) {
+    const key = readCanonicalProtobufVarint(contract, cursor, label);
+    const fieldNumber = protobufFieldNumber(key, label);
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 0 && contractType === null) {
+      contractType = readCanonicalProtobufVarint(contract, cursor, label);
+    } else if (fieldNumber === 2 && wireType === 2 && parameter === null) {
+      parameter = readProtobufBytesField(contract, cursor, label);
+    } else {
+      throw new TypeError(`${label} contains an unsupported protobuf field`);
+    }
+  }
+  if (contractType !== 31n) {
+    throw new TypeError(`${label} contract must be TriggerSmartContract`);
+  }
+  const trigger = parameter ? readTronProtobufAnyValue(parameter) : null;
+  if (trigger === null) {
+    throw new TypeError(`${label} TriggerSmartContract parameter type_url mismatch`);
+  }
+  return parseTronTriggerSmartContractParameter(
+    trigger,
+    `${label}.TriggerSmartContract`,
+  );
+};
+
+export function parseTronTriggerSmartContractRawData(rawDataInput, options = {}) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("TRON TriggerSmartContract raw-data parse options must be an object");
+  }
+  const rawData = toBytes(rawDataInput, "rawData");
+  if (rawData.length === 0 || rawData.length > SCCP_TRON_MAX_TRANSACTION_BYTES) {
+    throw new RangeError(
+      `rawData must contain 1..${SCCP_TRON_MAX_TRANSACTION_BYTES} bytes`,
+    );
+  }
+  const expectedOwnerAddress = normalizeOptionalTronAddress20Bytes(
+    options,
+    "expectedOwnerAddress",
+    "expectedOwnerAddress",
+    "expected_owner_address",
+    "ownerAddress",
+    "owner_address",
+  );
+  const expectedContractAddress = normalizeOptionalTronAddress20Bytes(
+    options,
+    "expectedContractAddress",
+    "expectedContractAddress",
+    "expected_contract_address",
+    "contractAddress",
+    "contract_address",
+  );
+  const expectedCallDataInput = strictOptionalResultField(
+    options,
+    "expectedCallData",
+    "expectedCallData",
+    "expected_call_data",
+    "callData",
+    "call_data",
+  );
+  const expectedCallData = expectedCallDataInput === SCCP_OPTIONAL_FIELD_MISSING
+    ? null
+    : toBytes(expectedCallDataInput, "expectedCallData");
+
+  const cursor = { offset: 0 };
+  let refBlockBytesSeen = false;
+  let refBlockNum = null;
+  let refBlockHashSeen = false;
+  let expirationMs = null;
+  let timestampMs = null;
+  let feeLimit = null;
+  let parsedContract = null;
+  let contractCount = 0;
+  while (cursor.offset < rawData.length) {
+    const key = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    const fieldNumber = protobufFieldNumber(key, "rawData");
+    const wireType = Number(key & 0x07n);
+    if (fieldNumber === 1 && wireType === 2 && !refBlockBytesSeen) {
+      refBlockBytesSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 2 || value.every((byte) => byte === 0)) {
+        throw new TypeError("rawData ref_block_bytes must be two non-zero bytes");
+      }
+    } else if (fieldNumber === 3 && wireType === 0 && refBlockNum === null) {
+      refBlockNum = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+    } else if (fieldNumber === 4 && wireType === 2 && !refBlockHashSeen) {
+      refBlockHashSeen = true;
+      const value = readProtobufBytesField(rawData, cursor, "rawData");
+      if (value.length !== 8 || value.every((byte) => byte === 0)) {
+        throw new TypeError("rawData ref_block_hash must be eight non-zero bytes");
+      }
+    } else if (fieldNumber === 8 && wireType === 0 && expirationMs === null) {
+      expirationMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (expirationMs === 0n) throw new TypeError("rawData expiration must be non-zero");
+    } else if (fieldNumber === 11 && wireType === 2) {
+      contractCount += 1;
+      if (contractCount > 1) {
+        throw new TypeError("rawData must contain exactly one contract");
+      }
+      parsedContract = parseTronTriggerSmartContractContract(
+        readProtobufBytesField(rawData, cursor, "rawData"),
+        "rawData.contract",
+      );
+    } else if (fieldNumber === 14 && wireType === 0 && timestampMs === null) {
+      timestampMs = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (timestampMs === 0n) throw new TypeError("rawData timestamp must be non-zero");
+    } else if (fieldNumber === 18 && wireType === 0 && feeLimit === null) {
+      feeLimit = readCanonicalProtobufVarint(rawData, cursor, "rawData");
+      if (feeLimit === 0n) throw new TypeError("rawData fee_limit must be non-zero");
+    } else {
+      throw new TypeError("rawData contains an unsupported protobuf field");
+    }
+  }
+  if (
+    !refBlockBytesSeen ||
+    !refBlockHashSeen ||
+    expirationMs === null ||
+    timestampMs === null ||
+    feeLimit === null ||
+    contractCount !== 1 ||
+    parsedContract === null
+  ) {
+    throw new TypeError("rawData must be a canonical TRON TriggerSmartContract transaction");
+  }
+  if (expirationMs <= timestampMs) {
+    throw new TypeError("rawData expiration must be after timestamp");
+  }
+  const ownerAddress20 = parsedContract.ownerAddress.subarray(1);
+  const contractAddress20 = parsedContract.contractAddress.subarray(1);
+  if (expectedOwnerAddress !== null && !bytesEqual(ownerAddress20, expectedOwnerAddress)) {
+    throw new TypeError("rawData owner_address does not match expectedOwnerAddress");
+  }
+  if (expectedContractAddress !== null && !bytesEqual(contractAddress20, expectedContractAddress)) {
+    throw new TypeError("rawData contract_address does not match expectedContractAddress");
+  }
+  if (expectedCallData !== null && !bytesEqual(parsedContract.data, expectedCallData)) {
+    throw new TypeError("rawData call data does not match expectedCallData");
+  }
+  return Object.freeze({
+    rawDataHash: bytesToHex(sha256(rawData)),
+    ownerAddress: bytesToHex(parsedContract.ownerAddress),
+    ownerAddress20: bytesToHex(ownerAddress20),
+    contractAddress: bytesToHex(parsedContract.contractAddress),
+    contractAddress20: bytesToHex(contractAddress20),
+    callData: bytesToHex(parsedContract.data),
+    refBlockNum: refBlockNum === null ? null : refBlockNum.toString(10),
+    timestampMs: timestampMs.toString(10),
+    expirationMs: expirationMs.toString(10),
+    feeLimit: feeLimit.toString(10),
+  });
+}
+
 const tronTransactionResultSuccess = (result) => {
   const cursor = { offset: 0 };
   let feeSeen = false;
@@ -23774,7 +24001,11 @@ const normalizeTairaXorRouteIdHash = (input) => {
     "route_id_hash",
   );
   if (routeIdHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    return normalizeNonZeroHex32(routeIdHash, "routeIdHash");
+    const normalizedRouteIdHash = normalizeNonZeroHex32(routeIdHash, "routeIdHash");
+    if (normalizedRouteIdHash !== tairaXorRouteIdHash()) {
+      throw new TypeError("routeIdHash must match taira_tron_xor");
+    }
+    return normalizedRouteIdHash;
   }
   const routeId = strictOptionalResultField(input, "routeId", "routeId", "route_id");
   return tairaXorRouteIdHash(
@@ -23790,12 +24021,25 @@ const normalizeTairaXorAssetKeyHash = (input) => {
     "asset_key_hash",
   );
   if (assetKeyHash !== SCCP_OPTIONAL_FIELD_MISSING) {
-    return normalizeNonZeroHex32(assetKeyHash, "assetKeyHash");
+    const normalizedAssetKeyHash = normalizeNonZeroHex32(assetKeyHash, "assetKeyHash");
+    if (normalizedAssetKeyHash !== tairaXorAssetKeyHash()) {
+      throw new TypeError("assetKeyHash must match xor");
+    }
+    return normalizedAssetKeyHash;
   }
   const assetKey = strictOptionalResultField(input, "assetKey", "assetKey", "asset_key");
   return tairaXorAssetKeyHash(
     assetKey === SCCP_OPTIONAL_FIELD_MISSING ? SCCP_TAIRA_XOR_ASSET_KEY_V1 : assetKey,
   );
+};
+
+const requireTairaRecipientBytesWithinLimit = (bytes, label) => {
+  if (bytes.length > SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1) {
+    throw new RangeError(
+      `${label} must be at most ${SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1} bytes`,
+    );
+  }
+  return bytes;
 };
 
 const normalizeTairaRecipientHash = (input) => {
@@ -23817,6 +24061,7 @@ const normalizeTairaRecipientHash = (input) => {
   if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
     const bytes = toBytes(recipientBytes, "tairaRecipientBytes");
     if (bytes.length === 0) throw new TypeError("tairaRecipientBytes must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipientBytes");
     return bytesToHex(keccak_256(bytes));
   }
   const recipient = strictResultField(
@@ -23830,15 +24075,19 @@ const normalizeTairaRecipientHash = (input) => {
   if (typeof recipient === "string" && recipient.trim().toLowerCase().startsWith("0x")) {
     const bytes = toBytes(recipient, "tairaRecipient");
     if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     return bytesToHex(keccak_256(bytes));
   }
   if (typeof recipient !== "string") {
     const bytes = toBytes(recipient, "tairaRecipient");
     if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
+    requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     return bytesToHex(keccak_256(bytes));
   }
   const text = normalizeCanonicalTairaAccountId(recipient, "tairaRecipient");
-  return bytesToHex(keccak_256(textEncoder.encode(text)));
+  const bytes = textEncoder.encode(text);
+  requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
+  return bytesToHex(keccak_256(bytes));
 };
 
 const normalizeTairaRecipientBytes = (input) => {
@@ -23851,7 +24100,7 @@ const normalizeTairaRecipientBytes = (input) => {
   if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
     const bytes = toBytes(recipientBytes, "tairaRecipientBytes");
     if (bytes.length === 0) throw new TypeError("tairaRecipientBytes must not be empty");
-    return bytes;
+    return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipientBytes");
   }
   const recipient = strictResultField(
     input,
@@ -23865,21 +24114,61 @@ const normalizeTairaRecipientBytes = (input) => {
     if (recipient.trim().toLowerCase().startsWith("0x")) {
       const bytes = toBytes(recipient, "tairaRecipient");
       if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
-      return bytes;
+      return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
     }
-    return textEncoder.encode(normalizeCanonicalTairaAccountId(recipient, "tairaRecipient"));
+    return requireTairaRecipientBytesWithinLimit(
+      textEncoder.encode(normalizeCanonicalTairaAccountId(recipient, "tairaRecipient")),
+      "tairaRecipient",
+    );
   }
   const bytes = toBytes(recipient, "tairaRecipient");
   if (bytes.length === 0) throw new TypeError("tairaRecipient must not be empty");
-  return bytes;
+  return requireTairaRecipientBytesWithinLimit(bytes, "tairaRecipient");
+};
+
+const normalizeTairaRecipientAccountText = (input) => {
+  const recipientBytes = strictOptionalResultField(
+    input,
+    "tairaRecipientBytes",
+    "tairaRecipientBytes",
+    "taira_recipient_bytes",
+  );
+  if (recipientBytes !== SCCP_OPTIONAL_FIELD_MISSING) {
+    throw new TypeError(
+      "tairaRecipientBytes is not accepted here; pass a canonical TAIRA I105 account id string.",
+    );
+  }
+  const recipient = strictResultField(
+    input,
+    "tairaRecipient",
+    "tairaRecipient",
+    "taira_recipient",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (typeof recipient !== "string") {
+    throw new TypeError("tairaRecipient must be a canonical TAIRA I105 account id string");
+  }
+  if (recipient.trim().toLowerCase().startsWith("0x")) {
+    throw new TypeError("tairaRecipient must be a canonical TAIRA I105 account id string");
+  }
+  return normalizeCanonicalTairaAccountId(recipient, "tairaRecipient");
 };
 
 export function tairaXorRouteIdHash(routeId = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
-  return textHash32(routeId, "routeId");
+  const hash = textHash32(routeId, "routeId");
+  if (routeId !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError("routeId must be taira_tron_xor");
+  }
+  return hash;
 }
 
 export function tairaXorAssetKeyHash(assetKey = SCCP_TAIRA_XOR_ASSET_KEY_V1) {
-  return textHash32(assetKey, "assetKey");
+  const hash = textHash32(assetKey, "assetKey");
+  if (assetKey !== SCCP_TAIRA_XOR_ASSET_KEY_V1) {
+    throw new TypeError("assetKey must be xor");
+  }
+  return hash;
 }
 
 export function tairaXorTransferPayloadHash(input, options = {}) {
@@ -24008,6 +24297,22 @@ export function tairaXorBurnToTairaCallData(input) {
   );
 }
 
+export function tairaXorBurnToTairaAccountCallData(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError("TAIRA XOR burn account call input must be an object");
+  }
+  const routeIdHash = normalizeTairaXorRouteIdHash(input);
+  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
+  const tairaRecipient = normalizeTairaRecipientAccountText(input);
+  const amount = strictResultField(input, "amount", "amount");
+  return tairaXorBurnToTairaCallData({
+    routeIdHash,
+    assetKeyHash,
+    tairaRecipient,
+    amount,
+  });
+}
+
 const requirePlainObject = (value, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`);
@@ -24022,6 +24327,441 @@ const optionalStringAlias = (record, label, ...names) => {
   }
   return normalizeNonEmptyString(value, label);
 };
+
+const normalizeTairaXorTronToTairaSettlementFragment = (value, label) => {
+  if (
+    value === SCCP_OPTIONAL_FIELD_MISSING ||
+    value === undefined ||
+    value === null
+  ) {
+    return {};
+  }
+  const settlement = requirePlainObject(value, label);
+  const entrypoint = optionalStringAlias(settlement, `${label}.entrypoint`, "entrypoint");
+  if (entrypoint && entrypoint !== "finalize_inbound") {
+    throw new TypeError(`${label}.entrypoint must be finalize_inbound`);
+  }
+  const route = optionalStringAlias(settlement, `${label}.route`, "route", "route_id");
+  if (route && route !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
+    throw new TypeError(`${label}.route must be taira_tron_xor`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadJson") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payload_bytes") ||
+    Object.prototype.hasOwnProperty.call(settlement, "payloadBytes")
+  ) {
+    throw new TypeError(`${label} payload must be generated by Torii`);
+  }
+  return settlement;
+};
+
+const normalizeTairaXorTronEventName = (value, label = "eventName") =>
+  normalizeNonEmptyString(value, label)
+    .replace(/[^a-z0-9]/giu, "")
+    .toLowerCase();
+
+export function isTairaXorTronBurnStartedEventName(value) {
+  try {
+    return ["tairaxorburnstarted", "burntotaira"].includes(
+      normalizeTairaXorTronEventName(value),
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+const readTairaXorTronEventResult = (event) => {
+  const result = strictOptionalResultField(
+    event,
+    "event.result",
+    "result",
+    "args",
+    "returnValues",
+  );
+  return result === SCCP_OPTIONAL_FIELD_MISSING ||
+    result === undefined ||
+    result === null
+    ? null
+    : requirePlainObject(result, "event.result");
+};
+
+const readTairaXorTronEventField = (event, label, ...names) => {
+  const result = readTairaXorTronEventResult(event);
+  const resultValue = result
+    ? strictOptionalResultField(result, label, ...names)
+    : SCCP_OPTIONAL_FIELD_MISSING;
+  const eventValue = strictOptionalResultField(event, label, ...names);
+  if (
+    resultValue !== SCCP_OPTIONAL_FIELD_MISSING &&
+    eventValue !== SCCP_OPTIONAL_FIELD_MISSING &&
+    resultValue !== eventValue
+  ) {
+    throw new TypeError(`${label} must not conflict between event and result`);
+  }
+  const selected =
+    resultValue !== SCCP_OPTIONAL_FIELD_MISSING ? resultValue : eventValue;
+  return selected === SCCP_OPTIONAL_FIELD_MISSING ? undefined : selected;
+};
+
+const requireTairaXorTronEventField = (event, label, ...names) => {
+  const selected = readTairaXorTronEventField(event, label, ...names);
+  if (selected === undefined || selected === null || selected === "") {
+    throw new TypeError(`TRON burn event is missing ${label}`);
+  }
+  return selected;
+};
+
+const normalizeTairaXorTronEventAddressPayload = (value, label) => {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text !== value) {
+      throw new TypeError(`${label} must be canonical`);
+    }
+    const hexText = text.replace(/^0x/i, "");
+    if (/^[0-9a-fA-F]{64}$/u.test(hexText)) {
+      if (!hexText.startsWith("0".repeat(24))) {
+        throw new TypeError(`${label} must be a left-padded TRON address`);
+      }
+      return normalizeTronAddressPayload(`0x41${hexText.slice(24)}`, label);
+    }
+  }
+  return normalizeTronAddressPayload(value, label);
+};
+
+const normalizeTairaXorTronEventUint = (value, label, max, typeLabel) => {
+  const normalized =
+    typeof value === "string" && /^0x[0-9a-fA-F]+$/u.test(value)
+      ? BigInt(value)
+      : normalizeUnsignedBigIntMax(value, label, max, typeLabel);
+  if (normalized > max) {
+    throw new RangeError(`${label} must fit ${typeLabel}`);
+  }
+  return normalized;
+};
+
+const decodeTairaXorEventRecipientText = (value, label) => {
+  if (typeof value === "string" && value.startsWith("0x")) {
+    return normalizeCanonicalTairaAccountId(
+      textDecoder.decode(toBytes(value, label)),
+      label,
+    );
+  }
+  if (typeof value === "string") {
+    return normalizeCanonicalTairaAccountId(value, label);
+  }
+  return normalizeCanonicalTairaAccountId(
+    textDecoder.decode(toBytes(value, label)),
+    label,
+  );
+};
+
+export function bindTairaXorTronBurnStartedEvent(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new TypeError(
+      "TAIRA XOR TRON burn event binding input must be an object",
+    );
+  }
+  const event = requirePlainObject(
+    strictResultField(input, "event", "event"),
+    "event",
+  );
+  const eventName = normalizeTairaXorTronEventName(
+    requireTairaXorTronEventField(
+      event,
+      "event name",
+      "event_name",
+      "eventName",
+      "name",
+    ),
+    "event name",
+  );
+  if (!["tairaxorburnstarted", "burntotaira"].includes(eventName)) {
+    throw new TypeError("TRON event must be TairaXorBurnStarted");
+  }
+  const sourceEventDigest = normalizeNonZeroHex32(
+    requireTairaXorTronEventField(
+      event,
+      "source event digest",
+      "sourceEventDigest",
+      "source_event_digest",
+      "source_event_digest_hex",
+      "_sourceEventDigest",
+      "_source_event_digest",
+      "eventDigest",
+      "event_digest",
+      "0",
+    ),
+    "sourceEventDigest",
+  );
+  const expectedSourceEventDigest = strictOptionalResultField(
+    input,
+    "sourceEventDigest",
+    "sourceEventDigest",
+    "source_event_digest",
+    "expectedSourceEventDigest",
+    "expected_source_event_digest",
+  );
+  if (
+    expectedSourceEventDigest !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeNonZeroHex32(
+      expectedSourceEventDigest,
+      "expectedSourceEventDigest",
+    ) !== sourceEventDigest
+  ) {
+    throw new TypeError(
+      "TRON burn event sourceEventDigest must match the expected digest",
+    );
+  }
+
+  const routeIdHash = normalizeTairaXorRouteIdHash(input);
+  const eventRouteIdHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "route hash",
+      "routeIdHash",
+      "route_id_hash",
+      "submittedRouteIdHash",
+      "submitted_route_id_hash",
+      "_routeIdHash",
+      "_route_id_hash",
+      "5",
+    ),
+    "event.routeIdHash",
+  );
+  if (eventRouteIdHash !== routeIdHash) {
+    throw new TypeError("TRON burn event route hash must match taira_tron_xor");
+  }
+
+  const assetKeyHash = normalizeTairaXorAssetKeyHash(input);
+  const eventAssetKeyHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "asset hash",
+      "assetKeyHash",
+      "asset_key_hash",
+      "submittedAssetKeyHash",
+      "submitted_asset_key_hash",
+      "_assetKeyHash",
+      "_asset_key_hash",
+      "6",
+    ),
+    "event.assetKeyHash",
+  );
+  if (eventAssetKeyHash !== assetKeyHash) {
+    throw new TypeError("TRON burn event asset hash must match xor");
+  }
+
+  const burnerAddress = bytesToHex(
+    normalizeTairaXorTronEventAddressPayload(
+      requireTairaXorTronEventField(
+        event,
+        "burner address",
+        "burner",
+        "_burner",
+        "sender",
+        "_sender",
+        "from",
+        "_from",
+        "1",
+      ),
+      "event.burner",
+    ),
+  );
+  const expectedBurner = strictOptionalResultField(
+    input,
+    "burnerAddress",
+    "burnerAddress",
+    "burner_address",
+    "burner",
+    "tronSender",
+    "tron_sender",
+    "sender",
+  );
+  if (
+    expectedBurner !== SCCP_OPTIONAL_FIELD_MISSING &&
+    bytesToHex(normalizeTronAddressPayload(expectedBurner, "burnerAddress")) !==
+      burnerAddress
+  ) {
+    throw new TypeError(
+      "TRON burn event burner must match the expected TRON sender",
+    );
+  }
+
+  const amount = normalizeTairaXorTronEventUint(
+    requireTairaXorTronEventField(
+      event,
+      "amount",
+      "amount",
+      "_amount",
+      "value",
+      "_value",
+      "3",
+    ),
+    "event.amount",
+    SCCP_U128_MAX,
+    "u128",
+  );
+  if (amount === 0n) {
+    throw new RangeError("event.amount must be greater than zero");
+  }
+  const expectedAmount = strictOptionalResultField(input, "amount", "amount");
+  if (
+    expectedAmount !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeUnsignedBigIntMax(
+      expectedAmount,
+      "amount",
+      SCCP_U128_MAX,
+      "u128",
+    ) !== amount
+  ) {
+    throw new TypeError(
+      "TRON burn event amount must match the expected bridge amount",
+    );
+  }
+
+  const nonce = normalizeTairaXorTronEventUint(
+    requireTairaXorTronEventField(
+      event,
+      "burn nonce",
+      "nonce",
+      "_nonce",
+      "burnNonce",
+      "burn_nonce",
+      "_burnNonce",
+      "_burn_nonce",
+      "4",
+    ),
+    "event.nonce",
+    (1n << 256n) - 1n,
+    "u256",
+  );
+
+  const tairaRecipient = decodeTairaXorEventRecipientText(
+    requireTairaXorTronEventField(
+      event,
+      "TAIRA recipient",
+      "tairaRecipient",
+      "taira_recipient",
+      "_tairaRecipient",
+      "_taira_recipient",
+      "recipient",
+      "_recipient",
+      "7",
+    ),
+    "event.tairaRecipient",
+  );
+  const expectedRecipient = strictOptionalResultField(
+    input,
+    "tairaRecipient",
+    "tairaRecipient",
+    "taira_recipient",
+    "recipient",
+    "tairaAccountId",
+    "taira_account_id",
+  );
+  if (
+    expectedRecipient !== SCCP_OPTIONAL_FIELD_MISSING &&
+    normalizeCanonicalTairaAccountId(expectedRecipient, "tairaRecipient") !==
+      tairaRecipient
+  ) {
+    throw new TypeError(
+      "TRON burn event TAIRA recipient must match the expected account",
+    );
+  }
+
+  const recipientHash = normalizeHex32(
+    requireTairaXorTronEventField(
+      event,
+      "TAIRA recipient hash",
+      "tairaRecipientHash",
+      "taira_recipient_hash",
+      "_tairaRecipientHash",
+      "_taira_recipient_hash",
+      "recipientHash",
+      "recipient_hash",
+      "2",
+    ),
+    "event.tairaRecipientHash",
+  );
+  const expectedRecipientHash = bytesToHex(
+    keccak_256(textEncoder.encode(tairaRecipient)),
+  );
+  if (recipientHash !== expectedRecipientHash) {
+    throw new TypeError(
+      "TRON burn event TAIRA recipient hash must match the recipient",
+    );
+  }
+
+  const contractAddress = readTairaXorTronEventField(
+    event,
+    "contract address",
+    "contract_address",
+    "contractAddress",
+    "caller_contract_address",
+    "callerContractAddress",
+  );
+  const bridgeAddress = strictOptionalResultField(
+    input,
+    "bridgeAddress",
+    "bridgeAddress",
+    "bridge_address",
+    "tronBridgeAddress",
+    "tron_bridge_address",
+  );
+  const normalizedBridgeAddress =
+    bridgeAddress === SCCP_OPTIONAL_FIELD_MISSING
+      ? null
+      : bytesToHex(normalizeTronAddressPayload(bridgeAddress, "bridgeAddress"));
+  const normalizedContractAddress =
+    contractAddress === undefined ||
+    contractAddress === null ||
+    contractAddress === ""
+      ? null
+      : bytesToHex(
+          normalizeTairaXorTronEventAddressPayload(
+            contractAddress,
+            "event.contractAddress",
+          ),
+        );
+  if (
+    normalizedBridgeAddress &&
+    normalizedContractAddress &&
+    normalizedBridgeAddress !== normalizedContractAddress
+  ) {
+    throw new TypeError(
+      "TRON burn event contract address must match the bridge address",
+    );
+  }
+  if (normalizedBridgeAddress) {
+    const expectedDigest = tairaXorBurnSourceEventDigest({
+      routeIdHash,
+      assetKeyHash,
+      bridgeAddress: normalizedBridgeAddress,
+      burnerAddress,
+      tairaRecipient,
+      amount,
+      nonce,
+    });
+    if (sourceEventDigest !== expectedDigest) {
+      throw new TypeError("TRON burn event digest must match the event fields");
+    }
+  }
+
+  return Object.freeze({
+    eventName,
+    sourceEventDigest,
+    routeIdHash,
+    assetKeyHash,
+    bridgeAddress: normalizedBridgeAddress ?? normalizedContractAddress,
+    burnerAddress,
+    tairaRecipient,
+    tairaRecipientHash: recipientHash,
+    amount: amount.toString(),
+    nonce: nonce.toString(),
+  });
+}
 
 const normalizeTairaXorTronTxId = (value, label) =>
   normalizeHex32(value, label).slice(2);
@@ -24104,18 +24844,14 @@ export function bindTairaXorTronToTairaSourceProofPackage(input) {
     "settlementDefaults",
     "settlement_defaults",
   );
-  const settlementDefaults =
-    settlementDefaultsInput === SCCP_OPTIONAL_FIELD_MISSING ||
-    settlementDefaultsInput === undefined ||
-    settlementDefaultsInput === null
-      ? {}
-      : requirePlainObject(settlementDefaultsInput, "settlementDefaults");
-  const settlement =
-    settlementInput === SCCP_OPTIONAL_FIELD_MISSING ||
-    settlementInput === undefined ||
-    settlementInput === null
-      ? {}
-      : requirePlainObject(settlementInput, "proofPackage.settlement");
+  const settlementDefaults = normalizeTairaXorTronToTairaSettlementFragment(
+    settlementDefaultsInput,
+    "settlementDefaults",
+  );
+  const settlement = normalizeTairaXorTronToTairaSettlementFragment(
+    settlementInput,
+    "proofPackage.settlement",
+  );
 
   const expectedTxId = normalizeTairaXorTronTxId(
     strictResultField(input, "txId", "txId", "txID", "transactionId", "transaction_id"),
@@ -24309,22 +25045,6 @@ export function bindTairaXorTronToTairaSourceProofPackage(input) {
         "proofPackage.sourceEventDigest must match the TAIRA XOR burn source event digest",
       );
     }
-  }
-
-  const settlementEntrypoint = optionalStringAlias(settlement, "settlement.entrypoint", "entrypoint");
-  if (settlementEntrypoint && settlementEntrypoint !== "finalize_inbound") {
-    throw new TypeError("settlement.entrypoint must be finalize_inbound");
-  }
-  const settlementRoute = optionalStringAlias(settlement, "settlement.route", "route", "route_id");
-  if (settlementRoute && settlementRoute !== SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1) {
-    throw new TypeError("settlement.route must be taira_tron_xor");
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(settlement, "payload") ||
-    Object.prototype.hasOwnProperty.call(settlement, "payload_json") ||
-    Object.prototype.hasOwnProperty.call(settlement, "payloadJson")
-  ) {
-    throw new TypeError("settlement payload must be generated by Torii");
   }
 
   canonicalSccpMessageProofBundleBytes(messageBundle);

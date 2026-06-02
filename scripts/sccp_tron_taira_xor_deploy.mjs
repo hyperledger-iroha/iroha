@@ -9,7 +9,7 @@
 // - `solc` and `ethers` on NODE_PATH for compile/deploy commands.
 // - Optional `TRON_PRO_API_KEY` or `TRON_GRID_API_KEY` for TronGrid calls.
 import { createRequire } from "node:module";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/secp256k1.js";
@@ -54,11 +54,32 @@ const DEPLOYER_SCHEMA = "iroha-sccp-tron-taira-xor-deployer/v1";
 const EVIDENCE_SCHEMA = "iroha-sccp-tron-taira-xor-deployment-evidence/v1";
 const ROUTE_MANIFEST_SCHEMA = "iroha-sccp-taira-xor-route-manifest-draft/v1";
 const TAIRA_BURN_RECORD_CONTRACT_SCHEMA = "iroha-sccp-taira-xor-burn-record-contract/v1";
+const UNSIGNED_TRANSACTION_SCHEMA = "iroha-sccp-tron-unsigned-transaction/v1";
 const SIGNED_TRANSACTION_SCHEMA = "iroha-sccp-tron-signed-transaction/v1";
+const SIGNED_TRANSACTION_PURPOSE = "taira-xor-sccp-deployment";
+const BROADCAST_RESULT_SCHEMA = "iroha-sccp-tron-broadcast-result/v1";
 const DEPLOYMENT_PLAN_SCHEMA = "iroha-sccp-tron-taira-xor-deployment-plan/v1";
+const TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES = 32;
+const TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES = 8 * 1024 * 1024;
 const SECP256K1_ORDER =
   0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141n;
 const SECP256K1_HALF_ORDER = SECP256K1_ORDER >> 1n;
+const POST_DEPLOY_CONFIGURATION_CHECKS = Object.freeze([
+  "TairaXOR.bridge() equals taira_xor_bridge_address",
+  "TairaXOR.bridgeLocked() is true",
+  "SccpTronSourceBridge.owner() equals taira_xor_bridge_address",
+  "TairaXorSccpBridge.destinationBindingHash() equals verifier destinationBindingHash()",
+]);
+const REQUIRED_POST_DEPLOY_CHECKS = Object.freeze([
+  ...POST_DEPLOY_CONFIGURATION_CHECKS,
+  "Run scripts/sccp_tron_source_bridge_evidence.py for source bridge config evidence",
+  "Run scripts/sccp_tron_live_evidence.py for live verifier/source/canary evidence",
+]);
+const DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN =
+  /(?:private[_-]?key|mnemonic|recovery[_-]?phrase|seed[_-]?phrase|secret)/iu;
+const PRIVATE_KEY_PEM_PATTERN =
+  /-----BEGIN(?: [A-Z0-9]+)* PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)* PRIVATE KEY-----/iu;
+const RECOVERY_PHRASE_WORD_COUNTS = new Set([12, 15, 18, 21, 24]);
 
 const textEncoder = new TextEncoder();
 
@@ -136,17 +157,18 @@ function repoPath(...segments) {
 
 function usage() {
   return `Usage:
-  node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer [--out ${DEFAULT_SECRET_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer [--out ${DEFAULT_SECRET_OUT}] [--force true]
   node scripts/sccp_tron_taira_xor_deploy.mjs doctor [--secret ${DEFAULT_SECRET_OUT}] [--verifier <verifier-key.json>] [--endpoint ${DEFAULT_TRON_ENDPOINT}] [--check-account true] [--require-secret true] [--require-verifier true] [--require-optional-packages true]
   node scripts/sccp_tron_taira_xor_deploy.mjs estimate-budget [--secret ${DEFAULT_SECRET_OUT}] [--fee-limit ${DEFAULT_DEPLOY_FEE_LIMIT_SUN}] [--trigger-fee-limit ${DEFAULT_TRIGGER_FEE_LIMIT_SUN}]
   node scripts/sccp_tron_taira_xor_deploy.mjs account-status [--secret ${DEFAULT_SECRET_OUT}] [--endpoint ${DEFAULT_TRON_ENDPOINT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs compile-taira-contract [--out ${DEFAULT_TAIRA_CONTRACT_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> [--secret ${DEFAULT_SECRET_OUT}] [--endpoint ${DEFAULT_TRON_ENDPOINT}] [--out ${DEFAULT_DEPLOYMENT_OUT}] [--broadcast true --confirm-mainnet ${CONFIRMATION_TEXT}]
-  node scripts/sccp_tron_taira_xor_deploy.mjs sign-transaction --secret ${DEFAULT_SECRET_OUT} --transaction <unsigned.json> [--out ${DEFAULT_SIGNED_TRANSACTION_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs sign-transaction --secret ${DEFAULT_SECRET_OUT} --transaction <unsigned-artifact.json> [--out ${DEFAULT_SIGNED_TRANSACTION_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs sign-transaction --secret ${DEFAULT_SECRET_OUT} --transaction ${DEFAULT_DEPLOYMENT_OUT} --step <step-key> [--out ${DEFAULT_SIGNED_TRANSACTION_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs broadcast --transaction <signed.json> [--endpoint ${DEFAULT_TRON_ENDPOINT}] --confirm-mainnet ${CONFIRMATION_TEXT} [--out ${DEFAULT_BROADCAST_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--out ${DEFAULT_EVIDENCE_OUT}]
-  node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest --settlement-asset-definition-id <asset-id> --verifier-code-hash <0x...> (--verifier-key-hash <0x...> | --verifier <verifier-key.json>) --vk-backend <backend> --vk-name <name> [--evidence ${DEFAULT_EVIDENCE_OUT}] [--taira-contract ${DEFAULT_TAIRA_CONTRACT_OUT}] [--expected-destination-binding-hash <0x...>] [--expected-destination-binding-key <key>] [--gas-limit 2000000] [--production-ready true --live-readback-checked true --confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest --settlement-asset-definition-id <asset-id> --verifier-code-hash <0x...> (--verifier-key-hash <0x...> | --verifier <verifier-key.json>) --vk-backend <backend> --vk-name <name> [--evidence ${DEFAULT_EVIDENCE_OUT}] [--taira-contract ${DEFAULT_TAIRA_CONTRACT_OUT}] [--live-evidence <sccp-tron-live-evidence.json>] [--expected-destination-binding-hash <0x...>] [--expected-destination-binding-key <key>] [--gas-limit 2000000] [--production-ready true --live-readback-checked true --confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs self-test
 
 Required optional packages for compile/deploy: solc and ethers. The contract
@@ -202,6 +224,53 @@ function normalizeNonEmptyText(value, label) {
     throw new Error(`${label} must be non-empty text without surrounding whitespace`);
   }
   return value;
+}
+
+function isRecoveryPhraseShapedText(value) {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().replace(/\s+/gu, " ").toLowerCase();
+  if (!normalized) return false;
+  const words = normalized.split(" ");
+  return (
+    RECOVERY_PHRASE_WORD_COUNTS.has(words.length) &&
+    words.every((word) => /^[a-z]{2,12}$/u.test(word))
+  );
+}
+
+function isSecretLikeArtifactText(value) {
+  return (
+    typeof value === "string" &&
+    (PRIVATE_KEY_PEM_PATTERN.test(value) || isRecoveryPhraseShapedText(value))
+  );
+}
+
+function assertNoSecretLikeDeploymentArtifactFields(
+  value,
+  path = "deployment artifact",
+  seen = new WeakSet(),
+) {
+  if (isSecretLikeArtifactText(value)) {
+    throw new Error(
+      `${path} must not contain recovery phrases or private key material`,
+    );
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return;
+    seen.add(value);
+    value.forEach((entry, index) => {
+      assertNoSecretLikeDeploymentArtifactFields(entry, `${path}[${index}]`, seen);
+    });
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  for (const [key, child] of Object.entries(value)) {
+    if (DEPLOYMENT_ARTIFACT_SECRET_KEY_PATTERN.test(key)) {
+      throw new Error(`${path}.${key} must not be present in deployment artifacts`);
+    }
+    assertNoSecretLikeDeploymentArtifactFields(child, `${path}.${key}`, seen);
+  }
 }
 
 function normalizeVerifierKeyRefText(value, label) {
@@ -309,9 +378,7 @@ function parseIpv4Octets(hostname) {
     : null;
 }
 
-function isPrivateOrReservedIpv4(hostname) {
-  const octets = parseIpv4Octets(hostname);
-  if (!octets) return false;
+function isPrivateOrReservedIpv4Octets(octets) {
   const [first, second] = octets;
   return (
     first === 0 ||
@@ -325,6 +392,70 @@ function isPrivateOrReservedIpv4(hostname) {
     (first === 198 && (second === 18 || second === 19)) ||
     first >= 224
   );
+}
+
+function isPrivateOrReservedIpv4(hostname) {
+  const octets = parseIpv4Octets(hostname);
+  if (!octets) return false;
+  return isPrivateOrReservedIpv4Octets(octets);
+}
+
+function parseIpv6Hextets(hostname) {
+  if (!hostname.includes(":")) {
+    return null;
+  }
+  const parts = hostname.split("::");
+  if (parts.length > 2) {
+    return null;
+  }
+  const parseSide = (side) =>
+    side
+      ? side.split(":").map((part) => {
+          if (!/^[0-9a-f]{1,4}$/iu.test(part)) {
+            return Number.NaN;
+          }
+          return Number.parseInt(part, 16);
+        })
+      : [];
+  const left = parseSide(parts[0]);
+  const right = parseSide(parts[1] ?? "");
+  if (
+    [...left, ...right].some((hextet) => !Number.isInteger(hextet)) ||
+    (parts.length === 1 && left.length !== 8) ||
+    left.length + right.length > 8
+  ) {
+    return null;
+  }
+  const zeroFill = parts.length === 2 ? Array(8 - left.length - right.length).fill(0) : [];
+  return [...left, ...zeroFill, ...right];
+}
+
+function hextetsToIpv4Octets(high, low) {
+  return [(high >> 8) & 0xff, high & 0xff, (low >> 8) & 0xff, low & 0xff];
+}
+
+function hasPrivateOrReservedEmbeddedIpv4(hextets) {
+  if (hextets.length !== 8) {
+    return false;
+  }
+  const lastIpv4 = hextetsToIpv4Octets(hextets[6], hextets[7]);
+  const leadingCompatibleZeros = hextets.slice(0, 6).every((part) => part === 0);
+  const leadingMappedZeros =
+    hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff;
+  const nat64WellKnownPrefix =
+    hextets[0] === 0x64 &&
+    hextets[1] === 0xff9b &&
+    hextets.slice(2, 6).every((part) => part === 0);
+  if (
+    (leadingCompatibleZeros || leadingMappedZeros || nat64WellKnownPrefix) &&
+    isPrivateOrReservedIpv4Octets(lastIpv4)
+  ) {
+    return true;
+  }
+  if (hextets[0] === 0x2002) {
+    return isPrivateOrReservedIpv4Octets(hextetsToIpv4Octets(hextets[1], hextets[2]));
+  }
+  return false;
 }
 
 function isPrivateTronEndpointHost(hostname) {
@@ -354,11 +485,17 @@ function isPrivateTronEndpointHost(hostname) {
   if (!normalized.includes(":")) {
     return false;
   }
-  const firstHextetText = normalized.split(":").find(Boolean) ?? "0";
-  const firstHextet = Number.parseInt(firstHextetText, 16);
-  if (!Number.isFinite(firstHextet)) {
+  const hextets = parseIpv6Hextets(normalized);
+  if (!hextets) {
     return true;
   }
+  if (
+    hasPrivateOrReservedEmbeddedIpv4(hextets) ||
+    (hextets[0] === 0x2001 && hextets[1] === 0)
+  ) {
+    return true;
+  }
+  const firstHextet = hextets[0];
   return (
     (firstHextet & 0xfe00) === 0xfc00 ||
     (firstHextet & 0xffc0) === 0xfe80 ||
@@ -418,7 +555,7 @@ function estimateDeploymentFunding(options = {}) {
     15,
   );
   const deployTransactionCount = 4n;
-  const postDeployTriggerTransactionCount = 4n;
+  const postDeployTriggerTransactionCount = BigInt(POST_DEPLOY_CONFIGURATION_CHECKS.length);
   const totalFeeLimitSun =
     deployTransactionCount * deployFeeLimitSun +
     postDeployTriggerTransactionCount * triggerFeeLimitSun;
@@ -601,6 +738,65 @@ function normalizeTronBase58Address(value, label) {
   return normalizeTronAddress(value, label);
 }
 
+function compactTronAddress(value, label) {
+  const candidate =
+    typeof value === "object" && value !== null
+      ? value.base58 ?? value.hex ?? value.solidity
+      : value;
+  const normalized = normalizeTronAddress(candidate, label);
+  return {
+    base58: normalized.base58,
+    hex: normalized.hex,
+    solidity: normalized.solidity,
+  };
+}
+
+function buildDeploymentConfigurationSpecs({
+  tokenAddress,
+  sourceBridgeAddress,
+  verifierAddress,
+  bridgeAddress,
+}) {
+  const token = compactTronAddress(tokenAddress, "token address");
+  const sourceBridge = compactTronAddress(sourceBridgeAddress, "source bridge address");
+  const verifier = compactTronAddress(verifierAddress, "verifier address");
+  const bridge = compactTronAddress(bridgeAddress, "bridge address");
+  return [
+    {
+      key: "token_set_bridge",
+      contractKey: "token",
+      contractAddress: token,
+      functionName: "setBridge",
+      args: [bridge.solidity],
+      requiredPostDeployCheck: POST_DEPLOY_CONFIGURATION_CHECKS[0],
+    },
+    {
+      key: "token_lock_bridge",
+      contractKey: "token",
+      contractAddress: token,
+      functionName: "lockBridge",
+      args: [],
+      requiredPostDeployCheck: POST_DEPLOY_CONFIGURATION_CHECKS[1],
+    },
+    {
+      key: "source_bridge_transfer_ownership",
+      contractKey: "source_bridge",
+      contractAddress: sourceBridge,
+      functionName: "transferOwnership",
+      args: [bridge.solidity],
+      requiredPostDeployCheck: POST_DEPLOY_CONFIGURATION_CHECKS[2],
+    },
+    {
+      key: "verifier_emit_destination_binding",
+      contractKey: "verifier",
+      contractAddress: verifier,
+      functionName: "emitDestinationBindingConfigured",
+      args: [],
+      requiredPostDeployCheck: POST_DEPLOY_CONFIGURATION_CHECKS[3],
+    },
+  ];
+}
+
 function routeHash(text) {
   return bytesToHex(keccak_256(textEncoder.encode(text)));
 }
@@ -737,6 +933,18 @@ async function writeJson(path, value, mode = 0o600) {
   return out;
 }
 
+async function pathExists(path) {
+  try {
+    await stat(resolve(path));
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function readJson(path, label) {
   let text;
   try {
@@ -748,6 +956,26 @@ async function readJson(path, label) {
     return JSON.parse(text);
   } catch (error) {
     throw new Error(`${label} is not valid JSON: ${error.message}`);
+  }
+}
+
+async function assertPrivateJsonFilePermissions(path, label) {
+  const resolved = resolve(path);
+  let fileStat;
+  try {
+    fileStat = await lstat(resolved);
+  } catch (error) {
+    throw new Error(`${label} could not be inspected: ${error.message}`);
+  }
+  if (fileStat.isSymbolicLink()) {
+    throw new Error(`${label} must be a direct file, not a symbolic link`);
+  }
+  if (!fileStat.isFile()) {
+    throw new Error(`${label} must be a regular file`);
+  }
+  const mode = fileStat.mode & 0o777;
+  if (mode !== 0o600) {
+    throw new Error(`${label} file mode must be 0600; run chmod 600 ${resolved}`);
   }
 }
 
@@ -787,6 +1015,7 @@ function parsePrivateKeyHex(value, label = "private_key_hex") {
 }
 
 async function loadDeployerSecret(path) {
+  await assertPrivateJsonFilePermissions(path, "deployer secret");
   const secret = await readJson(path, "deployer secret");
   if (secret.schema !== DEPLOYER_SCHEMA) {
     throw new Error(`deployer secret schema must be ${DEPLOYER_SCHEMA}`);
@@ -807,10 +1036,17 @@ async function loadDeployerSecret(path) {
 }
 
 async function generateDeployer(options) {
+  const outputPath = options.out ?? DEFAULT_SECRET_OUT;
+  if (!optionEnabled(options, "force", false) && (await pathExists(outputPath))) {
+    throw new Error(
+      `Refusing to overwrite existing deployer secret at ${resolve(outputPath)}. ` +
+        "Use --force true only when intentionally rotating the deployment account.",
+    );
+  }
   const privateKey = secp256k1.utils.randomPrivateKey();
   const address = tronAddressFromPrivateKey(privateKey);
   const createdAt = new Date().toISOString();
-  const out = await writeJson(options.out ?? DEFAULT_SECRET_OUT, {
+  const out = await writeJson(outputPath, {
     schema: DEPLOYER_SCHEMA,
     created_at: createdAt,
     network: "tron-mainnet",
@@ -1500,18 +1736,251 @@ function signTransactionPayload(transaction, deployer) {
   };
 }
 
+function verifySignedTransactionPayload(transaction, label = "signed transaction") {
+  if (!Array.isArray(transaction.signature) || transaction.signature.length !== 1) {
+    throw new Error(`${label} must contain exactly one signature`);
+  }
+  const signature = hexToBytes(transaction.signature[0], `${label}.signature[0]`, 65);
+  if (!tronRecoverableSignatureIsCanonical(signature)) {
+    throw new Error(`${label}.signature[0] must be a canonical recoverable TRON signature`);
+  }
+  const owner = transactionOwnerAddress(transaction, label);
+  const { hash, txid } = transactionRawDataHash(transaction, label);
+  const recoveryId = signature[64] >= 27 ? signature[64] - 27 : signature[64];
+  let recovered;
+  try {
+    const parsedSignature = secp256k1.Signature
+      .fromCompact(signature.slice(0, 64))
+      .addRecoveryBit(recoveryId);
+    recovered = tronAddressFromPublicKey(
+      parsedSignature.recoverPublicKey(hash).toRawBytes(false),
+    );
+  } catch (error) {
+    throw new Error(`${label}.signature[0] could not recover signer: ${error.message}`);
+  }
+  if (recovered.base58 !== owner.base58) {
+    throw new Error(
+      `${label}.signature[0] recovers ${recovered.base58}, not owner ${owner.base58}`,
+    );
+  }
+  return {
+    txid,
+    signature: bytesToHex(signature, false),
+    signature_recovery_id: signature[64],
+    signature_recovered_address: recovered.hex,
+    signature_recovered_base58: recovered.base58,
+    signature_recovers_to_owner: true,
+    owner_address: owner.hex,
+    owner_base58: owner.base58,
+  };
+}
+
+function buildSignedTransactionArtifact(signed, signedAt = new Date()) {
+  return {
+    schema: SIGNED_TRANSACTION_SCHEMA,
+    signed_at: signedAt.toISOString(),
+    network: "tron-mainnet",
+    network_id_hex: TRON_MAINNET_NETWORK_ID_HEX,
+    route_id: ROUTE_ID,
+    asset_key: ASSET_KEY,
+    purpose: SIGNED_TRANSACTION_PURPOSE,
+    ...signed.metadata,
+    transaction: signed.signed,
+  };
+}
+
+function assertExactArtifactField(payload, field, expected, label) {
+  if (payload[field] !== expected) {
+    throw new Error(`${label}.${field} must be ${expected}`);
+  }
+}
+
+function buildUnsignedTransactionArtifact(input, createdAt = new Date()) {
+  const transaction = extractTransaction(
+    { transaction: input.transaction },
+    "unsigned transaction",
+  );
+  const { txid } = transactionRawDataHash(transaction, "unsigned transaction");
+  return {
+    schema: UNSIGNED_TRANSACTION_SCHEMA,
+    created_at: createdAt.toISOString(),
+    network: "tron-mainnet",
+    network_id_hex: TRON_MAINNET_NETWORK_ID_HEX,
+    route_id: ROUTE_ID,
+    asset_key: ASSET_KEY,
+    purpose: SIGNED_TRANSACTION_PURPOSE,
+    step_key: normalizeNonEmptyText(input.stepKey, "step_key"),
+    step_kind: normalizeNonEmptyText(input.stepKind, "step_kind"),
+    deployer_address_base58: input.deployerAddress.base58,
+    deployer_address_hex: input.deployerAddress.hex,
+    txid,
+    transaction,
+  };
+}
+
+function assertRouteScopedTransactionArtifact(payload, label) {
+  assertExactArtifactField(payload, "network", "tron-mainnet", label);
+  assertExactArtifactField(payload, "network_id_hex", TRON_MAINNET_NETWORK_ID_HEX, label);
+  assertExactArtifactField(payload, "route_id", ROUTE_ID, label);
+  assertExactArtifactField(payload, "asset_key", ASSET_KEY, label);
+}
+
+function normalizeUnsignedTransactionArtifactPayload(payload, deployer, label) {
+  assertExactArtifactField(payload, "schema", UNSIGNED_TRANSACTION_SCHEMA, label);
+  assertRouteScopedTransactionArtifact(payload, label);
+  assertExactArtifactField(payload, "purpose", SIGNED_TRANSACTION_PURPOSE, label);
+  const stepKey = normalizeNonEmptyText(payload.step_key, `${label}.step_key`);
+  const stepKind = normalizeNonEmptyText(payload.step_kind, `${label}.step_kind`);
+  if (!["deploy", "trigger"].includes(stepKind)) {
+    throw new Error(`${label}.step_kind must be deploy or trigger`);
+  }
+  const artifactBase58 = normalizeTronAddress(
+    payload.deployer_address_base58,
+    `${label}.deployer_address_base58`,
+  );
+  const artifactHex = normalizeTronAddress(
+    payload.deployer_address_hex,
+    `${label}.deployer_address_hex`,
+  );
+  if (
+    artifactBase58.base58 !== deployer.address.base58 ||
+    artifactHex.base58 !== deployer.address.base58
+  ) {
+    throw new Error(`${label} deployer address does not match loaded deployer secret`);
+  }
+  const transaction = extractTransaction(payload, label);
+  const { txid } = transactionRawDataHash(transaction, `${label}.transaction`);
+  if (payload.txid !== txid) {
+    throw new Error(`${label}.txid does not match unsigned transaction`);
+  }
+  return { transaction, stepKey, stepKind };
+}
+
+function normalizeDeploymentPlanUnsignedTransaction(payload, options, deployer, label) {
+  assertExactArtifactField(payload, "schema", DEPLOYMENT_PLAN_SCHEMA, label);
+  assertRouteScopedTransactionArtifact(payload, label);
+  if (payload.broadcast !== false) {
+    throw new Error(`${label} must be a dry-run deployment plan with broadcast false`);
+  }
+  const planBase58 = normalizeTronAddress(
+    payload.deployer_address_base58,
+    `${label}.deployer_address_base58`,
+  );
+  const planHex = normalizeTronAddress(
+    payload.deployer_address_hex,
+    `${label}.deployer_address_hex`,
+  );
+  if (
+    planBase58.base58 !== deployer.address.base58 ||
+    planHex.base58 !== deployer.address.base58
+  ) {
+    throw new Error(`${label} deployer address does not match loaded deployer secret`);
+  }
+  const stepKey = normalizeNonEmptyText(
+    options.step ?? options["step-key"],
+    "--step",
+  );
+  if (!Array.isArray(payload.steps)) {
+    throw new Error(`${label}.steps must be an array`);
+  }
+  const matchingSteps = payload.steps.filter(
+    (step) => step && typeof step === "object" && step.key === stepKey,
+  );
+  if (matchingSteps.length !== 1) {
+    throw new Error(`${label} must contain exactly one step with key ${stepKey}`);
+  }
+  const [step] = matchingSteps;
+  const stepKind = normalizeNonEmptyText(step.kind, `${label}.steps.${stepKey}.kind`);
+  if (!["deploy", "trigger"].includes(stepKind)) {
+    throw new Error(`${label}.steps.${stepKey}.kind must be deploy or trigger`);
+  }
+  const transaction = extractTransaction(
+    {
+      transaction: step.unsigned_artifact?.transaction ?? step.unsigned_transaction,
+    },
+    `${label}.steps.${stepKey}`,
+  );
+  transactionRawDataHash(transaction, `${label}.steps.${stepKey}.transaction`);
+  if (step.unsigned_artifact !== undefined) {
+    const normalized = normalizeUnsignedTransactionArtifactPayload(
+      step.unsigned_artifact,
+      deployer,
+      `${label}.steps.${stepKey}.unsigned_artifact`,
+    );
+    if (normalized.stepKey !== stepKey || normalized.stepKind !== stepKind) {
+      throw new Error(`${label}.steps.${stepKey}.unsigned_artifact step metadata does not match`);
+    }
+    return normalized;
+  }
+  return { transaction, stepKey, stepKind };
+}
+
+function normalizeUnsignedTransactionArtifact(payload, options = {}, deployer = null, label = "unsigned transaction artifact") {
+  if (!deployer?.address) {
+    throw new Error("loaded deployer secret is required to normalize unsigned transactions");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  assertNoSecretLikeDeploymentArtifactFields(payload, label);
+  if (payload.schema === UNSIGNED_TRANSACTION_SCHEMA) {
+    return normalizeUnsignedTransactionArtifactPayload(payload, deployer, label);
+  }
+  if (payload.schema === DEPLOYMENT_PLAN_SCHEMA) {
+    return normalizeDeploymentPlanUnsignedTransaction(payload, options, deployer, label);
+  }
+  throw new Error(
+    `${label} must be a route-scoped unsigned artifact or dry-run deployment plan`,
+  );
+}
+
+function normalizeSignedTransactionArtifact(payload, label = "signed transaction artifact") {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  assertNoSecretLikeDeploymentArtifactFields(payload, label);
+  assertExactArtifactField(payload, "schema", SIGNED_TRANSACTION_SCHEMA, label);
+  assertRouteScopedTransactionArtifact(payload, label);
+  assertExactArtifactField(payload, "purpose", SIGNED_TRANSACTION_PURPOSE, label);
+
+  const transaction = extractTransaction(payload, label);
+  const verified = verifySignedTransactionPayload(transaction, `${label}.transaction`);
+  for (const field of [
+    "txid",
+    "signature",
+    "signature_recovery_id",
+    "signature_recovered_address",
+    "signature_recovered_base58",
+    "signature_recovers_to_owner",
+    "owner_address",
+    "owner_base58",
+  ]) {
+    if (payload[field] !== verified[field]) {
+      throw new Error(`${label}.${field} does not match signed transaction`);
+    }
+  }
+  return { transaction, verified };
+}
+
 async function signTransactionCommand(options) {
   if (!options.transaction) throw new Error("--transaction is required");
   const deployer = await loadDeployerSecret(options.secret ?? DEFAULT_SECRET_OUT);
   const payload = await readJson(options.transaction, "unsigned transaction");
-  const transaction = extractTransaction(payload, "unsigned transaction");
+  const { transaction, stepKey, stepKind } = normalizeUnsignedTransactionArtifact(
+    payload,
+    options,
+    deployer,
+    "unsigned transaction",
+  );
   const signed = signTransactionPayload(transaction, deployer);
-  const out = await writeJson(options.out ?? DEFAULT_SIGNED_TRANSACTION_OUT, {
-    schema: SIGNED_TRANSACTION_SCHEMA,
-    signed_at: new Date().toISOString(),
-    ...signed.metadata,
-    transaction: signed.signed,
-  });
+  const out = await writeJson(
+    options.out ?? DEFAULT_SIGNED_TRANSACTION_OUT,
+    {
+      ...buildSignedTransactionArtifact(signed),
+      step_key: stepKey,
+      step_kind: stepKind,
+    },
+  );
   console.log(JSON.stringify({ wrote: out, ...signed.metadata }, null, 2));
 }
 
@@ -1559,24 +2028,26 @@ async function broadcastCommand(options) {
   if (!options.transaction) throw new Error("--transaction is required");
   requireMainnetConfirmation(options, "broadcast");
   const payload = await readJson(options.transaction, "signed transaction");
-  const transaction = extractTransaction(payload, "signed transaction");
-  if (!Array.isArray(transaction.signature) || transaction.signature.length !== 1) {
-    throw new Error("signed transaction must contain exactly one signature");
-  }
-  transactionRawDataHash(transaction, "signed transaction");
+  const { transaction, verified } = normalizeSignedTransactionArtifact(payload);
   const result = await broadcastSignedTransaction(
     options.endpoint ?? DEFAULT_TRON_ENDPOINT,
     transaction,
     options,
   );
   const out = await writeJson(options.out ?? DEFAULT_BROADCAST_OUT, {
-    schema: "iroha-sccp-tron-broadcast-result/v1",
+    schema: BROADCAST_RESULT_SCHEMA,
     broadcast_at: new Date().toISOString(),
-    txid: transaction.txID,
+    network: "tron-mainnet",
+    network_id_hex: TRON_MAINNET_NETWORK_ID_HEX,
+    route_id: ROUTE_ID,
+    asset_key: ASSET_KEY,
+    purpose: SIGNED_TRANSACTION_PURPOSE,
+    txid: verified.txid,
+    signature: verified,
     endpoint: options.endpoint ?? DEFAULT_TRON_ENDPOINT,
     result,
   });
-  console.log(JSON.stringify({ wrote: out, txid: transaction.txID, result }, null, 2));
+  console.log(JSON.stringify({ wrote: out, txid: verified.txid, result }, null, 2));
 }
 
 function sleep(ms) {
@@ -1696,6 +2167,12 @@ async function createDeployStep(context, key, artifact, constructorArgs) {
     unsigned_response: response,
     unsigned_transaction: transaction,
   };
+  step.unsigned_artifact = buildUnsignedTransactionArtifact({
+    stepKey: key,
+    stepKind: step.kind,
+    deployerAddress: context.deployer.address,
+    transaction,
+  });
   if (!context.broadcast) return step;
   return submitSignedStep(context.endpoint, transaction, context.deployer, step, context.options);
 }
@@ -1725,6 +2202,12 @@ async function createTriggerStep(context, key, artifact, contractAddress, functi
     unsigned_response: response,
     unsigned_transaction: transaction,
   };
+  step.unsigned_artifact = buildUnsignedTransactionArtifact({
+    stepKey: key,
+    stepKind: step.kind,
+    deployerAddress: context.deployer.address,
+    transaction,
+  });
   if (!context.broadcast) return step;
   return submitSignedStep(context.endpoint, transaction, context.deployer, step, context.options);
 }
@@ -1789,41 +2272,26 @@ async function deployCommand(options) {
   const bridgeStep = await createDeployStep(context, "bridge", artifacts.bridge, bridgeArgs);
   steps.push(bridgeStep);
   const bridgeAddress = normalizeTronAddress(bridgeStep.address_base58, "bridge address");
+  const requiredPostDeployConfiguration = buildDeploymentConfigurationSpecs({
+    tokenAddress,
+    sourceBridgeAddress,
+    verifierAddress,
+    bridgeAddress,
+  });
 
   if (broadcast) {
-    steps.push(
-      await createTriggerStep(
-        context,
-        "token_set_bridge",
-        artifacts.token,
-        tokenAddress,
-        "setBridge",
-        [bridgeAddress.solidity],
-      ),
-    );
-    steps.push(
-      await createTriggerStep(context, "token_lock_bridge", artifacts.token, tokenAddress, "lockBridge", []),
-    );
-    steps.push(
-      await createTriggerStep(
-        context,
-        "source_bridge_transfer_ownership",
-        artifacts.source_bridge,
-        sourceBridgeAddress,
-        "transferOwnership",
-        [bridgeAddress.solidity],
-      ),
-    );
-    steps.push(
-      await createTriggerStep(
-        context,
-        "verifier_emit_destination_binding",
-        artifacts.verifier,
-        verifierAddress,
-        "emitDestinationBindingConfigured",
-        [],
-      ),
-    );
+    for (const configuration of requiredPostDeployConfiguration) {
+      steps.push(
+        await createTriggerStep(
+          context,
+          configuration.key,
+          artifacts[configuration.contractKey],
+          configuration.contractAddress,
+          configuration.functionName,
+          configuration.args,
+        ),
+      );
+    }
   }
 
   const plan = {
@@ -1848,6 +2316,14 @@ async function deployCommand(options) {
       token: tokenAddress.base58,
       bridge: bridgeAddress.base58,
     },
+    required_post_deploy_configuration: requiredPostDeployConfiguration.map((configuration) => ({
+      key: configuration.key,
+      contract_key: configuration.contractKey,
+      contract_address: configuration.contractAddress.base58,
+      function: configuration.functionName,
+      args: configuration.args,
+      required_check: configuration.requiredPostDeployCheck,
+    })),
     max_fee_limit_sun_per_deploy_transaction: normalizeSun(
       options["fee-limit"],
       "--fee-limit",
@@ -1943,14 +2419,7 @@ async function writeEvidence(options) {
     sccp_tron_source_bridge_address_hex: sourceBridgeAddress.hex,
     sccp_tron_destination_verifier_address: verifierAddress.base58,
     sccp_tron_destination_verifier_address_hex: verifierAddress.hex,
-    required_post_deploy_checks: [
-      "TairaXOR.bridge() equals taira_xor_bridge_address",
-      "TairaXOR.bridgeLocked() is true",
-      "SccpTronSourceBridge.owner() equals taira_xor_bridge_address",
-      "TairaXorSccpBridge.destinationBindingHash() equals verifier destinationBindingHash()",
-      "Run scripts/sccp_tron_source_bridge_evidence.py for source bridge config evidence",
-      "Run scripts/sccp_tron_live_evidence.py for live verifier/source/canary evidence",
-    ],
+    required_post_deploy_checks: [...REQUIRED_POST_DEPLOY_CHECKS],
   };
   const out = await writeJson(options.out ?? DEFAULT_EVIDENCE_OUT, evidence);
   console.log(JSON.stringify({ wrote: out, evidence }, null, 2));
@@ -1969,6 +2438,13 @@ function readRequiredField(record, key, label) {
 function assertOptionalAddressHex(record, key, expected, label) {
   const value = record[key];
   if (value === undefined || value === null || value === "") return;
+  if (typeof value !== "string" || value.trim() !== value || value.startsWith("T")) {
+    throw new Error(`${label} must be a 21-byte TRON hex address`);
+  }
+  const hex = strip0x(value);
+  if (!/^[0-9a-f]{42}$/iu.test(hex)) {
+    throw new Error(`${label} must be a 21-byte TRON hex address`);
+  }
   const normalized = normalizeTronAddress(value, label);
   if (normalized.base58 !== expected.base58) {
     throw new Error(`${label} does not match its Base58 evidence address`);
@@ -1987,6 +2463,18 @@ function normalizeDeploymentEvidence(evidence) {
   }
   if (evidence.asset_key !== ASSET_KEY) {
     throw new Error(`deployment evidence asset_key must be ${ASSET_KEY}`);
+  }
+  if (
+    normalizeBytes32(readRequiredField(evidence, "route_id_hash", "deployment evidence"), "deployment evidence route_id_hash") !==
+    routeHash(ROUTE_ID)
+  ) {
+    throw new Error(`deployment evidence route_id_hash must match ${ROUTE_ID}`);
+  }
+  if (
+    normalizeBytes32(readRequiredField(evidence, "asset_key_hash", "deployment evidence"), "deployment evidence asset_key_hash") !==
+    routeHash(ASSET_KEY)
+  ) {
+    throw new Error(`deployment evidence asset_key_hash must match ${ASSET_KEY}`);
   }
   if (evidence.network !== "tron-mainnet") {
     throw new Error("deployment evidence network must be tron-mainnet");
@@ -2029,7 +2517,328 @@ function normalizeDeploymentEvidence(evidence) {
     verifier,
     "deployment evidence verifier hex",
   );
+  const requiredPostDeployChecks = evidence.required_post_deploy_checks;
+  if (
+    !Array.isArray(requiredPostDeployChecks) ||
+    !requiredPostDeployChecks.every((entry) => typeof entry === "string")
+  ) {
+    throw new Error("deployment evidence required_post_deploy_checks must be a string array");
+  }
+  for (const requiredCheck of REQUIRED_POST_DEPLOY_CHECKS) {
+    if (!requiredPostDeployChecks.includes(requiredCheck)) {
+      throw new Error(`deployment evidence required_post_deploy_checks is missing: ${requiredCheck}`);
+    }
+  }
   return { token, bridge, sourceBridge, verifier };
+}
+
+function requireJsonObject(value, label) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  throw new Error(`${label} must be a JSON object`);
+}
+
+function requireBooleanTrue(value, label) {
+  if (value !== true) {
+    throw new Error(`${label} must be true`);
+  }
+}
+
+function normalizeLiveEvidenceForRoute(liveEvidence, expected) {
+  const summary = requireJsonObject(liveEvidence, "live evidence");
+  requireBooleanTrue(summary.full_toml_ready, "live evidence full_toml_ready");
+
+  const sourceBridge = requireJsonObject(summary.source_bridge, "live evidence source_bridge");
+  const destinationVerifier = requireJsonObject(
+    summary.destination_verifier,
+    "live evidence destination_verifier",
+  );
+  const routeCanary = requireJsonObject(summary.route_canary, "live evidence route_canary");
+  const routeCanaryTransaction = requireJsonObject(
+    summary.route_canary_transaction ?? routeCanary.transaction,
+    "live evidence route_canary_transaction",
+  );
+  const triggerContract = requireJsonObject(
+    routeCanaryTransaction.trigger_contract,
+    "live evidence route_canary_transaction.trigger_contract",
+  );
+
+  if (
+    normalizeTronBase58Address(sourceBridge.address, "live evidence source_bridge.address").base58 !==
+    expected.addresses.sourceBridge.base58
+  ) {
+    throw new Error("live evidence source_bridge.address does not match deployment evidence");
+  }
+  if (
+    normalizeTronBase58Address(destinationVerifier.address, "live evidence destination_verifier.address").base58 !==
+    expected.addresses.verifier.base58
+  ) {
+    throw new Error("live evidence destination_verifier.address does not match deployment evidence");
+  }
+  if (
+    normalizeBytes32(sourceBridge.source_bridge_network_id, "live evidence source_bridge.source_bridge_network_id") !==
+    TRON_MAINNET_NETWORK_ID_HEX
+  ) {
+    throw new Error("live evidence source_bridge.source_bridge_network_id must be TRON mainnet");
+  }
+  if (sourceBridge.source_domain !== SCCP_DOMAIN_TRON || sourceBridge.target_domain !== SCCP_DOMAIN_SORA) {
+    throw new Error("live evidence source bridge domains must be TRON -> SORA");
+  }
+  if (
+    normalizeTronBase58Address(
+      sourceBridge.source_bridge_owner_base58,
+      "live evidence source_bridge.source_bridge_owner_base58",
+    ).base58 !== expected.addresses.bridge.base58
+  ) {
+    throw new Error("live evidence source bridge owner must be the TAIRA XOR bridge");
+  }
+  requireBooleanTrue(sourceBridge.config_hash_matches, "live evidence source_bridge.config_hash_matches");
+  const sourceBridgeConfigHash = normalizeBytes32(
+    sourceBridge.source_bridge_config_hash,
+    "live evidence source_bridge.source_bridge_config_hash",
+  );
+
+  if (
+    normalizeBytes32(destinationVerifier.network_id, "live evidence destination_verifier.network_id") !==
+    TRON_MAINNET_NETWORK_ID_HEX
+  ) {
+    throw new Error("live evidence destination_verifier.network_id must be TRON mainnet");
+  }
+  if (
+    destinationVerifier.destination_source_domain !== SCCP_DOMAIN_SORA ||
+    destinationVerifier.destination_target_domain !== SCCP_DOMAIN_TRON
+  ) {
+    throw new Error("live evidence destination verifier domains must be SORA -> TRON");
+  }
+  if (
+    normalizeBytes32(
+      destinationVerifier.destination_verifier_code_hash,
+      "live evidence destination_verifier.destination_verifier_code_hash",
+    ) !== expected.verifierCodeHash
+  ) {
+    throw new Error("live evidence destination verifier code hash does not match --verifier-code-hash");
+  }
+  if (
+    normalizeBytes32(
+      destinationVerifier.destination_verifier_key_hash,
+      "live evidence destination_verifier.destination_verifier_key_hash",
+    ) !== expected.verifierKeyHash
+  ) {
+    throw new Error("live evidence destination verifier key hash does not match verifier material");
+  }
+  requireBooleanTrue(
+    destinationVerifier.verifier_backend_hash_matches,
+    "live evidence destination_verifier.verifier_backend_hash_matches",
+  );
+  requireBooleanTrue(
+    destinationVerifier.proof_family_hash_matches,
+    "live evidence destination_verifier.proof_family_hash_matches",
+  );
+  requireBooleanTrue(
+    destinationVerifier.destination_binding_hash_matches,
+    "live evidence destination_verifier.destination_binding_hash_matches",
+  );
+  if (destinationVerifier.expected_destination_binding_hash_matches !== undefined) {
+    requireBooleanTrue(
+      destinationVerifier.expected_destination_binding_hash_matches,
+      "live evidence destination_verifier.expected_destination_binding_hash_matches",
+    );
+  }
+  if (destinationVerifier.bytecode_hash_matches_verifier_code_hash !== undefined) {
+    requireBooleanTrue(
+      destinationVerifier.bytecode_hash_matches_verifier_code_hash,
+      "live evidence destination_verifier.bytecode_hash_matches_verifier_code_hash",
+    );
+  }
+  const destinationBindingHash = normalizeBytes32(
+    destinationVerifier.destination_binding_hash,
+    "live evidence destination_verifier.destination_binding_hash",
+  );
+  if (destinationBindingHash !== expected.destinationBindingHash) {
+    throw new Error("live evidence destination binding hash does not match computed destination binding hash");
+  }
+  const recomputedDestinationBindingHash = normalizeBytes32(
+    destinationVerifier.recomputed_destination_binding_hash,
+    "live evidence destination_verifier.recomputed_destination_binding_hash",
+  );
+  if (recomputedDestinationBindingHash !== expected.destinationBindingHash) {
+    throw new Error("live evidence recomputed destination binding hash does not match computed destination binding hash");
+  }
+  const destinationBindingKey = normalizeNonEmptyText(
+    destinationVerifier.destination_binding_key,
+    "live evidence destination_verifier.destination_binding_key",
+  );
+  if (destinationBindingKey !== expected.destinationBindingKey) {
+    throw new Error("live evidence destination binding key does not match computed destination binding key");
+  }
+
+  if (routeCanary.status !== "passed") {
+    throw new Error("live evidence route_canary.status must be passed");
+  }
+  if (routeCanary.evidence_source !== "tron_message_proof_accepted_transaction") {
+    throw new Error(
+      "live evidence route_canary.evidence_source must be tron_message_proof_accepted_transaction",
+    );
+  }
+  const routeCanaryEvidenceHash = normalizeBytes32(
+    routeCanary.evidence_hash ?? routeCanaryTransaction.route_canary_evidence_hash,
+    "live evidence route_canary.evidence_hash",
+  );
+  if (
+    normalizeBytes32(
+      routeCanaryTransaction.route_canary_evidence_hash,
+      "live evidence route_canary_transaction.route_canary_evidence_hash",
+    ) !== routeCanaryEvidenceHash
+  ) {
+    throw new Error("live evidence route canary transaction hash does not match route_canary.evidence_hash");
+  }
+  requireBooleanTrue(
+    routeCanaryTransaction.message_proof_used,
+    "live evidence route_canary_transaction.message_proof_used",
+  );
+  const routeCanarySourceDomain = normalizeUint32(
+    readRequiredField(routeCanaryTransaction, "source_domain", "live evidence route_canary_transaction"),
+    "live evidence route_canary_transaction.source_domain",
+  );
+  if (routeCanarySourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new Error("live evidence route canary source domain must be SORA");
+  }
+  const routeCanaryMessageId = normalizeBytes32(
+    readRequiredField(routeCanaryTransaction, "message_id", "live evidence route_canary_transaction"),
+    "live evidence route_canary_transaction.message_id",
+  );
+  const routeCanaryCommitmentRoot = normalizeBytes32(
+    readRequiredField(routeCanaryTransaction, "commitment_root", "live evidence route_canary_transaction"),
+    "live evidence route_canary_transaction.commitment_root",
+  );
+  const routeCanaryStatementHash = normalizeBytes32(
+    readRequiredField(routeCanaryTransaction, "statement_hash", "live evidence route_canary_transaction"),
+    "live evidence route_canary_transaction.statement_hash",
+  );
+  if (
+    normalizeBytes32(
+      readRequiredField(
+        routeCanaryTransaction,
+        "destination_binding_hash",
+        "live evidence route_canary_transaction",
+      ),
+      "live evidence route_canary_transaction.destination_binding_hash",
+    ) !== expected.destinationBindingHash
+  ) {
+    throw new Error("live evidence route canary destination binding hash does not match computed destination binding hash");
+  }
+  if (
+    normalizeBytes32(
+      readRequiredField(routeCanaryTransaction, "network_id", "live evidence route_canary_transaction"),
+      "live evidence route_canary_transaction.network_id",
+    ) !== TRON_MAINNET_NETWORK_ID_HEX
+  ) {
+    throw new Error("live evidence route canary network id must be TRON mainnet");
+  }
+  requireBooleanTrue(
+    triggerContract.raw_data_owner_matches_transaction,
+    "live evidence route_canary_transaction.trigger_contract.raw_data_owner_matches_transaction",
+  );
+  requireBooleanTrue(
+    triggerContract.signature_recovers_to_owner,
+    "live evidence route_canary_transaction.trigger_contract.signature_recovers_to_owner",
+  );
+  requireBooleanTrue(
+    triggerContract.raw_data_call_matches ?? triggerContract.call_matches,
+    "live evidence route_canary_transaction.trigger_contract.raw_data_call_matches",
+  );
+  const triggerProofSourceDomain = normalizeUint32(
+    readRequiredField(
+      triggerContract,
+      "proof_source_domain",
+      "live evidence route_canary_transaction.trigger_contract",
+    ),
+    "live evidence route_canary_transaction.trigger_contract.proof_source_domain",
+  );
+  if (triggerProofSourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new Error("live evidence route canary proof source domain must be SORA");
+  }
+  const triggerTargetDomain = normalizeUint32(
+    readRequiredField(
+      triggerContract,
+      "public_inputs_target_domain",
+      "live evidence route_canary_transaction.trigger_contract",
+    ),
+    "live evidence route_canary_transaction.trigger_contract.public_inputs_target_domain",
+  );
+  if (triggerTargetDomain !== SCCP_DOMAIN_TRON) {
+    throw new Error("live evidence route canary target domain must be TRON");
+  }
+  if (
+    normalizeBytes32(
+      readRequiredField(
+        triggerContract,
+        "public_inputs_message_id",
+        "live evidence route_canary_transaction.trigger_contract",
+      ),
+      "live evidence route_canary_transaction.trigger_contract.public_inputs_message_id",
+    ) !== routeCanaryMessageId
+  ) {
+    throw new Error("live evidence route canary public input message id does not match the accepted event");
+  }
+  if (
+    normalizeBytes32(
+      readRequiredField(
+        triggerContract,
+        "public_inputs_commitment_root",
+        "live evidence route_canary_transaction.trigger_contract",
+      ),
+      "live evidence route_canary_transaction.trigger_contract.public_inputs_commitment_root",
+    ) !== routeCanaryCommitmentRoot
+  ) {
+    throw new Error("live evidence route canary public input commitment root does not match the accepted event");
+  }
+  if (
+    normalizeBytes32(
+      readRequiredField(
+        triggerContract,
+        "statement_hash",
+        "live evidence route_canary_transaction.trigger_contract",
+      ),
+      "live evidence route_canary_transaction.trigger_contract.statement_hash",
+    ) !== routeCanaryStatementHash
+  ) {
+    throw new Error("live evidence route canary statement hash does not match the accepted event");
+  }
+  if (triggerContract.contract_base58 !== undefined) {
+    const triggerContractAddress = normalizeTronBase58Address(
+      triggerContract.contract_base58,
+      "live evidence route_canary_transaction.trigger_contract.contract_base58",
+    );
+    if (triggerContractAddress.base58 !== expected.addresses.verifier.base58) {
+      throw new Error("live evidence route canary contract_base58 must match the destination verifier");
+    }
+  }
+  if (triggerContract.contract_address !== undefined) {
+    const triggerContractAddress = normalizeTronAddress(
+      triggerContract.contract_address,
+      "live evidence route_canary_transaction.trigger_contract.contract_address",
+    );
+    if (triggerContractAddress.base58 !== expected.addresses.verifier.base58) {
+      throw new Error("live evidence route canary contract_address must match the destination verifier");
+    }
+  }
+
+  return {
+    sourceBridgeConfigHash,
+    destinationBindingHash,
+    destinationBindingKey,
+    routeCanaryEvidenceHash,
+    routeCanaryTransactionId: normalizeBytes32(
+      routeCanaryTransaction.transaction_id,
+      "live evidence route_canary_transaction.transaction_id",
+    ),
+    offlineFullTomlSha256:
+      summary.offline_full_toml_sha256 === undefined
+        ? null
+        : normalizeBytes32(summary.offline_full_toml_sha256, "live evidence offline_full_toml_sha256"),
+  };
 }
 
 function normalizeBurnRecordContract(contract) {
@@ -2056,6 +2865,14 @@ function normalizeBurnRecordContract(contract) {
   }
 
   const artifact = normalizeStrictBase64(contract.artifact_b64, "TAIRA burn-record artifact_b64");
+  if (
+    artifact.bytes.length < TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES ||
+    artifact.bytes.length > TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES
+  ) {
+    throw new Error(
+      `TAIRA burn-record artifact_b64 must decode to ${TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES}-${TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES} bytes`,
+    );
+  }
   const artifactSha256 = bytesToHex(sha256(artifact.bytes));
   if (normalizeBytes32(contract.artifact_sha256, "TAIRA burn-record artifact_sha256") !== artifactSha256) {
     throw new Error("TAIRA burn-record artifact_sha256 does not match artifact_b64");
@@ -2133,6 +2950,11 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
         "production-ready route manifests require --live-readback-checked true after TRON contract readback",
       );
     }
+    if (!options["live-evidence"]) {
+      throw new Error(
+        "production-ready route manifests require --live-evidence from scripts/sccp_tron_live_evidence.py",
+      );
+    }
   }
 
   const destinationBindingHash = tronDestinationBindingHash({
@@ -2147,7 +2969,22 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
     verifierCodeHash,
     verifierKeyHash,
   });
-  const expectedBindingHash = options["expected-destination-binding-hash"] ?? options["destination-binding-hash"];
+  const liveRouteEvidence = options["live-evidence"]
+    ? normalizeLiveEvidenceForRoute(
+        await readJson(options["live-evidence"], "live evidence"),
+        {
+          addresses,
+          verifierCodeHash,
+          verifierKeyHash,
+          destinationBindingHash,
+          destinationBindingKey,
+        },
+      )
+    : null;
+  const expectedBindingHash =
+    options["expected-destination-binding-hash"] ??
+    options["destination-binding-hash"] ??
+    liveRouteEvidence?.destinationBindingHash;
   if (productionReady && !expectedBindingHash) {
     throw new Error("production-ready route manifests require --expected-destination-binding-hash from live readback");
   }
@@ -2157,7 +2994,10 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
   ) {
     throw new Error("--expected-destination-binding-hash does not match computed destination binding hash");
   }
-  const expectedBindingKey = options["expected-destination-binding-key"] ?? options["destination-binding-key"];
+  const expectedBindingKey =
+    options["expected-destination-binding-key"] ??
+    options["destination-binding-key"] ??
+    liveRouteEvidence?.destinationBindingKey;
   if (productionReady && !expectedBindingKey) {
     throw new Error("production-ready route manifests require --expected-destination-binding-key from live readback");
   }
@@ -2221,6 +3061,19 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
       routeId: ROUTE_ID,
       assetKey: ASSET_KEY,
     },
+    ...(liveRouteEvidence
+      ? {
+          postDeployLiveEvidence: {
+            fullTomlReady: true,
+            sourceBridgeConfigHash: liveRouteEvidence.sourceBridgeConfigHash,
+            routeCanaryEvidenceHash: liveRouteEvidence.routeCanaryEvidenceHash,
+            routeCanaryTransactionId: liveRouteEvidence.routeCanaryTransactionId,
+            ...(liveRouteEvidence.offlineFullTomlSha256
+              ? { offlineFullTomlSha256: liveRouteEvidence.offlineFullTomlSha256 }
+              : {}),
+          },
+        }
+      : {}),
   };
   return manifest;
 }
@@ -2240,7 +3093,7 @@ async function routeManifestCommand(options) {
     settlementAssetDefinitionId: manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
     nextStep: manifest.productionReady
       ? "Publish this manifest only after the TAIRA SCCP route activation evidence is governed on-chain."
-      : "Run TRON readback/canary evidence, then re-run with --production-ready true --live-readback-checked true --confirm-mainnet taira_tron_xor.",
+      : "Run TRON readback/canary evidence, then re-run with --live-evidence plus --production-ready true --live-readback-checked true --confirm-mainnet taira_tron_xor.",
   }, null, 2));
 }
 
@@ -2404,22 +3257,31 @@ if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
 export {
   ASSET_KEY,
   ROUTE_ID,
+  TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES,
+  TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES,
   TRON_MAINNET_NETWORK_ID_HEX,
   assertDeploymentFundingReady,
   buildDeploymentDoctorReport,
+  buildDeploymentConfigurationSpecs,
   buildDeploymentFundingReadiness,
+  buildSignedTransactionArtifact,
+  buildUnsignedTransactionArtifact,
   buildTairaXorRouteManifestDraft,
   bytesToHex,
   compileTairaBurnRecordContract,
   estimateDeploymentFunding,
+  generateDeployer,
   hexToBytes,
   normalizeTronAddress,
   normalizeTronBase58Address,
   normalizeTronEndpoint,
+  normalizeSignedTransactionArtifact,
+  normalizeUnsignedTransactionArtifact,
   normalizeVerifierConstructorArgs,
   routeHash,
   signTransactionPayload,
   tronDestinationBindingHash,
   tronDestinationBindingKey,
   tronAddressFromPrivateKey,
+  verifySignedTransactionPayload,
 };

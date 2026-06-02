@@ -631,6 +631,7 @@ export const SCCP_TAIRA_CHAIN_ID_V1: "809574f5-fee7-5e69-bfcf-52451e42d50f";
 export const SCCP_TAIRA_NETWORK_PREFIX_V1: 369;
 export const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: "taira_tron_xor";
 export const SCCP_TAIRA_XOR_ASSET_KEY_V1: "xor";
+export const SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1: 256;
 export const SCCP_TAIRA_XOR_RECORD_EXECUTION_KIND_V1: "ivm_proved_record_sccp_message_v1";
 export const SCCP_TAIRA_XOR_BURN_RECORD_ENTRYPOINT_V1: "burn_and_record";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,bytes32[6],bytes32,bytes)";
@@ -720,6 +721,18 @@ export interface TairaXorTronToTairaTransferPayloadInput {
   nonce: string | number | bigint;
 }
 
+export interface TairaXorTronToTairaSettlementFragment {
+  entrypoint?: "finalize_inbound";
+  route?: "taira_tron_xor";
+  route_id?: "taira_tron_xor";
+  payload?: never;
+  payload_json?: never;
+  payloadJson?: never;
+  payload_bytes?: never;
+  payloadBytes?: never;
+  [key: string]: unknown;
+}
+
 export interface TairaXorTronToTairaSourceProofPackageInput {
   proofPackage?: Record<string, unknown>;
   proof_package?: Record<string, unknown>;
@@ -746,8 +759,8 @@ export interface TairaXorTronToTairaSourceProofPackageInput {
   bridge_address?: string | BinaryLike | number[];
   tronBridgeAddress?: string | BinaryLike | number[];
   tron_bridge_address?: string | BinaryLike | number[];
-  settlementDefaults?: Record<string, unknown>;
-  settlement_defaults?: Record<string, unknown>;
+  settlementDefaults?: TairaXorTronToTairaSettlementFragment;
+  settlement_defaults?: TairaXorTronToTairaSettlementFragment;
 }
 
 export interface TairaXorTronToTairaBoundSourceProofPackage {
@@ -761,6 +774,49 @@ export interface TairaXorTronToTairaBoundSourceProofPackage {
   readonly messageId: string;
   readonly commitmentRoot: string;
   readonly amount: string;
+}
+
+export interface TairaXorTronBurnStartedEventInput extends TairaXorRouteHashInput {
+  event: Record<string, unknown>;
+  sourceEventDigest?: string;
+  source_event_digest?: string;
+  expectedSourceEventDigest?: string;
+  expected_source_event_digest?: string;
+  burnerAddress?: string | BinaryLike | number[];
+  burner_address?: string | BinaryLike | number[];
+  burner?: string | BinaryLike | number[];
+  tronSender?: string | BinaryLike | number[];
+  tron_sender?: string | BinaryLike | number[];
+  sender?: string | BinaryLike | number[];
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  recipient?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; aliases such as name@taira are rejected. */
+  taira_account_id?: string;
+  amount?: string | number | bigint;
+  /** Optional TRON bridge contract address; when supplied, sourceEventDigest is recomputed from event fields. */
+  bridgeAddress?: string | BinaryLike | number[];
+  bridge_address?: string | BinaryLike | number[];
+  tronBridgeAddress?: string | BinaryLike | number[];
+  tron_bridge_address?: string | BinaryLike | number[];
+}
+
+export interface TairaXorTronBoundBurnStartedEvent {
+  readonly eventName: "tairaxorburnstarted" | "burntotaira";
+  readonly sourceEventDigest: string;
+  readonly routeIdHash: string;
+  readonly assetKeyHash: string;
+  readonly bridgeAddress: string | null;
+  readonly burnerAddress: string;
+  readonly tairaRecipient: string;
+  readonly tairaRecipientHash: string;
+  readonly amount: string;
+  readonly nonce: string;
 }
 
 export interface TairaXorSccpRecordDescriptorInput extends TairaXorTransferPayloadInput {
@@ -5121,6 +5177,27 @@ export function tronSccpSourceMessageCallData(
   targetDomain: number,
   sourceEventDigest: string,
 ): Uint8Array;
+export interface TronTriggerSmartContractRawDataParseOptions {
+  readonly expectedOwnerAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  readonly expectedContractAddress?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+  readonly expectedCallData?: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[];
+}
+export interface TronTriggerSmartContractRawDataView {
+  readonly rawDataHash: string;
+  readonly ownerAddress: string;
+  readonly ownerAddress20: string;
+  readonly contractAddress: string;
+  readonly contractAddress20: string;
+  readonly callData: string;
+  readonly refBlockNum: string | null;
+  readonly timestampMs: string;
+  readonly expirationMs: string;
+  readonly feeLimit: string;
+}
+export function parseTronTriggerSmartContractRawData(
+  rawData: string | Uint8Array | ArrayBuffer | ArrayBufferView | number[],
+  options?: TronTriggerSmartContractRawDataParseOptions,
+): TronTriggerSmartContractRawDataView;
 export function canonicalTronSccpTransactionSourceProofBytes(
   input: TronSccpTransactionSourceProofInput,
 ): Uint8Array;
@@ -5407,6 +5484,18 @@ export interface TairaXorBurnToTairaCallDataInput extends TairaXorRouteHashInput
   amount: string | number | bigint;
 }
 
+export interface TairaXorBurnToTairaAccountCallDataInput extends TairaXorRouteHashInput {
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  tairaRecipient?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  taira_recipient?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  tairaAccountId?: string;
+  /** Canonical TAIRA I105 account id; raw bytes, hex strings, and aliases are rejected. */
+  taira_account_id?: string;
+  amount: string | number | bigint;
+}
+
 export function tairaXorRouteIdHash(routeId?: string): string;
 export function tairaXorAssetKeyHash(assetKey?: string): string;
 export function buildTairaXorTransferPayload(input: TairaXorTransferPayloadInput): Readonly<SccpTransferPayload>;
@@ -5444,6 +5533,11 @@ export function tairaXorTransferPayloadHash(
 export function tairaXorBurnSourceEventDigest(input: TairaXorBurnSourceEventDigestInput): string;
 export function tairaXorFinalizeFromTairaCallData(input: TairaXorFinalizeFromTairaCallDataInput): string;
 export function tairaXorBurnToTairaCallData(input: TairaXorBurnToTairaCallDataInput): string;
+export function tairaXorBurnToTairaAccountCallData(input: TairaXorBurnToTairaAccountCallDataInput): string;
+export function isTairaXorTronBurnStartedEventName(value: unknown): boolean;
+export function bindTairaXorTronBurnStartedEvent(
+  input: TairaXorTronBurnStartedEventInput,
+): Readonly<TairaXorTronBoundBurnStartedEvent>;
 export function bindTairaXorTronToTairaSourceProofPackage(
   input: TairaXorTronToTairaSourceProofPackageInput,
 ): Readonly<TairaXorTronToTairaBoundSourceProofPackage>;

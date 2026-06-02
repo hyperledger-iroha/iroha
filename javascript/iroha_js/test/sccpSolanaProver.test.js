@@ -204,6 +204,7 @@ import {
   canonicalTronSccpReceiptProofBytes,
   canonicalTronSccpReceiptStateProofBytes,
   canonicalTronSccpTransactionSourceProofBytes,
+  parseTronTriggerSmartContractRawData,
   ethSyncCommitteeHash,
   ethSyncCommitteeHashFromPayload,
   ethSyncCommitteePayloadHash,
@@ -314,6 +315,7 @@ import {
   tonValidatorSetTransitionSignatureHash,
   tronSccpDestinationBinding,
   tronSccpDestinationBindingHash,
+  SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1,
   tairaXorRouteIdHash,
   tairaXorAssetKeyHash,
   buildTairaXorTransferPayload,
@@ -330,6 +332,9 @@ import {
   tairaXorBurnSourceEventDigest,
   tairaXorFinalizeFromTairaCallData,
   tairaXorBurnToTairaCallData,
+  tairaXorBurnToTairaAccountCallData,
+  isTairaXorTronBurnStartedEventName,
+  bindTairaXorTronBurnStartedEvent,
   bindTairaXorTronToTairaSourceProofPackage,
   tronSccpReceiptProofHash,
   tronSccpReceiptStateProofHash,
@@ -1000,6 +1005,15 @@ const TRON_RECEIPT_STATE_PROOF_HASH =
   "0x847c5ee3e6f4f83fef4d754a9aed93fae38c6677011cae03b10228c17c60b13b";
 const TRON_SOURCE_MESSAGE_CALL_DATA_HEX =
   `06841e30${"0".repeat(63)}5${"0".repeat(64)}${"34".repeat(32)}`;
+const TRON_TRANSACTION_SOURCE_RAW_DATA_HEX =
+  "0x0a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
+  "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
+  "54726967676572536d617274436f6e74726163741294010a15417e5f4552091a" +
+  "69125d5dfcb7b8c2659029395bdf121541454545454545454545454545454545" +
+  "4545454545226406841e30000000000000000000000000000000000000000000" +
+  "0000000000000000000005000000000000000000000000000000000000000000" +
+  "0000000000000000000000343434343434343434343434343434343434343434" +
+  "34343434343434343434347090e5ee3a900180e1eb17";
 const TRON_TRANSACTION_SOURCE_BYTES_HEX =
   "0x0af3010a02123418b9602208565656565656565640959aef3a5acf01081f12ca" +
   "010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e" +
@@ -10818,6 +10832,71 @@ test("derives TON ShardStateUnsplit accounts roots for UI proof material", () =>
   assert.throws(() => tonShardStateAccountsRootHash(basechainCustom), /custom/);
 });
 
+test("parses and binds canonical TRON TriggerSmartContract raw_data bytes", () => {
+  const parsed = parseTronTriggerSmartContractRawData(
+    TRON_TRANSACTION_SOURCE_RAW_DATA_HEX,
+    {
+      expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      expectedContractAddress: `0x${"45".repeat(20)}`,
+      expectedCallData: TRON_SOURCE_MESSAGE_CALL_DATA_HEX,
+    },
+  );
+  assert.deepEqual(parsed, {
+    rawDataHash:
+      "0x98eb38e4a22e8efa64a0f612cc1b90f4a4e547fde105c38a1e9ea899b26d472e",
+    ownerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    ownerAddress20: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+    contractAddress: `0x41${"45".repeat(20)}`,
+    contractAddress20: `0x${"45".repeat(20)}`,
+    callData: `0x${TRON_SOURCE_MESSAGE_CALL_DATA_HEX}`,
+    refBlockNum: "12345",
+    timestampMs: "123450000",
+    expirationMs: "123456789",
+    feeLimit: "50000000",
+  });
+  assert.deepEqual(
+    parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+      expectedOwnerAddress: "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      expectedContractAddress: `0x41${"45".repeat(20)}`,
+      expectedCallData: `0x${TRON_SOURCE_MESSAGE_CALL_DATA_HEX}`,
+    }),
+    parsed,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedOwnerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /owner_address/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedContractAddress: `0x${"46".repeat(20)}`,
+      }),
+    /contract_address/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        expectedCallData: `0x${"00".repeat(4)}`,
+      }),
+    /call data/u,
+  );
+  assert.throws(
+    () =>
+      parseTronTriggerSmartContractRawData(TRON_TRANSACTION_SOURCE_RAW_DATA_HEX, {
+        owner_address: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        expectedOwnerAddress: "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      }),
+    /expectedOwnerAddress must not use multiple aliases/u,
+  );
+  assert.throws(
+    () => parseTronTriggerSmartContractRawData("0x0af301"),
+    /truncated protobuf bytes field|canonical TRON TriggerSmartContract/u,
+  );
+});
+
 test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness material", () => {
   const sourceEventDigest = `0x${"34".repeat(32)}`;
   const inclusionBranch = [HEX32_E];
@@ -14061,6 +14140,208 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
   });
 });
 
+test("binds TAIRA XOR TRON burn-started events", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const bridgeAddress = tronSender;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 1000n;
+  const nonce = 7n;
+  const routeIdHash = tairaXorRouteIdHash();
+  const assetKeyHash = tairaXorAssetKeyHash();
+  const tairaRecipientHash = testBytesToHex(
+    keccak_256(testTextEncoder.encode(tairaRecipient)),
+  );
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const sampleEvent = (overrides = {}) => ({
+    transaction_id: "11".repeat(32),
+    event_name: "TairaXorBurnStarted",
+    contract_address: bridgeAddress,
+    result: {
+      sourceEventDigest,
+      burner: tronSender,
+      tairaRecipientHash,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+      routeIdHash,
+      assetKeyHash,
+      tairaRecipient: testBytesToHex(testTextEncoder.encode(tairaRecipient)),
+    },
+    ...overrides,
+  });
+
+  assert.equal(isTairaXorTronBurnStartedEventName("TairaXorBurnStarted"), true);
+  assert.equal(isTairaXorTronBurnStartedEventName("BurnToTaira"), true);
+  assert.equal(isTairaXorTronBurnStartedEventName("Approval"), false);
+
+  const bound = bindTairaXorTronBurnStartedEvent({
+    event: sampleEvent(),
+    bridgeAddress,
+    tronSender,
+    tairaRecipient,
+    amount,
+    sourceEventDigest,
+  });
+
+  assert.equal(bound.eventName, "tairaxorburnstarted");
+  assert.equal(bound.sourceEventDigest, sourceEventDigest);
+  assert.equal(bound.routeIdHash, routeIdHash);
+  assert.equal(bound.assetKeyHash, assetKeyHash);
+  assert.equal(bound.tairaRecipient, tairaRecipient);
+  assert.equal(bound.tairaRecipientHash, tairaRecipientHash);
+  assert.equal(bound.amount, amount.toString());
+  assert.equal(bound.nonce, nonce.toString());
+
+  assert.equal(
+    bindTairaXorTronBurnStartedEvent({
+      event: sampleEvent({ event_name: "BurnToTaira" }),
+      bridgeAddress,
+      tronSender,
+      tairaRecipient,
+      amount,
+    }).sourceEventDigest,
+    sourceEventDigest,
+  );
+});
+
+test("rejects adversarial TAIRA XOR TRON burn-started events", () => {
+  const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
+  const bridgeAddress = tronSender;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 1000n;
+  const nonce = 7n;
+  const routeIdHash = tairaXorRouteIdHash();
+  const assetKeyHash = tairaXorAssetKeyHash();
+  const tairaRecipientHash = testBytesToHex(
+    keccak_256(testTextEncoder.encode(tairaRecipient)),
+  );
+  const sourceEventDigest = tairaXorBurnSourceEventDigest({
+    bridgeAddress,
+    burnerAddress: tronSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const sampleEvent = () => ({
+    transaction_id: "11".repeat(32),
+    event_name: "TairaXorBurnStarted",
+    contract_address: bridgeAddress,
+    result: {
+      sourceEventDigest,
+      burner: tronSender,
+      tairaRecipientHash,
+      amount: amount.toString(),
+      nonce: nonce.toString(),
+      routeIdHash,
+      assetKeyHash,
+      tairaRecipient: testBytesToHex(testTextEncoder.encode(tairaRecipient)),
+    },
+  });
+  const bind = (mutate = () => {}) => {
+    const event = sampleEvent();
+    mutate(event);
+    return bindTairaXorTronBurnStartedEvent({
+      event,
+      bridgeAddress,
+      tronSender,
+      tairaRecipient,
+      amount,
+      sourceEventDigest,
+    });
+  };
+
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.event_name = "Approval";
+      }),
+    /TairaXorBurnStarted/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.sourceEventDigest = HEX32_E;
+      }),
+    /expected digest/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.routeIdHash = HEX32_A;
+      }),
+    /route hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.assetKeyHash = HEX32_A;
+      }),
+    /asset hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.burner = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /burner/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.amount = "1001";
+      }),
+    /amount/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.nonce = "8";
+      }),
+    /digest/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        delete event.result.nonce;
+      }),
+    /burn nonce/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.tairaRecipient = TAIRA_OTHER_ACCOUNT_ID;
+      }),
+    /TAIRA recipient/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.tairaRecipientHash = HEX32_A;
+      }),
+    /recipient hash/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.contract_address = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /contract address/,
+  );
+  assert.throws(
+    () =>
+      bind((event) => {
+        event.result.burner = tronSender;
+        event.burner = "TD5gsCwxykWsLN9aPrq2TAfNjByuZKYp4E";
+      }),
+    /conflict/,
+  );
+});
+
 test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
   const tronSender = "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8";
   const tairaRecipient = TAIRA_ACCOUNT_ID;
@@ -14111,7 +14392,7 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
     messageId,
     commitmentRoot: HEX32_D,
   });
-  const bind = (mutate = () => {}) => {
+  const bind = (mutate = () => {}, inputOverrides = {}) => {
     const proofPackage = samplePackage();
     mutate(proofPackage);
     return bindTairaXorTronToTairaSourceProofPackage({
@@ -14121,6 +14402,7 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
       tairaRecipient,
       amount,
       bridgeAddress,
+      ...inputOverrides,
     });
   };
 
@@ -14145,6 +14427,44 @@ test("rejects adversarial TAIRA XOR TRON-source proof packages", () => {
   assert.throws(() => bind((pkg) => { pkg.commitmentRoot = HEX32_A; }), /commitmentRoot/);
   assert.throws(() => bind((pkg) => { pkg.sourceEventDigest = HEX32_E; }), /burn source event digest/);
   assert.throws(() => bind((pkg) => { pkg.settlement.payload = { unsafe: true }; }), /payload/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.payload_bytes = "0x01"; }), /payload/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.entrypoint = "burn_and_record"; }), /finalize_inbound/);
+  assert.throws(() => bind((pkg) => { pkg.settlement.route = "evil_route"; }), /taira_tron_xor/);
+  assert.throws(
+    () => bind((pkg) => { pkg.settlement.route_id = SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1; }),
+    /proofPackage\.settlement\.route must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { entrypoint: "burn_and_record" },
+      }),
+    /settlementDefaults\.entrypoint must be finalize_inbound/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { route: "evil_route" },
+      }),
+    /settlementDefaults\.route must be taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { payloadJson: { unsafe: true } },
+      }),
+    /settlementDefaults payload must be generated by Torii/,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: {
+          route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+          route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
+        },
+      }),
+    /settlementDefaults\.route must not use multiple aliases/,
+  );
 });
 
 test("canonicalizes normalized SCCP message proof bundles for browser proof requests", () => {
@@ -14726,11 +15046,27 @@ test("builds TAIRA XOR TRON bridge contract call data", () => {
     }),
     expectedBurnCallData,
   );
+  assert.equal(
+    tairaXorBurnToTairaAccountCallData({
+      tairaRecipient,
+      amount,
+    }),
+    expectedBurnCallData,
+  );
+  assert.equal(
+    tairaXorBurnToTairaAccountCallData({
+      tairaAccountId: tairaRecipient,
+      amount,
+    }),
+    expectedBurnCallData,
+  );
 });
 
 test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
   assert.throws(() => tairaXorRouteIdHash(" taira_tron_xor"), /canonical/);
+  assert.throws(() => tairaXorRouteIdHash("other_route"), /routeId must be taira_tron_xor/);
   assert.throws(() => tairaXorAssetKeyHash(""), /non-empty string/);
+  assert.throws(() => tairaXorAssetKeyHash("wrong"), /assetKey must be xor/);
   assert.throws(
     () =>
       buildTairaXorTransferPayload({
@@ -14915,6 +15251,21 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
       }),
     /canonical TAIRA I105 account id/,
   );
+  assert.equal(SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1, 256);
+  const tooLongTairaRecipientBytes = new Uint8Array(
+    SCCP_TAIRA_XOR_MAX_TAIRA_RECIPIENT_BYTES_V1 + 1,
+  ).fill(0x61);
+  assert.throws(
+    () =>
+      tairaXorBurnSourceEventDigest({
+        bridgeAddress: `0x${"11".repeat(20)}`,
+        burnerAddress: `0x${"22".repeat(20)}`,
+        tairaRecipientBytes: tooLongTairaRecipientBytes,
+        amount: 1,
+        nonce: 0,
+      }),
+    /tairaRecipientBytes must be at most 256 bytes/,
+  );
   assert.throws(
     () =>
       tairaXorBurnSourceEventDigest({
@@ -15095,5 +15446,72 @@ test("rejects unsafe TAIRA XOR TRON hash inputs", () => {
         amount: 1,
       }),
     /tairaRecipientBytes must not be empty/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaCallData({
+        tairaRecipientBytes: tooLongTairaRecipientBytes,
+        amount: 1,
+      }),
+    /tairaRecipientBytes must be at most 256 bytes/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipientBytes: testTextEncoder.encode(TAIRA_ACCOUNT_ID),
+        amount: 1,
+      }),
+    /tairaRecipientBytes is not accepted/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: testTextEncoder.encode(TAIRA_ACCOUNT_ID),
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id string/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: `0x${testBytesToHex(testTextEncoder.encode(TAIRA_ACCOUNT_ID)).slice(2)}`,
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id string/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: "alice@taira",
+        amount: 1,
+      }),
+    /canonical TAIRA I105 account id/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        routeId: "other_route",
+        amount: 1,
+      }),
+    /routeId must be taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        routeIdHash: HEX32_A,
+        amount: 1,
+      }),
+    /routeIdHash must match taira_tron_xor/,
+  );
+  assert.throws(
+    () =>
+      tairaXorBurnToTairaAccountCallData({
+        tairaRecipient: TAIRA_ACCOUNT_ID,
+        assetKeyHash: HEX32_A,
+        amount: 1,
+      }),
+    /assetKeyHash must match xor/,
   );
 });

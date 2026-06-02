@@ -36,6 +36,7 @@ enabled = true
 allowed_origins = [
   "http://127.0.0.1:3000",
   "http://localhost:3000",
+  "https://test.soraswap.org",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_headers = ["accept", "authorization", "content-type"]
@@ -84,6 +85,7 @@ identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E319
 [gov]
 voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+parliament_eligibility_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_bond_amount = 10000
 citizenship_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
 bond_escrow_account = "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"

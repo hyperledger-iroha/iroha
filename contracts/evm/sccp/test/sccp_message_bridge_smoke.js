@@ -2813,6 +2813,17 @@ async function main() {
     },
     callException
   );
+  await assert.rejects(
+    async () => {
+      const zeroSenderTransferFromTx = await tairaXor.transferFrom(
+        ethers.ZeroAddress,
+        await outsider.getAddress(),
+        0
+      );
+      await zeroSenderTransferFromTx.wait();
+    },
+    callExceptionWithReason("Sender address is required")
+  );
 
   const bridgeSourceBridge = await deploy(
     signer,
@@ -2836,6 +2847,108 @@ async function main() {
       );
     },
     callException
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tairaXorAddress,
+          ethers.ZeroAddress,
+          await bridgeSourceBridge.getAddress(),
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Verifier address is required")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tairaXorAddress,
+          tronGroth16Address,
+          ethers.ZeroAddress,
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Source bridge address is required")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tronGroth16Address,
+          tronGroth16Address,
+          await bridgeSourceBridge.getAddress(),
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Bridge addresses must differ")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          await bridgeSourceBridge.getAddress(),
+          tronGroth16Address,
+          await bridgeSourceBridge.getAddress(),
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Bridge addresses must differ")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tairaXorAddress,
+          tronGroth16Address,
+          tronGroth16Address,
+          routeIdHash,
+          assetKeyHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Bridge addresses must differ")
+  );
+  await assert.rejects(
+    async () => {
+      await deploy(
+        signer,
+        tairaXorBridgeArtifact.abi,
+        tairaXorBridgeArtifact.bytecode,
+        [
+          tairaXorAddress,
+          tronGroth16Address,
+          await bridgeSourceBridge.getAddress(),
+          routeIdHash,
+          ethers.ZeroHash,
+        ]
+      );
+    },
+    callExceptionWithReason("Asset key hash is required")
   );
   await assert.rejects(
     async () => {
@@ -2879,6 +2992,12 @@ async function main() {
   await setBridgeTx.wait();
   const lockBridgeTx = await tairaXor.lockBridge();
   await lockBridgeTx.wait();
+  await assert.rejects(
+    async () => {
+      await tairaXor.lockBridge.staticCall();
+    },
+    callExceptionWithReason("Bridge is already locked")
+  );
   await assert.rejects(
     async () => {
       const resetBridgeTx = await tairaXor.setBridge(await outsider.getAddress());
@@ -3211,6 +3330,15 @@ async function main() {
   );
   await assert.rejects(
     async () => {
+      const longRecipientTx = await tairaXorBridge
+        .connect(outsider)
+        .burnToTaira(routeIdHash, assetKeyHash, `0x${"61".repeat(257)}`, 1);
+      await longRecipientTx.wait();
+    },
+    callExceptionWithReason("TAIRA recipient is too long")
+  );
+  await assert.rejects(
+    async () => {
       const outsiderOverburnTx = await tairaXorBridge
         .connect(outsider)
         .burnToTaira(routeIdHash, assetKeyHash, ethers.toUtf8Bytes("testu1@taira"), mintAmount);
@@ -3261,6 +3389,19 @@ async function main() {
   assert.equal(bridgeBurnLogs[0].args.amount, burnAmount);
   assert.equal(bridgeBurnLogs[0].args.nonce, 0n);
   assert.equal(ethers.hexlify(bridgeBurnLogs[0].args.tairaRecipient), ethers.hexlify(burnRecipient));
+  const bridgeSourceBridgeAddress = (await bridgeSourceBridge.getAddress()).toLowerCase();
+  const bridgeSourceEventLogs = burnReceipt.logs
+    .filter(
+      (log) =>
+        log.address.toLowerCase() === bridgeSourceBridgeAddress &&
+        log.topics[0] === sourceEventTopic
+    );
+  assert.equal(bridgeSourceEventLogs.length, 1);
+  assert.deepEqual(bridgeSourceEventLogs[0].topics, [
+    sourceEventTopic,
+    expectedBurnDigest,
+  ]);
+  assert.equal(bridgeSourceEventLogs[0].data, "0x");
 
   console.log("sccp_message_bridge_smoke: ok");
 }

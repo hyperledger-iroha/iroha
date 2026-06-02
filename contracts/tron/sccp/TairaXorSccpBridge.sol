@@ -48,6 +48,7 @@ contract TairaXorSccpBridge {
     uint8 private constant SCCP_CODEC_TEXT_UTF8 = 1;
     uint8 private constant SCCP_CODEC_TRON_BASE58CHECK = 5;
     string private constant SCCP_MSG_PREFIX_TRANSFER_V1 = "sccp:transfer:v1";
+    uint256 private constant MAX_TAIRA_RECIPIENT_BYTES = 256;
     bytes32 private constant TAIRA_XOR_BURN_SOURCE_EVENT_PREFIX =
         keccak256("iroha:sccp:taira-xor:burn-source-event:v1");
 
@@ -92,6 +93,12 @@ contract TairaXorSccpBridge {
         require(tokenAddress != address(0), "Token address is required");
         require(verifierAddress != address(0), "Verifier address is required");
         require(sourceBridgeAddress != address(0), "Source bridge address is required");
+        require(
+            tokenAddress != verifierAddress
+                && tokenAddress != sourceBridgeAddress
+                && verifierAddress != sourceBridgeAddress,
+            "Bridge addresses must differ"
+        );
         require(configuredRouteIdHash != bytes32(0), "Route id hash is required");
         require(configuredAssetKeyHash != bytes32(0), "Asset key hash is required");
 
@@ -182,6 +189,10 @@ contract TairaXorSccpBridge {
         require(submittedRouteIdHash == routeIdHash, "Unexpected route");
         require(submittedAssetKeyHash == assetKeyHash, "Unexpected asset");
         require(tairaRecipient.length != 0, "TAIRA recipient is required");
+        require(
+            tairaRecipient.length <= MAX_TAIRA_RECIPIENT_BYTES,
+            "TAIRA recipient is too long"
+        );
         require(amount != 0, "Amount is required");
         require(burnNonce != uint256(-1), "Burn nonce exhausted");
 
