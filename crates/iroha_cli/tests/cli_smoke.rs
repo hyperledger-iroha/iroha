@@ -587,56 +587,6 @@ fn soracles_aggregate_output_emits_instruction_payload() {
     assert_eq!(aggregate.evidence_hashes, vec![evidence_hash]);
 }
 
-fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
-    let contracts_dir = dir.path().join("contracts");
-    let artifacts_dir = dir.path().join("artifacts");
-    fs::create_dir_all(&contracts_dir).expect("create contracts dir");
-    fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
-
-    let contract_path = contracts_dir.join("greeter.ko");
-    fs::write(
-        &contract_path,
-        r#"
-            seiyaku Greeter {
-                kotoage fn init(value: int) {}
-                view fn status() -> int { return 7; }
-            }
-        "#,
-    )
-    .expect("write greeter contract");
-
-    let manifest_path = dir.path().join("iroha.app.toml");
-    fs::write(
-        &manifest_path,
-        r#"
-            bundle_name = "demo"
-            default_dataspace = "universal"
-
-            [[contracts]]
-            name = "demo.greeter"
-            alias = "greeter"
-            source = "contracts/greeter.ko"
-            artifact = "artifacts/greeter.to"
-
-            [[init]]
-            id = "seed"
-            contract = "demo.greeter"
-            entrypoint = "init"
-            gas_limit = 1000
-            payload = { value = 7 }
-
-            [[assertions]]
-            id = "status"
-            contract = "demo.greeter"
-            entrypoint = "status"
-            gas_limit = 1000
-            expected_result = 7
-        "#,
-    )
-    .expect("write contract app manifest");
-    manifest_path
-}
-
 #[test]
 fn help_displays_top_level_usage() {
     let output = command()
