@@ -888,11 +888,17 @@ object SccpEthereumMainnet {
 
     @JvmStatic
     fun buildProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest {
+        require(input.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof requests must route SORA -> ETH"
+        }
         require(input.publicInputs.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet proof requests must target ETH"
         }
         val destinationBinding = input.destinationBinding
             ?: throw IllegalArgumentException("Ethereum mainnet proof requests require destinationBinding")
+        require(destinationBinding.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet destinationBinding must start from SORA"
+        }
         require(destinationBinding.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet destinationBinding must target ETH"
         }
@@ -913,8 +919,14 @@ object SccpEthereumMainnet {
 
     @JvmStatic
     fun wrapProofResult(proofBytes: ByteArray, request: EvmSccpProofRequest): EvmSccpProofResult {
+        require(request.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof results must route SORA -> ETH"
+        }
         require(request.targetDomain == DOMAIN_ETH && request.publicInputs.targetDomain == DOMAIN_ETH) {
             "Ethereum mainnet proof results must target ETH"
+        }
+        require(request.destinationBinding?.sourceDomain == DOMAIN_SORA) {
+            "Ethereum mainnet proof results require SORA source destinationBinding"
         }
         require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
             "Ethereum mainnet proof results require chain id 1 destinationBinding"
@@ -2206,7 +2218,10 @@ class EthereumMainnetSccp(
         require(evidence.receiptProof != null) {
             "Ethereum mainnet SCCP inbound proof requires receiptProof"
         }
-        return prover.prove(evidence)
+        val proofBytes = prover.prove(evidence)
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        return proofBytes.copyOf()
     }
 
     fun submitInboundToIroha(proofBytes: ByteArray): Any? {

@@ -13,7 +13,9 @@ use soranet_pq::MlDsaSuite;
 
 use crate::{
     signature::ed25519::{Ed25519Sha512, PublicKey as Ed25519PublicKey},
-    soranet::certificate::{CertificateValidationPhase, RelayCertificateBundleV2},
+    soranet::certificate::{
+        CertificateValidationPhase, RelayCertificateBundleV2, RelayCertificateV2,
+    },
 };
 
 const SRC_V2_ISSUER_FINGERPRINT_DOMAIN: &[u8] = b"soranet.src.v2.issuer";
@@ -89,9 +91,10 @@ impl GuardDirectorySnapshotV2 {
                 "guard directory snapshot timestamps must be non-negative".to_string(),
             ));
         }
-        if self.valid_after_unix > self.valid_until_unix {
+        if self.valid_after_unix >= self.valid_until_unix {
             return Err(norito::Error::Message(
-                "guard directory snapshot valid_after_unix exceeds valid_until_unix".to_string(),
+                "guard directory snapshot valid_until_unix must be greater than valid_after_unix"
+                    .to_string(),
             ));
         }
         if self.published_at_unix > self.valid_until_unix {
@@ -187,6 +190,7 @@ impl GuardDirectorySnapshotV2 {
                     "guard directory snapshot contains duplicate relay id".to_string(),
                 ));
             }
+            self.validate_relay_certificate_window(&bundle.certificate)?;
             bundle
                 .verify(&issuer.0, issuer.1, validation_phase)
                 .map_err(|err| {
@@ -194,6 +198,30 @@ impl GuardDirectorySnapshotV2 {
                         "guard directory relay certificate signature verification failed: {err}"
                     ))
                 })?;
+        }
+        Ok(())
+    }
+
+    fn validate_relay_certificate_window(
+        &self,
+        certificate: &RelayCertificateV2,
+    ) -> Result<(), norito::Error> {
+        if certificate.published_at > self.published_at_unix {
+            return Err(norito::Error::Message(
+                "guard directory relay certificate published_at is after snapshot publication"
+                    .to_string(),
+            ));
+        }
+        if certificate.valid_after > self.valid_after_unix {
+            return Err(norito::Error::Message(
+                "guard directory relay certificate is not valid at snapshot valid_after"
+                    .to_string(),
+            ));
+        }
+        if certificate.valid_until < self.valid_until_unix {
+            return Err(norito::Error::Message(
+                "guard directory relay certificate expires before snapshot valid_until".to_string(),
+            ));
         }
         Ok(())
     }
@@ -488,6 +516,11 @@ mod tests {
     #[test]
     fn snapshot_rejects_invalid_time_window() {
         let mut snapshot = sample_snapshot();
+        snapshot.valid_until_unix = snapshot.valid_after_unix;
+        let bytes = snapshot.to_bytes().expect("serialize");
+        assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
+
+        let mut snapshot = sample_snapshot();
         snapshot.valid_after_unix = snapshot.valid_until_unix + 1;
         let bytes = snapshot.to_bytes().expect("serialize");
         assert!(GuardDirectorySnapshotV2::from_bytes(&bytes).is_err());
@@ -551,6 +584,17 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_phase2_accepts_single_signature_relay() {
+        let mut snapshot = sample_snapshot();
+        mutate_first_relay_bundle(&mut snapshot, |bundle| {
+            bundle.signatures.mldsa65 = None;
+        });
+        let bytes = snapshot.to_bytes().expect("serialize");
+        GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect("phase 2 accepts Ed25519-only relay certificates during rollout");
+    }
+
+    #[test]
     fn snapshot_rejects_invalid_issuer_ed25519_public_key() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].ed25519_public = [0xFF; 32];
@@ -600,6 +644,39 @@ mod tests {
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
             .expect_err("relay certificate with mismatched directory hash should fail");
         assert!(err.to_string().contains("directory_hash"));
+    }
+
+    #[test]
+    fn snapshot_rejects_relay_certificate_outside_snapshot_window() {
+        let mut snapshot = sample_snapshot();
+        let snapshot_valid_after = snapshot.valid_after_unix;
+        mutate_first_relay_bundle(&mut snapshot, |bundle| {
+            bundle.certificate.valid_after = snapshot_valid_after + 1;
+        });
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect_err("relay certificate not valid at snapshot start should fail");
+        assert!(err.to_string().contains("valid_after"));
+
+        let mut snapshot = sample_snapshot();
+        let snapshot_valid_until = snapshot.valid_until_unix;
+        mutate_first_relay_bundle(&mut snapshot, |bundle| {
+            bundle.certificate.valid_until = snapshot_valid_until - 1;
+        });
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect_err("relay certificate expiring inside snapshot window should fail");
+        assert!(err.to_string().contains("valid_until"));
+
+        let mut snapshot = sample_snapshot();
+        let snapshot_published_at = snapshot.published_at_unix;
+        mutate_first_relay_bundle(&mut snapshot, |bundle| {
+            bundle.certificate.published_at = snapshot_published_at + 1;
+        });
+        let bytes = snapshot.to_bytes().expect("serialize");
+        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect_err("relay certificate published after snapshot should fail");
+        assert!(err.to_string().contains("published_at"));
     }
 
     #[test]

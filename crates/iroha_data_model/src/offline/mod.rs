@@ -2336,6 +2336,12 @@ pub fn offline_note_recursive_public_inputs_schema_hash() -> [u8; Hash::LENGTH] 
     Hash::new(OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA).into()
 }
 
+/// Return the registry schema hash required for Offline V2 recursive note verifiers.
+#[must_use]
+pub fn offline_note_v2_recursive_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
+    offline_note_recursive_public_inputs_schema_hash()
+}
+
 /// Return the registry schema hash required for Kagemusha folded proof verifiers.
 #[must_use]
 pub fn kagemusha_folded_public_inputs_schema_hash() -> [u8; Hash::LENGTH] {
@@ -5249,6 +5255,14 @@ mod offline_note_tests {
             DomainId::try_new("offline", "universal").expect("domain id"),
             name.parse().expect("asset name"),
         )
+    }
+
+    #[test]
+    fn offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash() {
+        assert_eq!(
+            offline_note_v2_recursive_public_inputs_schema_hash(),
+            offline_note_recursive_public_inputs_schema_hash()
+        );
     }
 
     fn kagemusha_step(

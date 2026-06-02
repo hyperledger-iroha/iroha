@@ -2,6 +2,44 @@
 
 Last updated: 2026-06-02
 
+## 2026-06-02 SoraNet handshake capability/signature parser hardening
+
+- Hardened SoraNet NK2/NK3 runtime handshake admission so the selected
+  `kem_id` and `sig_id` must be advertised by both client and relay capability
+  TLVs before a session is accepted. Unsupported KEM ids still fail at the KEM
+  profile gate before capability downgrade telemetry is built.
+- Tightened `ClientHello` and `RelayHello` parsing so Dilithium3 and Ed25519
+  signature fields must match the handshake wire-format lengths and frames
+  must be 1024-byte aligned with zero-filled padding instead of accepting
+  arbitrary trailing bytes.
+- Added focused regressions for unadvertised selected KEM/signature ids,
+  malformed client Dilithium signature lengths, malformed relay Ed25519
+  signature lengths, malformed client padding, and the ML-KEM-1024 happy path
+  with explicit capability advertisement.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto build_client_hello_rejects_unknown_kem --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto runtime_handshake_roundtrip_supports_mlkem1024 --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --lib --quiet`
+    (`374` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-sig-cap-hardening cargo test -p iroha_crypto rejects_short --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-sig-cap-hardening cargo test -p iroha_crypto unadvertised_selected_ids --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-sig-cap-hardening cargo test -p iroha_crypto handshake --lib -- --nocapture`
+    (`53` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-sig-cap-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`375` passed, `1` ignored)
+  - `cargo fmt --all`, `cargo fmt --all --check`,
+    `git diff --check -- crates/iroha_crypto/src/soranet/handshake.rs crates/iroha_crypto/src/soranet/certificate.rs crates/iroha_crypto/src/soranet/directory.rs docs/source/engineering_backlog.md roadmap.md status.md`,
+    anchored conflict-marker scan, and Cargo.lock diff check
+    (passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-handshake-sig-cap-hardening cargo test -p iroha_crypto --lib --quiet`
+    (`374` passed, `1` ignored)
+
 ## 2026-06-02 SoraNet guard-directory relay certificate binding
 
 - Hardened `GuardDirectorySnapshotV2::from_bytes` so relay entries must decode
@@ -9,21 +47,27 @@ Last updated: 2026-06-02
   issuer fingerprint present in the same snapshot, bind to the snapshot
   `directory_hash`, avoid duplicate relay IDs, and verify the relay certificate
   signatures against the embedded issuer keys under the snapshot validation
-  phase.
+  phase. Snapshot validity windows now fail closed when zero-length or
+  inverted, and relay certificate validity must cover the full snapshot window
+  without being published after the snapshot. Phase 2 snapshot admission now
+  matches the documented rollout semantics by accepting Ed25519-only relay
+  certificates while still requiring an ML-DSA issuer key; Phase 3 remains the
+  strict dual-signature gate.
 - Tightened SRCv2 certificate payload admission to validate Ed25519 identity
   keys with the repository's canonical, non-weak Ed25519 parser instead of the
   looser `ed25519_dalek` compressed-point check.
 - Added focused regressions for malformed relay certificate bundles, unknown
   relay issuers, relay directory-hash mismatch, duplicate relay IDs, and
   weak/malformed Ed25519 identity public keys, invalid issuer Ed25519 public
-  keys, and bad Ed25519/ML-DSA relay certificate signatures.
+  keys, bad Ed25519/ML-DSA relay certificate signatures, and relay certificate
+  validity windows that do not cover the snapshot.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-relay-hardening cargo test -p iroha_crypto parse_certificate_payload_rejects_malformed_ed25519_identity_key --lib -- --nocapture`
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parse_certificate_payload_rejects_weak_ed25519_identity_key --lib -- --nocapture`
     (`1` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto directory --lib -- --nocapture`
-    (`18` passed)
+    (`20` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-signature-hardening cargo test -p iroha_crypto directory --lib -- --nocapture`
     (`18` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-directory-signature-hardening cargo test -p iroha_crypto --lib --quiet`
@@ -94,6 +138,13 @@ Last updated: 2026-06-02
   verifier keys and preflights supplied ML-DSA-65 issuer public-key bytes plus
   in-memory detached signature bytes against suite metadata before entering
   backend verification, covering callers that bypass bundle CBOR decode.
+  `Phase2PreferDual` now follows its rollout contract by accepting
+  Ed25519-only bundles while `Phase3RequireDual` still rejects missing ML-DSA
+  signatures.
+- `RelayCertificateV2::issue` now runs the canonical certificate payload
+  admission path and ML-DSA-65 issuer secret-key length preflight before
+  producing Ed25519 or ML-DSA signatures, so invalid in-memory certificates or
+  malformed issuer signing keys cannot be signed into SRCv2 bundles locally.
 - Added focused parser regressions for unknown preferred/fallback KEM suites,
   invalid ML-DSA-65 identity public-key length, and invalid ML-KEM public-key
   length while preserving existing missing-field diagnostic order. Added
@@ -105,16 +156,17 @@ Last updated: 2026-06-02
   empty/duplicate handshake-suite and endpoint-list coverage, plus weak
   Ed25519 identity public-key rejection and invalid endpoint URL value
   coverage, invalid endpoint tag coverage, KEM policy semantic coverage, and
-  direct verifier Ed25519/ML-DSA material coverage.
+  direct verifier Ed25519/ML-DSA material coverage, plus invalid local
+  issuance and malformed issuer secret-key coverage.
 - Validation:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto parse_certificate_payload_rejects --lib -- --nocapture`
     (`16` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto soranet::certificate::tests:: --lib -- --nocapture`
-    (`28` passed)
+    (`30` passed)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo clippy -p iroha_crypto --lib --no-deps -- -D warnings`
     (passed)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-certificate-parser-hardening cargo test -p iroha_crypto --lib --quiet`
-    (`347` passed, `1` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-verify cargo test -p iroha_crypto --lib --quiet`
+    (`370` passed, `1` ignored)
   - `cargo fmt --all`, `cargo fmt --all --check`,
     `git diff --check -- crates/iroha_crypto/src/soranet/certificate.rs docs/source/engineering_backlog.md roadmap.md status.md`,
     conflict-marker scan, and Cargo.lock diff check
@@ -545,6 +597,21 @@ Last updated: 2026-06-02
   - `git diff --check`
     (passed)
 
+## 2026-06-02 Offline V2 recursive schema hash export
+
+- Restored the V2-named Offline recursive public-input schema hash export in
+  `iroha_data_model::offline` as an alias of the canonical recursive note
+  schema hash, keeping Torii Offline V2 readiness smoke tests source-compatible
+  without changing the on-wire verifier schema hash.
+- Added a unit test proving the V2 alias matches the canonical Offline
+  recursive schema hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_data_model offline_note_v2_recursive_schema_hash_alias_matches_canonical_hash -- --nocapture`
+    (`1 passed`)
+  - `cargo test -p iroha_torii --test offline_v2_readiness_smoke --no-run`
+    (test binary compiled)
+
 ## 2026-06-02 Sumeragi RBC progress-state evidence proof
 
 - Added top-level Sumeragi RBC progress-state evidence obligations:
@@ -569,6 +636,52 @@ Last updated: 2026-06-02
     (`12` temporal-property branches, `2338` distinct states, no errors)
   - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast`
     (`NoError` through computation length `10`, `EXITCODE: OK`, `25 min 15 sec`)
+
+## 2026-06-02 SCCP Ethereum mainnet SDK release-surface hardening
+
+- Reconfirmed the release-readiness renderer and strict release-bundle verifier
+  use Ethereum mainnet as the active launch lane (`domain 1`,
+  `EthereumMainnetLane`) instead of stale BSC launch constants.
+- Tightened the browser TypeScript declaration surface for
+  `EthereumMainnetSccp`: the inbound prover hook now returns `BinaryLike`, the
+  facade returns `Promise<Uint8Array>` from `proveInboundToSora`, and
+  `submitInboundToIroha` takes local proof bytes rather than an untyped
+  payload. The package-dist test and release phase evidence now assert the
+  full Ethereum facade method list stays declared.
+- Expanded the release-readiness and bundle-verifier SDK helper inventories so
+  Swift, Kotlin/JVM, and Java Android must advertise the full native Ethereum
+  outbound facade (`buildOutboundProofRequest`, `proveOutboundToEthereum`,
+  `buildEthereumCalldata`, and `submitOutboundToEthereum`) alongside the
+  inbound/local-admission methods.
+- Added a release-readiness guard over the Ethereum mainnet evidence-collection
+  methods in JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET:
+  the guarded regions must keep using app-owned execution and consensus
+  providers (`eth_chainId`, receipt/block RPC calls, and Beacon finality hooks)
+  and must not introduce Torii, proxy, or embedded HTTP-client fallback paths.
+- Hardened native Ethereum inbound proving in Swift, Kotlin/JVM, and Java
+  Android so app-owned prover callbacks must return non-empty, non-zero proof
+  bytes and the facades return copied proof bytes, matching the JS/Python/.NET
+  behavior before Iroha submission.
+- Validation:
+  - `node --test --test-name-pattern "package declarations expose Ethereum mainnet SCCP facade methods|browser Ethereum mainnet SCCP artifacts stay JS-only" javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_policy or ethereum_facade_declaration_marker"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_policy or ethereum_facade_declaration_marker"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_passes_with_only_active_launch_lane`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_accepts_active_launch_lane_without_future_lanes`
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_are_unique pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_data_collection"`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "ethereum_data_collection or ethereum_sdk_sources_are_native"`
+  - `swift test --filter IrohaSwiftTests.SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetInboundEvidenceUsesMainnetRpcAndRejectsDrift --console=plain`
+    (from `kotlin/`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew test --console=plain`
+    (from `java/iroha_android/`)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_json_tracks_corridor_phase_results pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_sdk_helper_symbols_are_unique pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_ethereum_data_collection_has_no_proxy_fallback`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_required_helper_inventory_matches_report pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_helper_inventory_is_independent pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_active_launch_policy_is_ethereum_mainnet pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_ethereum_facade_declaration_marker`
+  - `git diff --check`
 
 ## 2026-06-02 Ethereum SCCP evidence input hardening
 
@@ -2459,10 +2572,10 @@ Last updated: 2026-06-02
   - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --test bridge_proofs ethereum_mainnet_lane_readiness_requires_complete_eth_material -- --nocapture`
     (`1 passed`)
   - `env CARGO_TARGET_DIR=target/sccp-production-corridor NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_torii configured_ethereum_mainnet_lane_launch -- --nocapture`
-    did not reach the routing tests because unrelated
-    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` currently imports
-    missing `iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash`;
-    the library-only Torii run above passed.
+    previously did not reach the routing tests because unrelated
+    `crates/iroha_torii/tests/offline_v2_readiness_smoke.rs` imported the
+    missing V2 Offline recursive schema hash helper; the later Offline V2
+    schema-hash export status entry records the fix.
 
 ## 2026-06-02 SCCP EVM live evidence mainnet network-id default
 

@@ -3180,7 +3180,7 @@ fn ethereum_mainnet_lane_readiness_requires_complete_eth_material() {
 }
 
 #[test]
-fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_launch() {
+fn submit_configured_bsc_source_adapter_proof_is_accepted_for_bsc_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3192,11 +3192,11 @@ fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_laun
     state.zk.sccp_destination_rollouts.clear();
     state.zk.sccp_route_allowlists.clear();
 
-    let material = configured_eth_source_verifier_material();
-    let deployment = configured_eth_source_adapter_engine_deployment(&material);
-    let destination_rollout = configured_eth_destination_rollout();
+    let material = configured_bsc_source_verifier_material();
+    let deployment = configured_bsc_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_bsc_destination_rollout();
     let route_allowlist =
-        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
+        configured_bsc_route_allowlist(&material, &deployment, &destination_rollout);
     state
         .zk
         .sccp_source_verifier_materials
@@ -3214,8 +3214,8 @@ fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_laun
         .sccp_route_allowlists
         .push(actual_route_allowlist(&route_allowlist));
 
-    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
-        1_003,
+    let proof = make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
+        56_003,
         &material,
         &deployment,
     );
@@ -3227,7 +3227,7 @@ fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_laun
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect("ETH source proof should pass the Ethereum mainnet lane launch policy");
+        .expect("BSC source proof should pass the BSC mainnet lane launch policy");
     assert!(stx.world.proofs().get(&proof_id).is_some());
 }
 
@@ -3328,7 +3328,7 @@ fn submit_configured_eth_source_adapter_proof_rejects_replayed_source_material()
 }
 
 #[test]
-fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethereum_lane_launch() {
+fn submit_sccp_inbound_message_with_configured_eth_source_adapter_waits_for_bsc_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3340,11 +3340,11 @@ fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethe
     state.zk.sccp_destination_rollouts.clear();
     state.zk.sccp_route_allowlists.clear();
 
-    let material = configured_bsc_source_verifier_material();
-    let deployment = configured_bsc_source_adapter_engine_deployment(&material);
-    let destination_rollout = configured_bsc_destination_rollout();
+    let material = configured_eth_source_verifier_material();
+    let deployment = configured_eth_source_adapter_engine_deployment(&material);
+    let destination_rollout = configured_eth_destination_rollout();
     let route_allowlist =
-        configured_bsc_route_allowlist(&material, &deployment, &destination_rollout);
+        configured_eth_route_allowlist(&material, &deployment, &destination_rollout);
     state
         .zk
         .sccp_source_verifier_materials
@@ -3362,8 +3362,8 @@ fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethe
         .sccp_route_allowlists
         .push(actual_route_allowlist(&route_allowlist));
 
-    let proof = make_sccp_bsc_to_sora_message_bridge_proof_with_material_and_deployment(
-        5603,
+    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_603,
         &material,
         &deployment,
     );
@@ -3376,10 +3376,10 @@ fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethe
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("BSC source proofs must wait until the BSC lane launch policy opens");
+        .expect_err("ETH source proofs must wait until the ETH lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy")
-            && format!("{err:?}").contains("domain 2"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
+            && format!("{err:?}").contains("domain 1"),
         "unexpected error: {err:?}",
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -3443,7 +3443,7 @@ fn submit_sccp_inbound_message_with_audited_sol_source_adapter_waits_for_lane_la
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("Solana material must wait until the Solana lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -3503,7 +3503,7 @@ fn submit_sccp_inbound_message_with_audited_ton_source_adapter_waits_for_lane_la
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("TON material must wait until the TON lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -3562,7 +3562,7 @@ fn submit_sccp_inbound_message_with_configured_tron_source_adapter_waits_for_lan
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("TRON material must wait until the TRON lane launch policy opens");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -3783,7 +3783,7 @@ fn submit_sccp_inbound_message_rejects_source_proof_without_deployment_binding_b
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("source proof without deployment evidence must not bypass lane launch");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy"),
+        format!("{err:?}").contains("BSC mainnet lane launch policy"),
         "unexpected error: {err:?}"
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
@@ -3942,7 +3942,7 @@ fn submit_sccp_inbound_message_waits_for_sol_lane_launch_before_route_allowlist_
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("Solana route allowlist drift must wait for lane launch");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy")
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
             && format!("{err:?}").contains("domain 3"),
         "unexpected error: {err:?}"
     );
@@ -3995,7 +3995,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_allowlist
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("TRON route allowlist drift must wait for lane launch");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy")
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
             && format!("{err:?}").contains("domain 5"),
         "unexpected error: {err:?}"
     );
@@ -4057,7 +4057,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_route_canary_dr
                     " drift must wait for lane launch"
                 ));
             assert!(
-                format!("{err:?}").contains("Ethereum mainnet lane launch policy")
+                format!("{err:?}").contains("BSC mainnet lane launch policy")
                     && format!("{err:?}").contains("domain 5"),
                 "unexpected {label} error: {err:?}",
                 label = $label,
@@ -4178,7 +4178,7 @@ fn submit_sccp_inbound_message_waits_for_tron_lane_launch_before_destination_net
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("TRON destination network drift must wait for lane launch");
     assert!(
-        format!("{err:?}").contains("Ethereum mainnet lane launch policy")
+        format!("{err:?}").contains("BSC mainnet lane launch policy")
             && format!("{err:?}").contains("domain 5"),
         "unexpected error: {err:?}"
     );

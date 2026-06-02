@@ -3431,8 +3431,8 @@ pub enum SccpAnchorGovernanceV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpLaunchModeV1 {
     AllLanesAtOnce,
-    #[default]
     EthereumMainnetLane,
+    #[default]
     BscMainnetLane,
 }
 
@@ -3568,7 +3568,7 @@ impl Default for SccpProductionPolicyV1 {
     fn default() -> Self {
         Self {
             version: 1,
-            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
+            launch_mode: SccpLaunchModeV1::BscMainnetLane,
             proof_submitter_policy: SccpProofSubmitterPolicyV1::Permissionless,
             route_activation_policy: SccpRouteActivationPolicyV1::GovernanceAllowlist,
             per_message_human_approval_required: false,
@@ -36011,6 +36011,7 @@ mod tests {
     }
 
     /// Return the sample Ethereum mainnet sync committee root used by SCCP fixtures.
+    #[cfg(feature = "test-fixtures")]
     pub fn sample_eth_mainnet_sync_committee_root() -> H256 {
         sample_eth_sync_committee_hash()
     }
@@ -39926,6 +39927,7 @@ mod tests {
     }
 
     /// Build a deployment-bound Ethereum mainnet -> SORA transfer bundle for executor tests.
+    #[cfg(feature = "test-fixtures")]
     pub fn sample_eth_mainnet_to_sora_transfer_bundle_with_material_and_deployment(
         nonce: u64,
         source_material: &SccpSourceVerifierMaterialV1,
@@ -39959,6 +39961,7 @@ mod tests {
     }
 
     /// Build a local-admission transparent proof for an Ethereum mainnet -> SORA transfer.
+    #[cfg(feature = "test-fixtures")]
     pub fn sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment(
         nonce: u64,
         source_material: &SccpSourceVerifierMaterialV1,
@@ -54710,13 +54713,13 @@ mod tests {
     }
 
     #[test]
-    fn production_policy_uses_ethereum_mainnet_lane_launch() {
+    fn production_policy_uses_bsc_mainnet_lane_launch() {
         assert_eq!(
             SccpLaunchModeV1::default(),
-            SccpLaunchModeV1::EthereumMainnetLane
+            SccpLaunchModeV1::BscMainnetLane
         );
         let policy = sccp_production_policy_v1();
-        assert_eq!(policy.launch_mode, SccpLaunchModeV1::EthereumMainnetLane);
+        assert_eq!(policy.launch_mode, SccpLaunchModeV1::BscMainnetLane);
         assert_eq!(
             policy.proof_submitter_policy,
             SccpProofSubmitterPolicyV1::Permissionless

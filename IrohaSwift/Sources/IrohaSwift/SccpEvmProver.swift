@@ -1729,7 +1729,14 @@ public final class EthereumMainnetSccp {
         guard evidence.receiptProof != nil else {
             throw EvmSccpProverError.invalidPublicInputs("receiptProof")
         }
-        return try await inboundProveFunction(evidence)
+        let proofBytes = try await inboundProveFunction(evidence)
+        guard !proofBytes.isEmpty else {
+            throw EvmSccpProverError.emptyProof
+        }
+        guard proofBytes.contains(where: { $0 != 0 }) else {
+            throw EvmSccpProverError.allZeroProof
+        }
+        return Data(proofBytes)
     }
 
     public func submitInboundToIroha(_ proofBytes: Data) async throws -> Any {
@@ -1756,6 +1763,9 @@ public final class EthereumMainnetSccp {
         guard result.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.publicInputs.targetDomain")
         }
+        guard result.destinationBinding?.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding.sourceDomain")
+        }
         guard result.destinationBinding?.networkId == sccpEthereumMainnetNetworkId else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.destinationBinding.networkId")
         }
@@ -1772,6 +1782,7 @@ public final class EthereumMainnetSccp {
         }
         guard let proofResult = input.proofResult,
               let destinationBinding = proofResult.destinationBinding,
+              destinationBinding.sourceDomain == sccpDomainSora,
               destinationBinding.targetDomain == sccpDomainEthereum,
               destinationBinding.networkId == sccpEthereumMainnetNetworkId,
               destinationBinding.hash == proofResult.destinationBindingHash else {
@@ -1795,9 +1806,15 @@ public final class EthereumMainnetSccp {
     }
 
     private static func requireEthereumMainnetRequest(_ request: EvmSccpProofRequest) throws {
+        guard request.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("request.sourceDomain")
+        }
         guard request.targetDomain == sccpDomainEthereum,
               request.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("request.targetDomain")
+        }
+        guard request.destinationBinding?.sourceDomain == sccpDomainSora else {
+            throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.sourceDomain")
         }
         guard request.destinationBinding?.networkId == sccpEthereumMainnetNetworkId else {
             throw EvmSccpProverError.invalidPublicInputs("request.destinationBinding.networkId")

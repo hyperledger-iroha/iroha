@@ -7753,6 +7753,7 @@ Invariants:
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
 - `ViewEvidenceIsCompleteOrEmpty`
+- `PreCommitPhasesHaveNoCommitVotes`
 - `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
 - `CommitImpliesPrepareQuorum`
@@ -8661,6 +8662,9 @@ Temporal properties:
   view-change phase with enough votes already collected.
 - `ViewEvidenceNeverPartial` proves that the latched view-change witness is
   either absent or quorum-complete, never a partial vote count.
+- `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
+  prepare phases cannot carry stale live commit-vote counters or signed stake
+  from an earlier view into the next pre-commit path.
 - `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
   their view-change quorum witness after commit.
 - `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required

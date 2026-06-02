@@ -726,6 +726,12 @@ impl RelayCertificateV2 {
         mldsa_secret_key: &[u8],
     ) -> Result<RelayCertificateBundleV2, CertificateError> {
         let payload = self.to_cbor();
+        parse_certificate_payload(&payload)?;
+        MlDsaSuite::MlDsa65
+            .validate_secret_key(mldsa_secret_key)
+            .map_err(|err| {
+                CertificateError::SignatureFailure(format!("ML-DSA secret key is invalid: {err}"))
+            })?;
         let digest = compute_signing_digest(SRC_V2_ED25519_DOMAIN, &payload);
 
         let ed25519_signature: Signature = ed25519_signing_key.sign(&digest);
@@ -936,12 +942,11 @@ impl RelayCertificateBundleV2 {
                     },
                 )?;
             }
-            (None, CertificateValidationPhase::Phase1AllowSingle) => {}
-            (None, CertificateValidationPhase::Phase2PreferDual) => {
-                return Err(CertificateError::MissingMldsaSignature {
-                    phase: "Phase2PreferDual",
-                });
-            }
+            (
+                None,
+                CertificateValidationPhase::Phase1AllowSingle
+                | CertificateValidationPhase::Phase2PreferDual,
+            ) => {}
             (None, CertificateValidationPhase::Phase3RequireDual) => {
                 return Err(CertificateError::MissingMldsaSignature {
                     phase: "Phase3RequireDual",
@@ -2401,6 +2406,49 @@ mod tests {
     }
 
     #[test]
+    fn issue_rejects_invalid_certificate_payload_before_signing() {
+        let mut certificate = sample_certificate();
+        certificate.endpoints.clear();
+
+        let signing_key = SigningKey::from_bytes(&[0x88; SECRET_KEY_LENGTH]);
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+
+        let err = certificate
+            .issue(&signing_key, mldsa_keys.secret_key())
+            .expect_err("invalid certificates must not be signed into bundles");
+        match err {
+            CertificateError::InvalidFieldValue { field, .. } => {
+                assert_eq!(field, "certificate.endpoints");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn issue_rejects_invalid_mldsa_secret_key_length() {
+        let certificate = sample_certificate();
+        let signing_key = SigningKey::from_bytes(&[0x89; SECRET_KEY_LENGTH]);
+        let mldsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+        let mut short_secret_key = mldsa_keys.secret_key().to_vec();
+        short_secret_key.pop();
+
+        let err = certificate
+            .issue(&signing_key, &short_secret_key)
+            .expect_err("invalid ML-DSA secret keys must fail before backend signing");
+        match err {
+            CertificateError::SignatureFailure(message) => {
+                assert!(
+                    message.contains("secret key"),
+                    "unexpected error: {message}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn verification_fails_without_mldsa_in_phase3() {
         let certificate = sample_certificate();
 
@@ -2429,7 +2477,7 @@ mod tests {
 
         matches!(err, CertificateError::MissingMldsaSignature { .. });
 
-        // Phase 1 should allow it.
+        // Phase 1 and Phase 2 should allow it during the staged rollout.
         bundle
             .verify(
                 &verifying_key,
@@ -2437,6 +2485,13 @@ mod tests {
                 CertificateValidationPhase::Phase1AllowSingle,
             )
             .expect("phase 1 accepts single signature");
+        bundle
+            .verify(
+                &verifying_key,
+                mldsa_keys.public_key(),
+                CertificateValidationPhase::Phase2PreferDual,
+            )
+            .expect("phase 2 accepts single signature");
     }
 
     #[test]

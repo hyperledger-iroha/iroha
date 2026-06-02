@@ -632,11 +632,21 @@ test("EthereumMainnetSccp keeps the easy outbound path Ethereum-only", () => {
   const sdk = new EthereumMainnetSccp();
   const ethRequest = sdk.buildOutboundProofRequest(sampleOutboundInput());
   assert.equal(ethRequest.targetDomain, SCCP_DOMAIN_ETH);
+  assert.equal(ethRequest.sourceDomain, SCCP_DOMAIN_SORA);
+  assert.equal(ethRequest.destinationBinding.sourceDomain, SCCP_DOMAIN_SORA);
   assert.equal(ethRequest.destinationBinding.networkId, SCCP_ETH_MAINNET_NETWORK_ID);
 
   assert.throws(
     () => sdk.buildOutboundProofRequest(sampleOutboundInput(SCCP_DOMAIN_BSC)),
     /request route|targetDomain|Ethereum mainnet/u,
+  );
+  assert.throws(
+    () =>
+      sdk.buildOutboundProofRequest({
+        ...sampleOutboundInput(),
+        sourceDomain: SCCP_DOMAIN_BSC,
+      }),
+    /SORA/u,
   );
 });
 

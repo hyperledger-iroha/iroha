@@ -676,6 +676,12 @@ NewViewPhaseBelowQuorum ==
 ViewEvidenceIsCompleteOrEmpty ==
   viewEvidenceVotes = 0 \/ viewEvidenceVotes >= ViewQuorum
 
+PreCommitPhasesHaveNoCommitVotes ==
+  phase \in {"NewView", "Propose", "Prepare"} =>
+    /\ commitVotesHonest = 0
+    /\ commitVotesByz = 0
+    /\ stakeSigned = 0
+
 CommitImpliesViewQuorumEvidence ==
   committed => (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
 
@@ -753,6 +759,9 @@ NewViewQuorumHandoffNeverStalls ==
 
 ViewEvidenceNeverPartial ==
   [] ViewEvidenceIsCompleteOrEmpty
+
+PreCommitVotesNeverCarryAcrossViews ==
+  [] PreCommitPhasesHaveNoCommitVotes
 
 CommitViewQuorumEvidenceNeverLost ==
   [] (committed =>

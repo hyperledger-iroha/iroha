@@ -8621,6 +8621,7 @@ final class SccpSolanaProverTests: XCTestCase {
             verifierKeyHash: "0x" + String(repeating: "cc", count: 32)
         )
         XCTAssertEqual(binding.networkId, sccpEthereumMainnetNetworkId)
+        XCTAssertEqual(binding.sourceDomain, sccpDomainSora)
         XCTAssertEqual(binding.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(
             binding.hash,
@@ -8688,6 +8689,21 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTFail("BSC public inputs must not use the Ethereum mainnet facade")
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .invalidPublicInputs("request.targetDomain"))
+        }
+
+        do {
+            _ = try await facade.buildOutboundProofRequest(EvmSccpProofRequestInput(
+                publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainEthereum),
+                bundleBytes: Data([5, 6, 7]),
+                sourceProofBytes: Data([9, 10]),
+                statementHash: String(repeating: "56", count: 32),
+                destinationBindingHash: binding.hash,
+                sourceDomain: sccpDomainBsc,
+                destinationBinding: binding
+            ))
+            XCTFail("Ethereum outbound facade must reject non-SORA source domains")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("request.sourceDomain"))
         }
     }
 
@@ -8971,6 +8987,22 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         )
         XCTAssertEqual(proofBytes, Data([1, 2, 3]))
+        let proofReadyEvidence = EthereumMainnetInboundEvidence(
+            transactionHash: evidence.transactionHash,
+            receipt: evidence.receipt,
+            block: evidence.block,
+            beaconFinality: evidence.beaconFinality,
+            receiptProof: receiptProof,
+            receiptProofHash: receiptProofHash
+        )
+        await assertEvmError(.emptyProof) {
+            _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in Data() })
+                .proveInboundToSora(proofReadyEvidence)
+        }
+        await assertEvmError(.allZeroProof) {
+            _ = try await EthereumMainnetSccp(inboundProveFunction: { _ in Data([0, 0]) })
+                .proveInboundToSora(proofReadyEvidence)
+        }
         let submitResult = try await sdk.submitInboundToIroha(Data([1, 2, 3]))
         XCTAssertEqual(submitResult as? String, "submitted")
 

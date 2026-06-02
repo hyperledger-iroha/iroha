@@ -1058,6 +1058,8 @@ public final class EvmSccpProverTests {
             "0x" + repeat("cc", 32));
     assert SourceSccpProofs.ETH_MAINNET_NETWORK_ID.equals(binding.networkId)
         : "Ethereum binding must default to chain id 1";
+    assert binding.sourceDomain == EvmSccpProver.DOMAIN_SORA
+        : "Ethereum binding must start from SORA";
     assert binding.targetDomain == EvmSccpProver.DOMAIN_ETH
         : "Ethereum binding must target ETH";
     assert binding.hash.equals(
@@ -1169,6 +1171,23 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("target ETH");
     }
     assert threw : "Ethereum request helper must reject BSC public inputs";
+
+    threw = false;
+    try {
+      EthereumMainnetSccp.buildProofRequest(
+          new EvmSccpProver.ProofRequestInput(
+              samplePublicInputs(EvmSccpProver.DOMAIN_ETH),
+              new byte[] {5, 6, 7},
+              new byte[0],
+              repeat("56", 32),
+              binding.hash,
+              EvmSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              EvmSccpProver.DOMAIN_BSC,
+              binding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("SORA -> ETH");
+    }
+    assert threw : "Ethereum request helper must reject non-SORA outbound source domains";
 
     final String txHash = "0x" + repeat("aa", 32);
     final String blockHash = "0x" + repeat("bb", 32);
@@ -1354,21 +1373,39 @@ public final class EvmSccpProverTests {
         : "Ethereum inbound collection must derive receiptProofHash from receiptProof";
     assert receiptProof == receiptProofEvidence.receiptProof()
         : "Ethereum inbound collection must retain app-collected receiptProof";
+    final EthereumMainnetSccp.InboundEvidence proofReadyEvidence =
+        new EthereumMainnetSccp.InboundEvidence(
+            EvmSccpProver.DOMAIN_ETH,
+            EvmSccpProver.DOMAIN_SORA,
+            evidence.transactionHash(),
+            evidence.receipt(),
+            evidence.block(),
+            evidence.beaconFinality(),
+            receiptProof,
+            receiptProofHash,
+            null,
+            null);
     assert Arrays.equals(
-            new byte[] {1, 2, 3},
-            sdk.proveInboundToSora(
-                new EthereumMainnetSccp.InboundEvidence(
-                    EvmSccpProver.DOMAIN_ETH,
-                    EvmSccpProver.DOMAIN_SORA,
-                    evidence.transactionHash(),
-                    evidence.receipt(),
-                    evidence.block(),
-                    evidence.beaconFinality(),
-                    receiptProof,
-                    receiptProofHash,
-                    null,
-                    null)))
+            new byte[] {1, 2, 3}, sdk.proveInboundToSora(proofReadyEvidence))
         : "inbound prover must receive receipt-proof-backed validated evidence";
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null, null, null, null, emptyProofEvidence -> new byte[0], null)
+          .proveInboundToSora(proofReadyEvidence);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be empty");
+    }
+    assert threw : "Ethereum inbound prover output must reject empty proof bytes";
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null, null, null, null, zeroProofEvidence -> new byte[] {0, 0}, null)
+          .proveInboundToSora(proofReadyEvidence);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofBytes must not be all zero");
+    }
+    assert threw : "Ethereum inbound prover output must reject all-zero proof bytes";
     threw = false;
     try {
       new EthereumMainnetSccp()

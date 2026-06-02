@@ -295,6 +295,13 @@ function declarationInterface(name) {
   return match[0];
 }
 
+function declarationClass(name) {
+  const start = DECLARATIONS_TEXT.indexOf(`export class ${name} {`);
+  assert.notEqual(start, -1, `missing declaration class ${name}`);
+  const end = DECLARATIONS_TEXT.indexOf("\nexport ", start + 1);
+  return end === -1 ? DECLARATIONS_TEXT.slice(start) : DECLARATIONS_TEXT.slice(start, end);
+}
+
 function abiWord(value) {
   let remaining = BigInt(value);
   const out = new Uint8Array(32);
@@ -888,6 +895,47 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   assert.match(
     DECLARATIONS_TEXT,
     /proveInboundToSora\([\s\S]*executionProvider\?: EthereumMainnetExecutionProvider;[\s\S]*consensusProvider\?: EthereumMainnetConsensusProvider;[\s\S]*proveInbound\?: EthereumMainnetInboundProveFn;/,
+  );
+});
+
+test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
+  const declaration = declarationClass("EthereumMainnetSccp");
+  assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
+  assert.match(
+    declaration,
+    /collectInboundEvidenceFromReceipt\([\s\S]*input\?: EthereumMainnetInboundEvidenceInput,[\s\S]*\): Promise<EthereumMainnetInboundEvidence>;/u,
+  );
+  assert.match(
+    declaration,
+    /proveInboundToSora\([\s\S]*input: EthereumMainnetInboundEvidenceInput,[\s\S]*\): Promise<Uint8Array>;/u,
+  );
+  assert.match(
+    declaration,
+    /submitInboundToIroha\([\s\S]*input: BinaryLike,[\s\S]*\): Promise<unknown>;/u,
+  );
+  assert.match(
+    declaration,
+    /buildOutboundProofRequest\(input: EvmSccpProofRequestInput\): EvmSccpProofRequest;/u,
+  );
+  assert.match(
+    declaration,
+    /proveOutboundToEthereum\([\s\S]*input: EvmSccpProofRequestInput,[\s\S]*\): Promise<EvmSccpProofResult>;/u,
+  );
+  assert.match(
+    declaration,
+    /buildEthereumCalldata\(input: EthereumMainnetSccpSubmissionInput\): EvmSccpSubmission;/u,
+  );
+  assert.match(
+    declaration,
+    /submitOutboundToEthereum\([\s\S]*input: EthereumMainnetSccpSubmissionInput & \{[\s\S]*\): Promise<unknown>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetInboundProveFn = \([\s\S]*\) => BinaryLike \| Promise<BinaryLike>;/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type EthereumMainnetSubmitInboundFn = \([\s\S]*proofBytes: Uint8Array,[\s\S]*\) => unknown \| Promise<unknown>;/u,
   );
 });
 

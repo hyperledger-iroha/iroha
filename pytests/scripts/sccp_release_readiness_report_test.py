@@ -118,6 +118,109 @@ BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS = {
     "proverUrl": re.compile(r"\bproverUrl\b"),
     "proverEndpoint": re.compile(r"\bproverEndpoint\b"),
 }
+ETHEREUM_DATA_COLLECTION_FORBIDDEN_PATTERNS = {
+    "Torii": re.compile(r"\bTorii\b"),
+    "torii": re.compile(r"\btorii\b"),
+    "proxy": re.compile(r"\bproxy\b", re.IGNORECASE),
+    "embedded HTTP client": re.compile(
+        r"\b(fetch|XMLHttpRequest|requests|URLSession|HttpURLConnection|HttpClient)\b"
+    ),
+}
+ETHEREUM_DATA_COLLECTION_REGIONS = {
+    "js-sdk": (
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
+        "  async validateExecutionProviderMainnet",
+        "  async submitInboundToIroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "collectFinalityEvidence",
+        ),
+    ),
+    "python-sdk": (
+        ROOT / "python" / "iroha_torii_client" / "sccp.py",
+        "    async def validate_execution_provider_mainnet",
+        "    async def submit_inbound_to_iroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "_evm_facade_collect_finality",
+        ),
+    ),
+    "swift-sdk": (
+        ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SccpEvmProver.swift",
+        "    public func validateExecutionProviderMainnet",
+        "    public func submitInboundToIroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "collectFinalityEvidence",
+        ),
+    ),
+    "kotlin-sdk": (
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProver.kt",
+        "    fun validateExecutionProviderMainnet",
+        "    fun submitInboundToIroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "collectFinalityEvidence",
+        ),
+    ),
+    "java-android": (
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EthereumMainnetSccp.java",
+        "  public Object validateExecutionProviderMainnet()",
+        "  public Object submitInboundToIroha",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "collectFinalityEvidence",
+        ),
+    ),
+    "dotnet-sdk": (
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs",
+        "    public static async ValueTask<object?> ValidateExecutionProviderMainnetAsync",
+        "    public static async ValueTask<object?> SubmitInboundToIrohaAsync",
+        (
+            "eth_chainId",
+            "eth_getTransactionReceipt",
+            "eth_getBlockByHash",
+            "CollectFinalityEvidenceAsync",
+        ),
+    ),
+}
 NATIVE_LOCAL_PROVER_SOURCE_GLOBS = {
     "js-sdk": (
         "javascript/iroha_js/src/sccp.js",
@@ -183,6 +286,23 @@ def native_local_prover_source_paths() -> dict[str, list[Path]]:
             paths.extend(path for path in matches if path.is_file())
         paths_by_sdk[sdk] = paths
     return paths_by_sdk
+
+
+def source_region(path: Path, start_marker: str, end_marker: str) -> str:
+    """Return the source region delimited by two stable markers."""
+
+    source = path.read_text(encoding="utf-8")
+    start = source.find(start_marker)
+    if start == -1:
+        raise AssertionError(
+            f"{path.relative_to(ROOT)} missing start marker: {start_marker}"
+        )
+    end = source.find(end_marker, start + len(start_marker))
+    if end == -1:
+        raise AssertionError(
+            f"{path.relative_to(ROOT)} missing end marker: {end_marker}"
+        )
+    return source[start:end]
 
 
 def write_downloaded_phase_artifacts(tmp_path: Path) -> Path:
@@ -426,6 +546,33 @@ def test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only() -
             if pattern.search(source):
                 violations.append(
                     f"{sdk} {path.relative_to(ROOT)} contains forbidden {label}"
+                )
+
+    assert violations == []
+
+
+def test_release_readiness_ethereum_data_collection_has_no_proxy_fallback() -> None:
+    """Ethereum evidence collection must use app-owned providers."""
+
+    violations: list[str] = []
+    for sdk, region_config in ETHEREUM_DATA_COLLECTION_REGIONS.items():
+        path, start_marker, end_marker, required_markers = region_config
+        if not path.is_file():
+            violations.append(
+                f"{sdk} missing Ethereum data-collection source file: "
+                f"{path.relative_to(ROOT)}"
+            )
+            continue
+        region = source_region(path, start_marker, end_marker)
+        for marker in required_markers:
+            if marker not in region:
+                violations.append(
+                    f"{sdk} {path.relative_to(ROOT)} missing provider marker {marker}"
+                )
+        for label, pattern in ETHEREUM_DATA_COLLECTION_FORBIDDEN_PATTERNS.items():
+            if pattern.search(region):
+                violations.append(
+                    f"{sdk} {path.relative_to(ROOT)} collection path contains forbidden {label}"
                 )
 
     assert violations == []
@@ -770,6 +917,12 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "EthereumMainnetSccp.submitOutboundToEthereum"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
     )
+    for symbol in (
+        "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.proveOutboundToEthereum",
+        "EthereumMainnetSccp.buildEthereumCalldata",
+    ):
+        assert symbol in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
     assert (
         "EthereumMainnetSccp.OutboundSubmitFunction"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["swift-sdk"]
@@ -826,6 +979,12 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "EthereumMainnetSccp.submitOutboundToEthereum"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
     )
+    for symbol in (
+        "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.proveOutboundToEthereum",
+        "EthereumMainnetSccp.buildEthereumCalldata",
+    ):
+        assert symbol in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
     assert (
         "EthereumMainnetOutboundSubmitter"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
@@ -882,6 +1041,12 @@ def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) ->
         "EthereumMainnetSccp.submitOutboundToEthereum"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
     )
+    for symbol in (
+        "EthereumMainnetSccp.buildOutboundProofRequest",
+        "EthereumMainnetSccp.proveOutboundToEthereum",
+        "EthereumMainnetSccp.buildEthereumCalldata",
+    ):
+        assert symbol in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
     assert (
         "EthereumMainnetSccp.OutboundSubmitter"
         in surfaces["eth,bsc"]["sdk_helper_symbols_by_sdk"]["java-android"]
@@ -1726,6 +1891,63 @@ def test_release_readiness_report_requires_bsc_parlia_declaration_marker(
         if fragment != declaration_marker
     ]
     corridor_log = tmp_path / "js-sdk-without-bsc-parlia-declaration-marker.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "js-sdk=passed",
+            "--phase-evidence",
+            f"js-sdk={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {declaration_marker}"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_requires_ethereum_facade_declaration_marker(
+    tmp_path: Path,
+) -> None:
+    """The JS phase evidence must prove the Ethereum facade declarations were tested."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    declaration_marker = "package declarations expose Ethereum mainnet SCCP facade methods"
+    assert declaration_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != declaration_marker
+    ]
+    corridor_log = tmp_path / "js-sdk-without-ethereum-facade-declaration-marker.log"
     corridor_log.write_text(
         "\n".join(
             (

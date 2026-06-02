@@ -32,7 +32,11 @@ and completed history lives in [`status.md`](./status.md).
   X25519 public-key decoders for the hybrid KEM and standalone key exchange now
   reject low-order encodings before ECDH, while retaining shared-secret checks
   as defense in depth. SoraNet NK2/NK3 handshake parsers now apply the same
-  low-order X25519 policy to decoded Noise static and ephemeral public keys.
+  low-order X25519 policy to decoded Noise static and ephemeral public keys,
+  reject malformed Dilithium3/Ed25519 handshake signature field lengths,
+  require 1024-byte zero-padded frames, and reject selected KEM/signature ids
+  that are absent from either peer's advertised capability TLVs; unsupported
+  KEM ids fail at the KEM profile gate before downgrade telemetry is built.
   SoraNet signed-ticket decode and direct verification now reject ML-DSA-44
   signature vectors whose length disagrees with the suite metadata before
   accepting tokens or entering backend verification. SoraNet revocation-store
@@ -46,8 +50,11 @@ and completed history lives in [`status.md`](./status.md).
   public-key and detached-signature lengths before backend verification or
   replay-store mutation. SoraNet SRCv2 bundle verification now also rejects
   weak Ed25519 verifier keys and preflights ML-DSA-65 issuer public-key and
-  detached-signature lengths before backend verification. SoraNet SRCv2
-  certificate decode now rejects unknown
+  detached-signature lengths before backend verification, and local SRCv2
+  issuance reuses certificate-payload admission plus ML-DSA-65 issuer
+  secret-key length preflight before signing bundles. Phase 2 SRCv2 rollout
+  accepts Ed25519-only relay certificates while Phase 3 remains the
+  dual-signature gate. SoraNet SRCv2 certificate decode now rejects unknown
   ML-KEM suite ids and key-material length drift for ML-DSA-65 identity keys
   and advertised ML-KEM relay public keys, rejects malformed/noncanonical/weak
   Ed25519 identity public keys, rejects ML-DSA-65 detached signature length
@@ -57,7 +64,10 @@ and completed history lives in [`status.md`](./status.md).
   now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
   snapshot directory hash, and a unique relay ID, with relay certificate
   signatures verified against embedded issuer keys under the snapshot validation
-  phase. SRCv2 role/capability bitmask decode now rejects unsupported bits
+  phase; zero-length or inverted snapshot validity windows now fail closed, and
+  relay certificate validity must cover the full snapshot window without being
+  published after the snapshot.
+  SRCv2 role/capability bitmask decode now rejects unsupported bits
   instead of masking them away, and validity windows fail closed when inverted
   or published after expiry. KEM rotation policies now reject static
   fallback/rotation/grace metadata, staged policies without fallbacks, rolling
@@ -199,17 +209,26 @@ and completed history lives in [`status.md`](./status.md).
   helper symbols in the `eth,bsc` SDK rows. The JavaScript package-dist tests
   now also guard the browser Ethereum and BSC mainnet SCCP artifacts against
   `WebAssembly`, `wasm`, `snarkjs`, remote prover, prover URL, and prover
-  endpoint dependency markers, and release-bundle verification requires both
-  no-WASM guard test names plus the BSC Parlia declaration test name in the JS
-  phase transcript. Release-readiness tests
+  endpoint dependency markers, and package declaration tests require the full
+  Ethereum-mainnet browser facade method list plus typed local proof bytes for
+  inbound proving/submission. Release-bundle verification requires both
+  no-WASM guard test names plus the Ethereum facade declaration and BSC Parlia
+  declaration test names in the JS phase transcript. Release-readiness tests
   also scan the Ethereum and BSC JavaScript, Python, Swift, Kotlin/JVM, Java
   Android, and .NET facade sources for missing files or forbidden
   WASM/snarkjs/remote-prover dependency markers, keeping those mainnet SDK
-  paths native or local-prover owned. Release-readiness and strict
+  paths native or local-prover owned. They now also guard the Ethereum mainnet
+  evidence-collection regions so they keep using app-owned execution/consensus
+  providers and do not grow Torii, proxy, or embedded HTTP-client fallbacks.
+  Swift, Kotlin/JVM, and Java Android Ethereum inbound facades now reject
+  empty/all-zero app-owned prover output and return copied proof bytes before
+  Iroha submission, matching the JS/Python/.NET local-prover path.
+  Release-readiness and strict
   release-bundle verifier helper inventories now require the native typed
   Ethereum receipt-proof evidence helpers for Swift, Kotlin/JVM, Java Android,
-  and .NET, and the active production launch policy now targets the Ethereum
-  mainnet lane rather than waiting on other SCCP lanes. The Python, Swift,
+  and .NET, and now require the full Swift/Kotlin/JVM/Java Android native
+  Ethereum outbound facade methods by name. The active production launch policy
+  targets the Ethereum mainnet lane rather than waiting on other SCCP lanes. The Python, Swift,
   Kotlin/JVM, Java Android, and JavaScript Ethereum-mainnet calldata helpers
   now also require wrapped proof results carrying the chain-id-1 destination
   binding before verifier calldata is emitted. Python, Swift, Kotlin/JVM, Java Android, and
@@ -401,6 +420,7 @@ and completed history lives in [`status.md`](./status.md).
   commit-view future-view exclusion,
   view-change quorum evidence for nonzero active views,
   NewView quorum handoff and complete-only view evidence,
+  pre-commit stale commit-vote reset across view changes,
   prepare-quorum commit gating, commit-certificate evidence stability,
   commit-certificate vote/stake traceability,
   live stake-accounting traceability,

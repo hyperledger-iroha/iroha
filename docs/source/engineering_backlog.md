@@ -98,7 +98,11 @@ track detailed unfinished engineering work.
   keys, and the standalone key-exchange surface now reject low-order encodings
   before ECDH while retaining all-zero shared-secret fallback checks;
   SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
-  ephemeral public keys in decoded client and relay frames;
+  ephemeral public keys in decoded client and relay frames, reject malformed
+  Dilithium3/Ed25519 handshake signature field lengths, require 1024-byte
+  zero-padded frames, and reject selected KEM/signature ids that are absent
+  from either peer's advertised capability TLVs; unsupported KEM ids fail at
+  the KEM profile gate before downgrade telemetry is built;
   SoraNet signed-ticket decode and direct verification now reject ML-DSA-44
   signature vectors whose length disagrees with the suite metadata before
   accepting tokens or entering backend verification;
@@ -114,6 +118,10 @@ track detailed unfinished engineering work.
   backend verification or replay-store mutation; SoraNet SRCv2 bundle
   verification rejects weak Ed25519 verifier keys and preflights ML-DSA-65
   issuer public-key and detached-signature lengths before backend verification;
+  local SRCv2 issuance reuses certificate-payload admission and ML-DSA-65
+  issuer secret-key length preflight before signing bundles; Phase 2 SRCv2
+  rollout accepts Ed25519-only relay certificates while Phase 3 remains the
+  dual-signature gate;
   SoraNet SRCv2 certificate decode now rejects unknown ML-KEM suite ids and
   key-material length drift for ML-DSA-65 identity keys and advertised ML-KEM
   relay public keys, rejects malformed/noncanonical/weak Ed25519 identity
@@ -124,7 +132,9 @@ track detailed unfinished engineering work.
   now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
   snapshot directory hash, and a unique relay ID, with relay certificate
   signatures verified against embedded issuer keys under the snapshot
-  validation phase; SRCv2 role/capability bitmask decode rejects unsupported
+  validation phase; zero-length or inverted snapshot validity windows now fail
+  closed, and relay certificate validity must cover the full snapshot window
+  without being published after the snapshot; SRCv2 role/capability bitmask decode rejects unsupported
   bits instead of masking them away and validity windows fail closed when they
   are inverted or published after expiry; KEM rotation policies reject static
   fallback/rotation/grace metadata, staged policies without fallbacks, rolling

@@ -7757,10 +7757,16 @@ const requireEthereumMainnetInboundReceiptProof = (evidence) => {
 
 const requireEthereumMainnetOutboundRequest = (request) => {
   requireProductionEvmProofRequest(request);
+  if (request.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new RangeError("EthereumMainnetSccp outbound proofs must start from SORA");
+  }
   if (request.targetDomain !== SCCP_DOMAIN_ETH || request.publicInputs?.targetDomain !== SCCP_DOMAIN_ETH) {
     throw new RangeError("EthereumMainnetSccp outbound proofs must target Ethereum mainnet");
   }
   const binding = ethereumMainnetSccpDestinationBinding(request.destinationBinding);
+  if (binding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (request.destinationBindingHash !== binding.bindingHash) {
     throw new TypeError("destinationBindingHash must match Ethereum mainnet destinationBinding");
   }
@@ -7788,6 +7794,9 @@ const requireEthereumMainnetSubmission = (submission, input) => {
       "destination_binding",
     ),
   );
+  if (destinationBinding.sourceDomain !== SCCP_DOMAIN_SORA) {
+    throw new TypeError("Ethereum mainnet destinationBinding must start from SORA");
+  }
   if (submission.destinationBindingHash !== destinationBinding.bindingHash) {
     throw new TypeError(
       "submission destinationBindingHash must match Ethereum mainnet destinationBinding",

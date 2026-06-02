@@ -6461,8 +6461,11 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     evm_surface = next(surface for surface in surfaces if surface["lanes"] == "eth,bsc")
     sol_surface = next(surface for surface in surfaces if surface["lanes"] == "sol")
     missing_swift_receipt_proof_helper = "EthereumMainnetReceiptProof"
+    missing_swift_outbound_helper = "EthereumMainnetSccp.buildEthereumCalldata"
     missing_kotlin_receipt_proof_helper = "EthereumMainnetReceiptProof"
+    missing_kotlin_outbound_helper = "EthereumMainnetSccp.proveOutboundToEthereum"
     missing_java_receipt_proof_helper = "EthereumMainnetSccp.ReceiptProof"
+    missing_java_outbound_helper = "EthereumMainnetSccp.buildOutboundProofRequest"
     missing_dotnet_receipt_proof_helper = "EthereumMainnetReceiptProof"
     missing_dotnet_helper = "IEthereumMainnetOutboundProver"
     missing_bsc_dotnet_helper = "IBscMainnetOutboundSubmitter"
@@ -6472,12 +6475,20 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     evm_surface["sdk_helper_symbols_by_sdk"]["swift-sdk"] = [
         helper
         for helper in evm_surface["sdk_helper_symbols_by_sdk"]["swift-sdk"]
-        if helper != missing_swift_receipt_proof_helper
+        if helper
+        not in {
+            missing_swift_receipt_proof_helper,
+            missing_swift_outbound_helper,
+        }
     ]
     evm_surface["sdk_helper_symbols_by_sdk"]["kotlin-sdk"] = [
         helper
         for helper in evm_surface["sdk_helper_symbols_by_sdk"]["kotlin-sdk"]
-        if helper != missing_kotlin_receipt_proof_helper
+        if helper
+        not in {
+            missing_kotlin_receipt_proof_helper,
+            missing_kotlin_outbound_helper,
+        }
     ]
     evm_surface["sdk_helper_symbols_by_sdk"]["dotnet-sdk"] = [
         helper
@@ -6491,7 +6502,12 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     evm_surface["sdk_helper_symbols_by_sdk"]["java-android"] = [
         helper
         for helper in evm_surface["sdk_helper_symbols_by_sdk"]["java-android"]
-        if helper not in {missing_evm_java_helper, missing_java_receipt_proof_helper}
+        if helper
+        not in {
+            missing_evm_java_helper,
+            missing_java_receipt_proof_helper,
+            missing_java_outbound_helper,
+        }
     ]
     sol_surface["sdk_helper_symbols"] = [
         helper
@@ -6533,13 +6549,28 @@ def test_release_bundle_verifier_helper_inventory_is_independent() -> None:
     ) in errors
     assert (
         "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[swift-sdk] missing required helper: "
+        f"{missing_swift_outbound_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
         "sdk_helper_symbols_by_sdk[kotlin-sdk] missing required helper: "
         f"{missing_kotlin_receipt_proof_helper}"
     ) in errors
     assert (
         "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[kotlin-sdk] missing required helper: "
+        f"{missing_kotlin_outbound_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
         "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
         f"{missing_java_receipt_proof_helper}"
+    ) in errors
+    assert (
+        "readiness report user_prover_submission_surfaces lanes eth,bsc "
+        "sdk_helper_symbols_by_sdk[java-android] missing required helper: "
+        f"{missing_java_outbound_helper}"
     ) in errors
     assert (
         "readiness report user_prover_submission_surfaces lanes eth,bsc "
@@ -7043,6 +7074,52 @@ def test_release_bundle_verifier_requires_bsc_parlia_declaration_marker(
     declaration_marker = (
         "package declarations expose BSC mainnet Parlia finality evidence hooks"
     )
+    assert declaration_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+    success_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
+        if fragment != declaration_marker
+    ]
+    phase_log = output_dir / "corridor" / "js-sdk.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+                ),
+                *success_fragments,
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "js-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase js-sdk evidence artifact is missing "
+        f"expected phase-block success marker: {declaration_marker}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_ethereum_facade_declaration_marker(
+    tmp_path: Path,
+) -> None:
+    """Published JS evidence must prove the Ethereum facade declarations were tested."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    declaration_marker = "package declarations expose Ethereum mainnet SCCP facade methods"
     assert declaration_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"]
     success_fragments = [
         fragment
