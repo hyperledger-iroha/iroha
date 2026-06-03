@@ -8223,14 +8223,17 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let source_domain = iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload);
-        let configured_source_material = if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
-            None
-        } else {
-            configured_sccp_source_verifier_material_for_domain(
-                &state_transaction.zk,
-                source_domain,
-            )?
-        };
+        let diagnostic_taira_tron_xor = state_transaction.zk.sccp_allow_unready_transparent_proofs
+            && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact);
+        let configured_source_material =
+            if source_domain == iroha_sccp::SCCP_DOMAIN_SORA || diagnostic_taira_tron_xor {
+                None
+            } else {
+                configured_sccp_source_verifier_material_for_domain(
+                    &state_transaction.zk,
+                    source_domain,
+                )?
+            };
         let configured_source_deployment =
             if let Some(material) = configured_source_material.as_ref() {
                 let deployment = configured_sccp_source_adapter_engine_deployment_for_domain(
@@ -8284,7 +8287,9 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
-        let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
+        let artifact_structure_is_valid = if diagnostic_taira_tron_xor {
+            true
+        } else if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
@@ -8315,6 +8320,9 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
+            if diagnostic_taira_tron_xor {
+                return Ok(());
+            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),

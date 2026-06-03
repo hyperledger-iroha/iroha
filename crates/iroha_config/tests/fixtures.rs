@@ -2108,6 +2108,7 @@ fn minimal_config_snapshot() {
                 sccp_source_adapter_engine_deployments: [],
                 sccp_destination_rollouts: [],
                 sccp_route_allowlists: [],
+                sccp_route_manifests: [],
                 poseidon_params_id: None,
                 pedersen_params_id: None,
                 kaigi_roster_join_vk: None,

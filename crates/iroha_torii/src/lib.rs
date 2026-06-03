@@ -26218,9 +26218,11 @@ async fn handler_sccp_manifests(
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/manifests");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sccp_manifests(accept)
-        .await?
-        .into_response())
+    Ok(
+        routing::handle_v1_sccp_manifests(app.state.as_ref(), accept)
+            .await?
+            .into_response(),
+    )
 }
 
 async fn handler_sccp_messages_recent(
@@ -49175,6 +49177,48 @@ pub(crate) mod tests_runtime_handlers {
         state.zk.max_proof_size_bytes = 1_000_000;
     }
 
+    fn sample_taira_xor_nile_route_manifest_for_test()
+    -> iroha_config::parameters::actual::SccpRouteManifest {
+        iroha_config::parameters::actual::SccpRouteManifest {
+            version: 1,
+            route_id: "taira_tron_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "nile".to_owned(),
+            chain: "tron-nile".to_owned(),
+            chain_id_hex: "0xcd8690dc".to_owned(),
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            verifier_target: "TronContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("TAIRA/Nile route is enabled only for testnet smoke.".to_owned()),
+            network_id_hex: "0x00000000000000000000000000000000000000000000000000000000cd8690dc"
+                .to_owned(),
+            taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
+            taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
+            sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+            tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            verifier_code_hash: format!("0x{}", "11".repeat(32)),
+            verifier_key_hash: format!("0x{}", "22".repeat(32)),
+            destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
+            destination_binding_hash: format!("0x{}", "33".repeat(32)),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "Tm9yaXRvLXJvdXRlLWZpeHR1cmU=".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", "44".repeat(32)),
+            taira_burn_record_code_hash: "55".repeat(32),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: None,
+            post_deploy_source_bridge_config_hash: None,
+            post_deploy_source_event_transaction_id: None,
+            post_deploy_route_canary_evidence_hash: None,
+            post_deploy_route_canary_transaction_id: None,
+            post_deploy_offline_full_toml_sha256: None,
+        }
+    }
+
     static SCCP_BUNDLE_TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> =
         LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -49477,7 +49521,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_artifact_rejects_disabled_lane_when_unready_config_allows() {
+    async fn sccp_artifact_allows_disabled_lane_when_unready_config_allows() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -49500,7 +49544,7 @@ pub(crate) mod tests_runtime_handlers {
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         enable_unready_sccp_transparent_proofs_for_test(&mut app);
 
-        let err = routing::handle_v1_sccp_message_proof_artifact(
+        let response = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
@@ -49508,18 +49552,20 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err(
-            "disabled lane should reject artifact generation even when unready config allows",
-        );
-        assert!(
-            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
+        .expect("unready config should allow artifact generation for non-Groth16 test lanes");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_job_rejects_disabled_lane_when_unready_config_allows() {
+    async fn sccp_job_allows_disabled_lane_when_unready_config_allows() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -49542,7 +49588,7 @@ pub(crate) mod tests_runtime_handlers {
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         enable_unready_sccp_transparent_proofs_for_test(&mut app);
 
-        let err = routing::handle_v1_sccp_message_proof_job(
+        let response = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
@@ -49550,18 +49596,20 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err(
-            "disabled lane should reject proof job generation even when unready config allows",
-        );
-        assert!(
-            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
+        .expect("unready config should allow proof job generation for non-Groth16 test lanes");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_artifact_rejects_disabled_evm_lane_when_unready_config_allows() {
+    async fn sccp_artifact_requires_groth16_material_when_unready_config_allows() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -49593,10 +49641,11 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await
         .expect_err(
-            "disabled lane should reject EVM artifact generation even when unready config allows",
+            "Groth16 lanes still require deployment fields and proof bytes in unready mode",
         );
         assert!(
-            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("proof_bytes_hex"))
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -49717,7 +49766,8 @@ pub(crate) mod tests_runtime_handlers {
 
     #[tokio::test]
     async fn sccp_manifests_endpoint_roundtrips_json_and_norito() {
-        let json_response = routing::handle_v1_sccp_manifests(None)
+        let app = mk_app_state_for_tests();
+        let json_response = routing::handle_v1_sccp_manifests(app.state.as_ref(), None)
             .await
             .expect("json response");
         assert_eq!(
@@ -49738,6 +49788,7 @@ pub(crate) mod tests_runtime_handlers {
             decoded_json.proof_family,
             iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1
         );
+        assert!(decoded_json.routes.is_empty());
         let ton = decoded_json
             .manifests
             .iter()
@@ -49760,9 +49811,10 @@ pub(crate) mod tests_runtime_handlers {
             iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
-        let norito_response = routing::handle_v1_sccp_manifests(Some(HeaderValue::from_static(
-            crate::utils::NORITO_MIME_TYPE,
-        )))
+        let norito_response = routing::handle_v1_sccp_manifests(
+            app.state.as_ref(),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
         .await
         .expect("norito response");
         assert_eq!(
@@ -49781,10 +49833,79 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(decoded_norito.local_chain, decoded_json.local_chain);
         assert_eq!(decoded_norito.proof_family, decoded_json.proof_family);
         assert_eq!(decoded_norito.manifests.len(), decoded_json.manifests.len());
+        assert_eq!(decoded_norito.routes.len(), decoded_json.routes.len());
     }
 
     #[tokio::test]
-    async fn bridge_proof_submit_rejects_disabled_sccp_when_unready_config_allows() {
+    async fn sccp_manifests_endpoint_advertises_configured_unready_route_manifest() {
+        let mut app = mk_app_state_for_tests();
+        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        let configured_route = sample_taira_xor_nile_route_manifest_for_test();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
+            state.zk.sccp_route_manifests.push(configured_route.clone());
+        }
+
+        let response = routing::handle_v1_sccp_manifests(app.state.as_ref(), None)
+            .await
+            .expect("json response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: routing::SccpProofManifestSetDto =
+            serde_json::from_slice(&bytes).expect("decode json manifests");
+        assert_eq!(decoded.routes.len(), 1);
+        let route = decoded.routes.first().expect("route manifest");
+        assert_eq!(route.route_id, configured_route.route_id);
+        assert_eq!(route.asset_key, configured_route.asset_key);
+        assert_eq!(route.tron_network, "nile");
+        assert_eq!(route.chain_id_hex, "0xcd8690dc");
+        assert_eq!(route.production_ready, false);
+        assert_eq!(
+            route.taira_xor_bridge_address,
+            configured_route.taira_xor_bridge_address
+        );
+        assert_eq!(
+            route.destination_rollout.destination_network_id,
+            configured_route.network_id_hex
+        );
+        assert_eq!(
+            route.destination_rollout.verifier_identity,
+            configured_route.tron_verifier_address
+        );
+        assert_eq!(
+            route.destination_binding.binding_hash,
+            configured_route.destination_binding_hash
+        );
+        assert_eq!(
+            route.taira_xor_burn_record.settlement_asset_definition_id,
+            configured_route.taira_burn_record_settlement_asset_definition_id
+        );
+        assert_eq!(route.taira_xor_burn_record.vk_ref.backend, "halo2/ipa");
+        assert_eq!(route.settlement.mode, "finalize_inbound");
+        assert_eq!(
+            route.settlement.contract_alias.as_deref(),
+            Some("taira_xor_burn_record")
+        );
+
+        let norito_response = routing::handle_v1_sccp_manifests(
+            app.state.as_ref(),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
+        .await
+        .expect("norito response");
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let decoded_norito: routing::SccpProofManifestSetDto =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito manifests");
+        assert_eq!(decoded_norito.routes.len(), 1);
+        assert_eq!(decoded_norito.routes[0].route_id, "taira_tron_xor");
+    }
+
+    #[tokio::test]
+    async fn bridge_proof_submit_requires_groth16_material_when_unready_config_allows() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -49860,10 +49981,13 @@ pub(crate) mod tests_runtime_handlers {
         .await
         {
             Err(err) => err,
-            Ok(_) => panic!("disabled lane should reject proof submit"),
+            Ok(_) => {
+                panic!("Groth16 proof submit should require proof bytes and deployment fields")
+            }
         };
         assert!(
-            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
+            query_conversion_message(&err)
+                .is_some_and(|message| message.contains("proof_bytes_hex"))
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -50015,7 +50139,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_rejects_disabled_inbound_sccp_when_unready_config_allows() {
+    async fn bridge_message_submit_skips_disabled_gate_when_unready_config_allows() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -50093,13 +50217,12 @@ pub(crate) mod tests_runtime_handlers {
         {
             Err(err) => err,
             Ok(_) => panic!(
-                "disabled lane should reject message submit even when unready proofs are allowed in config"
+                "inbound Groth16 message submit should still require a source proof or proof bytes"
             ),
         };
-        assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("transparent proof consumption"))
-        );
+        assert!(query_conversion_message(&err).is_some_and(|message| {
+            message.contains("source-chain proof envelope") || message.contains("proof_bytes_hex")
+        }));
 
         routing::clear_sccp_bundles_for_tests();
     }

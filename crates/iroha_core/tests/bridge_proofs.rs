@@ -2676,6 +2676,55 @@ fn make_sccp_tron_to_sora_unverified_message_bridge_proof(nonce: u64) -> BridgeP
     proof
 }
 
+fn make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(nonce: u64) -> BridgeProof {
+    let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+        version: 1,
+        source_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+        dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        nonce,
+        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        asset_id: iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes().to_vec(),
+        amount: 7,
+        sender_codec: iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+        sender: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+        recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        recipient: b"alice@universal".to_vec(),
+        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        route_id: iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+            .as_bytes()
+            .to_vec(),
+    });
+    let commitment = iroha_sccp::hub_commitment_from_sccp_payload(&payload);
+    let merkle_proof = iroha_sccp::SccpMerkleProofV1 { steps: Vec::new() };
+    let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+    let bundle = iroha_sccp::NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof,
+        payload,
+        finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
+    };
+    let artifact = iroha_sccp::build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
+        .expect("TAIRA/TRON XOR diagnostic artifact");
+    BridgeProof {
+        range: BridgeProofRange {
+            start_height: artifact.public_inputs.finality_height,
+            end_height: artifact.public_inputs.finality_height,
+        },
+        manifest_hash: iroha_sccp::sccp_bridge_manifest_hash_for_seed(&artifact.manifest_seed),
+        payload: BridgeProofPayload::TransparentZk(BridgeTransparentProof {
+            proof: ProofBox::new(
+                artifact.message_backend.clone(),
+                norito::to_bytes(&artifact).expect("encode diagnostic SCCP artifact"),
+            ),
+            recursion_depth: None,
+        }),
+        pinned: false,
+    }
+}
+
 #[test]
 fn submit_bridge_proof_records_metadata() {
     let world = iroha_core::state::World::new();
@@ -3001,6 +3050,61 @@ fn submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows() {
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
         .expect_err("unready SCCP lanes must not be accepted on-chain");
+    assert!(
+        format!("{err:?}").contains("structural verification"),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn submit_taira_tron_xor_diagnostic_inbound_message_accepts_when_config_allows() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.sccp_allow_unready_transparent_proofs = true;
+    state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let proof = make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(99);
+    let proof_id = bridge_proof_id(&proof);
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect("TAIRA/TRON XOR diagnostic proof accepted");
+    let rec = stx
+        .world
+        .proofs()
+        .get(&proof_id)
+        .expect("diagnostic proof recorded");
+    assert_eq!(rec.status, ProofStatus::Verified);
+}
+
+#[test]
+fn submit_taira_tron_xor_diagnostic_inbound_message_rejects_without_config_flag() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let proof = make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(99);
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("diagnostic proof must require the unready SCCP flag");
     assert!(
         format!("{err:?}").contains("structural verification"),
         "unexpected error: {err:?}"

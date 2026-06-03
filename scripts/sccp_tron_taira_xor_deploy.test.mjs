@@ -10,6 +10,7 @@ import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/sec
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import {
   ASSET_KEY,
+  CONTRACT_DEFINITIONS,
   ROUTE_ID,
   TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES,
   TRON_MAINNET_NETWORK_ID_HEX,
@@ -18,7 +19,9 @@ import {
   buildDeploymentDoctorReport,
   buildDeploymentConfigurationSpecs,
   buildDeploymentFundingReadiness,
+  buildMergedTairaXorRouteConfigToml,
   buildSignedTransactionArtifact,
+  buildTairaXorRouteConfigToml,
   buildUnsignedTransactionArtifact,
   buildTairaXorRouteManifestDraft,
   bytesToHex,
@@ -916,6 +919,15 @@ test("deployment configuration specs define the required post-deploy trigger ord
   assert.equal(JSON.stringify(specs).includes("payload"), false);
 });
 
+test("TRON deploy names stay within java-tron contract name limits", () => {
+  for (const definition of CONTRACT_DEFINITIONS) {
+    assert.ok(
+      definition.deployName.length <= 32,
+      `${definition.key} deployName is too long for java-tron`,
+    );
+  }
+});
+
 test("deployment funding estimate is a conservative mainnet TRX and energy budget", () => {
   const estimate = estimateDeploymentFunding();
   assert.equal(
@@ -1442,6 +1454,59 @@ test("route manifest draft supports Nile evidence but blocks production readines
     assert.equal(disabled.networkIdHex, TRON_NILE_NETWORK_ID_HEX);
     assert.equal(disabled.destinationRollout.destinationNetworkId, TRON_NILE_NETWORK_ID_HEX);
     assert.equal(disabled.destinationBinding.networkIdHex, TRON_NILE_NETWORK_ID_HEX);
+
+    const toml = buildTairaXorRouteConfigToml(disabled);
+    assert.match(toml, /\[zk\]/u);
+    assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
+    assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
+    assert.match(toml, /route_id = "taira_tron_xor"/u);
+    assert.match(toml, /asset_key = "xor"/u);
+    assert.match(toml, /tron_network = "nile"/u);
+    assert.match(toml, /chain_id_hex = "0xcd8690dc"/u);
+    assert.match(toml, /network_id_hex = "0x00000000000000000000000000000000000000000000000000000000cd8690dc"/u);
+    assert.match(toml, /taira_xor_bridge_address = "/u);
+    assert.match(toml, /taira_burn_record_settlement_asset_definition_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"/u);
+    assert.match(toml, /taira_burn_record_vk_backend = "halo2\/ipa"/u);
+    assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
+    assert.equal(toml.includes("private_key"), false);
+
+    const baseConfig = [
+      "[torii]",
+      'address = "0.0.0.0:8080"',
+      "",
+      "[zk]",
+      "sccp_allow_unready_transparent_proofs = false",
+      "sccp_source_verifier_materials = []",
+      "",
+      "[zk.halo2]",
+      "enabled = true",
+      "",
+    ].join("\n");
+    const merged = buildMergedTairaXorRouteConfigToml(baseConfig, disabled);
+    assert.match(merged, /\[torii\]\naddress = "0\.0\.0\.0:8080"/u);
+    assert.match(merged, /\[zk\]\nsccp_allow_unready_transparent_proofs = true/u);
+    assert.match(merged, /sccp_source_verifier_materials = \[\]/u);
+    assert.match(merged, /\[\[zk\.sccp_route_manifests\]\]/u);
+    assert.match(merged, /tron_network = "nile"/u);
+    assert.match(merged, /\n\[zk\.halo2\]\nenabled = true/u);
+    assert.equal(
+      (merged.match(/sccp_allow_unready_transparent_proofs =/gu) ?? []).length,
+      1,
+    );
+    assert.equal(merged.includes("private_key"), false);
+    assert.throws(
+      () =>
+        buildMergedTairaXorRouteConfigToml(
+          `${baseConfig}\n[[zk.sccp_route_manifests]]\nroute_id = "other"\n`,
+          disabled,
+        ),
+      /already contains zk\.sccp_route_manifests/u,
+    );
+
+    assert.throws(
+      () => buildTairaXorRouteConfigToml(disabled, { "allow-unready": "false" }),
+      /non-production route manifests require --allow-unready true/u,
+    );
 
     await assert.rejects(
       () =>

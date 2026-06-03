@@ -4357,6 +4357,123 @@ impl SccpRouteAllowlist {
     }
 }
 
+/// User-level SCCP route manifest material advertised to wallet clients.
+#[derive(Debug, ReadConfig, Clone, norito::derive::JsonDeserialize)]
+pub struct SccpRouteManifest {
+    /// Material format version.
+    #[config(default = "1")]
+    pub version: u8,
+    /// Stable route identifier.
+    pub route_id: String,
+    /// Stable asset key within the route.
+    pub asset_key: String,
+    /// TRON network key, for example `mainnet` or `nile`.
+    pub tron_network: String,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// CAIP-compatible TRON chain id hex.
+    pub chain_id_hex: String,
+    /// SCCP counterparty domain identifier.
+    pub counterparty_domain: u32,
+    /// Destination verifier target name.
+    pub verifier_target: String,
+    /// Whether this route is production-ready.
+    #[config(default = "false")]
+    pub production_ready: bool,
+    /// Disabled reason surfaced when the route is not production-ready.
+    pub disabled_reason: Option<String>,
+    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    pub network_id_hex: String,
+    /// TRON TairaXOR token contract address.
+    pub taira_xor_token_address: String,
+    /// TRON TairaXOR bridge contract address.
+    pub taira_xor_bridge_address: String,
+    /// TRON SCCP source bridge contract address.
+    pub sccp_tron_source_bridge_address: String,
+    /// TRON destination verifier contract address.
+    pub tron_verifier_address: String,
+    /// Hex-encoded verifier code digest.
+    pub verifier_code_hash: String,
+    /// Hex-encoded verifier key digest.
+    pub verifier_key_hash: String,
+    /// Canonical destination binding key.
+    pub destination_binding_key: String,
+    /// Hex-encoded canonical destination binding hash.
+    pub destination_binding_hash: String,
+    /// Canonical TAIRA settlement asset definition id.
+    pub taira_burn_record_settlement_asset_definition_id: String,
+    /// Base64-encoded TAIRA burn-record contract artifact.
+    pub taira_burn_record_contract_artifact_b64: String,
+    /// Hex-encoded SHA-256 digest of the TAIRA burn-record artifact.
+    pub taira_burn_record_artifact_sha256: String,
+    /// Hex-encoded TAIRA burn-record contract code hash.
+    pub taira_burn_record_code_hash: String,
+    /// TAIRA burn-record verifier backend.
+    pub taira_burn_record_vk_backend: String,
+    /// TAIRA burn-record verifier key name.
+    pub taira_burn_record_vk_name: String,
+    /// TAIRA burn-record settlement gas limit.
+    pub taira_burn_record_gas_limit: u64,
+    /// Optional settlement contract address.
+    pub settlement_contract_address: Option<String>,
+    /// Optional settlement contract alias.
+    pub settlement_contract_alias: Option<String>,
+    /// Whether post-deploy route evidence is complete.
+    pub post_deploy_full_toml_ready: Option<bool>,
+    /// Hex-encoded source bridge config hash.
+    pub post_deploy_source_bridge_config_hash: Option<String>,
+    /// Hex-encoded source event transaction id.
+    pub post_deploy_source_event_transaction_id: Option<String>,
+    /// Hex-encoded route canary evidence hash.
+    pub post_deploy_route_canary_evidence_hash: Option<String>,
+    /// Hex-encoded route canary transaction id.
+    pub post_deploy_route_canary_transaction_id: Option<String>,
+    /// Hex-encoded offline full TOML SHA-256 digest.
+    pub post_deploy_offline_full_toml_sha256: Option<String>,
+}
+
+impl SccpRouteManifest {
+    fn parse(self) -> actual::SccpRouteManifest {
+        actual::SccpRouteManifest {
+            version: self.version,
+            route_id: self.route_id,
+            asset_key: self.asset_key,
+            tron_network: self.tron_network,
+            chain: self.chain,
+            chain_id_hex: self.chain_id_hex,
+            counterparty_domain: self.counterparty_domain,
+            verifier_target: self.verifier_target,
+            production_ready: self.production_ready,
+            disabled_reason: self.disabled_reason,
+            network_id_hex: self.network_id_hex,
+            taira_xor_token_address: self.taira_xor_token_address,
+            taira_xor_bridge_address: self.taira_xor_bridge_address,
+            sccp_tron_source_bridge_address: self.sccp_tron_source_bridge_address,
+            tron_verifier_address: self.tron_verifier_address,
+            verifier_code_hash: self.verifier_code_hash,
+            verifier_key_hash: self.verifier_key_hash,
+            destination_binding_key: self.destination_binding_key,
+            destination_binding_hash: self.destination_binding_hash,
+            taira_burn_record_settlement_asset_definition_id: self
+                .taira_burn_record_settlement_asset_definition_id,
+            taira_burn_record_contract_artifact_b64: self.taira_burn_record_contract_artifact_b64,
+            taira_burn_record_artifact_sha256: self.taira_burn_record_artifact_sha256,
+            taira_burn_record_code_hash: self.taira_burn_record_code_hash,
+            taira_burn_record_vk_backend: self.taira_burn_record_vk_backend,
+            taira_burn_record_vk_name: self.taira_burn_record_vk_name,
+            taira_burn_record_gas_limit: self.taira_burn_record_gas_limit,
+            settlement_contract_address: self.settlement_contract_address,
+            settlement_contract_alias: self.settlement_contract_alias,
+            post_deploy_full_toml_ready: self.post_deploy_full_toml_ready,
+            post_deploy_source_bridge_config_hash: self.post_deploy_source_bridge_config_hash,
+            post_deploy_source_event_transaction_id: self.post_deploy_source_event_transaction_id,
+            post_deploy_route_canary_evidence_hash: self.post_deploy_route_canary_evidence_hash,
+            post_deploy_route_canary_transaction_id: self.post_deploy_route_canary_transaction_id,
+            post_deploy_offline_full_toml_sha256: self.post_deploy_offline_full_toml_sha256,
+        }
+    }
+}
+
 /// Zero-knowledge configuration section.
 /// User-level configuration container for `Zk`.
 #[derive(Debug, ReadConfig, Clone)]
@@ -4457,6 +4574,9 @@ pub struct Zk {
     /// SCCP governed route allowlist material that can enable SCCP lanes.
     #[config(default = "Vec::new()")]
     pub sccp_route_allowlists: Vec<SccpRouteAllowlist>,
+    /// Concrete SCCP route manifests advertised to wallet clients.
+    #[config(default = "Vec::new()")]
+    pub sccp_route_manifests: Vec<SccpRouteManifest>,
     /// Poseidon parameter set identifier to embed into confidential policies (if any).
     #[config(env = "ZK_POSEIDON_PARAMS_ID")]
     pub poseidon_params_id: Option<u32>,
@@ -4509,6 +4629,11 @@ impl Zk {
                 .sccp_route_allowlists
                 .into_iter()
                 .map(SccpRouteAllowlist::parse)
+                .collect(),
+            sccp_route_manifests: self
+                .sccp_route_manifests
+                .into_iter()
+                .map(SccpRouteManifest::parse)
                 .collect(),
             poseidon_params_id: self.poseidon_params_id,
             pedersen_params_id: self.pedersen_params_id,

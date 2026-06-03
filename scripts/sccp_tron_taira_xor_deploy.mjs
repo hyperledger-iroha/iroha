@@ -29,6 +29,9 @@ const BASE58_INDEX = new Map(
 const DEFAULT_SECRET_OUT = "artifacts/sccp-tron/taira-xor-deployer.secret.json";
 const DEFAULT_EVIDENCE_OUT = "artifacts/sccp-tron/taira-xor-deployment.evidence.json";
 const DEFAULT_ROUTE_MANIFEST_OUT = "artifacts/sccp-tron/taira-xor-route.manifest.json";
+const DEFAULT_ROUTE_CONFIG_OUT = "artifacts/sccp-tron/taira-xor-route.torii.toml";
+const DEFAULT_ROUTE_FULL_CONFIG_OUT =
+  "artifacts/sccp-tron/taira-xor-route.full-taira-config.toml";
 const DEFAULT_ARTIFACTS_OUT = "artifacts/sccp-tron/contracts";
 const DEFAULT_TAIRA_CONTRACT_OUT = "artifacts/sccp-taira/taira-xor-burn-record.contract.json";
 const DEFAULT_DEPLOYMENT_OUT = "artifacts/sccp-tron/taira-xor-deployment.plan.json";
@@ -151,7 +154,7 @@ const CONTRACT_DEFINITIONS = [
     key: "verifier",
     file: "contracts/tron/sccp/SccpTronGroth16Bn254MessageVerifier.sol",
     contract: "SccpTronGroth16Bn254MessageVerifier",
-    deployName: "SccpTronGroth16Bn254MessageVerifier",
+    deployName: "SccpTronGroth16Verifier",
   },
   {
     key: "source_bridge",
@@ -197,6 +200,7 @@ function usage() {
   node scripts/sccp_tron_taira_xor_deploy.mjs broadcast --transaction <signed.json> [--tron-network mainnet|nile|shasta] [--endpoint ${DEFAULT_TRON_ENDPOINT}] (--confirm-mainnet ${CONFIRMATION_TEXT} | --confirm-testnet nile|shasta) [--out ${DEFAULT_BROADCAST_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--out ${DEFAULT_EVIDENCE_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest --settlement-asset-definition-id <asset-id> --verifier-code-hash <0x...> (--verifier-key-hash <0x...> | --verifier <verifier-key.json>) --vk-backend <backend> --vk-name <name> [--tron-network mainnet|nile|shasta] [--evidence ${DEFAULT_EVIDENCE_OUT}] [--taira-contract ${DEFAULT_TAIRA_CONTRACT_OUT}] [--live-evidence <sccp-tron-live-evidence.json>] [--expected-destination-binding-hash <0x...>] [--expected-destination-binding-key <key>] [--gas-limit 2000000] [--production-ready true --live-readback-checked true --confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--allow-unready true|false] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs self-test
 
 Required optional packages for compile/deploy: solc and ethers. The contract
@@ -1014,6 +1018,14 @@ async function writeJson(path, value, mode = 0o600) {
   return out;
 }
 
+async function writeText(path, value, mode = 0o600) {
+  const out = resolve(path);
+  await mkdir(dirname(out), { recursive: true });
+  await writeFile(`${out}.tmp`, value, { mode });
+  await rename(`${out}.tmp`, out);
+  return out;
+}
+
 async function pathExists(path) {
   try {
     await stat(resolve(path));
@@ -1037,6 +1049,14 @@ async function readJson(path, label) {
     return JSON.parse(text);
   } catch (error) {
     throw new Error(`${label} is not valid JSON: ${error.message}`);
+  }
+}
+
+async function readText(path, label) {
+  try {
+    return await readFile(resolve(path), "utf8");
+  } catch (error) {
+    throw new Error(`${label} could not be read: ${error.message}`);
   }
 }
 
@@ -3295,6 +3315,312 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
   return manifest;
 }
 
+function tomlString(value, label) {
+  return JSON.stringify(normalizeNonEmptyText(value, label));
+}
+
+function tomlOptionalStringLine(key, value, label) {
+  if (value === undefined || value === null || value === "") return [];
+  return [`${key} = ${tomlString(value, label)}`];
+}
+
+function routeConfigRequiredRecord(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value;
+}
+
+function normalizeRouteManifestForConfig(manifest) {
+  const record = routeConfigRequiredRecord(manifest, "route manifest");
+  if (record.schema !== ROUTE_MANIFEST_SCHEMA) {
+    throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}`);
+  }
+  assertNoSecretLikeDeploymentArtifactFields(record);
+  const destinationRollout = routeConfigRequiredRecord(
+    record.destinationRollout,
+    "route manifest destinationRollout",
+  );
+  const burnRecord = routeConfigRequiredRecord(
+    record.tairaXorBurnRecord,
+    "route manifest tairaXorBurnRecord",
+  );
+  const vkRef = routeConfigRequiredRecord(
+    burnRecord.vkRef,
+    "route manifest tairaXorBurnRecord.vkRef",
+  );
+  const settlement = routeConfigRequiredRecord(record.settlement, "route manifest settlement");
+  const productionReady = record.productionReady === true;
+  if (record.productionReady !== true && record.productionReady !== false) {
+    throw new Error("route manifest productionReady must be true or false");
+  }
+  const routeId = normalizeNonEmptyText(record.routeId, "route manifest routeId");
+  const assetKey = normalizeNonEmptyText(record.assetKey, "route manifest assetKey");
+  const counterpartyDomain = normalizeUint32(
+    record.counterpartyDomain,
+    "route manifest counterpartyDomain",
+  );
+  const gasLimit = normalizePositiveSafeInteger(
+    burnRecord.gasLimit,
+    "route manifest burn-record gasLimit",
+  );
+  const postDeployLiveEvidence = record.postDeployLiveEvidence
+    ? routeConfigRequiredRecord(
+        record.postDeployLiveEvidence,
+        "route manifest postDeployLiveEvidence",
+      )
+    : null;
+  return {
+    version: normalizeUint32(record.version ?? 1, "route manifest version"),
+    routeId,
+    assetKey,
+    tronNetwork: normalizeNonEmptyText(record.tronNetwork, "route manifest tronNetwork"),
+    chain: normalizeNonEmptyText(record.chain, "route manifest chain"),
+    chainIdHex: normalizeNonEmptyText(record.chainIdHex, "route manifest chainIdHex"),
+    counterpartyDomain,
+    verifierTarget: normalizeNonEmptyText(
+      record.verifierTarget,
+      "route manifest verifierTarget",
+    ),
+    productionReady,
+    disabledReason:
+      record.disabledReason === undefined || record.disabledReason === null
+        ? null
+        : normalizeNonEmptyText(record.disabledReason, "route manifest disabledReason"),
+    networkIdHex: normalizeBytes32(record.networkIdHex, "route manifest networkIdHex"),
+    tairaXorTokenAddress: normalizeTronBase58Address(
+      record.tairaXorTokenAddress,
+      "route manifest tairaXorTokenAddress",
+    ).base58,
+    tairaXorBridgeAddress: normalizeTronBase58Address(
+      record.tairaXorBridgeAddress,
+      "route manifest tairaXorBridgeAddress",
+    ).base58,
+    sccpTronSourceBridgeAddress: normalizeTronBase58Address(
+      record.sccpTronSourceBridgeAddress,
+      "route manifest sccpTronSourceBridgeAddress",
+    ).base58,
+    tronVerifierAddress: normalizeTronBase58Address(
+      record.tronVerifierAddress,
+      "route manifest tronVerifierAddress",
+    ).base58,
+    verifierCodeHash: normalizeBytes32(
+      destinationRollout.verifierCodeHash,
+      "route manifest destinationRollout.verifierCodeHash",
+    ),
+    verifierKeyHash: normalizeBytes32(
+      destinationRollout.verifierKeyHash,
+      "route manifest destinationRollout.verifierKeyHash",
+    ),
+    destinationBindingKey: normalizeNonEmptyText(
+      destinationRollout.destinationBindingKey,
+      "route manifest destinationRollout.destinationBindingKey",
+    ),
+    destinationBindingHash: normalizeBytes32(
+      destinationRollout.destinationBindingHash,
+      "route manifest destinationRollout.destinationBindingHash",
+    ),
+    settlementAssetDefinitionId: normalizeCanonicalAssetDefinitionId(
+      burnRecord.settlementAssetDefinitionId,
+      "route manifest tairaXorBurnRecord.settlementAssetDefinitionId",
+    ),
+    contractArtifactB64: normalizeStrictBase64(
+      burnRecord.contractArtifactB64,
+      "route manifest tairaXorBurnRecord.contractArtifactB64",
+    ).text,
+    artifactSha256: normalizeBytes32(
+      burnRecord.artifactSha256,
+      "route manifest tairaXorBurnRecord.artifactSha256",
+    ),
+    codeHash: normalizeNonEmptyText(
+      burnRecord.codeHash,
+      "route manifest tairaXorBurnRecord.codeHash",
+    ),
+    vkBackend: normalizeNonEmptyText(
+      vkRef.backend,
+      "route manifest tairaXorBurnRecord.vkRef.backend",
+    ),
+    vkName: normalizeNonEmptyText(
+      vkRef.name,
+      "route manifest tairaXorBurnRecord.vkRef.name",
+    ),
+    gasLimit,
+    settlementContractAddress:
+      settlement.contractAddress === undefined || settlement.contractAddress === null
+        ? null
+        : normalizeNonEmptyText(settlement.contractAddress, "route manifest settlement.contractAddress"),
+    settlementContractAlias:
+      settlement.contractAlias === undefined || settlement.contractAlias === null
+        ? null
+        : normalizeNonEmptyText(settlement.contractAlias, "route manifest settlement.contractAlias"),
+    postDeployLiveEvidence: postDeployLiveEvidence
+      ? {
+          fullTomlReady: postDeployLiveEvidence.fullTomlReady === true,
+          sourceBridgeConfigHash: normalizeBytes32(
+            postDeployLiveEvidence.sourceBridgeConfigHash,
+            "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
+          ),
+          sourceEventTransactionId: normalizeBytes32(
+            postDeployLiveEvidence.sourceEventTransactionId,
+            "route manifest postDeployLiveEvidence.sourceEventTransactionId",
+          ),
+          routeCanaryEvidenceHash: normalizeBytes32(
+            postDeployLiveEvidence.routeCanaryEvidenceHash,
+            "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
+          ),
+          routeCanaryTransactionId: normalizeBytes32(
+            postDeployLiveEvidence.routeCanaryTransactionId,
+            "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
+          ),
+          offlineFullTomlSha256:
+            postDeployLiveEvidence.offlineFullTomlSha256 === undefined ||
+            postDeployLiveEvidence.offlineFullTomlSha256 === null
+              ? null
+              : normalizeBytes32(
+                  postDeployLiveEvidence.offlineFullTomlSha256,
+                  "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
+                ),
+        }
+      : null,
+  };
+}
+
+function buildTairaXorRouteConfigToml(manifest, options = {}) {
+  const route = normalizeRouteManifestForConfig(manifest);
+  const allowUnready = optionEnabled(options, "allow-unready", !route.productionReady);
+  if (!route.productionReady && !allowUnready) {
+    throw new Error("non-production route manifests require --allow-unready true");
+  }
+  const lines = [
+    "# Generated by scripts/sccp_tron_taira_xor_deploy.mjs route-config.",
+    "# Merge this overlay into the TAIRA Torii/Iroha runtime config for testnet smoke.",
+    "[zk]",
+    `sccp_allow_unready_transparent_proofs = ${allowUnready ? "true" : "false"}`,
+    "",
+    "[[zk.sccp_route_manifests]]",
+    `version = ${route.version}`,
+    `route_id = ${tomlString(route.routeId, "route_id")}`,
+    `asset_key = ${tomlString(route.assetKey, "asset_key")}`,
+    `tron_network = ${tomlString(route.tronNetwork, "tron_network")}`,
+    `chain = ${tomlString(route.chain, "chain")}`,
+    `chain_id_hex = ${tomlString(route.chainIdHex, "chain_id_hex")}`,
+    `counterparty_domain = ${route.counterpartyDomain}`,
+    `verifier_target = ${tomlString(route.verifierTarget, "verifier_target")}`,
+    `production_ready = ${route.productionReady ? "true" : "false"}`,
+    ...tomlOptionalStringLine("disabled_reason", route.disabledReason, "disabled_reason"),
+    `network_id_hex = ${tomlString(route.networkIdHex, "network_id_hex")}`,
+    `taira_xor_token_address = ${tomlString(route.tairaXorTokenAddress, "taira_xor_token_address")}`,
+    `taira_xor_bridge_address = ${tomlString(route.tairaXorBridgeAddress, "taira_xor_bridge_address")}`,
+    `sccp_tron_source_bridge_address = ${tomlString(route.sccpTronSourceBridgeAddress, "sccp_tron_source_bridge_address")}`,
+    `tron_verifier_address = ${tomlString(route.tronVerifierAddress, "tron_verifier_address")}`,
+    `verifier_code_hash = ${tomlString(route.verifierCodeHash, "verifier_code_hash")}`,
+    `verifier_key_hash = ${tomlString(route.verifierKeyHash, "verifier_key_hash")}`,
+    `destination_binding_key = ${tomlString(route.destinationBindingKey, "destination_binding_key")}`,
+    `destination_binding_hash = ${tomlString(route.destinationBindingHash, "destination_binding_hash")}`,
+    `taira_burn_record_settlement_asset_definition_id = ${tomlString(route.settlementAssetDefinitionId, "taira_burn_record_settlement_asset_definition_id")}`,
+    `taira_burn_record_contract_artifact_b64 = ${tomlString(route.contractArtifactB64, "taira_burn_record_contract_artifact_b64")}`,
+    `taira_burn_record_artifact_sha256 = ${tomlString(route.artifactSha256, "taira_burn_record_artifact_sha256")}`,
+    `taira_burn_record_code_hash = ${tomlString(route.codeHash, "taira_burn_record_code_hash")}`,
+    `taira_burn_record_vk_backend = ${tomlString(route.vkBackend, "taira_burn_record_vk_backend")}`,
+    `taira_burn_record_vk_name = ${tomlString(route.vkName, "taira_burn_record_vk_name")}`,
+    `taira_burn_record_gas_limit = ${route.gasLimit}`,
+    ...tomlOptionalStringLine(
+      "settlement_contract_address",
+      route.settlementContractAddress,
+      "settlement_contract_address",
+    ),
+    ...tomlOptionalStringLine(
+      "settlement_contract_alias",
+      route.settlementContractAlias,
+      "settlement_contract_alias",
+    ),
+  ];
+  if (route.postDeployLiveEvidence) {
+    lines.push(
+      `post_deploy_full_toml_ready = ${route.postDeployLiveEvidence.fullTomlReady ? "true" : "false"}`,
+      `post_deploy_source_bridge_config_hash = ${tomlString(route.postDeployLiveEvidence.sourceBridgeConfigHash, "post_deploy_source_bridge_config_hash")}`,
+      `post_deploy_source_event_transaction_id = ${tomlString(route.postDeployLiveEvidence.sourceEventTransactionId, "post_deploy_source_event_transaction_id")}`,
+      `post_deploy_route_canary_evidence_hash = ${tomlString(route.postDeployLiveEvidence.routeCanaryEvidenceHash, "post_deploy_route_canary_evidence_hash")}`,
+      `post_deploy_route_canary_transaction_id = ${tomlString(route.postDeployLiveEvidence.routeCanaryTransactionId, "post_deploy_route_canary_transaction_id")}`,
+      ...tomlOptionalStringLine(
+        "post_deploy_offline_full_toml_sha256",
+        route.postDeployLiveEvidence.offlineFullTomlSha256,
+        "post_deploy_offline_full_toml_sha256",
+      ),
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function routeConfigOverlayParts(manifest, options = {}) {
+  const overlay = buildTairaXorRouteConfigToml(manifest, options);
+  const overlayLines = overlay.trimEnd().split(/\r?\n/u);
+  const allowLine = overlayLines.find((line) =>
+    /^sccp_allow_unready_transparent_proofs\s*=/u.test(line),
+  );
+  const routeStart = overlayLines.findIndex(
+    (line) => line.trim() === "[[zk.sccp_route_manifests]]",
+  );
+  if (!allowLine || routeStart < 0) {
+    throw new Error("generated route config overlay is incomplete");
+  }
+  return {
+    allowLine,
+    routeLines: overlayLines.slice(routeStart),
+  };
+}
+
+function buildMergedTairaXorRouteConfigToml(
+  baseConfigText,
+  manifest,
+  options = {},
+) {
+  const baseConfig = String(baseConfigText ?? "").replace(/\r\n?/gu, "\n");
+  if (/^\s*\[\[zk\.sccp_route_manifests\]\]\s*$/mu.test(baseConfig)) {
+    throw new Error(
+      "base TAIRA config already contains zk.sccp_route_manifests; merge route manifests manually to avoid duplicate routes",
+    );
+  }
+  const { allowLine, routeLines } = routeConfigOverlayParts(manifest, options);
+  const lines = baseConfig.split("\n");
+  const zkStart = lines.findIndex((line) => line.trim() === "[zk]");
+  const mergedRouteLines = [
+    "# Generated by scripts/sccp_tron_taira_xor_deploy.mjs route-config --base-config.",
+    "# Public TAIRA/Nile smoke requires this route to be present in the node runtime config.",
+    ...routeLines,
+  ];
+
+  if (zkStart < 0) {
+    const trimmed = baseConfig.replace(/\s*$/u, "");
+    return `${trimmed}\n\n[zk]\n${allowLine}\n\n${mergedRouteLines.join("\n")}\n`;
+  }
+
+  let zkEnd = lines.length;
+  for (let index = zkStart + 1; index < lines.length; index += 1) {
+    if (/^\s*\[/u.test(lines[index])) {
+      zkEnd = index;
+      break;
+    }
+  }
+
+  const zkBody = lines
+    .slice(zkStart + 1, zkEnd)
+    .filter(
+      (line) =>
+        !/^\s*sccp_allow_unready_transparent_proofs\s*=/u.test(line),
+    );
+  const mergedLines = [
+    ...lines.slice(0, zkStart),
+    "[zk]",
+    allowLine,
+    ...zkBody,
+    "",
+    ...mergedRouteLines,
+    ...lines.slice(zkEnd),
+  ];
+  return `${mergedLines.join("\n").replace(/\s*$/u, "")}\n`;
+}
+
 async function routeManifestCommand(options) {
   const manifest = await buildTairaXorRouteManifestDraft(options);
   const out = await writeJson(options.out ?? DEFAULT_ROUTE_MANIFEST_OUT, manifest, 0o644);
@@ -3310,7 +3636,38 @@ async function routeManifestCommand(options) {
     settlementAssetDefinitionId: manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
     nextStep: manifest.productionReady
       ? "Publish this manifest only after the TAIRA SCCP route activation evidence is governed on-chain."
-      : "Run TRON readback/canary evidence, then re-run with --live-evidence plus --production-ready true --live-readback-checked true --confirm-mainnet taira_tron_xor.",
+      : "For TAIRA/Nile testing, run route-config against this manifest and deploy the generated Torii config overlay; for production, run TRON readback/canary evidence, then re-run with --live-evidence plus --production-ready true --live-readback-checked true --confirm-mainnet taira_tron_xor.",
+  }, null, 2));
+}
+
+async function routeConfigCommand(options) {
+  const manifest = await readJson(options.manifest ?? DEFAULT_ROUTE_MANIFEST_OUT, "route manifest");
+  const baseConfigPath = options["base-config"] ?? null;
+  const toml = baseConfigPath
+    ? buildMergedTairaXorRouteConfigToml(
+        await readText(baseConfigPath, "base TAIRA config"),
+        manifest,
+        options,
+      )
+    : buildTairaXorRouteConfigToml(manifest, options);
+  const out = await writeText(
+    options.out ??
+      (baseConfigPath ? DEFAULT_ROUTE_FULL_CONFIG_OUT : DEFAULT_ROUTE_CONFIG_OUT),
+    toml,
+    0o644,
+  );
+  console.log(JSON.stringify({
+    wrote: out,
+    mode: baseConfigPath ? "merged-full-config" : "overlay",
+    baseConfig: baseConfigPath ? resolve(baseConfigPath) : null,
+    routeId: manifest.routeId,
+    assetKey: manifest.assetKey,
+    productionReady: manifest.productionReady,
+    allowUnready: optionEnabled(options, "allow-unready", manifest.productionReady !== true),
+    nextStep:
+      baseConfigPath
+        ? "Deploy this merged TAIRA node config on every public validator and restart Torii/Iroha before rerunning the SCCP route preflight without --manifest-file."
+        : "Merge this TOML into the TAIRA node config and redeploy/restart Torii before rerunning the SCCP route preflight.",
   }, null, 2));
 }
 
@@ -3460,6 +3817,7 @@ async function main() {
   if (command === "broadcast") return broadcastCommand(options);
   if (command === "evidence") return writeEvidence(options);
   if (command === "route-manifest") return routeManifestCommand(options);
+  if (command === "route-config") return routeConfigCommand(options);
   if (command === "self-test") return selfTest();
   throw new Error(usage());
 }
@@ -3473,6 +3831,7 @@ if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
 
 export {
   ASSET_KEY,
+  CONTRACT_DEFINITIONS,
   ROUTE_ID,
   TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES,
   TAIRA_BURN_RECORD_ARTIFACT_MIN_BYTES,
@@ -3484,8 +3843,10 @@ export {
   buildDeploymentDoctorReport,
   buildDeploymentConfigurationSpecs,
   buildDeploymentFundingReadiness,
+  buildMergedTairaXorRouteConfigToml,
   buildSignedTransactionArtifact,
   buildUnsignedTransactionArtifact,
+  buildTairaXorRouteConfigToml,
   buildTairaXorRouteManifestDraft,
   bytesToHex,
   compileTairaBurnRecordContract,
