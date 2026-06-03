@@ -1925,6 +1925,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn programmed_public_parameters_reject_profile_and_verifier_metadata_abuse() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();

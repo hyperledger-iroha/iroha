@@ -111,7 +111,8 @@ async fn persist_vrf_council_and_get_current_matches() {
         let account_id = account.to_string();
         let input = parliament::build_input(&seed, &account);
         let (_y, pi) =
-            iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id_str.as_bytes(), &input);
+            iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id_str.as_bytes(), &input)
+                .expect("normal VRF proof");
         let pr_b64 = base64::engine::general_purpose::STANDARD.encode(match pi {
             iroha_crypto::vrf::VrfProof::SigInG2(arr) => arr.to_vec(),
             _ => unreachable!(),

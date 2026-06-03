@@ -145,7 +145,7 @@ def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
         assert module.ACTIVE_LAUNCH_DOMAIN == 1
         assert module.ACTIVE_LAUNCH_CHAIN == "eth"
         assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
-        assert module.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+        assert module.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
 def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
@@ -2722,7 +2722,7 @@ def test_release_bundle_verifier_rejects_all_lanes_root_blockers(
 
     assert verified.returncode == 1
     report = load_report_module()
-    active_label = f"{report.ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
+    active_label = report.ACTIVE_LAUNCH_DISPLAY
     assert (
         f"readiness report embedded evidence active {active_label} launch blockers must be empty"
         in verified.stdout
@@ -2924,6 +2924,13 @@ def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift(
         lane["source_adapter_gate"]["gate_hash"] = "0X" + "aa" * 32
         lane["source_adapter_gate"]["audit_hashes"] = {"audit": True}
         lane["source_adapter_gate"]["blockers"] = "none"
+        lane["evm_live_metadata"]["operator_attestation"] = "reviewed elsewhere"
+        lane["evm_live_metadata"]["required"] = "true"
+        lane["evm_live_metadata"]["ready"] = "true"
+        lane["evm_live_metadata"]["source_rpc_chain_id"] = "01"
+        lane["evm_live_metadata"]["source_block_tag"] = "latest"
+        lane["evm_live_metadata"]["destination_rpc_chain_id"] = True
+        lane["evm_live_metadata"]["destination_block_tag"] = True
         lane["destination_binding"]["operator_attestation"] = "reviewed elsewhere"
         lane["destination_binding"]["destination_binding_key"] = ""
         lane["destination_binding"]["destination_binding_hash"] = "0X" + "aa" * 32
@@ -3008,6 +3015,34 @@ def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift(
     ) in verified.stdout
     assert (
         "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata contains unknown field: operator_attestation"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata required must be a boolean"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata ready must be a boolean"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata destination_rpc_chain_id must be a string"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata source_rpc_chain_id must be canonical chain id 1"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata destination_block_tag must be a string"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
+        "1 evm_live_metadata source_block_tag must be finalized for Ethereum mainnet"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain "
         "1 destination_binding contains unknown field: operator_attestation"
     ) in verified.stdout
     assert (
@@ -3069,6 +3104,10 @@ def test_release_bundle_verifier_rejects_all_lanes_nested_crypto_field_drift(
     ) in verified.stdout
     assert (
         "all-lanes summary lane domain 1 source_adapter_gate contains unknown "
+        "field: operator_attestation"
+    ) in verified.stdout
+    assert (
+        "all-lanes summary lane domain 1 evm_live_metadata contains unknown "
         "field: operator_attestation"
     ) in verified.stdout
     assert (
@@ -5820,11 +5859,27 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
     domain_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 3)
     domain_row["domain"] = "3"
     domain_row["chain"] = 3
+    domain_row["evm_source_block_tag"] = "latest"
+    domain_row["evm_destination_block_tag"] = 3
     domain_row["source_adapter_gate_audit_hashes"] = ["audit"]
+    non_evm_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 4)
+    non_evm_row["evm_source_rpc_chain_id"] = "1"
+    non_evm_row["evm_destination_rpc_chain_id"] = "1"
+    non_evm_row["evm_source_block_tag"] = "finalized"
+    non_evm_row["evm_destination_block_tag"] = "latest"
+    eth_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 1)
+    eth_row["evm_source_rpc_chain_id"] = "2"
+    eth_row["evm_source_block_tag"] = "latest"
+    bsc_row = next(row for row in report["cryptographic_evidence"] if row["domain"] == 2)
+    bsc_row["evm_source_rpc_chain_id"] = ""
+    bsc_row["evm_source_block_tag"] = ""
     active_domain = load_report_module().ACTIVE_LAUNCH_DOMAIN
     row = next(
         row for row in report["cryptographic_evidence"] if row["domain"] == active_domain
     )
+    row["evm_source_block_tag"] = ""
+    row["evm_destination_rpc_chain_id"] = True
+    row["evm_destination_block_tag"] = True
     row["source_verifier_material_hash"] = "0X" + "aa" * 32
     row["source_adapter_engine_deployment_hash"] = "0x" + "bb" * 31
     row["destination_binding_hash"] = True
@@ -5862,6 +5917,42 @@ def test_release_bundle_verifier_rejects_crypto_evidence_field_type_drift(
         "readiness report cryptographic evidence row chain must be a non-empty string"
         in verified.stdout
     )
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_rpc_chain_id must be Ethereum mainnet chain id 1"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_destination_rpc_chain_id must be a string"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_block_tag must be finalized for Ethereum mainnet"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_destination_block_tag must be a string"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_rpc_chain_id must be empty for non-EVM lanes"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_block_tag must be empty for non-EVM lanes"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_destination_block_tag must be empty for non-EVM lanes"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_rpc_chain_id must be BSC mainnet chain id 56"
+    ) in verified.stdout
+    assert (
+        "readiness report cryptographic evidence row "
+        "evm_source_block_tag must be non-empty for BSC mainnet"
+    ) in verified.stdout
     for field in (
         "source_verifier_material_hash",
         "source_adapter_engine_deployment_hash",
@@ -7319,6 +7410,220 @@ def test_release_bundle_verifier_requires_js_mainnet_facade_transcripts(
             "readiness report phase js-sdk evidence artifact is missing "
             f"expected phase-block command: {required_facade_test}"
         ) in verified.stdout
+
+
+def test_release_bundle_verifier_guards_ethereum_inbound_adversarial_sdk_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH inbound SDK adversarial tests present."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_inbound_adversarial_sdk_test_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("failedReceipt\n", encoding="utf-8")
+    verifier.ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
+        (sparse_test, ("failedReceipt", "duplicateReceipt")),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet inbound adversarial SDK test inventory" in error
+        and "missing marker: duplicateReceipt" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_outbound_precallback_sdk_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH outbound pre-callback tests."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_outbound_precallback_sdk_test_inventory_errors() == []
+
+    sparse_test = tmp_path / "SccpSolanaProverTests.swift"
+    sparse_test.write_text("outboundProverCalled\n", encoding="utf-8")
+    sparse_js_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_js_test.write_text(
+        "Ethereum outbound prover callback must not see BSC requests\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
+        (
+            sparse_js_test,
+            (
+                "Ethereum outbound prover callback must not see BSC requests",
+                "assert.equal(outboundProverCalled, false)",
+            ),
+        ),
+        (
+            sparse_test,
+            (
+                "outboundProverCalled",
+                "Ethereum outbound prover callback must not see BSC requests",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet outbound pre-callback SDK test inventory" in error
+        and (
+            "missing marker: assert.equal(outboundProverCalled, false)"
+            in error
+        )
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_receipt_root_zero_sdk_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH receipt-root zero SDK guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_receipt_root_zero_sdk_inventory_errors() == []
+
+    sparse_test = tmp_path / "SourceSccpProofHashesTest.kt"
+    sparse_test.write_text(
+        "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS = (
+        (
+            sparse_test,
+            (
+                "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+                "assertFailsWith<IllegalArgumentException>",
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet receipt-root zero rejection SDK test inventory" in error
+        and "missing marker: assertFailsWith<IllegalArgumentException>" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_topic_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH receipt-RLP zero-topic guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_receipt_rlp_zero_topic_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("zeroTopicReceiptTrieProof\n", encoding="utf-8")
+    verifier.ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS = (
+        (
+            sparse_test,
+            (
+                "zeroTopicReceiptTrieProof",
+                'topics: [hex32("00")]',
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet receipt RLP zero-topic SDK test inventory" in error
+        and 'missing marker: topics: [hex32("00")]' in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_receipt_rlp_zero_address_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH receipt-RLP zero-address guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_receipt_rlp_zero_address_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("zeroAddressReceiptTrieProof\n", encoding="utf-8")
+    verifier.ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS = (
+        (
+            sparse_test,
+            (
+                "zeroAddressReceiptTrieProof",
+                'address: `0x${"00".repeat(20)}`',
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet receipt RLP zero-address SDK test inventory" in error
+        and 'missing marker: address: `0x${"00".repeat(20)}`' in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ethereum_source_event_context_tests(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep ETH source-event context guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ethereum_receipt_source_event_context_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccp_evm_receipt_proof_evidence_test.py"
+    sparse_test.write_text(
+        "test_collect_receipt_proof_rejects_source_event_missing_context_fields\n",
+        encoding="utf-8",
+    )
+    verifier.ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
+        (
+            sparse_test,
+            (
+                "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+                'for field in ("transactionHash", "blockHash", "blockNumber")',
+            ),
+        ),
+    )
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "Ethereum mainnet source-event context SDK test inventory" in error
+        and 'missing marker: for field in ("transactionHash", "blockHash", "blockNumber")'
+        in error
+        for error in verified["errors"]
+    )
 
 
 def test_release_bundle_verifier_rejects_phase_command_outside_claimed_block(

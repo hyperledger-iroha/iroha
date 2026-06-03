@@ -662,24 +662,29 @@ CommitImpliesRbcEvidence ==
     /\ headerSeen
     /\ digestValid
 
+FinalityCertificateStackPresent ==
+  /\ phase = "Committed"
+  /\ prepareVotes >= CommitQuorum
+  /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+  /\ commitVotesHonest >= HonestCommitSupportThreshold
+  /\ stakeSigned >= StakeQuorum
+  /\ commitEvidenceVotes = commitVotesHonest + commitVotesByz
+  /\ commitEvidenceStake = stakeSigned
+  /\ commitEvidenceVotes >= CommitQuorum
+  /\ commitEvidenceStake >= StakeQuorum
+  /\ rbcState = "Delivered"
+  /\ readyVotes >= CommitQuorum
+  /\ chunkCount >= MaxChunks
+  /\ headerSeen
+  /\ digestValid
+  /\ commitView = view
+  /\ (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
+
 FinalityCertificateStackComplete ==
-  committed =>
-    /\ phase = "Committed"
-    /\ prepareVotes >= CommitQuorum
-    /\ commitVotesHonest + commitVotesByz >= CommitQuorum
-    /\ commitVotesHonest >= HonestCommitSupportThreshold
-    /\ stakeSigned >= StakeQuorum
-    /\ commitEvidenceVotes = commitVotesHonest + commitVotesByz
-    /\ commitEvidenceStake = stakeSigned
-    /\ commitEvidenceVotes >= CommitQuorum
-    /\ commitEvidenceStake >= StakeQuorum
-    /\ rbcState = "Delivered"
-    /\ readyVotes >= CommitQuorum
-    /\ chunkCount >= MaxChunks
-    /\ headerSeen
-    /\ digestValid
-    /\ commitView = view
-    /\ (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
+  committed => FinalityCertificateStackPresent
+
+FinalityCertificateStackMatchesFinality ==
+  committed <=> FinalityCertificateStackPresent
 
 CommitDisablesProgressActions ==
   committed =>
@@ -712,6 +717,12 @@ ViewEvidenceMatchesActiveView ==
 NewViewPhaseBelowQuorum ==
   phase = "NewView" => newViewVotes < ViewQuorum
 
+LiveNewViewVotesStayInHandoff ==
+  newViewVotes > 0 =>
+    /\ phase \in {"NewView", "Propose"}
+    /\ ~committed
+    /\ (phase = "Propose" => viewEvidenceVotes >= ViewQuorum)
+
 ViewEvidenceIsCompleteOrEmpty ==
   viewEvidenceVotes = 0 \/ viewEvidenceVotes >= ViewQuorum
 
@@ -729,6 +740,11 @@ CommitImpliesViewQuorumEvidence ==
 
 CommitVotePhaseRequiresPrepareQuorum ==
   phase \in {"CommitVote", "Committed"} => prepareVotes >= CommitQuorum
+
+LiveCommitVotesRequirePrepareQuorum ==
+  (commitVotesHonest + commitVotesByz > 0 \/ stakeSigned > 0) =>
+    /\ phase \in {"CommitVote", "Committed"}
+    /\ prepareVotes >= CommitQuorum
 
 CommitImpliesPrepareQuorum ==
   committed => prepareVotes >= CommitQuorum
@@ -811,6 +827,9 @@ ViewQuorumEvidenceNeverDiverges ==
 NewViewQuorumHandoffNeverStalls ==
   [] NewViewPhaseBelowQuorum
 
+LiveNewViewVotesNeverLeakPastHandoff ==
+  [] LiveNewViewVotesStayInHandoff
+
 ViewEvidenceNeverPartial ==
   [] ViewEvidenceIsCompleteOrEmpty
 
@@ -823,11 +842,17 @@ PrePrepareVotesNeverCarryAcrossViews ==
 CommitPhasesNeverBypassPrepareQuorum ==
   [] CommitVotePhaseRequiresPrepareQuorum
 
+LiveCommitVotesNeverBypassPrepareQuorum ==
+  [] LiveCommitVotesRequirePrepareQuorum
+
 PreFinalityCommitArtifactsNeverAppear ==
   [] (NoCommitEvidenceBeforeCommit /\ NoCommitViewBeforeCommit)
 
 FinalityCertificateStackNeverIncomplete ==
   [] FinalityCertificateStackComplete
+
+FinalityCertificateStackAlwaysMatchesFinality ==
+  [] FinalityCertificateStackMatchesFinality
 
 CommitViewQuorumEvidenceNeverLost ==
   [] (committed =>

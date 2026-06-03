@@ -16110,20 +16110,20 @@ pub mod isi {
 
             let configured_material =
                 super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
-                    .expect("configured ETH source material")
-                    .expect("ETH source material");
+                    .expect("configured BSC source material")
+                    .expect("BSC source material");
             let configured_deployment =
                 super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
-                    .expect("configured ETH source deployment")
-                    .expect("ETH source deployment");
+                    .expect("configured Ethereum source deployment")
+                    .expect("Ethereum source deployment");
             let configured_rollout =
                 super::configured_sccp_destination_rollout_for_domain(&zk, domain)
-                    .expect("configured ETH destination rollout")
-                    .expect("ETH destination rollout");
+                    .expect("configured Ethereum destination rollout")
+                    .expect("Ethereum destination rollout");
             let configured_allowlist =
                 super::configured_sccp_route_allowlist_for_domain(&zk, domain)
-                    .expect("configured ETH route allowlist")
-                    .expect("ETH route allowlist");
+                    .expect("configured Ethereum route allowlist")
+                    .expect("Ethereum route allowlist");
 
             super::validate_configured_sccp_lane_launch_ready(
                 &zk,
@@ -16133,10 +16133,12 @@ pub mod isi {
                 &configured_rollout,
                 &configured_allowlist,
             )
-            .expect("ETH lane should launch with complete ETH material only");
+            .expect("Ethereum lane should launch with complete ETH material only");
 
             let all_lanes_err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
-                .expect_err("single ETH lane must not satisfy the all-lanes diagnostic helper");
+                .expect_err(
+                    "single Ethereum lane must not satisfy the all-lanes diagnostic helper",
+                );
             assert!(
                 format!("{all_lanes_err:?}").contains("all-lanes launch policy"),
                 "unexpected all-lanes diagnostic error: {all_lanes_err:?}",
@@ -16456,8 +16458,8 @@ pub mod isi {
                         &zk,
                         iroha_sccp::SCCP_DOMAIN_BSC,
                     )
-                    .expect("configured BSC source material")
-                    .expect("BSC source material");
+                    .expect("configured Ethereum source material")
+                    .expect("Ethereum source material");
                     (
                         iroha_sccp::sccp_source_verifier_material_hash(&material),
                         "source verifier material",

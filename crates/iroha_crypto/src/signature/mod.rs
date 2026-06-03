@@ -236,11 +236,11 @@ impl Signature {
                 gost::sign(*algorithm, payload, secret)?
             }
             #[cfg(feature = "bls")]
-            crate::PrivateKeyInner::BlsSmall(sk) => bls::BlsSmall::sign(payload, sk),
+            crate::PrivateKeyInner::BlsSmall(sk) => bls::BlsSmall::try_sign(payload, sk)?,
             #[cfg(feature = "bls")]
-            crate::PrivateKeyInner::BlsNormal(sk) => bls::BlsNormal::sign(payload, sk),
+            crate::PrivateKeyInner::BlsNormal(sk) => bls::BlsNormal::try_sign(payload, sk)?,
             #[cfg(feature = "sm")]
-            crate::PrivateKeyInner::Sm2(sk) => sk.sign(payload).as_bytes().to_vec(),
+            crate::PrivateKeyInner::Sm2(sk) => sk.try_sign(payload)?.as_bytes().to_vec(),
         };
 
         Ok(Self {
@@ -675,6 +675,17 @@ mod tests {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
         let message = b"Test message to sign.";
         let signature = Signature::new(key_pair.private_key(), message);
+        signature.verify(key_pair.public_key(), message).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "sm")]
+    fn create_signature_sm2_checked_path() {
+        let key_pair =
+            KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Sm2).expect("seeded SM2 keypair");
+        let message = b"Test message to sign with checked SM2.";
+        let signature =
+            Signature::try_new(key_pair.private_key(), message).expect("checked SM2 signature");
         signature.verify(key_pair.public_key(), message).unwrap();
     }
 

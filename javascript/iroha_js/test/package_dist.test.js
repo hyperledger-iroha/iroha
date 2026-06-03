@@ -2925,6 +2925,7 @@ test("package dist entrypoint exports TRON receipt-state transcript helpers", ()
     Buffer.from(canonicalEvmReceiptRootMptValue(input.receiptRoot)).toString("hex"),
     `f8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,
   );
+  assert.throws(() => canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`), /must not be zero/u);
   assert.equal(
     Buffer.from(canonicalTronReceiptRootMptValue(input.receiptRoot)).toString("hex"),
     `f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`,

@@ -11,7 +11,9 @@ use iroha_crypto::{
     bls_small_verify_aggregate_multi_message, bls_small_verify_aggregate_same_message,
     bls_small_verify_batch_deterministic,
 };
-use w3f_bls::serialize::SerializableToBytes;
+#[cfg(not(feature = "bls-backend-blstrs"))]
+use w3f_bls::serialize::SerializableToBytes as _;
+
 #[test]
 fn bls_normal_batch_verify_ok_and_fail() {
     let (pk, sk) = BlsNormal::keypair(KeyGenOption::Random);

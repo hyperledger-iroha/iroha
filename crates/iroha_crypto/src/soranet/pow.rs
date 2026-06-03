@@ -82,18 +82,22 @@ impl Ticket {
                 bytes.len()
             )));
         }
-        let version = bytes[0];
+        let mut cursor = 0usize;
+        let version = read_ticket_byte(bytes, &mut cursor)?;
         if version != Self::VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
-        let difficulty = bytes[1];
-        let mut expires_at_bytes = [0u8; 8];
-        expires_at_bytes.copy_from_slice(&bytes[2..10]);
+        let difficulty = read_ticket_byte(bytes, &mut cursor)?;
+        let expires_at_bytes = read_ticket_field::<8>(bytes, &mut cursor)?;
         let expires_at = u64::from_be_bytes(expires_at_bytes);
-        let mut client_nonce = [0u8; 32];
-        client_nonce.copy_from_slice(&bytes[10..42]);
-        let mut solution = [0u8; 32];
-        solution.copy_from_slice(&bytes[42..74]);
+        let client_nonce = read_ticket_field::<32>(bytes, &mut cursor)?;
+        let solution = read_ticket_field::<32>(bytes, &mut cursor)?;
+        if cursor != bytes.len() {
+            return Err(Error::Malformed(format!(
+                "expected {TICKET_LEN} bytes, got {}",
+                bytes.len()
+            )));
+        }
 
         Ok(Self {
             version,
@@ -107,7 +111,14 @@ impl Ticket {
     /// Returns the ticket expiration timestamp as a `SystemTime`.
     #[must_use]
     pub fn expires_at_time(&self) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(self.expires_at)
+        self.checked_expires_at_time().unwrap_or(UNIX_EPOCH)
+    }
+
+    /// Returns the ticket expiration timestamp if it is representable by
+    /// `SystemTime`.
+    #[must_use]
+    pub fn checked_expires_at_time(&self) -> Option<SystemTime> {
+        unix_time_from_secs(self.expires_at)
     }
 
     /// Compute the revocation fingerprint for the ticket payload.
@@ -115,6 +126,31 @@ impl Ticket {
     pub fn revocation_fingerprint(&self) -> [u8; 32] {
         compute_revocation_fingerprint(&self.to_bytes())
     }
+}
+
+fn read_ticket_byte(bytes: &[u8], cursor: &mut usize) -> Result<u8, Error> {
+    let end = (*cursor).checked_add(1).ok_or_else(|| {
+        Error::Malformed(format!("expected {TICKET_LEN} bytes, got {}", bytes.len()))
+    })?;
+    let value = *bytes.get(*cursor).ok_or_else(|| {
+        Error::Malformed(format!("expected {TICKET_LEN} bytes, got {}", bytes.len()))
+    })?;
+    *cursor = end;
+    Ok(value)
+}
+
+fn read_ticket_field<const N: usize>(bytes: &[u8], cursor: &mut usize) -> Result<[u8; N], Error> {
+    let start = *cursor;
+    let end = start.checked_add(N).ok_or_else(|| {
+        Error::Malformed(format!("expected {TICKET_LEN} bytes, got {}", bytes.len()))
+    })?;
+    let slice = bytes.get(start..end).ok_or_else(|| {
+        Error::Malformed(format!("expected {TICKET_LEN} bytes, got {}", bytes.len()))
+    })?;
+    let mut out = [0u8; N];
+    out.copy_from_slice(slice);
+    *cursor = end;
+    Ok(out)
 }
 
 /// A `PoW` ticket signed by a relay using ML-DSA-44 (Dilithium2).
@@ -240,7 +276,14 @@ impl SignedTicket {
     /// Returns the ticket expiration timestamp as a `SystemTime`.
     #[must_use]
     pub fn expires_at(&self) -> SystemTime {
-        UNIX_EPOCH + Duration::from_secs(self.ticket.expires_at)
+        self.checked_expires_at().unwrap_or(UNIX_EPOCH)
+    }
+
+    /// Returns the signed ticket expiration timestamp if it is representable by
+    /// `SystemTime`.
+    #[must_use]
+    pub fn checked_expires_at(&self) -> Option<SystemTime> {
+        self.ticket.checked_expires_at_time()
     }
 
     /// Compute the revocation fingerprint for the embedded signature.
@@ -334,6 +377,9 @@ pub enum TicketRevocationStoreError {
     /// Persisted snapshot failed to parse.
     #[error("revocation store parse error: {0}")]
     Parse(String),
+    /// Ticket expiry timestamp cannot be represented by `SystemTime`.
+    #[error("revocation expiry timestamp {0} overflows system time")]
+    ExpiryTimestampOverflow(u64),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -405,7 +451,10 @@ impl TicketRevocationStore {
         ticket: &SignedTicket,
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        self.revoke_signature(&ticket.signature, ticket.expires_at(), now)
+        let expires_at = ticket.checked_expires_at().ok_or(
+            TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.ticket.expires_at),
+        )?;
+        self.revoke_signature(&ticket.signature, expires_at, now)
     }
 
     /// Insert a raw signature and expiry into the store.
@@ -433,11 +482,10 @@ impl TicketRevocationStore {
         ticket: &Ticket,
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
-        self.insert(
-            ticket.revocation_fingerprint(),
-            ticket.expires_at_time(),
-            now,
-        )
+        let expires_at = ticket.checked_expires_at_time().ok_or(
+            TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.expires_at),
+        )?;
+        self.insert(ticket.revocation_fingerprint(), expires_at, now)
     }
 
     /// Insert a raw ticket payload into the store using its expiry.
@@ -451,7 +499,9 @@ impl TicketRevocationStore {
         now: SystemTime,
     ) -> Result<TicketRevocationInsertOutcome, TicketRevocationStoreError> {
         let fingerprint = ticket.revocation_fingerprint();
-        let expires_at = ticket.expires_at_time();
+        let expires_at = ticket.checked_expires_at_time().ok_or(
+            TicketRevocationStoreError::ExpiryTimestampOverflow(ticket.expires_at),
+        )?;
         self.insert(fingerprint, expires_at, now)
     }
 
@@ -704,22 +754,24 @@ impl<'a> ChallengeBinding<'a> {
 }
 
 impl Parameters {
-    /// Construct new `PoW` parameters, panicking when bounds are invalid.
+    /// Construct new `PoW` parameters.
     ///
-    /// # Panics
-    ///
-    /// Panics if `min_ttl` is zero or if `max_future_skew` is less than
-    /// `min_ttl`. Runtime configuration loaders should prefer
-    /// [`Parameters::try_new`] so invalid policy input can fail closed without
-    /// unwinding.
+    /// Invalid bounds produce a fail-closed policy that rejects all minted and
+    /// verified tickets. Runtime configuration loaders should prefer
+    /// [`Parameters::try_new`] so invalid policy input can be surfaced as a
+    /// configuration error.
     #[must_use]
     pub fn new(difficulty: u8, max_future_skew: Duration, min_ttl: Duration) -> Self {
-        Self::try_new(difficulty, max_future_skew, min_ttl).unwrap_or_else(|err| match err {
-            ParameterError::MinTtlZero => panic!("min_ttl must be > 0"),
-            ParameterError::MaxFutureSkewTooShort { .. } => {
-                panic!("max_future_skew must be >= min_ttl")
-            }
-        })
+        Self::try_new(difficulty, max_future_skew, min_ttl)
+            .unwrap_or_else(|_| Self::fail_closed(difficulty))
+    }
+
+    fn fail_closed(difficulty: u8) -> Self {
+        Self {
+            difficulty,
+            max_future_skew: Duration::ZERO,
+            min_ttl: Duration::MAX,
+        }
     }
 
     /// Construct new `PoW` parameters.
@@ -856,6 +908,9 @@ pub enum MintError {
         /// Maximum future skew allowed by policy.
         max_skew: Duration,
     },
+    /// Requested TTL cannot be represented as a `SystemTime` expiry.
+    #[error("requested ttl {0:?} overflows system time")]
+    ExpiryTimestampOverflow(Duration),
     /// System clock unavailable.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -1079,7 +1134,9 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
         });
     }
     let now = SystemTime::now();
-    let expires_at = now + ttl;
+    let expires_at = now
+        .checked_add(ttl)
+        .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
     let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
     let mut client_nonce = [0u8; 32];
     rng.fill_bytes(&mut client_nonce);
@@ -1201,6 +1258,10 @@ fn handle_revocation_outcome(
             "revocation store at capacity".to_string(),
         )),
     }
+}
+
+fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
 fn compute_revocation_fingerprint(signature: &[u8]) -> [u8; 32] {
@@ -1333,6 +1394,49 @@ mod tests {
     }
 
     #[test]
+    fn parameters_new_invalid_bounds_fail_closed_without_panic() {
+        let zero_ttl = Parameters::new(0, Duration::from_secs(600), Duration::ZERO);
+        assert_eq!(zero_ttl.max_future_skew(), Duration::ZERO);
+        assert_eq!(zero_ttl.min_ticket_ttl(), Duration::MAX);
+
+        let inverted = Parameters::new(0, Duration::from_secs(29), Duration::from_secs(30));
+        assert_eq!(inverted.max_future_skew(), Duration::ZERO);
+        assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
+
+        let descriptor = [0xAA; 32];
+        let binding = binding(&descriptor);
+        let mut rng = rand::rngs::StdRng::from_seed([0x24; 32]);
+        let mint_err = mint_ticket(&zero_ttl, &binding, Duration::from_secs(30), &mut rng)
+            .expect_err("fail-closed params must reject minting");
+        assert!(matches!(
+            mint_err,
+            MintError::TtlTooShort {
+                required: Duration::MAX,
+                ..
+            }
+        ));
+
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 1_120,
+            client_nonce: [0u8; 32],
+            solution: [0u8; 32],
+        };
+        let verify_err = verify_at(
+            &ticket,
+            &binding,
+            &inverted,
+            UNIX_EPOCH + Duration::from_secs(1_000),
+        )
+        .expect_err("fail-closed params must reject verification");
+        assert!(matches!(
+            verify_err,
+            Error::ExpiryWindowTooSmall(Duration::MAX)
+        ));
+    }
+
+    #[test]
     fn ticket_round_trip() {
         let mut rng = rand::rngs::StdRng::from_seed([0x42; 32]);
         let params = params();
@@ -1347,6 +1451,45 @@ mod tests {
     }
 
     #[test]
+    fn ticket_expiry_accessors_fail_closed_on_unrepresentable_timestamp() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: u64::MAX,
+            client_nonce: [0u8; 32],
+            solution: [0u8; 32],
+        };
+        assert!(ticket.checked_expires_at_time().is_none());
+        assert_eq!(ticket.expires_at_time(), UNIX_EPOCH);
+
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
+        };
+        assert!(signed.checked_expires_at().is_none());
+        assert_eq!(signed.expires_at(), UNIX_EPOCH);
+    }
+
+    #[test]
+    fn mint_ticket_rejects_ttl_that_overflows_system_time() {
+        let mut rng = rand::rngs::StdRng::from_seed([0x24; 32]);
+        let params = Parameters::try_new(0, Duration::from_secs(u64::MAX), Duration::from_secs(1))
+            .expect("huge bounds are structurally valid");
+        let descriptor = [0xAA; 32];
+        let binding = binding(&descriptor);
+
+        let err = mint_ticket(&params, &binding, Duration::from_secs(u64::MAX), &mut rng)
+            .expect_err("overflowing ttl should fail closed");
+        assert!(matches!(
+            err,
+            MintError::ExpiryTimestampOverflow(ttl)
+                if ttl == Duration::from_secs(u64::MAX)
+        ));
+    }
+
+    #[test]
     fn rejects_unsupported_ticket_version() {
         let mut bytes = [0u8; TICKET_LEN];
         bytes[0] = Ticket::VERSION + 1;
@@ -1357,7 +1500,40 @@ mod tests {
     #[test]
     fn rejects_bad_length() {
         let err = Ticket::parse(&[0u8; 10]).expect_err("should fail");
-        matches!(err, Error::Malformed(_));
+        assert!(matches!(err, Error::Malformed(_)));
+    }
+
+    #[test]
+    fn ticket_parse_rejects_truncated_prefixes_without_panic() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 1_700_000_120,
+            client_nonce: [0x11; 32],
+            solution: [0x22; 32],
+        };
+        let bytes = ticket.to_bytes();
+
+        for len in 0..TICKET_LEN {
+            let err = Ticket::parse(&bytes[..len])
+                .expect_err("truncated ticket prefix should fail closed");
+            assert!(matches!(err, Error::Malformed(_)));
+        }
+    }
+
+    #[test]
+    fn ticket_field_readers_reject_overflowed_offsets_without_advancing() {
+        let mut byte_cursor = usize::MAX;
+        let err = read_ticket_byte(&[], &mut byte_cursor)
+            .expect_err("overflowed byte cursor should fail closed");
+        assert!(matches!(err, Error::Malformed(_)));
+        assert_eq!(byte_cursor, usize::MAX);
+
+        let mut field_cursor = usize::MAX;
+        let err = read_ticket_field::<8>(&[], &mut field_cursor)
+            .expect_err("overflowed field cursor should fail closed");
+        assert!(matches!(err, Error::Malformed(_)));
+        assert_eq!(field_cursor, usize::MAX);
     }
 
     #[test]
@@ -2038,6 +2214,51 @@ mod tests {
 
         let expired = store.revoke_ticket(&overdue, now).expect("insert overdue");
         assert_eq!(expired.status, TicketRevocationInsertStatus::Expired);
+        assert_eq!(store.len(now), 0);
+    }
+
+    #[test]
+    fn revocation_store_rejects_unrepresentable_ticket_expiry_without_panic() {
+        let now = UNIX_EPOCH + Duration::from_secs(5_000);
+        let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(60)).expect("limits");
+        let mut store = TicketRevocationStore::in_memory(limits).expect("store");
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: u64::MAX,
+            client_nonce: [0u8; 32],
+            solution: [0u8; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0xAA; MlDsaSuite::MlDsa44.signature_len()],
+        };
+
+        let err = store
+            .revoke_ticket_payload(&ticket, now)
+            .expect_err("overflowed ticket payload expiry should fail closed");
+        assert!(matches!(
+            err,
+            TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
+        ));
+
+        let err = store
+            .revoke_ticket_bytes(&ticket, now)
+            .expect_err("overflowed ticket byte expiry should fail closed");
+        assert!(matches!(
+            err,
+            TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
+        ));
+
+        let err = store
+            .revoke_ticket(&signed, now)
+            .expect_err("overflowed signed-ticket expiry should fail closed");
+        assert!(matches!(
+            err,
+            TicketRevocationStoreError::ExpiryTimestampOverflow(u64::MAX)
+        ));
         assert_eq!(store.len(now), 0);
     }
 

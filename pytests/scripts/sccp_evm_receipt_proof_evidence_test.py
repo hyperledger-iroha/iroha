@@ -200,6 +200,64 @@ def test_receipt_rlp_rejects_unknown_typed_receipt_prefix():
         raise AssertionError("unknown EIP-2718 receipt type was accepted")
 
 
+def test_collect_receipt_proof_accepts_zero_log_topic_in_receipt_rlp():
+    module = load_module()
+    receipts = block_receipts(module)
+    receipts[1] = receipt(
+        module,
+        index=1,
+        tx_byte=0x22,
+        logs=[
+            {
+                "address": "0x" + "12" * 20,
+                "topics": ["0x" + "00" * 32],
+                "data": "0x",
+            }
+        ],
+    )
+    opener = fake_opener_for(module, receipts=receipts)
+
+    summary = module.collect_receipt_proof_evidence(
+        "https://rpc.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        transaction_hash=bytes.fromhex("11" * 32),
+        source_bridge_address=bytes.fromhex("33" * 20),
+        opener=opener,
+    )
+
+    assert summary["receipt_root_verified"] is True
+    assert summary["receipt_rlp"].startswith("0x02")
+
+
+def test_collect_receipt_proof_accepts_zero_log_address_in_receipt_rlp():
+    module = load_module()
+    receipts = block_receipts(module)
+    receipts[1] = receipt(
+        module,
+        index=1,
+        tx_byte=0x22,
+        logs=[
+            {
+                "address": "0x" + "00" * 20,
+                "topics": ["0x" + "44" * 32],
+                "data": "0x",
+            }
+        ],
+    )
+    opener = fake_opener_for(module, receipts=receipts)
+
+    summary = module.collect_receipt_proof_evidence(
+        "https://rpc.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        transaction_hash=bytes.fromhex("11" * 32),
+        source_bridge_address=bytes.fromhex("33" * 20),
+        opener=opener,
+    )
+
+    assert summary["receipt_root_verified"] is True
+    assert summary["receipt_rlp"].startswith("0x02")
+
+
 def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
     module = load_module()
     opener = fake_opener_for(module, chain_id=56)
@@ -270,6 +328,28 @@ def test_collect_receipt_proof_rejects_duplicate_source_event_logs():
         assert "duplicate SCCP source event logs" in str(exc)
     else:
         raise AssertionError("duplicate SCCP source event logs were accepted")
+
+
+def test_collect_receipt_proof_rejects_source_event_missing_context_fields():
+    module = load_module()
+
+    for field in ("transactionHash", "blockHash", "blockNumber"):
+        receipts = block_receipts(module)
+        del receipts[0]["logs"][0][field]
+        opener = fake_opener_for(module, receipts=receipts)
+
+        try:
+            module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                domain=module.SCCP_DOMAIN_ETH,
+                transaction_hash=bytes.fromhex("11" * 32),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                opener=opener,
+            )
+        except RuntimeError as exc:
+            assert f"receipt.logs[0].{field}" in str(exc)
+        else:
+            raise AssertionError(f"source event log without {field} was accepted")
 
 
 def test_collect_receipt_proof_rejects_direct_receipt_rlp_drift():

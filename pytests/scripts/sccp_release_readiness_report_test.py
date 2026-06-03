@@ -400,7 +400,7 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     assert report.ACTIVE_LAUNCH_DOMAIN == 1
     assert report.ACTIVE_LAUNCH_CHAIN == "eth"
     assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
-    assert report.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+    assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
 def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
@@ -968,6 +968,73 @@ def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submi
         for marker in markers:
             if marker not in source:
                 violations.append(f"{sdk} {path.relative_to(ROOT)} missing `{marker}`")
+
+    assert violations == []
+
+
+def test_release_readiness_evm_evidence_keeps_block_tag_metadata_guards() -> None:
+    """Ethereum production evidence must keep finalized block-tag tripwires."""
+
+    guarded_files = {
+        ROOT / "scripts" / "sccp_evm_source_live_evidence.py": (
+            'sccp_evm_source_block_tag = "',
+            "--block-tag finalized",
+        ),
+        ROOT / "scripts" / "sccp_evm_live_evidence.py": (
+            'sccp_evm_block_tag = "',
+            "--block-tag finalized",
+        ),
+        ROOT / "scripts" / "sccp_eth_source_bridge_evidence.py": (
+            'sccp_evm_source_block_tag = "',
+            "Ethereum source TOML requires --block-tag finalized",
+        ),
+        ROOT / "scripts" / "sccp_evm_destination_evidence.py": (
+            'sccp_evm_block_tag = "',
+            "Ethereum destination TOML requires --block-tag finalized",
+        ),
+        ROOT / "scripts" / "sccp_bsc_source_bridge_evidence.py": (
+            'sccp_evm_source_block_tag = "',
+            '"latest"',
+        ),
+        ROOT / "scripts" / "sccp_all_lanes_evidence.py": (
+            '"sccp_evm_source_rpc_chain_id": "_comment_evm_source_rpc_chain_id"',
+            '"sccp_evm_source_block_tag": "_comment_evm_source_block_tag"',
+            '"sccp_evm_rpc_chain_id": "_comment_evm_rpc_chain_id"',
+            '"sccp_evm_block_tag": "_comment_evm_block_tag"',
+            "EVM source live RPC chain-id must be canonical for {profile.chain}",
+            "EVM live RPC chain-id must be canonical for {profile.chain}",
+            "Ethereum source live block-tag metadata must be finalized",
+            "Ethereum destination live block-tag metadata must be finalized",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_source_live_evidence_test.py": (
+            "test_evm_source_live_eth_toml_requires_finalized_block_tag",
+            '# sccp_evm_source_block_tag = "finalized"',
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_live_evidence_test.py": (
+            "test_live_evm_eth_toml_requires_finalized_block_tag",
+            '# sccp_evm_block_tag = "finalized"',
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_eth_source_bridge_evidence_test.py": (
+            "test_eth_source_toml_rejects_nonfinalized_block_tag",
+            "Ethereum source TOML requires --block-tag finalized",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_destination_evidence_test.py": (
+            "test_evm_destination_eth_toml_rejects_nonfinalized_block_tag",
+            "Ethereum destination TOML requires --block-tag finalized",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_all_lanes_evidence_test.py": (
+            "test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata",
+            '# sccp_evm_source_block_tag = "finalized"',
+            '# sccp_evm_block_tag = "finalized"',
+        ),
+    }
+
+    violations: list[str] = []
+    for path, markers in guarded_files.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                violations.append(f"{path.relative_to(ROOT)} missing `{marker}`")
 
     assert violations == []
 
@@ -1848,6 +1915,11 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert f"| `rust-sccp` | passed | `{corridor_log}` |" in completed.stdout
     assert "## Release Checklist" in completed.stdout
     assert "## Cryptographic Evidence" in completed.stdout
+    assert "EVM Source Chain ID | EVM Source Tag | EVM Destination Chain ID" in (
+        completed.stdout
+    )
+    assert "`eth` | `1` | `finalized` | `1` | `finalized`" in completed.stdout
+    assert "`bsc` | `56` | `latest` | `56` | `latest`" in completed.stdout
     assert "Source Material | Source Deployment | Destination Binding" in (
         completed.stdout
     )
@@ -1910,6 +1982,10 @@ def test_release_readiness_report_passes_with_only_active_launch_lane(
         if row["domain"] == active_domain
     )
     assert active_crypto["domain"] == active_domain
+    assert active_crypto["evm_source_rpc_chain_id"] == "1"
+    assert active_crypto["evm_source_block_tag"] == "finalized"
+    assert active_crypto["evm_destination_rpc_chain_id"] == "1"
+    assert active_crypto["evm_destination_block_tag"] == "finalized"
     blocked_future_lanes = [
         lane
         for lane in payload["evidence"]["lanes"]
@@ -2526,6 +2602,548 @@ def test_release_readiness_report_requires_js_mainnet_facade_transcripts(
             "production corridor phase js-sdk evidence artifact is missing "
             f"expected phase-block command: {required_facade_test}"
         ) in completed.stdout
+
+
+def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests() -> None:
+    """Native/browser Ethereum inbound tests must retain adversarial evidence cases."""
+
+    guarded_tests = {
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
+            "EthereumMainnetSccp rejects failed or drifted receipt evidence before proving",
+            "receipt status must be 0x1",
+            "beaconFinality.executionReceiptsRoot",
+            "EthereumMainnetSccp validates source bridge logs in receipt evidence",
+            "sourceEventLog(), sourceEventLog()",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            'invalidPublicInputs("receipt.status")',
+            'invalidPublicInputs("beaconFinality.executionReceiptsRoot")',
+            "wrongTopicReceipt",
+            "duplicateLogReceipt",
+            'invalidPublicInputs("receipt.logs")',
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            'receipt + ("status" to "0x0")',
+            'beaconFinality + ("executionReceiptsRoot"',
+            '"logs" to listOf(sourceEventLog, sourceEventLog)',
+            "SccpEthereumMainnet.sourceEventTopic()",
+            "receiptProof.executionReceiptsRoot",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "Ethereum inbound collection must reject failed receipts",
+            "beaconFinality.executionReceiptsRoot",
+            'duplicateReceipt.put("logs"',
+            "source-event validation must reject duplicate matching events",
+            "EthereumMainnetSccp.sourceEventTopic()",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "failedReceipt",
+            "receiptProof.executionReceiptsRoot",
+            "driftedFinalityReceiptsRoot",
+            "wrongTopicLog",
+            "duplicateReceipt",
+        ),
+    }
+    missing: list[str] = []
+    for path, markers in guarded_tests.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests() -> None:
+    """Ethereum outbound facades must reject foreign lanes before callbacks."""
+
+    guarded_tests = {
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "assert.equal(outboundProverCalled, false)",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "XCTAssertFalse(outboundProverCalled)",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "outboundProverCalled",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "assert !outboundProverCalled[0]",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "Ethereum outbound prover callback must not see BSC requests",
+            "Assert.Null(guardedProver.Request)",
+        ),
+    }
+    missing = []
+    for path, markers in guarded_tests.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_receipt_root_zero_sdk_tests() -> None:
+    """Ethereum SDK receipt-root helpers must reject zero typed MPT roots."""
+
+    guarded_sources = {
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "export function canonicalEvmReceiptRootMptValue(receiptRoot)",
+            'const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");',
+        ),
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js": (
+            "export function canonicalEvmReceiptRootMptValue(receiptRoot)",
+            'const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");',
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpSolanaProver.test.js": (
+            "canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1)",
+            "must not be zero",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "package_dist.test.js": (
+            'canonicalEvmReceiptRootMptValue(`0x${"00".repeat(32)}`)',
+            "must not be zero",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpSourceProofHashes.swift": (
+            "public func canonicalEvmReceiptRootMptValue(receiptRoot: String)",
+            'sourceProofNonZeroBytesFromHex32(receiptRoot, field: "receiptRoot")',
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "canonicalEvmReceiptRootMptValue(receiptRoot: zeroHash)",
+            "XCTAssertThrowsError",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashes.kt": (
+            "fun canonicalEvmReceiptRootMptValue(receiptRoot: String)",
+            'rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot"))',
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashesTest.kt": (
+            "SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+            "assertFailsWith<IllegalArgumentException>",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofs.java": (
+            "public static byte[] canonicalEvmReceiptRootMptValue(final String receiptRoot)",
+            'fields.add(rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")))',
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofsTests.java": (
+            "SourceSccpProofs.canonicalEvmReceiptRootMptValue(zeroHash)",
+            "expectThrows",
+        ),
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            "public static byte[] CanonicalEvmSccpReceiptProofBytes",
+            "payload.Write(RpcHexToBytes(executionReceiptsRoot, nameof(executionReceiptsRoot), 32));",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "BuildBytes(executionReceiptsRoot: zeroRoot)",
+            "BuildBytes(syncCommitteeRoot: zeroRoot)",
+        ),
+    }
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_receipt_rlp_zero_topic_tests() -> None:
+    """Ethereum receipt RLP builders must allow zero log topics."""
+
+    guarded_sources = {
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "`receipt.logs[${index}].topics[${topicIndex}]`",
+            "{ nonzero: false }",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
+            "zeroTopicReceiptTrieProof",
+            'topics: [hex32("00")]',
+        ),
+        ROOT / "scripts" / "sccp_evm_receipt_proof_evidence.py": (
+            "method=f\"receipt.logs[{log_index}].topics[{topic_index}]\"",
+            "nonzero=False",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_receipt_proof_evidence_test.py": (
+            "test_collect_receipt_proof_accepts_zero_log_topic_in_receipt_rlp",
+            '"topics": ["0x" + "00" * 32]',
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpSourceProofHashes.swift": (
+            'field: "receipt.logs[\\(index)].topics[\\(topicIndex)]"',
+            "nonzero: false",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "zeroTopicProof",
+            '"topics": ["0x" + String(repeating: "00", count: 32)]',
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashes.kt": (
+            '"receipt.logs[$index].topics[$topicIndex]"',
+            "nonzero = false",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            "zeroTopicProof",
+            '"topics" to listOf("0x" + "00".repeat(32))',
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofs.java": (
+            '"receipt.logs[" + index + "].topics[" + topicIndex + "]"',
+            "false,\n                    false)))",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "zeroTopicProof",
+            "generic Ethereum receipt RLP must allow zero log topics",
+        ),
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            '$"receipt.logs[{index}].topics[{topicIndex}]"',
+            "nonZero: false",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "zeroTopicProof",
+            '["topics"] = new object?[] { "0x" + new string(\'0\', 64) }',
+        ),
+    }
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_receipt_rlp_zero_address_tests() -> None:
+    """Ethereum receipt RLP builders must allow zero log addresses."""
+
+    guarded_sources = {
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js": (
+            "`receipt.logs[${index}].address`",
+            "{ nonzero: false }",
+        ),
+        ROOT / "javascript" / "iroha_js" / "test" / "sccpEthereumMainnet.test.js": (
+            "zeroAddressReceiptTrieProof",
+            'address: `0x${"00".repeat(20)}`',
+        ),
+        ROOT / "scripts" / "sccp_evm_receipt_proof_evidence.py": (
+            "method=f\"receipt.logs[{log_index}].address\"",
+            "nonzero=False",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_receipt_proof_evidence_test.py": (
+            "test_collect_receipt_proof_accepts_zero_log_address_in_receipt_rlp",
+            '"address": "0x" + "00" * 20',
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Sources"
+        / "IrohaSwift"
+        / "SccpSourceProofHashes.swift": (
+            'field: "receipt.logs[\\(index)].address"',
+            "nonzero: false",
+        ),
+        ROOT
+        / "IrohaSwift"
+        / "Tests"
+        / "IrohaSwiftTests"
+        / "SccpSolanaProverTests.swift": (
+            "zeroAddressProof",
+            '"address": "0x" + String(repeating: "00", count: 20)',
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "SourceSccpProofHashes.kt": (
+            '"receipt.logs[$index].address"',
+            "nonzero = false",
+        ),
+        ROOT
+        / "kotlin"
+        / "core-jvm"
+        / "src"
+        / "test"
+        / "kotlin"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "sdk"
+        / "sccp"
+        / "EvmSccpProverTest.kt": (
+            "zeroAddressProof",
+            '"address" to "0x" + "00".repeat(20)',
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "main"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "SourceSccpProofs.java": (
+            '"receipt.logs[" + index + "].address"',
+            "false,\n                          false))",
+        ),
+        ROOT
+        / "java"
+        / "iroha_android"
+        / "src"
+        / "test"
+        / "java"
+        / "org"
+        / "hyperledger"
+        / "iroha"
+        / "android"
+        / "sccp"
+        / "EvmSccpProverTests.java": (
+            "zeroAddressProof",
+            "generic Ethereum receipt RLP must allow zero log addresses",
+        ),
+        ROOT
+        / "csharp"
+        / "src"
+        / "Hyperledger.Iroha.Sdk"
+        / "Sccp"
+        / "EthereumMainnetSccp.cs": (
+            '$"receipt.logs[{index}].address"',
+            "nonZero: false",
+        ),
+        ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SccpEthereumMainnetTests.cs": (
+            "zeroAddressProof",
+            '["address"] = "0x" + new string(\'0\', 40)',
+        ),
+    }
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
+
+
+def test_release_readiness_guards_ethereum_source_event_context_tests() -> None:
+    """Ethereum source-event evidence must bind logs to receipt/block context."""
+
+    guarded_sources = {
+        ROOT / "scripts" / "sccp_evm_receipt_proof_evidence.py": (
+            "log_transaction_hash = _rpc_fixed_hex_data(",
+            "log_block_hash = _rpc_fixed_hex_data(",
+            "log_block_number = _rpc_quantity(",
+            "source event log transactionHash does not match receipt",
+        ),
+        ROOT / "pytests" / "scripts" / "sccp_evm_receipt_proof_evidence_test.py": (
+            "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+            'for field in ("transactionHash", "blockHash", "blockNumber")',
+        ),
+    }
+    missing = []
+    for path, markers in guarded_sources.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                missing.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert missing == []
 
 
 def test_release_readiness_report_rejects_phase_command_outside_claimed_block(

@@ -328,6 +328,7 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     rendered = module.render_toml(args)
 
     assert '# sccp_evm_source_rpc_chain_id = "1"' in rendered
+    assert '# sccp_evm_source_block_tag = "finalized"' in rendered
     assert '# sccp_evm_source_bridge_address = "0x' + "11" * 20 + '"' in rendered
     assert (
         '# sccp_evm_source_bridge_runtime_code_hash = "0x'
@@ -435,6 +436,32 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
     assert "source_bridge_owner_address" not in rendered
     assert 'source_bridge_config_hash = "0x' in rendered
     assert "# sccp_eth_source_bridge_config_hash" in rendered
+
+
+def test_eth_source_toml_rejects_nonfinalized_block_tag():
+    module = load_evidence_module()
+    args = eth_args(module)
+    runtime_bytecode = bytes.fromhex("6080604052")
+    args.source_bridge_emitter_code_hash = module.runtime_bytecode_hash(runtime_bytecode)
+    args.source_bridge_runtime_bytecode_hex = runtime_bytecode
+    args.source_bridge_runtime_bytecode_file = None
+    args.expected_source_verifier_material_hash = (
+        module.eth_source_verifier_material_record_hash(args)
+    )
+    args.expected_source_adapter_engine_deployment_hash = (
+        module.eth_source_adapter_engine_deployment_record_hash(args)
+    )
+    args.block_tag = "latest"
+
+    try:
+        module.render_toml(args)
+    except ValueError as exc:
+        assert "Ethereum source TOML requires --block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("non-finalized ETH source TOML was accepted")
+
+    summary = module._json_summary(args)
+    assert summary["block_tag"] == "latest"
 
 
 def test_eth_source_evidence_rejects_boolean_receipt_block_number():

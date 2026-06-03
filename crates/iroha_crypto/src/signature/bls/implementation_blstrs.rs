@@ -102,37 +102,43 @@ impl<C: BlsConfiguration> BlsImpl<C> {
             KeyGenOption::FromPrivateKey(key) => key,
         };
 
-        // Public key depends on orientation; derive via w3f to ensure stable encoding
-        let pk_bytes = if C::NORMAL {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
-                .expect("valid w3f secret from bytes");
-            sk_w.into_public().to_bytes()
-        } else {
-            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(&sk.bytes)
-                .expect("valid w3f secret from bytes");
-            sk_w.into_public().to_bytes()
-        };
-        (
-            PublicKey {
-                bytes: pk_bytes,
-                _m: PhantomData,
-            },
-            sk,
-        )
+        let public_key = Self::derive_public_key(&sk).expect("valid w3f secret from bytes");
+        (public_key, sk)
     }
 
     pub fn sign(message: &[u8], sk: &SecretKey<C>) -> Vec<u8> {
+        Self::try_sign(message, sk).expect("valid w3f secret from bytes")
+    }
+
+    pub fn try_sign(message: &[u8], sk: &SecretKey<C>) -> Result<Vec<u8>, Error> {
         // Produce signature with w3f to match canonical encoding exactly.
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         if C::NORMAL {
             let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
-                .expect("valid w3f secret from bytes");
-            sk_w.sign(&msg).to_bytes()
+                .map_err(|err| Error::Signing(err.to_string()))?;
+            Ok(sk_w.sign(&msg).to_bytes())
         } else {
             let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(&sk.bytes)
-                .expect("valid w3f secret from bytes");
-            sk_w.sign(&msg).to_bytes()
+                .map_err(|err| Error::Signing(err.to_string()))?;
+            Ok(sk_w.sign(&msg).to_bytes())
         }
+    }
+
+    pub fn derive_public_key(sk: &SecretKey<C>) -> Result<PublicKey<C>, ParseError> {
+        // Public key depends on orientation; derive via w3f to ensure stable encoding
+        let pk_bytes = if C::NORMAL {
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_bytes(&sk.bytes)
+                .map_err(|err| ParseError(err.to_string()))?;
+            sk_w.into_public().to_bytes()
+        } else {
+            let sk_w = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_bytes(&sk.bytes)
+                .map_err(|err| ParseError(err.to_string()))?;
+            sk_w.into_public().to_bytes()
+        };
+        Ok(PublicKey {
+            bytes: pk_bytes,
+            _m: PhantomData,
+        })
     }
 
     pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey<C>) -> Result<(), Error> {
@@ -509,11 +515,7 @@ fn to_g1(bytes: &[u8]) -> Option<G1Affine> {
     }
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
-    let ct = G1Affine::from_compressed(&arr);
-    if !bool::from(ct.is_some()) {
-        return None;
-    }
-    let point = ct.unwrap();
+    let point = G1Affine::from_compressed(&arr).into_option()?;
     if bool::from(point.is_identity()) {
         return None;
     }
@@ -528,11 +530,7 @@ fn to_g2(bytes: &[u8]) -> Option<G2Affine> {
     }
     let mut arr = [0u8; 96];
     arr.copy_from_slice(bytes);
-    let ct = G2Affine::from_compressed(&arr);
-    if !bool::from(ct.is_some()) {
-        return None;
-    }
-    let point = ct.unwrap();
+    let point = G2Affine::from_compressed(&arr).into_option()?;
     if bool::from(point.is_identity()) {
         return None;
     }
@@ -672,5 +670,16 @@ mod tests {
         let prepared = to_g2_prepared(&bytes).expect("valid prepared key");
         let cached = to_g2_prepared(&bytes).expect("cached prepared key");
         assert!(Arc::ptr_eq(&prepared, &cached));
+    }
+
+    #[test]
+    fn compressed_point_decoders_reject_invalid_encodings() {
+        let mut invalid_g1 = [0xFF; 48];
+        let mut invalid_g2 = [0xFF; 96];
+        invalid_g1[0] = 0x00;
+        invalid_g2[0] = 0x00;
+
+        assert!(to_g1_public_key(&invalid_g1).is_none());
+        assert!(to_g2_public_key(&invalid_g2).is_none());
     }
 }

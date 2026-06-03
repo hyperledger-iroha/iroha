@@ -82,13 +82,12 @@ pub enum ParameterError {
 }
 
 impl Parameters {
-    /// Construct a new parameter set, panicking when bounds are invalid.
+    /// Construct a new parameter set.
     ///
-    /// # Panics
-    /// Panics when `min_ticket_ttl` is zero or when `max_future_skew` is
-    /// shorter than the minimum TTL. Runtime configuration loaders should
-    /// prefer [`Parameters::try_new`] so invalid policy input can fail closed
-    /// without unwinding.
+    /// Invalid timing bounds produce a fail-closed policy that rejects all
+    /// minted and verified tickets. Runtime configuration loaders should prefer
+    /// [`Parameters::try_new`] so invalid policy input can be surfaced as a
+    /// configuration error.
     #[must_use]
     pub fn new(
         memory_kib: NonZeroU32,
@@ -106,14 +105,23 @@ impl Parameters {
             max_future_skew,
             min_ticket_ttl,
         )
-        .unwrap_or_else(|err| match err {
-            ParameterError::MinTicketTtlZero => {
-                panic!("min_ticket_ttl must be greater than zero")
-            }
-            ParameterError::MaxFutureSkewTooShort { .. } => {
-                panic!("max_future_skew must be at least min_ticket_ttl")
-            }
-        })
+        .unwrap_or_else(|_| Self::fail_closed(memory_kib, time_cost, lanes, difficulty))
+    }
+
+    fn fail_closed(
+        memory_kib: NonZeroU32,
+        time_cost: NonZeroU32,
+        lanes: NonZeroU32,
+        difficulty: u8,
+    ) -> Self {
+        Self {
+            memory_kib,
+            time_cost,
+            lanes,
+            difficulty,
+            max_future_skew: Duration::ZERO,
+            min_ticket_ttl: Duration::MAX,
+        }
     }
 
     /// Construct a new parameter set.
@@ -250,6 +258,9 @@ pub enum MintError {
         /// Maximum future skew derived from policy.
         max_skew: Duration,
     },
+    /// Requested TTL cannot be represented as a `SystemTime` expiry.
+    #[error("requested ttl {0:?} overflows system time")]
+    ExpiryTimestampOverflow(Duration),
     /// System clock could not be queried.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -356,7 +367,9 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
     }
 
     let now = SystemTime::now();
-    let expires_at = now + ttl;
+    let expires_at = now
+        .checked_add(ttl)
+        .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
     let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
     let mut client_nonce = [0u8; 32];
     rng.fill_bytes(&mut client_nonce);
@@ -561,6 +574,65 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn parameters_new_invalid_bounds_fail_closed_without_panic() {
+        let memory = NonZeroU32::new(8 * 1024).expect("non-zero memory");
+        let time = NonZeroU32::new(2).expect("non-zero time");
+        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
+
+        let zero_ttl = Parameters::new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(30),
+            Duration::ZERO,
+        );
+        assert_eq!(zero_ttl.max_future_skew(), Duration::ZERO);
+        assert_eq!(zero_ttl.min_ticket_ttl(), Duration::MAX);
+
+        let inverted = Parameters::new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(4),
+            Duration::from_secs(5),
+        );
+        assert_eq!(inverted.max_future_skew(), Duration::ZERO);
+        assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
+
+        let mut rng = ChaCha20Rng::seed_from_u64(99);
+        let mint_err = mint_ticket(&zero_ttl, &binding(), Duration::from_secs(5), &mut rng)
+            .expect_err("fail-closed params must reject minting");
+        assert!(matches!(
+            mint_err,
+            MintError::TtlTooShort {
+                required: Duration::MAX,
+                ..
+            }
+        ));
+
+        let ticket = Ticket {
+            version: 1,
+            difficulty: 0,
+            expires_at: 1_120,
+            client_nonce: [0u8; 32],
+            solution: [0u8; 32],
+        };
+        let verify_err = verify_at(
+            &ticket,
+            &binding(),
+            &inverted,
+            UNIX_EPOCH + Duration::from_secs(1_000),
+        )
+        .expect_err("fail-closed params must reject verification");
+        assert!(matches!(
+            verify_err,
+            Error::ExpiryWindowTooSmall(Duration::MAX)
+        ));
+    }
+
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
     }
@@ -700,6 +772,32 @@ mod tests {
         )
         .expect_err("expired");
         assert!(matches!(err, Error::Expired(_, _)));
+    }
+
+    #[test]
+    fn mint_rejects_ttl_that_overflows_system_time() {
+        let memory = NonZeroU32::new(8).expect("non-zero memory");
+        let time = NonZeroU32::new(1).expect("non-zero time");
+        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
+        let params = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(u64::MAX),
+            Duration::from_secs(1),
+        )
+        .expect("huge bounds are structurally valid");
+        let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
+        let binding = binding();
+
+        let err = mint_ticket(&params, &binding, Duration::from_secs(u64::MAX), &mut rng)
+            .expect_err("overflowing ttl should fail closed");
+        assert!(matches!(
+            err,
+            MintError::ExpiryTimestampOverflow(ttl)
+                if ttl == Duration::from_secs(u64::MAX)
+        ));
     }
 
     #[test]

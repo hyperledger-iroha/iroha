@@ -306,6 +306,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
             log.get("address"),
             method=f"receipt.logs[{log_index}].address",
             byte_length=20,
+            nonzero=False,
         )
         topics = log.get("topics")
         if not isinstance(topics, Sequence) or isinstance(topics, (str, bytes, bytearray)):
@@ -317,6 +318,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
                 topic,
                 method=f"receipt.logs[{log_index}].topics[{topic_index}]",
                 byte_length=32,
+                nonzero=False,
             )
             for topic_index, topic in enumerate(topics)
         ]
@@ -614,22 +616,25 @@ def _source_event_digest_from_receipt(
             raise RuntimeError("SCCP source event log must contain exactly 2 topics")
         if log.get("data") != "0x":
             raise RuntimeError("SCCP source event log data must be 0x")
-        if log.get("transactionHash") is not None and _rpc_fixed_hex_data(
+        log_transaction_hash = _rpc_fixed_hex_data(
             log.get("transactionHash"),
             method=f"receipt.logs[{index}].transactionHash",
             byte_length=32,
-        ) != transaction_hash:
+        )
+        if log_transaction_hash != transaction_hash:
             raise RuntimeError("source event log transactionHash does not match receipt")
-        if log.get("blockHash") is not None and _rpc_fixed_hex_data(
+        log_block_hash = _rpc_fixed_hex_data(
             log.get("blockHash"),
             method=f"receipt.logs[{index}].blockHash",
             byte_length=32,
-        ) != block_hash:
+        )
+        if log_block_hash != block_hash:
             raise RuntimeError("source event log blockHash does not match receipt")
-        if log.get("blockNumber") is not None and _rpc_quantity(
+        log_block_number = _rpc_quantity(
             log.get("blockNumber"),
             method=f"receipt.logs[{index}].blockNumber",
-        ) != block_number:
+        )
+        if log_block_number != block_number:
             raise RuntimeError("source event log blockNumber does not match receipt")
         digest = _rpc_fixed_hex_data(
             topics[1],

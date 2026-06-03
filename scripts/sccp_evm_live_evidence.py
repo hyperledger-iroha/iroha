@@ -1569,6 +1569,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     destination_binding_hash = evidence._destination_binding_hash_from_args(args)
     rendered = evidence.render_toml(args, destination_binding_hash)
     comments = [
+        "# sccp_evm_block_tag = " + json.dumps(str(summary["block_tag"])),
         "# sccp_evm_rpc_chain_id = " + json.dumps(str(destination["rpc_chain_id"])),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(str(destination["bridge_code_hash"])),

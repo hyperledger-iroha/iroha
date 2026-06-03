@@ -493,13 +493,38 @@ impl Sm2PrivateKey {
 
     /// Derive the SM2 public key corresponding to this private key.
     pub fn public_key(&self) -> Sm2PublicKey {
-        Sm2PublicKey::from_verifying_key(self.signing_key().verifying_key().clone())
+        self.try_public_key()
+            .expect("validated SM2 private key should derive a public key")
+    }
+
+    /// Derive the SM2 public key corresponding to this private key.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] if the stored secret or distinguishing identifier
+    /// can no longer be rebuilt into an SM2 signing key.
+    pub fn try_public_key(&self) -> Result<Sm2PublicKey, ParseError> {
+        Ok(Sm2PublicKey::from_verifying_key(
+            self.try_signing_key()?.verifying_key().clone(),
+        ))
     }
 
     /// Sign a message with this private key using SM2 DSA.
     pub fn sign(&self, message: &[u8]) -> Sm2Signature {
-        let signature = self.signing_key().sign(message);
-        Sm2Signature::from_raw(signature)
+        self.try_sign(message)
+            .expect("validated SM2 private key should sign messages")
+    }
+
+    /// Sign a message with this private key using SM2 DSA.
+    ///
+    /// # Errors
+    /// Returns [`Error::Signing`] if the stored secret or distinguishing
+    /// identifier can no longer be rebuilt into an SM2 signing key.
+    pub fn try_sign(&self, message: &[u8]) -> Result<Sm2Signature, Error> {
+        let signature = self
+            .try_signing_key()
+            .map_err(|err| Error::Signing(err.to_string()))?
+            .sign(message);
+        Ok(Sm2Signature::from_raw(signature))
     }
 
     /// Export the private key as a PKCS#8 DER document.
@@ -507,8 +532,7 @@ impl Sm2PrivateKey {
     /// # Errors
     /// Returns [`ParseError`] when encoding fails.
     pub fn to_pkcs8_der(&self) -> Result<Vec<u8>, ParseError> {
-        SecretKey::from_slice(self.secret.expose_secret().as_ref())
-            .expect("validated secret")
+        self.secret_key()?
             .to_pkcs8_der()
             .map(|doc| doc.as_bytes().to_vec())
             .map_err(|err| {
@@ -527,10 +551,15 @@ impl Sm2PrivateKey {
             .map(|der| encode_pem("PRIVATE KEY", &der))
     }
 
-    fn signing_key(&self) -> SigningKey {
-        let secret =
-            SecretKey::from_slice(self.secret.expose_secret().as_ref()).expect("validated secret");
-        SigningKey::new(&self.distid, &secret).expect("validated secret/distid")
+    fn secret_key(&self) -> Result<SecretKey, ParseError> {
+        SecretKey::from_slice(self.secret.expose_secret().as_ref())
+            .map_err(|_| ParseError("invalid SM2 private key".into()))
+    }
+
+    fn try_signing_key(&self) -> Result<SigningKey, ParseError> {
+        let secret = self.secret_key()?;
+        SigningKey::new(&self.distid, &secret)
+            .map_err(|_| ParseError("invalid SM2 private key or distinguishing identifier".into()))
     }
 
     pub(crate) fn from_secret_key(distid: String, secret: &SecretKey) -> Result<Self, ParseError> {
@@ -1268,6 +1297,25 @@ mod sm_accel {
         }
 
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
+        struct IntrinsicPolicyGuard(super::super::SmIntrinsicPolicy);
+
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
+        impl IntrinsicPolicyGuard {
+            fn set(policy: super::super::SmIntrinsicPolicy) -> Self {
+                let previous = super::super::configured_intrinsic_policy();
+                super::super::set_intrinsic_policy(policy);
+                Self(previous)
+            }
+        }
+
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
+        impl Drop for IntrinsicPolicyGuard {
+            fn drop(&mut self) {
+                super::super::set_intrinsic_policy(self.0);
+            }
+        }
+
+        #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
         fn neon_force_disable_disables_accel() {
             if !sm4_neon::is_supported() {
@@ -1275,6 +1323,8 @@ mod sm_accel {
                 return;
             }
 
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             let key = [0x11u8; 16];
             let block = [0x22u8; 16];
             let baseline = sm4_neon::encrypt_block(&key, &block)
@@ -1344,6 +1394,9 @@ mod sm_accel {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
         fn neon_runtime_parity_when_available() {
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             for seed in parity_seeds() {
                 let (key, block) = parity_case(seed);
                 let Some(accel_enc) = crate::sm::sm_accel::sm4_encrypt_block(&key, &block) else {
@@ -1393,6 +1446,8 @@ mod sm_accel {
                 return;
             }
 
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             let guard = force_disable_all_for_tests();
             assert!(
                 crate::sm::sm_accel::sm3_digest(b"disable-check").is_none(),
@@ -1448,6 +1503,8 @@ mod sm_accel {
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
+
+            let _accel_lock = super::super::test_support::lock_accel_state();
 
             for (index, &(key_bytes, block_bytes)) in SM4_KEY_FIXTURES.iter().enumerate() {
                 let key = Sm4Key::new(key_bytes);
@@ -2230,6 +2287,19 @@ pub fn configured_intrinsic_policy() -> SmIntrinsicPolicy {
     sm_accel::configured_policy()
 }
 
+#[cfg(test)]
+mod test_support {
+    use std::sync::{Mutex, MutexGuard};
+
+    static SM_ACCEL_STATE_LOCK: Mutex<()> = Mutex::new(());
+
+    pub(super) fn lock_accel_state() -> MutexGuard<'static, ()> {
+        SM_ACCEL_STATE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 /// Summary of SM acceleration capabilities at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmAccelerationAdvert {
@@ -2288,19 +2358,27 @@ pub fn intrinsic_policy() -> SmIntrinsicPolicy {
 mod intrinsic_policy_tests {
     use super::{
         SmIntrinsicPolicy, configured_intrinsic_policy, intrinsic_policy, set_intrinsic_policy,
+        test_support,
     };
 
-    struct PolicyGuard(SmIntrinsicPolicy);
+    struct PolicyGuard {
+        previous: SmIntrinsicPolicy,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
 
     impl PolicyGuard {
         fn new() -> Self {
-            Self(configured_intrinsic_policy())
+            let lock = test_support::lock_accel_state();
+            Self {
+                previous: configured_intrinsic_policy(),
+                _lock: lock,
+            }
         }
     }
 
     impl Drop for PolicyGuard {
         fn drop(&mut self) {
-            set_intrinsic_policy(self.0);
+            set_intrinsic_policy(self.previous);
         }
     }
 
@@ -2435,14 +2513,19 @@ pub mod openssl_provider {
         #[cfg(feature = "sm-ffi-openssl")]
         struct PreviewFlagGuard {
             previous: bool,
+            _lock: std::sync::MutexGuard<'static, ()>,
         }
 
         #[cfg(feature = "sm-ffi-openssl")]
         impl PreviewFlagGuard {
             fn set(enabled: bool) -> Self {
+                let lock = super::super::test_support::lock_accel_state();
                 let previous = OpenSslProvider::is_enabled();
                 OpenSslProvider::set_preview_enabled(enabled);
-                Self { previous }
+                Self {
+                    previous,
+                    _lock: lock,
+                }
             }
 
             fn enable() -> Self {
@@ -2831,13 +2914,18 @@ mod tests {
 
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
     impl IntrinsicPolicyGuard {
         fn set(policy: SmIntrinsicPolicy) -> Self {
+            let lock = test_support::lock_accel_state();
             let previous = configured_intrinsic_policy();
             set_intrinsic_policy(policy);
-            Self { previous }
+            Self {
+                previous,
+                _lock: lock,
+            }
         }
     }
 
@@ -2942,6 +3030,7 @@ mod tests {
 
     #[test]
     fn sm3_digest_fallback_produces_expected_bytes() {
+        let _accel_lock = test_support::lock_accel_state();
         let _guard = sm_accel::tests::force_disable_all_for_tests();
         let digest = Sm3Digest::hash(b"abc");
         assert_eq!(hex::encode_upper(digest.as_bytes()), SM3_ABC_HEX);
@@ -2957,6 +3046,7 @@ mod tests {
 
     #[test]
     fn sm4_block_encrypt_fallback_matches_reference_vector() {
+        let _accel_lock = test_support::lock_accel_state();
         let _guard = sm_accel::tests::force_disable_all_for_tests();
         let key = Sm4Key::new(hex_to_array::<16>(SM4_GMT_VECTOR_KEY));
         let block = hex_to_array::<16>(SM4_GMT_VECTOR_BLOCK);
@@ -3144,6 +3234,19 @@ mod tests {
         let signature = private.sign(message);
 
         let public = private.public_key();
+        public
+            .verify(message, &signature)
+            .expect("signature verifies");
+    }
+
+    #[test]
+    fn sm2_try_sign_roundtrip_and_verify() {
+        let private =
+            Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x12; 32]).expect("secret key");
+        let message = b"hello checked sm2";
+        let signature = private.try_sign(message).expect("checked SM2 signing");
+
+        let public = private.try_public_key().expect("checked public key");
         public
             .verify(message, &signature)
             .expect("signature verifies");

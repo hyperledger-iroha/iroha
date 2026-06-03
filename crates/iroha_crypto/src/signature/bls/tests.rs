@@ -63,6 +63,15 @@ fn test_signature_verification_different_keys<
         .expect_err("Signature verification for wrong public key should fail");
 }
 
+#[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+fn test_fallible_paths_reject_corrupted_stored_secret<C: BlsConfiguration>() {
+    let key =
+        super::implementation::ManagedSecretKey::<C>::from_unchecked_bytes_for_test(vec![0; 31]);
+
+    assert!(BlsImpl::<C>::try_sign(MESSAGE_1, &key).is_err());
+    assert!(BlsImpl::<C>::derive_public_key(&key).is_err());
+}
+
 mod normal {
     use super::*;
     #[cfg(feature = "bls-backend-blstrs")]
@@ -185,6 +194,12 @@ mod normal {
     fn parse_private_key_rejects_zero() {
         let zero = [0u8; 32];
         assert!(BlsImpl::<NormalConfiguration>::parse_private_key(&zero).is_err());
+    }
+
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[test]
+    fn fallible_paths_reject_corrupted_stored_secret() {
+        test_fallible_paths_reject_corrupted_stored_secret::<NormalConfiguration>();
     }
 
     #[test]
@@ -407,6 +422,12 @@ mod small {
     fn parse_private_key_rejects_zero() {
         let zero = [0u8; 32];
         assert!(BlsImpl::<SmallConfiguration>::parse_private_key(&zero).is_err());
+    }
+
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    #[test]
+    fn fallible_paths_reject_corrupted_stored_secret() {
+        test_fallible_paths_reject_corrupted_stored_secret::<SmallConfiguration>();
     }
 
     #[test]

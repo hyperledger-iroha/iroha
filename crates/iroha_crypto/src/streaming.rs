@@ -1683,7 +1683,7 @@ impl StreamingSession {
         let shared_secret_bytes = match suite_ephemeral_mechanism(&suite)? {
             EphemeralMechanism::X25519 => {
                 const X25519_PUBLIC_LEN: usize = 32;
-                let state = self.x25519_ephemeral()?;
+                let state = self.ensure_x25519_ephemeral();
                 let remote_bytes: [u8; X25519_PUBLIC_LEN] =
                     frame.pub_ephemeral.as_slice().try_into().map_err(|_| {
                         StreamingCryptoError::InvalidEphemeralPublicKey {
@@ -1858,13 +1858,6 @@ impl StreamingSession {
             .get_or_insert_with(|| EphemeralState::X25519(X25519Ephemeral::new_random()));
         match state {
             EphemeralState::X25519(inner) => inner,
-        }
-    }
-
-    fn x25519_ephemeral(&self) -> Result<&X25519Ephemeral, HandshakeError> {
-        match self.local_ephemeral.as_ref() {
-            Some(EphemeralState::X25519(inner)) => Ok(inner),
-            None => Err(HandshakeError::MissingX25519LocalEphemeral),
         }
     }
 

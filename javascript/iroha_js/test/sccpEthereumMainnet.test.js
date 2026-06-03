@@ -251,6 +251,44 @@ test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
     receiptTrieProof.receiptRlp,
     `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
   );
+  const zeroTopicReceiptTrieProof = buildEvmReceiptTrieProofFromReceipts(
+    [
+      receipt,
+      fullReceipt(1, {
+        logs: [
+          {
+            address: `0x${"12".repeat(20)}`,
+            topics: [hex32("00")],
+            data: "0x",
+          },
+        ],
+      }),
+    ],
+    { transactionIndex: 0 },
+  );
+  assert.equal(
+    zeroTopicReceiptTrieProof.receiptRlp,
+    `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
+  );
+  const zeroAddressReceiptTrieProof = buildEvmReceiptTrieProofFromReceipts(
+    [
+      receipt,
+      fullReceipt(1, {
+        logs: [
+          {
+            address: `0x${"00".repeat(20)}`,
+            topics: [hex32("44")],
+            data: "0x",
+          },
+        ],
+      }),
+    ],
+    { transactionIndex: 0 },
+  );
+  assert.equal(
+    zeroAddressReceiptTrieProof.receiptRlp,
+    `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
+  );
   assert.match(receiptTrieProof.receiptsRoot, /^0x[0-9a-f]{64}$/u);
   assert.ok(receiptTrieProof.receiptTrieProofNodes.length > 0);
   assert.throws(
@@ -598,6 +636,55 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       },
       ...extra,
     });
+  const streamResponse = (chunks, extra = {}) => ({
+    ok: true,
+    body: {
+      getReader() {
+        let index = 0;
+        return {
+          async read() {
+            if (index >= chunks.length) return { done: true };
+            const value = chunks[index];
+            index += 1;
+            return { done: false, value };
+          },
+          async cancel() {},
+          releaseLock() {},
+        };
+      },
+    },
+    ...extra,
+  });
+
+  assert.throws(
+    () =>
+      new EthereumMainnetBeaconRestConsensusProvider({
+        endpoint: "https://beacon.example",
+        verifyFinalityCheckpoint: 0,
+      }),
+    /verifyFinalityCheckpoint must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence(
+        { block },
+        { verify_finality_checkpoint: "false" },
+      ),
+    /verifyFinalityCheckpoint must be a boolean/u,
+  );
+
+  const unchecked = await providerFor(
+    { ok: true, json: async () => validHeader() },
+    {
+      ok: true,
+      json: async () => ({
+        ...validCheckpoint(),
+        data: { finalized: { root: hex32("99"), epoch: "2" } },
+      }),
+    },
+  ).collectFinalityEvidence({ block }, { verifyFinalityCheckpoint: false });
+  assert.equal(unchecked.finalizedHeaderRoot, hex32("dd"));
 
   await assert.rejects(
     () => providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence({}),
@@ -613,6 +700,67 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
 
   await assert.rejects(
     () =>
+      providerFor({ ok: "false", status: 200, json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /response ok must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ status: "503", json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /response status must be an integer/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ status: 503, statusText: "Unavailable", json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /request failed 503 Unavailable/u,
+  );
+
+  const textEvidence = await providerFor(
+    { ok: true, text: async () => JSON.stringify(validHeader()) },
+    { ok: true, text: async () => JSON.stringify(validCheckpoint()) },
+  ).collectFinalityEvidence({ block });
+  assert.equal(textEvidence.finalizedHeaderRoot, hex32("dd"));
+
+  const streamEvidence = await providerFor(
+    streamResponse([Buffer.from(JSON.stringify(validHeader()))]),
+    streamResponse([Buffer.from(JSON.stringify(validCheckpoint()))]),
+  ).collectFinalityEvidence({ block });
+  assert.equal(streamEvidence.finalizedHeaderRoot, hex32("dd"));
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, text: async () => "x".repeat(1024 * 1024 + 1) })
+        .collectFinalityEvidence({ block }),
+    /response body must be at most/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(streamResponse([Buffer.alloc(1024 * 1024), Buffer.from("x")]))
+        .collectFinalityEvidence({ block }),
+    /response body must be at most/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(streamResponse(["not bytes"]))
+        .collectFinalityEvidence({ block }),
+    /response body chunks must be bytes/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, text: async () => JSON.stringify([]) })
+        .collectFinalityEvidence({ block }),
+    /response JSON must be an object/u,
+  );
+
+  await assert.rejects(
+    () =>
       providerFor({ ok: true, json: async () => ({ ...validHeader(), execution_optimistic: true }) })
         .collectFinalityEvidence({ block }),
     /must not be execution optimistic/u,
@@ -620,9 +768,42 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
 
   await assert.rejects(
     () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), execution_optimistic: "false" }) })
+        .collectFinalityEvidence({ block }),
+    /execution_optimistic must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), executionOptimistic: 0 }) })
+        .collectFinalityEvidence({ block }),
+    /executionOptimistic must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
       providerFor({ ok: true, json: async () => ({ ...validHeader(), finalized: false }) })
         .collectFinalityEvidence({ block }),
     /must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), finalized: "true" }) })
+        .collectFinalityEvidence({ block }),
+    /finalized must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => ({
+          ...validHeader(),
+          data: { ...validHeader().data, canonical: "true" },
+        }),
+      }).collectFinalityEvidence({ block }),
+    /canonical must be a boolean/u,
   );
 
   await assert.rejects(
@@ -1406,6 +1587,24 @@ test("EthereumMainnetSccp keeps the easy outbound path Ethereum-only", () => {
       }),
     /SORA/u,
   );
+});
+
+test("Ethereum outbound prover callback must not see BSC requests", async () => {
+  let outboundProverCalled = false;
+  const sdk = new EthereumMainnetSccp({
+    outboundProver: {
+      async prove(request) {
+        outboundProverCalled = true;
+        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => sdk.proveOutboundToEthereum(sampleOutboundInput(SCCP_DOMAIN_BSC)),
+    /request route|targetDomain|Ethereum mainnet/u,
+  );
+  assert.equal(outboundProverCalled, false);
 });
 
 test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof result", () => {

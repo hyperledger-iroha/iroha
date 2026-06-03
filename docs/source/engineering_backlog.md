@@ -51,7 +51,18 @@ track detailed unfinished engineering work.
   the full BFV-RNS modulus-chain, packed Galois-switching, and bootstrapping
   key bundle.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
-  checks into the next full workspace and SDK corridor. Focused adversarial
+  checks into the next full workspace and SDK corridor. The `iroha_cli
+  --all-targets` strict clippy gate now covers the governance-instruction, IVM
+  contract deploy, and Taikai helper targets after the previously failing
+  length/time arithmetic paths were made warning-clean. The `iroha_crypto
+  --all-targets` strict clippy gate is also green after the SoraNet
+  token/handshake and RAM-LFE test-target warning blockers were cleared. The
+  non-default GOST, SM, forced-NEON SM, SM OpenSSL provider, Rayon-backed
+  Merkle, secp256k1 MSM-batch, BLS multi-pairing, FFI export, and crypto
+  parity-test feature corridors now also pass strict `iroha_crypto
+  --all-targets` clippy and focused library tests, with SM acceleration and
+  OpenSSL preview tests serialized around their test-only runtime dispatch
+  overrides. Focused adversarial
   tests now cover malformed/truncated ciphertext envelopes, hidden-program
   shape/overflow rejection, replayed/tampered/future/expired/wrong-verifier
   openings, receipt-signing/backend mismatch refusal, adversarial BFV public
@@ -105,13 +116,22 @@ track detailed unfinished engineering work.
   now keeps two entries per exact slot to reduce collision churn for 32-byte
   transaction-hash verification tuples without returning to a process-wide
   cache;
+  SoraNet relay handshake frame length-prefix writes now use a checked helper
+  plus a compile-time `u16` maximum-frame assertion, so oversized relay hellos
+  fail as `FrameTooLarge` instead of relying on a narrowing assertion;
+  SoraNet constant-rate scheduler dequeue now handles unexpected empty queues
+  explicitly and falls through to the dummy-cell path instead of using
+  panic-only queue-pop assertions;
   ML-DSA public-key reconstruction from private-key material now has a
   fallible API, and `KeyPair::from_private_key` uses it so length-valid but
   internally inconsistent ML-DSA secrets return `KeyGen` instead of panicking;
+  ML-DSA seeded-keygen HKDF expansion now propagates `Error::KeyGen` through
+  the existing `Result` path instead of relying on a panic-only assertion;
   `PublicKey::try_to_*` and `ExposedPrivateKey::try_to_*` now expose fallible
-  public/private key formatting, and ML-DSA import plus `Signature::try_new`
-  reject secrets whose recomputed public material or embedded `tr = H(pk)`
-  public hash is inconsistent before signing;
+  public/private key formatting, `Signature::try_new` now routes SM2 through
+  checked private-key rebuild/signing helpers, and ML-DSA import plus
+  `Signature::try_new` reject secrets whose recomputed public material or
+  embedded `tr = H(pk)` public hash is inconsistent before signing;
   SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
   direct validation and direct/OS-backed signing, and expose fallible public-key
   reconstruction from secret material;
@@ -121,17 +141,35 @@ track detailed unfinished engineering work.
   duplicate signer keys before PoP verification/cache work and no longer fall
   back to per-signature verification after aggregate rejection; distinct-message
   aggregate verification rejects duplicate messages and aggregate signatures
-  that cancel to the identity before batch verification. The blstrs feature
+  that cancel to the identity before batch verification, and the blstrs feature
+  backend compressed G1/G2 public-key decoders now use explicit `CtOption` to
+  `Option` handling instead of panic-only unwrap assumptions. The blstrs feature
   backend also reuses the w3f signing/message semantics for normal, small,
   same-message, preaggregated, and distinct-message aggregate verification so
-  backend choice does not change accepted signatures;
+  backend choice does not change accepted signatures, and the feature-gated
+  `iroha_crypto --all-targets` strict clippy corridor now covers the blstrs BLS
+  test targets while the default w3f `bls` all-targets corridor is also green
+  after removing an unused panic-only secret-key wrapper. The default w3f BLS
+  backend now exposes fallible secret reload, signing, and public-key derivation
+  helpers, and top-level BLS signing, proof-of-possession proving, and
+  public-key derivation route through checked paths on `Result`-returning APIs;
+  BLS VRF proof construction now returns `Result`, rejects invalid stored
+  secret scalars before signing for both Normal and Small variants, and uses
+  checked compressed-proof decoding so malformed G1/G2 proof encodings fail
+  closed without `CtOption::unwrap`, with
+  governance VRF candidate generation handling those errors directly instead of
+  relying on `catch_unwind`; Merkle leaf iteration now stops cleanly on an
+  unexpected missing leaf slot instead of relying on panic-only internal layout
+  assertions, while decoded tree layout validation remains strict;
   X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
   keys, and the standalone key-exchange surface now reject low-order encodings
   before ECDH while retaining all-zero shared-secret fallback checks, and
+  X25519 session-key derivation now maps HKDF expansion failures through the
+  shared-secret `Result` path instead of using a panic-only assertion;
   Kotlin/Java Connect X25519 direction-key derivation now maps provider
-  low-order agreement failures into `ConnectProtocolException`, while the native
-  Connect bridge FFI rejects the same low-order peer key without touching output
-  buffers;
+  low-order agreement failures into `ConnectProtocolException`, while the
+  native Connect bridge FFI rejects the same low-order peer key without touching
+  output buffers;
   Kotlin/Java Connect nonce, frame/envelope codec, and queue journal paths now
   reject negative signed sequence values before nonce/AAD construction,
   encoding, decode handoff, or journal persistence, high-bit `uint64` frame
@@ -144,6 +182,10 @@ track detailed unfinished engineering work.
   Soracloud uploaded-model `X25519HkdfSha256` admission now requires exact
   32-byte recipient and ephemeral public keys and routes both through the same
   low-order decoder before bundle registration;
+  confidential key hierarchy derivation now reports HKDF expansion failures via
+  `Result`-returning helpers instead of panic-only assertions, and the CLI
+  `create-keys` path now propagates those failures through normal command
+  errors instead of a post-length-check `expect`;
   confidential encrypted shield payloads now require supported versions,
   non-empty ciphertext, and low-order-free X25519 ephemeral keys before
   `Shield` execution burns public balance or records note commitments, and the
@@ -238,18 +280,40 @@ track detailed unfinished engineering work.
   encapsulation, client/relay capability vectors must now fit the
   length-prefixed handshake field before client RNG or frame construction,
   transcript hashing now rejects capability vectors that cannot fit its fixed
-  `u32` length field before hashing, and suite-list capability TLV re-encoding
-  now rejects oversized values through `update_suite_list` before encoded
-  capabilities are emitted; PoW
-  ticket verification,
+  `u32` length field before hashing, len-prefixed handshake message parsing
+  now reads frame fields through checked cursor ranges, capability TLV parsing
+  now reads headers and value spans through checked cursor helpers, and
+  suite-list capability TLV re-encoding now rejects oversized values through
+  `update_suite_list` before encoded capabilities are emitted; deterministic
+  handshake fixture and telemetry signature rendering now uses checked base64
+  output lengths and fallible slice encoding before returning `prefix:base64`
+  witness strings; PoW
+  ticket parsing now reads fixed fields through checked cursor helpers, ticket verification,
   signed-ticket verification, ticket
   minting, and Argon2 puzzle verification/minting now reject malformed
   descriptor, relay-id, or transcript binding field lengths before challenge
   derivation, solution search, Argon2 work, or public-key validation;
   PoW and Argon2 puzzle policy parameters now expose fallible constructors for
   runtime config loaders so zero minimum TTLs and inverted future-skew bounds
-  fail closed without panicking, and p2p SoraNet runtime construction now uses
-  those fallible constructors for config-derived PoW/puzzle bounds; P2P
+  fail closed without panicking, and their compatibility `new` constructors now
+  return fail-closed policies instead of unwinding on invalid timing bounds; PoW
+  ticket minting, Argon2 puzzle minting, and
+  revocation-store insertion now reject unrepresentable expiry timestamps
+  through checked `SystemTime` conversion, and p2p SoraNet runtime construction
+  now uses those fallible constructors for config-derived PoW/puzzle bounds;
+  relay capability advertisement and runtime GREASE append now check TLV payload
+  lengths before writing the two-byte length field, and relay config validation
+  rejects configured GREASE payloads that cannot fit that wire field;
+  relay
+  replay-filter bit counts are now bounded before power-of-two rounding, and
+  direct replay-filter construction plus `DoSControls::new` now propagate
+  oversized filter shapes as `ConfigError::ReplayFilter` instead of reaching
+  overflow-prone arithmetic; relay incentive uptime/scheduled-uptime and
+  verified-bandwidth epoch accumulators now saturate on overflow instead of
+  panicking on extreme telemetry or proof totals; relay adaptive PoW
+  success/failure window counters and difficulty-step arithmetic now saturate
+  before min/max clamping, avoiding panic-only overflow paths under extreme
+  counters or oversized adaptive-step config; P2P
   QUIC/TCP happy-eyeballs dialing now records the first branch failure and
   returns the second branch failure directly when both dials fail, avoiding
   panic-only option readbacks in the fallback path; SoraNet CID
@@ -264,16 +328,24 @@ track detailed unfinished engineering work.
   shape and the fingerprint `u32` key-length field now checked before
   fingerprint derivation, and rejects empty issuer or relay sets before
   trust-map construction or relay certificate verification;
-  SoraNet admission-token decode now reads fixed-width body fields through
-  checked cursor helpers so malformed token prefixes return decode errors
-  instead of relying on manual slice invariants;
+  SoraNet admission-token decode now reads fixed-width body fields and trailing
+  signature spans through checked cursor helpers so malformed token prefixes
+  return decode errors instead of relying on manual slice invariants; admission
+  tokens now expose `try_encode`, and the compatibility encoder fails closed to
+  a malformed frame when impossible direct token state cannot fit the v1
+  signature-length prefix;
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer
   public-key and detached-signature lengths before backend verification or
   replay-store mutation; admission-token verifier construction exposes a
   fallible path that rejects malformed issuer public keys before fingerprint
-  derivation or runtime state admission;
+  derivation or runtime state admission, and the compatibility constructor now
+  keeps malformed issuer keys as fail-closed verifier state that is rejected
+  during ML-DSA preflight before backend signature work or replay-store mutation;
+  admission-token decode now rejects unrepresentable `issued_at`/`expires_at`
+  UNIX-second fields before downstream relay tools can attempt unchecked
+  `SystemTime` conversion;
   admission-token minting now
   preflights issuer ML-DSA secret-key length before nonce generation, body
   construction, or backend signing; SoraNet SRCv2 bundle
@@ -290,7 +362,11 @@ track detailed unfinished engineering work.
   public keys, rejects ML-DSA-65 detached signature length drift, and its
   canonical CBOR parser rejects trailing payload/bundle bytes plus non-shortest
   integer/length encodings and duplicate nested
-  bundle/signature/endpoint/KEM-policy fields; guard-directory relay entries
+  bundle/signature/endpoint/KEM-policy fields, with byte/text/exact payload
+  reads routed through checked cursor helpers; SRCv2 validity-duration accessors
+  now use checked signed timestamp subtraction, expose a checked route for
+  callers, and fail closed to `Duration::ZERO` for directly constructed inverted
+  or unrepresentable windows; guard-directory relay entries
   now parse as SRCv2 bundles and must bind to a known snapshot issuer, the
   snapshot directory hash, and a unique relay ID, with relay certificate
   signatures verified against embedded issuer keys under the snapshot
@@ -386,10 +462,32 @@ track detailed unfinished engineering work.
 
 - Rerun the full SoraFS data-model, core pin-registry, Torii storage-pin, and
   gateway policy suites under the next long validation budget. Focused coverage
-  is now green for the paid-pin adversarial cases; remaining breadth should
-  include historical fee receipt acceptance after governance pricing changes,
-  manifest envelope validation, admission fail-closed, streaming CAR range
-  coverage, and SDK validation once Java is available.
+  is now green for the paid-pin adversarial cases, and SoraFS proof-token
+  decode now uses checked cursor reads for fixed-width moderation-token fields
+  with truncated-prefix regression coverage while rejecting unrepresentable
+  issued/expiry UNIX-second fields before `SystemTime` conversion; proof-token
+  body encoding now exposes `try_encode`, routes mint/signature/digest helpers
+  through checked entry-count and entry-length narrowing, and makes the
+  compatibility `encode` path fail closed to a malformed frame for impossible
+  direct token states; proof-token base64 header encoding/decoding now uses the
+  `base64` crate's checked no-alloc slice helpers instead of manual capacity
+  arithmetic and panic-only buffer assertions; remaining breadth should include
+  historical fee receipt acceptance after governance pricing changes, manifest
+  envelope validation, admission fail-closed, streaming CAR range coverage, and
+  SDK validation once Java is available.
+
+## Norito columnar and streaming validation follow-ups
+
+- Fold the focused NCB row-count prefix regression into the next full Norito and
+  workspace validation budget. Columnar `u64` combo views now read their `u32`
+  row-count prefix through a shared checked helper, so truncated prefixes return
+  `Error::LengthMismatch` on the normal decode path. Streaming baseline RLE
+  block decode now reads DC differences and AC records through checked helpers,
+  keeping truncated or overflowed cursor state on `CodecError::TruncatedBlock`
+  before offset advancement, and baseline frame/chroma metadata uses checked
+  fixed-width readers before chunk payload slicing. Bundled rANS SIMD stream
+  lane lengths also use a checked prefix reader before cursor advancement or
+  lane slicing.
 
 ## ZK audit validation follow-ups
 

@@ -2378,14 +2378,6 @@ pub mod isi {
                         "recursive Kagemusha spend verifier key is not registered",
                     )
                 })?;
-            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
-                &self.bundle,
-                &recursive_record,
-            )
-            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-            state_transaction
-                .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
-
             let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
                 &def_id,
                 &self.redeem_proof,
@@ -2396,6 +2388,14 @@ pub mod isi {
                 state_transaction,
                 &redeem_record,
             )?;
+            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
+                &self.bundle,
+                &recursive_record,
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+            state_transaction
+                .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
+
             if let Some(lineage_witness) = &self.lineage_witness {
                 ensure_kagemusha_recursive_lineage_verifier_records_registered(
                     lineage_witness,

@@ -236,6 +236,37 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
+    private final class EthereumMainnetBeaconRestURLProtocol: URLProtocol {
+        static var response: (statusCode: Int, headers: [String: String], body: Data)?
+
+        override class func canInit(with request: URLRequest) -> Bool {
+            true
+        }
+
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+            request
+        }
+
+        override func startLoading() {
+            guard let response = Self.response,
+                  let url = request.url,
+                  let http = HTTPURLResponse(
+                    url: url,
+                    statusCode: response.statusCode,
+                    httpVersion: nil,
+                    headerFields: response.headers
+                  ) else {
+                client?.urlProtocol(self, didFailWithError: EvmSccpProverError.invalidPublicInputs("beaconRest.response"))
+                return
+            }
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: response.body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+
     private static func ethereumBeaconHeaderJson(finalizedHeaderRoot: String = "0x" + String(repeating: "dd", count: 32),
                                                  slot: String = "32",
                                                  executionOptimistic: Bool = false,
@@ -8833,6 +8864,21 @@ final class SccpSolanaProverTests: XCTestCase {
         } catch let error as EvmSccpProverError {
             XCTAssertEqual(error, .invalidPublicInputs("sourceDomain"))
         }
+
+        var outboundProverCalled = false
+        let guardedProveFacade = EthereumMainnetSccp(proveFunction: { _ in
+            outboundProverCalled = true
+            return proofBytes
+        })
+        do {
+            _ = try await guardedProveFacade.proveOutboundToEthereum(Self.sampleEvmProofRequestInput(
+                publicInputs: Self.sampleEvmPublicInputs(targetDomain: sccpDomainBsc)
+            ))
+            XCTFail("Ethereum outbound prover callback must not see BSC requests")
+        } catch let error as EvmSccpProverError {
+            XCTAssertEqual(error, .invalidPublicInputs("request.targetDomain"))
+        }
+        XCTAssertFalse(outboundProverCalled)
     }
 
     func testEthereumMainnetSccpBuildsLocalAdmissionSubmission() throws {
@@ -9020,15 +9066,15 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         let syncCommitteeRoot = try ethSyncCommitteeHashFromPayload(payload: syncCommitteePayload)
         let transport = EthereumMainnetBeaconRestTransportStub(responses: [
-            "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "32")
             ),
-            "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints": Self.ethereumBeaconResponse(
+            "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconCheckpointJson(finalizedHeaderRoot: finalizedHeaderRoot)
             ),
         ])
         let provider = try EthereumMainnetBeaconRestConsensusProvider(
-            endpoint: "https://beacon.example/eth/v1",
+            endpoint: "https://beacon.example/eth/v1?token=rpc",
             syncCommitteeRoot: syncCommitteeRoot,
             syncCommitteePayload: syncCommitteePayload,
             headers: ["Authorization": "Bearer rpc"],
@@ -9051,10 +9097,60 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(finality["syncCommitteeRoot"] as? String, syncCommitteeRoot)
         XCTAssertEqual(finality["beaconSlot"] as? String, "32")
         XCTAssertEqual(transport.calls.map { $0.url }, [
-            "https://beacon.example/eth/v1/beacon/headers/finalized",
-            "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
+            "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc",
+            "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc",
         ])
         XCTAssertEqual(transport.calls.map { $0.headers["Authorization"] }, ["Bearer rpc", "Bearer rpc"])
+    }
+
+    func testEthereumMainnetBeaconRestURLSessionTransportRejectsOversizedBodies() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [EthereumMainnetBeaconRestURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            EthereumMainnetBeaconRestURLProtocol.response = nil
+            session.invalidateAndCancel()
+        }
+        EthereumMainnetBeaconRestURLProtocol.response = (
+            statusCode: 200,
+            headers: ["Content-Length": String(1024 * 1024 + 1)],
+            body: Data(repeating: 0x7b, count: 1024 * 1024 + 1)
+        )
+        let transport = EthereumMainnetBeaconRestURLSessionTransport(session: session)
+        do {
+            _ = try await transport.get(
+                url: URL(string: "https://beacon.example/oversized")!,
+                headers: ["Authorization": "Bearer rpc"]
+            )
+            XCTFail("expected oversized Beacon REST response to fail")
+        } catch {
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("beaconRest.response"))
+        }
+    }
+
+    func testEthereumMainnetBeaconRestURLSessionTransportRejectsOversizedBodiesWithoutContentLength() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [EthereumMainnetBeaconRestURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            EthereumMainnetBeaconRestURLProtocol.response = nil
+            session.invalidateAndCancel()
+        }
+        EthereumMainnetBeaconRestURLProtocol.response = (
+            statusCode: 200,
+            headers: [:],
+            body: Data(repeating: 0x7b, count: 1024 * 1024 + 1)
+        )
+        let transport = EthereumMainnetBeaconRestURLSessionTransport(session: session)
+        do {
+            _ = try await transport.get(
+                url: URL(string: "https://beacon.example/oversized")!,
+                headers: ["Authorization": "Bearer rpc"]
+            )
+            XCTFail("expected oversized Beacon REST response to fail")
+        } catch {
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("beaconRest.response"))
+        }
     }
 
     func testEthereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality() async throws {
@@ -9104,6 +9200,11 @@ final class SccpSolanaProverTests: XCTestCase {
             )
         }
 
+        func malformedHeader(replacing needle: String, with replacement: String) -> Data {
+            let json = String(decoding: Self.ethereumBeaconHeaderJson(), as: UTF8.self)
+            return Data(json.replacingOccurrences(of: needle, with: replacement).utf8)
+        }
+
         await assertEvmError(.invalidPublicInputs("beaconRest.block")) {
             _ = try await provider(header: Self.ethereumBeaconHeaderJson()).collectFinalityEvidence(
                 receipt: nil,
@@ -9117,9 +9218,44 @@ final class SccpSolanaProverTests: XCTestCase {
                 statusCode: 503
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
         }
+        await assertEvmError(.invalidPublicInputs("beaconRest.response")) {
+            _ = try await provider(
+                header: Data(repeating: 0x7b, count: 1024 * 1024 + 1)
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
         await assertEvmError(.invalidPublicInputs("beaconRest.finalizedHeader")) {
             _ = try await provider(
                 header: Self.ethereumBeaconHeaderJson(executionOptimistic: true)
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST finalized header.execution_optimistic")
+        ) {
+            _ = try await provider(
+                header: malformedHeader(
+                    replacing: "\"execution_optimistic\": false",
+                    with: "\"execution_optimistic\": \"false\""
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST finalized header.finalized")
+        ) {
+            _ = try await provider(
+                header: malformedHeader(
+                    replacing: "\"finalized\": true",
+                    with: "\"finalized\": \"true\""
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST finalized header.canonical")
+        ) {
+            _ = try await provider(
+                header: malformedHeader(
+                    replacing: "\"canonical\": true",
+                    with: "\"canonical\": \"true\""
+                )
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
         }
         await assertEvmError(.invalidPublicInputs("beaconRest.finalizedHeader")) {
@@ -9208,6 +9344,28 @@ final class SccpSolanaProverTests: XCTestCase {
             transactionIndex: "0x1"
         )
         XCTAssertEqual(secondProof.receiptTrieKey, "0x01")
+        var zeroTopicReceipt = legacyReceipt
+        zeroTopicReceipt["logs"] = [[
+            "address": "0x" + String(repeating: "12", count: 20),
+            "topics": ["0x" + String(repeating: "00", count: 32)],
+            "data": "0x",
+        ]]
+        let zeroTopicProof = try buildEvmReceiptTrieProofFromReceipts(
+            [typedReceipt, zeroTopicReceipt],
+            transactionIndex: "0x0"
+        )
+        XCTAssertEqual(zeroTopicProof.receiptRlp, "0x" + typedReceiptRlp.hexEncodedString())
+        var zeroAddressReceipt = legacyReceipt
+        zeroAddressReceipt["logs"] = [[
+            "address": "0x" + String(repeating: "00", count: 20),
+            "topics": ["0x" + String(repeating: "44", count: 32)],
+            "data": "0x",
+        ]]
+        let zeroAddressProof = try buildEvmReceiptTrieProofFromReceipts(
+            [typedReceipt, zeroAddressReceipt],
+            transactionIndex: "0x0"
+        )
+        XCTAssertEqual(zeroAddressProof.receiptRlp, "0x" + typedReceiptRlp.hexEncodedString())
 
         var wrongReceiptIndex = typedReceipt
         wrongReceiptIndex["transactionIndex"] = "0x1"
@@ -12609,6 +12767,7 @@ final class SccpSolanaProverTests: XCTestCase {
             evmReceiptRootMptValueHex
         )
         XCTAssertThrowsError(try canonicalEvmReceiptRootMptValue(receiptRoot: "1234"))
+        XCTAssertThrowsError(try canonicalEvmReceiptRootMptValue(receiptRoot: zeroHash))
         XCTAssertEqual(
             try canonicalTronReceiptRootMptValue(receiptRoot: String(repeating: "bb", count: 32)).hexEncodedString(),
             "f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0" + String(repeating: "bb", count: 32)

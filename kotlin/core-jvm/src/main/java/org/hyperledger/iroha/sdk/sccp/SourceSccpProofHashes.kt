@@ -2260,7 +2260,7 @@ object SccpSourceProofs {
             rlpList(
                 listOf(
                     rlpBytes(EVM_RECEIPT_ROOT_VALUE_MARKER),
-                    rlpBytes(hex32Bytes(receiptRoot, "receiptRoot")),
+                    rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")),
                 ),
             )
         require(value.isNotEmpty() && value.size <= EVM_MAX_RECEIPT_VALUE_BYTES) {
@@ -5031,6 +5031,7 @@ object SccpSourceProofs {
                             log["address"],
                             "receipt.logs[$index].address",
                             byteLength = 20,
+                            nonzero = false,
                         ),
                     ),
                     rlpList(
@@ -5040,6 +5041,7 @@ object SccpSourceProofs {
                                     topic,
                                     "receipt.logs[$index].topics[$topicIndex]",
                                     byteLength = 32,
+                                    nonzero = false,
                                 ),
                             )
                         },

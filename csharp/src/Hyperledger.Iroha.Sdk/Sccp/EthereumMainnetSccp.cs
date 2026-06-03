@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO;
 using System.Net.Http;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -752,10 +753,10 @@ public static class EthereumMainnetSccp
         payload.Write(RpcHexToBytes(sourceEventDigest, nameof(sourceEventDigest), 32));
         payload.Write(LeU64(beaconSlot));
         payload.Write(LeU64(executionBlockNumber));
-        payload.Write(RpcHexToBytes(executionBlockHash, nameof(executionBlockHash), 32, allowZero: true));
-        payload.Write(RpcHexToBytes(executionReceiptsRoot, nameof(executionReceiptsRoot), 32, allowZero: true));
-        payload.Write(RpcHexToBytes(beaconFinalizedRoot, nameof(beaconFinalizedRoot), 32, allowZero: true));
-        payload.Write(RpcHexToBytes(syncCommitteeRoot, nameof(syncCommitteeRoot), 32, allowZero: true));
+        payload.Write(RpcHexToBytes(executionBlockHash, nameof(executionBlockHash), 32));
+        payload.Write(RpcHexToBytes(executionReceiptsRoot, nameof(executionReceiptsRoot), 32));
+        payload.Write(RpcHexToBytes(beaconFinalizedRoot, nameof(beaconFinalizedRoot), 32));
+        payload.Write(RpcHexToBytes(syncCommitteeRoot, nameof(syncCommitteeRoot), 32));
         payload.Write(LeU64(receiptRootIndex));
         payload.Write(LeU32(nodes.Count));
         foreach (var node in nodes)
@@ -2180,7 +2181,7 @@ public static class EthereumMainnetSccp
                     topic,
                     $"receipt.logs[{index}].topics[{topicIndex}]",
                     byteLength: 32,
-                    nonZero: true,
+                    nonZero: false,
                     allowEmpty: false)))
                 .ToArray();
             encodedLogs[index] = RlpList([
@@ -2188,7 +2189,7 @@ public static class EthereumMainnetSccp
                     FirstPresent(log, "address"),
                     $"receipt.logs[{index}].address",
                     byteLength: 20,
-                    nonZero: true,
+                    nonZero: false,
                     allowEmpty: false)),
                 RlpList(topicFields),
                 RlpBytes(EthereumRpcHexBytes(
@@ -4068,6 +4069,8 @@ public interface IEthereumMainnetBeaconRestTransport
 public sealed class EthereumMainnetBeaconRestHttpTransport(HttpClient? httpClient = null)
     : IEthereumMainnetBeaconRestTransport
 {
+    private const int BeaconRestMaxResponseBytes = 1024 * 1024;
+
     private readonly HttpClient httpClient = httpClient ?? new HttpClient();
 
     public async ValueTask<EthereumMainnetBeaconRestResponse> GetAsync(
@@ -4080,17 +4083,49 @@ public sealed class EthereumMainnetBeaconRestHttpTransport(HttpClient? httpClien
         {
             request.Headers.TryAddWithoutValidation(name, value);
         }
-        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        using var response = await httpClient
+            .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+            .ConfigureAwait(false);
+        if (response.Content.Headers.ContentLength is > BeaconRestMaxResponseBytes)
+        {
+            throw new ArgumentException(
+                $"Ethereum mainnet Beacon REST response body must be at most {BeaconRestMaxResponseBytes} bytes");
+        }
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        var body = await ReadBodyAsync(stream, cancellationToken).ConfigureAwait(false);
         return new EthereumMainnetBeaconRestResponse(
             (int)response.StatusCode,
             body,
             response.ReasonPhrase);
     }
+
+    private static async ValueTask<byte[]> ReadBodyAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var outStream = new MemoryStream();
+        var buffer = new byte[8192];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+            if (outStream.Length + read > BeaconRestMaxResponseBytes)
+            {
+                throw new ArgumentException(
+                    $"Ethereum mainnet Beacon REST response body must be at most {BeaconRestMaxResponseBytes} bytes");
+            }
+            outStream.Write(buffer, 0, read);
+        }
+        return outStream.ToArray();
+    }
 }
 
 public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainnetConsensusProvider
 {
+    private const int BeaconRestMaxResponseBytes = 1024 * 1024;
+
     private readonly Uri endpoint;
     private readonly string syncCommitteeRoot;
     private readonly IReadOnlyDictionary<string, string> headers;
@@ -4156,12 +4191,9 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         var headerData = RequireObject(
             RequireProperty(headerRoot, "Ethereum mainnet Beacon REST finalized header", "data"),
             "Ethereum mainnet Beacon REST finalized header.data");
-        if (headerData.TryGetProperty("canonical", out var canonical)
-            && canonical.ValueKind == JsonValueKind.False)
-        {
-            throw new ArgumentException(
-                "Ethereum mainnet Beacon REST finalized header must be canonical");
-        }
+        RejectNonBooleanBeaconRestCanonical(
+            headerData,
+            "Ethereum mainnet Beacon REST finalized header");
         var finalizedHeaderRoot = NormalizeRpcHex(
             RequireString(
                 RequireProperty(headerData, "Ethereum mainnet Beacon REST finalized header.data", "root"),
@@ -4250,9 +4282,20 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             var suffix = string.IsNullOrEmpty(response.StatusMessage) ? string.Empty : $" {response.StatusMessage}";
             throw new ArgumentException($"{label} request failed {response.StatusCode}{suffix}");
         }
+        if (response.Body.Length > BeaconRestMaxResponseBytes)
+        {
+            throw new ArgumentException(
+                $"{label} response body must be at most {BeaconRestMaxResponseBytes} bytes");
+        }
         try
         {
-            return JsonDocument.Parse(response.Body);
+            var document = JsonDocument.Parse(response.Body);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                document.Dispose();
+                throw new ArgumentException($"{label} response JSON must be an object");
+            }
+            return document;
         }
         catch (JsonException ex)
         {
@@ -4349,18 +4392,39 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
 
     private static void RejectUnsafeBeaconRestPayload(JsonElement payload, string label)
     {
-        if ((payload.TryGetProperty("execution_optimistic", out var optimistic)
-                && optimistic.ValueKind == JsonValueKind.True)
-            || (payload.TryGetProperty("executionOptimistic", out var optimisticAlias)
-                && optimisticAlias.ValueKind == JsonValueKind.True))
+        var optimistic = OptionalBeaconRestBoolean(payload, "execution_optimistic", label);
+        var optimisticAlias = OptionalBeaconRestBoolean(payload, "executionOptimistic", label);
+        var finalized = OptionalBeaconRestBoolean(payload, "finalized", label);
+        if (optimistic == true || optimisticAlias == true)
         {
             throw new ArgumentException($"{label} must not be execution optimistic");
         }
-        if (payload.TryGetProperty("finalized", out var finalized)
-            && finalized.ValueKind == JsonValueKind.False)
+        if (finalized == false)
         {
             throw new ArgumentException($"{label} must be finalized");
         }
+    }
+
+    private static void RejectNonBooleanBeaconRestCanonical(JsonElement payload, string label)
+    {
+        if (OptionalBeaconRestBoolean(payload, "canonical", label) == false)
+        {
+            throw new ArgumentException($"{label} must be canonical");
+        }
+    }
+
+    private static bool? OptionalBeaconRestBoolean(JsonElement payload, string field, string label)
+    {
+        if (!payload.TryGetProperty(field, out var value))
+        {
+            return null;
+        }
+        return value.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ArgumentException($"{label}.{field} must be a boolean"),
+        };
     }
 
     private static object RequiredBlockValue(IReadOnlyDictionary<string, object?> block, string key)

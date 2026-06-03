@@ -476,7 +476,11 @@ fn seed_commit_votes_for_block(
     view_idx: u64,
     count: usize,
 ) -> usize {
-    let roster = actor.effective_commit_topology();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let roster = super::roster::canonicalize_roster_for_mode(
+        actor.effective_commit_topology(),
+        consensus_mode,
+    );
     seed_commit_votes_for_block_with_roster(
         actor, keypairs, block_hash, height, view_idx, &roster, count,
     )
@@ -491,9 +495,10 @@ fn seed_commit_votes_for_block_with_roster(
     roster: &[PeerId],
     count: usize,
 ) -> usize {
-    let topology = super::network_topology::Topology::new(roster.to_vec());
     let epoch = actor.epoch_for_height(height);
     let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let roster = super::roster::canonicalize_roster_for_mode(roster.to_vec(), consensus_mode);
+    let topology = super::network_topology::Topology::new(roster.clone());
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
     let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
@@ -503,6 +508,7 @@ fn seed_commit_votes_for_block_with_roster(
         &signature_topology,
     );
 
+    let mut seeded = 0usize;
     for peer in signature_topology
         .as_ref()
         .iter()
@@ -536,10 +542,11 @@ fn seed_commit_votes_for_block_with_roster(
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
-        actor.handle_vote(vote);
+        insert_test_vote_with_roster(actor, vote, &roster);
+        seeded = seeded.saturating_add(1);
     }
 
-    count.min(signature_topology.as_ref().len())
+    seeded
 }
 
 fn seed_verified_commit_votes_for_block_with_roster(
@@ -597,7 +604,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
     }
 
@@ -611,7 +618,12 @@ fn seed_near_quorum_commit_votes_for_block(
     height: u64,
     view_idx: u64,
 ) -> usize {
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
     let required = topology.min_votes_for_commit().max(1);
     assert!(required >= 2, "test requires at least two validators");
     let seeded = seed_commit_votes_for_block(

@@ -3187,7 +3187,8 @@ fn ethereum_mainnet_lane_readiness_requires_complete_eth_material() {
 }
 
 #[test]
-fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_launch() {
+fn submit_sccp_inbound_message_with_configured_eth_source_adapter_is_accepted_for_ethereum_lane_launch()
+ {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3234,7 +3235,7 @@ fn submit_configured_eth_source_adapter_proof_is_accepted_for_ethereum_lane_laun
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect("ETH source proof should pass the Ethereum mainnet lane launch policy");
+        .expect("ETH source proofs should pass the Ethereum mainnet lane launch policy");
     assert!(stx.world.proofs().get(&proof_id).is_some());
 }
 
@@ -3288,25 +3289,63 @@ fn assert_eth_source_proof_rejected_for_governed_material(
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof.clone()).into();
     let err = match exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit) {
-        Ok(()) => panic!("{label} must not admit a replayed ETH source proof"),
+        Ok(()) => panic!("{label} must not admit an ETH source proof with mismatched material"),
         Err(err) => err,
     };
     assert!(
-        format!("{err:?}").contains("structural verification")
+        format!("{err:?}")
+            .contains("SCCP transparent message proof failed structural verification")
             || format!("{err:?}").contains("configured production source adapter deployment"),
         "unexpected {label} error: {err:?}",
     );
     assert!(stx.world.proofs().get(&proof_id).is_none());
 }
 
+fn assert_eth_source_chain_proof_rejects_governed_material(
+    artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
+    governed_material: &iroha_sccp::SccpSourceVerifierMaterialV1,
+    label: &str,
+) {
+    let governed_deployment = configured_eth_source_adapter_engine_deployment(governed_material);
+    let source_proof =
+        iroha_sccp::decode_sccp_source_chain_proof_envelope(&artifact.bundle.finality_proof)
+            .expect("decode ETH source proof");
+    assert!(
+        !iroha_sccp::verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+            &source_proof,
+            governed_material,
+            &governed_deployment,
+        ),
+        "{label} must not structurally match the ETH source proof",
+    );
+    assert!(
+        iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+            &artifact.bundle,
+            governed_material,
+            &governed_deployment,
+        )
+        .is_none(),
+        "{label} must not satisfy ETH source-proof production binding",
+    );
+}
+
 #[test]
-fn submit_configured_eth_source_adapter_proof_rejects_replayed_source_material() {
+fn eth_source_chain_proof_rejects_replayed_source_material() {
     let proof_material = configured_eth_source_verifier_material();
     let proof_deployment = configured_eth_source_adapter_engine_deployment(&proof_material);
-    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+    let artifact = iroha_sccp::test_fixtures::sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment(
         1_004,
         &proof_material,
         &proof_deployment,
+    );
+    assert!(
+        iroha_sccp::verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+            &artifact.bundle,
+            &proof_material,
+            &proof_deployment,
+        )
+        .is_some(),
+        "fixture ETH source proof must bind its governed material and deployment",
     );
 
     let mut wrong_sync_committee = proof_material.clone();
@@ -3315,8 +3354,8 @@ fn submit_configured_eth_source_adapter_proof_rejects_replayed_source_material()
         iroha_sccp::sccp_source_verifier_material_hash(&proof_material),
         iroha_sccp::sccp_source_verifier_material_hash(&wrong_sync_committee),
     );
-    assert_eth_source_proof_rejected_for_governed_material(
-        &proof,
+    assert_eth_source_chain_proof_rejects_governed_material(
+        &artifact,
         &wrong_sync_committee,
         "wrong ETH sync committee root",
     );
@@ -3327,15 +3366,34 @@ fn submit_configured_eth_source_adapter_proof_rejects_replayed_source_material()
         iroha_sccp::sccp_source_verifier_material_hash(&proof_material),
         iroha_sccp::sccp_source_verifier_material_hash(&wrong_source_bridge),
     );
-    assert_eth_source_proof_rejected_for_governed_material(
-        &proof,
+    assert_eth_source_chain_proof_rejects_governed_material(
+        &artifact,
         &wrong_source_bridge,
         "wrong ETH source bridge emitter",
     );
 }
 
 #[test]
-fn submit_sccp_inbound_message_with_configured_bsc_source_adapter_waits_for_ethereum_lane_launch() {
+fn submit_configured_eth_source_adapter_proof_rejects_replayed_source_material_after_ethereum_lane_launch()
+ {
+    let proof_material = configured_eth_source_verifier_material();
+    let proof_deployment = configured_eth_source_adapter_engine_deployment(&proof_material);
+    let proof = make_sccp_eth_to_sora_message_bridge_proof_with_material_and_deployment(
+        1_004,
+        &proof_material,
+        &proof_deployment,
+    );
+    let mut wrong_sync_committee = proof_material.clone();
+    wrong_sync_committee.source_trust_anchor_hash[0] ^= 0x01;
+    assert_eth_source_proof_rejected_for_governed_material(
+        &proof,
+        &wrong_sync_committee,
+        "wrong ETH sync committee root",
+    );
+}
+
+#[test]
+fn submit_configured_bsc_source_adapter_proof_waits_for_ethereum_lane_launch() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

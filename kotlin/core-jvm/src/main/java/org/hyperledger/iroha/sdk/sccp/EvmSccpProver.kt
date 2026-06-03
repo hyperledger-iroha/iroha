@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.sccp
 
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.math.BigInteger
@@ -831,6 +832,8 @@ object SccpEvm {
         return builder.toString()
     }
 }
+
+private const val ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES: Int = 1024 * 1024
 
 /** Ethereum mainnet SCCP Groth16 helpers with chain-id and domain checks baked in. */
 object SccpEthereumMainnet {
@@ -1900,16 +1903,33 @@ object EthereumMainnetBeaconRestHttpTransport : EthereumMainnetBeaconRestTranspo
                 connection.setRequestProperty(name, value)
             }
             val statusCode = connection.responseCode
-            val body = try {
-                (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-                    ?.use { it.readBytes() } ?: ByteArray(0)
-            } catch (ex: Exception) {
-                ByteArray(0)
-            }
+            val body = readEthereumMainnetBeaconRestBody(
+                if (statusCode in 200..299) connection.inputStream else connection.errorStream,
+            )
             return EthereumMainnetBeaconRestResponse(statusCode, body, connection.responseMessage)
         } finally {
             connection.disconnect()
         }
+    }
+}
+
+private fun readEthereumMainnetBeaconRestBody(stream: InputStream?): ByteArray {
+    if (stream == null) return ByteArray(0)
+    stream.use { input ->
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            require(total <= ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES) {
+                "Ethereum mainnet Beacon REST response body must be at most " +
+                    "$ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES bytes"
+            }
+            out.write(buffer, 0, read)
+        }
+        return out.toByteArray()
     }
 }
 
@@ -1958,9 +1978,7 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             ),
             "Ethereum mainnet Beacon REST finalized header.data",
         )
-        require(headerData["canonical"] != false) {
-            "Ethereum mainnet Beacon REST finalized header must be canonical"
-        }
+        rejectNonBooleanBeaconRestCanonical(headerData, "Ethereum mainnet Beacon REST finalized header")
         val finalizedHeaderRoot = normalizeEthereumBeaconRestHex(
             requireBeaconRestField(
                 headerData,
@@ -2049,6 +2067,9 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             val suffix = response.statusMessage?.let { " $it" } ?: ""
             "$label request failed ${response.statusCode}$suffix"
         }
+        require(response.body.size <= ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES) {
+            "$label response body must be at most $ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES bytes"
+        }
         val parsed = JsonParser.parse(String(response.body, Charsets.UTF_8))
         return expectBeaconRestObject(parsed, "$label response JSON")
     }
@@ -2089,12 +2110,29 @@ private fun requireBeaconRestField(value: Map<String, Any?>, label: String, fiel
 }
 
 private fun rejectUnsafeBeaconRestPayload(payload: Map<String, Any?>, label: String) {
-    require(payload["execution_optimistic"] != true && payload["executionOptimistic"] != true) {
+    val executionOptimistic = optionalBeaconRestBoolean(payload, "execution_optimistic", label)
+    val executionOptimisticAlias = optionalBeaconRestBoolean(payload, "executionOptimistic", label)
+    val finalized = optionalBeaconRestBoolean(payload, "finalized", label)
+    require(executionOptimistic != true && executionOptimisticAlias != true) {
         "$label must not be execution optimistic"
     }
-    require(payload["finalized"] != false) {
+    require(finalized != false) {
         "$label must be finalized"
     }
+}
+
+private fun rejectNonBooleanBeaconRestCanonical(payload: Map<String, Any?>, label: String) {
+    val canonical = optionalBeaconRestBoolean(payload, "canonical", label)
+    require(canonical != false) { "$label must be canonical" }
+}
+
+private fun optionalBeaconRestBoolean(payload: Map<String, Any?>, field: String, label: String): Boolean? {
+    if (!payload.containsKey(field)) {
+        return null
+    }
+    val value = payload[field]
+    require(value is Boolean) { "$label.$field must be a boolean" }
+    return value
 }
 
 private fun normalizeEthereumBeaconRestHex(value: Any?, label: String, byteLength: Int): String {

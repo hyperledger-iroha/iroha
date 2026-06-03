@@ -784,6 +784,7 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         in rendered
     )
     assert '# sccp_evm_rpc_chain_id = "1"' in rendered
+    assert '# sccp_evm_block_tag = "finalized"' in rendered
     assert (
         '# sccp_evm_bridge_runtime_code_hash = "0x'
         + eth.bridge_code_hash.hex()
@@ -888,6 +889,7 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
     bsc_rendered = module.render_toml(bsc_args, bsc.destination_binding_hash)
     assert 'domain = 2' in bsc_rendered
     assert 'chain = "bsc"' in bsc_rendered
+    assert '# sccp_evm_block_tag = "latest"' in bsc_rendered
     assert 'anchor_id = "sccp:bsc:destination-anchor:bsc-mainnet:v1"' in bsc_rendered
     assert (
         'route_allowlist_id = "sccp:bsc:route-allowlist:bsc-mainnet:v1"'
@@ -1015,6 +1017,23 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         assert "route canary transaction metadata" in str(exc)
     else:
         raise AssertionError("EVM destination JSON accepted forged route canary hash")
+
+
+def test_evm_destination_eth_toml_rejects_nonfinalized_block_tag():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+    args = full_toml_args(eth)
+    args.block_tag = "latest"
+
+    try:
+        module.render_toml(args, eth.destination_binding_hash)
+    except ValueError as exc:
+        assert "Ethereum destination TOML requires --block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("non-finalized ETH destination TOML was accepted")
+
+    summary = module._json_summary(args, eth.destination_binding_hash, True)
+    assert summary["block_tag"] == "latest"
 
 
 def test_evm_full_toml_rejects_route_canary_transaction_readback_drift():

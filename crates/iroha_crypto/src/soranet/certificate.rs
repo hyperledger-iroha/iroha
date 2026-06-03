@@ -751,12 +751,21 @@ impl RelayCertificateV2 {
         })
     }
 
+    /// Returns the checked length of the validity window.
+    ///
+    /// Returns `None` when the certificate carries an inverted or unrepresentable
+    /// timestamp range.
+    pub fn checked_validity_duration(&self) -> Option<Duration> {
+        let seconds = self.valid_until.checked_sub(self.valid_after)?;
+        let seconds = u64::try_from(seconds).ok()?;
+        Some(Duration::from_secs(seconds))
+    }
+
     /// Returns the length of the validity window.
+    ///
+    /// Invalid or unrepresentable ranges fail closed to `Duration::ZERO`.
     pub fn validity_duration(&self) -> Duration {
-        let seconds_i64 = (self.valid_until - self.valid_after).max(0);
-        let seconds =
-            u64::try_from(seconds_i64).expect("difference is clamped to a non-negative range");
-        Duration::from_secs(seconds)
+        self.checked_validity_duration().unwrap_or(Duration::ZERO)
     }
 }
 
@@ -1613,11 +1622,7 @@ impl<'a> CborDecoder<'a> {
         }
         let len = usize::try_from(len)
             .map_err(|_| CertificateError::InvalidCbor("byte string length exceeds usize"))?;
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("byte string truncated"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        let slice = self.read_slice(len, "byte string truncated")?;
         Ok(slice.to_vec())
     }
 
@@ -1630,11 +1635,7 @@ impl<'a> CborDecoder<'a> {
         }
         let len = usize::try_from(len)
             .map_err(|_| CertificateError::InvalidCbor("text string length exceeds usize"))?;
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("text string truncated"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        let slice = self.read_slice(len, "text string truncated")?;
         let text = core::str::from_utf8(slice)
             .map_err(|_| CertificateError::InvalidCbor("invalid UTF-8 in text string"))?;
         Ok(text.to_string())
@@ -1740,11 +1741,23 @@ impl<'a> CborDecoder<'a> {
     }
 
     fn read_exact(&mut self, len: usize) -> Result<&[u8], CertificateError> {
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("truncated CBOR payload"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        self.read_slice(len, "truncated CBOR payload")
+    }
+
+    fn read_slice(
+        &mut self,
+        len: usize,
+        truncated_message: &'static str,
+    ) -> Result<&[u8], CertificateError> {
+        let start = self.pos;
+        let end = start
+            .checked_add(len)
+            .ok_or(CertificateError::InvalidCbor(truncated_message))?;
+        let slice = self
+            .data
+            .get(start..end)
+            .ok_or(CertificateError::InvalidCbor(truncated_message))?;
+        self.pos = end;
         Ok(slice)
     }
 
@@ -1814,6 +1827,90 @@ mod tests {
             issuer_fingerprint: [0x66; 32],
             pq_kem_public: vec![0x77; MlKemSuite::MlKem768.public_key_len()],
         }
+    }
+
+    #[test]
+    fn cbor_decoder_reads_byte_text_and_exact_slices() {
+        let mut byte_payload = CborDecoder::new(&[0x42, 0xAA, 0xBB]);
+        assert_eq!(byte_payload.read_bytes().unwrap(), vec![0xAA, 0xBB]);
+        byte_payload.ensure_finished().unwrap();
+
+        let mut text_payload = CborDecoder::new(&[0x62, b'o', b'k']);
+        assert_eq!(text_payload.read_text().unwrap(), "ok");
+        text_payload.ensure_finished().unwrap();
+
+        let mut exact_payload = CborDecoder::new(&[0xAA, 0xBB, 0xCC]);
+        assert_eq!(exact_payload.read_exact(2).unwrap(), &[0xAA, 0xBB]);
+        assert_eq!(exact_payload.pos, 2);
+    }
+
+    #[test]
+    fn cbor_decoder_rejects_truncated_slices_without_advancing() {
+        let mut byte_payload = CborDecoder::new(&[0x42, 0xAA]);
+        let err = byte_payload
+            .read_bytes()
+            .expect_err("truncated byte string should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("byte string truncated")
+        ));
+        assert_eq!(byte_payload.pos, 1);
+
+        let mut text_payload = CborDecoder::new(&[0x62, b'o']);
+        let err = text_payload
+            .read_text()
+            .expect_err("truncated text string should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("text string truncated")
+        ));
+        assert_eq!(text_payload.pos, 1);
+
+        let mut exact_payload = CborDecoder::new(&[0xAA]);
+        let err = exact_payload
+            .read_exact(2)
+            .expect_err("truncated exact read should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("truncated CBOR payload")
+        ));
+        assert_eq!(exact_payload.pos, 0);
+    }
+
+    #[test]
+    fn cbor_decoder_rejects_overflowed_slice_cursor_without_advancing() {
+        let mut decoder = CborDecoder::new(&[]);
+        decoder.pos = usize::MAX;
+        let err = decoder
+            .read_exact(1)
+            .expect_err("overflowed cursor should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("truncated CBOR payload")
+        ));
+        assert_eq!(decoder.pos, usize::MAX);
+    }
+
+    #[test]
+    fn validity_duration_handles_invalid_and_extreme_windows() {
+        let mut certificate = sample_certificate();
+        certificate.valid_after = 10;
+        certificate.valid_until = 15;
+        assert_eq!(
+            certificate.checked_validity_duration(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(certificate.validity_duration(), Duration::from_secs(5));
+
+        certificate.valid_after = 15;
+        certificate.valid_until = 10;
+        assert_eq!(certificate.checked_validity_duration(), None);
+        assert_eq!(certificate.validity_duration(), Duration::ZERO);
+
+        certificate.valid_after = i64::MIN;
+        certificate.valid_until = i64::MAX;
+        assert_eq!(certificate.checked_validity_duration(), None);
+        assert_eq!(certificate.validity_duration(), Duration::ZERO);
     }
 
     #[test]

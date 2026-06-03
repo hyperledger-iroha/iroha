@@ -273,6 +273,7 @@ def test_bsc_direct_renderers_derive_source_bridge_code_hash_from_runtime_byteco
         + '"'
         in rendered
     )
+    assert '# sccp_evm_source_block_tag = "latest"' in rendered
     assert (
         '# sccp_evm_source_bridge_runtime_bytecode_hex = "0x'
         + runtime_bytecode.hex()

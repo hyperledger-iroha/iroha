@@ -2140,7 +2140,7 @@ public func ethBeaconBlockHeaderRoot(beaconSlot: UInt64,
 
 /// Typed EVM-family MPT value envelope carrying an SCCP receipt root.
 public func canonicalEvmReceiptRootMptValue(receiptRoot: String) throws -> Data {
-    let root = try sourceProofBytesFromHex32(receiptRoot, field: "receiptRoot")
+    let root = try sourceProofNonZeroBytesFromHex32(receiptRoot, field: "receiptRoot")
     let value = sourceProofRlpList([
         sourceProofRlpString(sccpEvmReceiptRootValueMarker),
         sourceProofRlpString(root),
@@ -6449,7 +6449,8 @@ private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws ->
                 sourceProofEthereumRpcHexBytes(
                     topic,
                     field: "receipt.logs[\(index)].topics[\(topicIndex)]",
-                    byteLength: 32
+                    byteLength: 32,
+                    nonzero: false
                 )
             )
         }
@@ -6458,7 +6459,8 @@ private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws ->
                 sourceProofEthereumRpcHexBytes(
                     log["address"],
                     field: "receipt.logs[\(index)].address",
-                    byteLength: 20
+                    byteLength: 20,
+                    nonzero: false
                 )
             ),
             sourceProofRlpList(encodedTopics),

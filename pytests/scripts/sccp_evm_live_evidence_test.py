@@ -681,6 +681,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     }
 
     rendered = module.render_offline_toml(summary)
+    assert '# sccp_evm_block_tag = "finalized"' in rendered
     assert '# sccp_evm_rpc_chain_id = "1"' in rendered
     assert (
         '# sccp_evm_bridge_runtime_code_hash = "0x'
@@ -729,6 +730,7 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert "evm_route_canary_transaction_hash = " in rendered
     assert "evm_route_canary_transaction_block_hash = " in rendered
     for key in (
+        "# sccp_evm_block_tag = ",
         "# sccp_evm_rpc_chain_id = ",
         "# sccp_evm_bridge_runtime_code_hash = ",
         "# sccp_evm_verifier_runtime_code_hash = ",

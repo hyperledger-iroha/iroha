@@ -651,13 +651,27 @@ impl VpnConfig {
         Ok(())
     }
 
+    /// Return the configured meter hash as raw bytes.
+    pub fn try_meter_hash_bytes(&self) -> Result<[u8; 32], ConfigError> {
+        let decoded = hex::decode(&self.billing.meter_hash_hex).map_err(|err| {
+            ConfigError::Vpn(format!(
+                "vpn.billing.meter_hash_hex must be valid hex: {err}"
+            ))
+        })?;
+        if decoded.len() != 32 {
+            return Err(ConfigError::Vpn(
+                "vpn.billing.meter_hash_hex must decode to 32 bytes".to_string(),
+            ));
+        }
+        let mut meter_hash = [0u8; 32];
+        meter_hash.copy_from_slice(&decoded);
+        Ok(meter_hash)
+    }
+
     /// Return the configured meter hash as raw bytes. Only safe to call after `validate`.
     pub fn meter_hash_bytes(&self) -> [u8; 32] {
-        let mut meter_hash = [0u8; 32];
-        let decoded =
-            hex::decode(&self.billing.meter_hash_hex).expect("validated meter hash to decode");
-        meter_hash.copy_from_slice(&decoded);
-        meter_hash
+        self.try_meter_hash_bytes()
+            .expect("validated meter hash to decode")
     }
 
     /// Guard ensuring the VPN overlay is compiled in when enabled.
@@ -796,28 +810,64 @@ impl VpnConfig {
             .cloned()
     }
 
-    pub fn helper_ticket_secret_bytes(&self) -> Option<[u8; 32]> {
-        let secret = self.helper_ticket_secret_hex.as_ref()?;
-        let decoded =
-            hex::decode(secret).expect("validated vpn.helper_ticket_secret_hex to decode");
+    pub fn try_helper_ticket_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
+        let Some(secret) = self.parse_helper_ticket_secret_hex()? else {
+            return Ok(None);
+        };
+        let decoded = hex::decode(&secret).map_err(|err| {
+            ConfigError::Vpn(format!(
+                "vpn.helper_ticket_secret_hex must be valid hex: {err}"
+            ))
+        })?;
+        if decoded.len() != 32 {
+            return Err(ConfigError::Vpn(
+                "vpn.helper_ticket_secret_hex must decode to 32 bytes".to_string(),
+            ));
+        }
         let mut bytes = [0u8; 32];
         bytes.copy_from_slice(&decoded);
-        Some(bytes)
+        Ok(Some(bytes))
+    }
+
+    pub fn helper_ticket_secret_bytes(&self) -> Option<[u8; 32]> {
+        self.try_helper_ticket_secret_bytes()
+            .expect("validated vpn.helper_ticket_secret_hex to decode")
+    }
+
+    pub fn try_backend_endpoint(&self) -> Result<Option<VpnBackendEndpoint>, ConfigError> {
+        self.parse_backend_endpoint()?
+            .as_deref()
+            .map(parse_vpn_backend_endpoint)
+            .transpose()
     }
 
     pub fn backend_endpoint(&self) -> Option<VpnBackendEndpoint> {
-        self.backend_endpoint.as_ref().map(|endpoint| {
-            parse_vpn_backend_endpoint(endpoint).expect("validated vpn.backend_endpoint to parse")
-        })
+        self.try_backend_endpoint()
+            .expect("validated vpn.backend_endpoint to parse")
+    }
+
+    pub fn try_backend_bootstrap_secret_bytes(&self) -> Result<Option<[u8; 32]>, ConfigError> {
+        let Some(secret) = self.parse_backend_bootstrap_secret_hex()? else {
+            return Ok(None);
+        };
+        let decoded = hex::decode(&secret).map_err(|err| {
+            ConfigError::Vpn(format!(
+                "vpn.backend_bootstrap_secret_hex must be valid hex: {err}"
+            ))
+        })?;
+        if decoded.len() != 32 {
+            return Err(ConfigError::Vpn(
+                "vpn.backend_bootstrap_secret_hex must decode to 32 bytes".to_string(),
+            ));
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&decoded);
+        Ok(Some(bytes))
     }
 
     pub fn backend_bootstrap_secret_bytes(&self) -> Option<[u8; 32]> {
-        let secret = self.backend_bootstrap_secret_hex.as_ref()?;
-        let decoded =
-            hex::decode(secret).expect("validated vpn.backend_bootstrap_secret_hex to decode");
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(&decoded);
-        Some(bytes)
+        self.try_backend_bootstrap_secret_bytes()
+            .expect("validated vpn.backend_bootstrap_secret_hex to decode")
     }
 }
 
@@ -1119,7 +1169,19 @@ impl PowConfig {
         if let Some(emergency) = self.emergency.as_mut() {
             emergency.apply_defaults()?;
         }
+        let base = self.parameters()?;
+        let _ = self.puzzle_parameters(&base)?;
         Ok(())
+    }
+
+    /// Build the base PoW verifier parameters from config.
+    pub fn parameters(&self) -> Result<pow::Parameters, ConfigError> {
+        pow::Parameters::try_new(
+            self.difficulty.min(u8::MAX as u32) as u8,
+            Duration::from_secs(self.max_future_skew_secs),
+            Duration::from_secs(self.min_ticket_ttl_secs),
+        )
+        .map_err(|err| ConfigError::Puzzle(format!("invalid pow ticket timing parameters: {err}")))
     }
 
     /// Build the admission token verifier if configured.
@@ -1339,14 +1401,19 @@ impl PuzzleConfig {
         })?;
         let lanes = NonZeroU32::new(self.lanes)
             .ok_or_else(|| ConfigError::Puzzle("pow.puzzle.lanes must be non-zero".to_string()))?;
-        Ok(Some(puzzle::Parameters::new(
-            memory,
-            time,
-            lanes,
-            base.difficulty(),
-            base.max_future_skew(),
-            base.min_ticket_ttl(),
-        )))
+        Ok(Some(
+            puzzle::Parameters::try_new(
+                memory,
+                time,
+                lanes,
+                base.difficulty(),
+                base.max_future_skew(),
+                base.min_ticket_ttl(),
+            )
+            .map_err(|err| {
+                ConfigError::Puzzle(format!("invalid pow.puzzle timing parameters: {err}"))
+            })?,
+        ))
     }
 }
 
@@ -1497,10 +1564,12 @@ impl TokenConfig {
         if !self.enabled {
             return Ok(None);
         }
-        let public_hex = self
-            .issuer_public_key_hex
-            .as_ref()
-            .expect("validated issuer public key");
+        let public_hex = self.issuer_public_key_hex.as_ref().ok_or_else(|| {
+            ConfigError::Token(
+                "pow.token.issuer_public_key_hex must be set when pow.token.enabled = true"
+                    .to_string(),
+            )
+        })?;
         let public_key = hex::decode(public_hex).map_err(|kind| ConfigError::Hex {
             field: "pow.token.issuer_public_key_hex".to_string(),
             kind,
@@ -1656,12 +1725,27 @@ impl GuardDirectoryConfig {
 
     #[must_use]
     pub fn expected_directory_hash(&self) -> Option<[u8; 32]> {
-        self.expected_directory_hash_hex.as_ref().map(|hex_value| {
-            let raw = hex::decode(hex_value).expect("hex validated in apply_defaults");
-            let mut bytes = [0u8; 32];
-            bytes.copy_from_slice(&raw);
-            bytes
-        })
+        self.try_expected_directory_hash()
+            .expect("validated expected_directory_hash_hex to decode")
+    }
+
+    pub fn try_expected_directory_hash(&self) -> Result<Option<[u8; 32]>, ConfigError> {
+        let Some(hex_value) = self.expected_directory_hash_hex.as_ref() else {
+            return Ok(None);
+        };
+        let raw = hex::decode(hex_value).map_err(|_| {
+            ConfigError::GuardDirectory(
+                "expected_directory_hash_hex must decode to 32 bytes".to_string(),
+            )
+        })?;
+        if raw.len() != 32 {
+            return Err(ConfigError::GuardDirectory(
+                "expected_directory_hash_hex must decode to 32 bytes".to_string(),
+            ));
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&raw);
+        Ok(Some(bytes))
     }
 
     #[must_use]
@@ -1732,12 +1816,12 @@ impl ReplayFilterConfig {
             self.bits = Self::default_bits();
         }
         let clamped = self.bits.max(64);
-        let next_power = clamped.next_power_of_two();
-        if next_power > MAX_BITS {
+        if clamped > MAX_BITS {
             return Err(ConfigError::ReplayFilter(
                 "replay_filter.bits must not exceed 16,777,216".to_string(),
             ));
         }
+        let next_power = clamped.next_power_of_two();
         self.bits = next_power;
 
         if self.ttl_secs == 0 {
@@ -2493,10 +2577,12 @@ impl HandshakePolicy {
                     grease.typ
                 )));
             }
-            hex::decode(&grease.value_hex).map_err(|err| ConfigError::Hex {
-                field: format!("handshake.grease[{:#06x}]", grease.typ),
-                kind: err,
-            })?;
+            hex::decode(&grease.value_hex)
+                .map_err(|err| ConfigError::Hex {
+                    field: format!("handshake.grease[{:#06x}]", grease.typ),
+                    kind: err,
+                })
+                .and_then(|value| validate_grease_value_len(grease.typ, value.len()))?;
         }
         if let Some(identity_hex) = &self.identity_private_key_hex {
             let decoded = hex::decode(identity_hex).map_err(|err| ConfigError::Hex {
@@ -2535,6 +2621,7 @@ impl HandshakePolicy {
                 field: format!("handshake.grease[{:#06x}]", g.typ),
                 kind: err,
             })?;
+            validate_grease_value_len(g.typ, value.len())?;
             entries.push(GreaseEntry { ty: g.typ, value });
         }
         Ok(entries)
@@ -3017,6 +3104,15 @@ impl RelayConfig {
             .filter(|cfg| cfg.enabled)
             .map(ConstantRateCapabilityConfig::capability)
     }
+}
+
+fn validate_grease_value_len(typ: u16, len: usize) -> Result<(), ConfigError> {
+    if len > usize::from(u16::MAX) {
+        return Err(ConfigError::Handshake(format!(
+            "GREASE type {typ:04x} value length {len} exceeds u16::MAX"
+        )));
+    }
+    Ok(())
 }
 
 /// Errors surfaced while parsing or validating configuration.
@@ -3513,6 +3609,32 @@ mod tests {
     }
 
     #[test]
+    fn pow_config_parameters_reject_inverted_ticket_timing_without_panic() {
+        let pow = PowConfig {
+            max_future_skew_secs: 10,
+            min_ticket_ttl_secs: 30,
+            ..PowConfig::default()
+        };
+
+        match pow.parameters() {
+            Err(ConfigError::Puzzle(message)) => assert!(
+                message.contains("invalid pow ticket timing parameters"),
+                "unexpected pow timing error: {message}"
+            ),
+            other => panic!("expected pow timing error, got {other:?}"),
+        }
+
+        let mut pow = pow;
+        match pow.apply_defaults() {
+            Err(ConfigError::Puzzle(message)) => assert!(
+                message.contains("invalid pow ticket timing parameters"),
+                "unexpected pow defaults error: {message}"
+            ),
+            other => panic!("expected pow defaults error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn puzzle_config_builds_parameters() {
         let mut pow = PowConfig {
             difficulty: 12,
@@ -3566,6 +3688,20 @@ mod tests {
         let err = too_many_bits
             .apply_defaults()
             .expect_err("bits exceeding limit should fail");
+        assert!(
+            matches!(err, ConfigError::ReplayFilter(ref message) if message.contains("bits")),
+            "unexpected error: {err:?}"
+        );
+
+        let mut overflowing_bits = ReplayFilterConfig {
+            enabled: true,
+            bits: u32::MAX,
+            hash_functions: 4,
+            ttl_secs: 10,
+        };
+        let err = overflowing_bits
+            .apply_defaults()
+            .expect_err("overflowing bit count should fail");
         assert!(
             matches!(err, ConfigError::ReplayFilter(ref message) if message.contains("bits")),
             "unexpected error: {err:?}"
@@ -3700,6 +3836,31 @@ mod tests {
         match err {
             ConfigError::Handshake(message) => {
                 assert!(message.contains("unknown KEM identifier"));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_handshake_grease_value() {
+        let value_hex = "aa".repeat(usize::from(u16::MAX) + 1);
+        let json = format!(
+            r#"{{
+                "mode": "Entry",
+                "listen": "127.0.0.1:0",
+                "handshake": {{
+                    "grease": [
+                        {{ "typ": 32528, "value_hex": "{value_hex}" }}
+                    ]
+                }}
+            }}"#
+        );
+        let path = write_config(&json);
+        let err = RelayConfig::load(path).expect_err("oversized GREASE value should fail");
+        match err {
+            ConfigError::Handshake(message) => {
+                assert!(message.contains("value length"));
+                assert!(message.contains("exceeds u16::MAX"));
             }
             other => panic!("unexpected error variant: {other:?}"),
         }
@@ -4008,6 +4169,22 @@ mod tests {
     }
 
     #[test]
+    fn token_policy_rejects_missing_issuer_key_without_panic() {
+        let cfg = TokenConfig {
+            enabled: true,
+            ..TokenConfig::default()
+        };
+
+        match cfg.build_policy() {
+            Err(ConfigError::Token(message)) => assert!(
+                message.contains("pow.token.issuer_public_key_hex must be set"),
+                "unexpected token config error: {message}"
+            ),
+            other => panic!("expected token config error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn privacy_config_overrides_are_applied() {
         let json = r#"
             {
@@ -4196,6 +4373,57 @@ mod tests {
             Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
         );
         assert_eq!(cfg.backend_bootstrap_secret_bytes(), Some([0xCD; 32]));
+    }
+
+    #[test]
+    fn vpn_fallible_accessors_decode_valid_normalized_values() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some(format!("0X{}", "AB".repeat(32))),
+            backend_endpoint: Some(" tcp://127.0.0.1:19090 ".to_string()),
+            backend_bootstrap_secret_hex: Some(format!("0X{}", "CD".repeat(32))),
+            billing: VpnBillingConfig {
+                meter_hash_hex: "ef".repeat(32),
+                ..VpnBillingConfig::default()
+            },
+            ..VpnConfig::default()
+        };
+
+        cfg.validate().expect("vpn config validates");
+        assert_eq!(cfg.try_meter_hash_bytes().expect("meter hash"), [0xEF; 32]);
+        assert_eq!(
+            cfg.try_helper_ticket_secret_bytes().expect("helper secret"),
+            Some([0xAB; 32])
+        );
+        assert_eq!(
+            cfg.try_backend_endpoint().expect("backend endpoint"),
+            Some(VpnBackendEndpoint::Tcp("127.0.0.1:19090".to_string()))
+        );
+        assert_eq!(
+            cfg.try_backend_bootstrap_secret_bytes()
+                .expect("bootstrap secret"),
+            Some([0xCD; 32])
+        );
+
+        let overlay = VpnOverlay::try_from_config(cfg).expect("vpn overlay");
+        assert_eq!(overlay.meter_hash(), [0xEF; 32]);
+    }
+
+    #[test]
+    fn vpn_overlay_try_from_config_rejects_invalid_helper_secret_without_panic() {
+        let cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("not-hex".to_string()),
+            ..VpnConfig::default()
+        };
+
+        match VpnOverlay::try_from_config(cfg) {
+            Err(ConfigError::Vpn(message)) => assert!(
+                message.contains("vpn.helper_ticket_secret_hex"),
+                "unexpected vpn config error: {message}"
+            ),
+            other => panic!("expected vpn config error, got {other:?}"),
+        }
     }
 
     #[test]

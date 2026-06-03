@@ -302,6 +302,8 @@ pub enum CapabilityError {
     TranscriptCommitMismatch,
     #[error("missing snnet.transcript_commit in client advertisement")]
     TranscriptCommitMissing,
+    #[error("capability TLV {ty:#06x} value length {length} exceeds u16::MAX")]
+    CapabilityValueTooLarge { ty: u16, length: usize },
 }
 
 /// Parse a capability vector into structured fields.
@@ -559,48 +561,56 @@ pub fn negotiate_capabilities(
 }
 
 /// Encode the relay response capability vector reflecting the negotiated values.
-pub fn encode_relay_advertisement(negotiated: &NegotiatedCapabilities, role_bits: u8) -> Vec<u8> {
+pub fn encode_relay_advertisement(
+    negotiated: &NegotiatedCapabilities,
+    role_bits: u8,
+) -> Result<Vec<u8>, CapabilityError> {
     let mut out = Vec::new();
     push_tlv(
         &mut out,
         TYPE_PQ_KEM,
         &[negotiated.kem.id.code(), flag_byte(negotiated.kem.required)],
-    );
+    )?;
 
     for sig in &negotiated.signatures {
         push_tlv(
             &mut out,
             TYPE_PQ_SIG,
             &[sig.id.code(), flag_byte(sig.required)],
-        );
+        )?;
     }
 
     if let Some(commit) = negotiated.descriptor_commit {
-        push_tlv(&mut out, TYPE_TRANSCRIPT_COMMIT, &commit);
+        push_tlv(&mut out, TYPE_TRANSCRIPT_COMMIT, &commit)?;
     }
 
-    push_tlv(&mut out, TYPE_ROLE, &[role_bits]);
-    push_tlv(&mut out, TYPE_PADDING, &negotiated.padding.to_le_bytes());
+    push_tlv(&mut out, TYPE_ROLE, &[role_bits])?;
+    push_tlv(&mut out, TYPE_PADDING, &negotiated.padding.to_le_bytes())?;
     if let Some(constant_rate) = negotiated.constant_rate {
         let value = constant_rate.encode_value();
-        push_tlv(&mut out, TYPE_CONSTANT_RATE, &value);
+        push_tlv(&mut out, TYPE_CONSTANT_RATE, &value)?;
     }
 
     for grease in &negotiated.grease {
-        push_tlv(&mut out, grease.ty, &grease.value);
+        push_tlv(&mut out, grease.ty, &grease.value)?;
     }
 
-    out
+    Ok(out)
 }
 
 fn flag_byte(required: bool) -> u8 {
     if required { REQUIRED_FLAG } else { 0 }
 }
 
-fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) {
+fn push_tlv(buffer: &mut Vec<u8>, ty: u16, value: &[u8]) -> Result<(), CapabilityError> {
     buffer.extend_from_slice(&ty.to_be_bytes());
-    buffer.extend_from_slice(&(value.len() as u16).to_be_bytes());
+    let len = u16::try_from(value.len()).map_err(|_| CapabilityError::CapabilityValueTooLarge {
+        ty,
+        length: value.len(),
+    })?;
+    buffer.extend_from_slice(&len.to_be_bytes());
     buffer.extend_from_slice(value);
+    Ok(())
 }
 
 impl fmt::Display for KemId {
@@ -641,17 +651,19 @@ mod tests {
             &mut bytes,
             TYPE_PQ_KEM,
             &[KemId::MlKem768.code(), REQUIRED_FLAG],
-        );
+        )
+        .expect("pqkem TLV");
         push_tlv(
             &mut bytes,
             TYPE_PQ_SIG,
             &[SignatureId::Dilithium3.code(), REQUIRED_FLAG],
-        );
-        push_tlv(&mut bytes, TYPE_PADDING, &1024u16.to_le_bytes());
+        )
+        .expect("pqsig TLV");
+        push_tlv(&mut bytes, TYPE_PADDING, &1024u16.to_le_bytes()).expect("padding TLV");
         let value = sample_constant_rate(ConstantRateMode::BestEffort).encode_value();
-        push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &value);
-        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]);
-        push_tlv(&mut bytes, 0x7F10, &[0xDE, 0xAD, 0xBE, 0xEF]);
+        push_tlv(&mut bytes, TYPE_CONSTANT_RATE, &value).expect("constant-rate TLV");
+        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
+        push_tlv(&mut bytes, 0x7F10, &[0xDE, 0xAD, 0xBE, 0xEF]).expect("GREASE TLV");
         bytes
     }
 
@@ -698,7 +710,7 @@ mod tests {
             Some(sample_constant_rate(ConstantRateMode::Strict))
         );
 
-        let relay_bytes = encode_relay_advertisement(&negotiated, 0x01);
+        let relay_bytes = encode_relay_advertisement(&negotiated, 0x01).expect("relay caps");
         assert!(!relay_bytes.is_empty());
         assert!(
             relay_bytes
@@ -714,13 +726,15 @@ mod tests {
             &mut bytes,
             TYPE_PQ_KEM,
             &[KemId::MlKem1024.code(), REQUIRED_FLAG],
-        );
+        )
+        .expect("pqkem TLV");
         push_tlv(
             &mut bytes,
             TYPE_PQ_SIG,
             &[SignatureId::Dilithium3.code(), REQUIRED_FLAG],
-        );
-        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]);
+        )
+        .expect("pqsig TLV");
+        push_tlv(&mut bytes, TYPE_TRANSCRIPT_COMMIT, &[0xAA; 32]).expect("commit TLV");
 
         let client = parse_client_advertisement(&bytes).expect("parse client");
         let err = negotiate_capabilities(&client, &sample_server_caps()).unwrap_err();
@@ -830,7 +844,7 @@ mod tests {
             "server should enforce its configured constant-rate profile even if the viewer omits the TLV",
         );
 
-        let relay_vector = encode_relay_advertisement(&negotiated, 0x01);
+        let relay_vector = encode_relay_advertisement(&negotiated, 0x01).expect("relay caps");
         assert!(
             relay_vector.windows(8).any(|window| {
                 window
@@ -847,5 +861,28 @@ mod tests {
             }),
             "relay advertisement must include the strict constant-rate TLV"
         );
+    }
+
+    #[test]
+    fn encode_relay_advertisement_rejects_oversized_tlv_value_without_truncation() {
+        let mut negotiated = negotiate_capabilities(
+            &parse_client_advertisement(&sample_client_vector()).unwrap(),
+            &sample_server_caps(),
+        )
+        .expect("negotiate");
+        negotiated.grease.push(GreaseEntry {
+            ty: 0x7F12,
+            value: vec![0xAA; usize::from(u16::MAX) + 1],
+        });
+
+        let err = encode_relay_advertisement(&negotiated, 0x01)
+            .expect_err("oversized TLV value must fail");
+        assert!(matches!(
+            err,
+            CapabilityError::CapabilityValueTooLarge {
+                ty: 0x7F12,
+                length
+            } if length == usize::from(u16::MAX) + 1
+        ));
     }
 }

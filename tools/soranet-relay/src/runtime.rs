@@ -141,6 +141,7 @@ const SORANET_HANDSHAKE_LOG_TARGET: &str = "soranet.handshake";
 const HANDSHAKE_STREAM_TIMEOUT: Duration = Duration::from_secs(5);
 const HANDSHAKE_PAYLOAD_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HANDSHAKE_FRAME_LEN: usize = MAX_CLIENT_HELLO_LEN;
+const _: () = assert!(MAX_HANDSHAKE_FRAME_LEN <= u16::MAX as usize);
 /// Temporary seed used when the relay configuration does not provide an identity key.
 const FALLBACK_IDENTITY_SEED: [u8; 32] = [0x42; 32];
 /// Provisional epoch window for incentive aggregation (1 hour).
@@ -863,12 +864,15 @@ struct VpnSettlementSpoolRecord {
     submit_receipt_request: VpnSettlementSubmitRequestArtifact,
 }
 
-fn unix_time_ms_for_artifact() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
+fn unix_time_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
+}
+
+fn unix_time_ms_for_artifact() -> u64 {
+    unix_time_ms(SystemTime::now())
 }
 
 fn vpn_settlement_spool_record(
@@ -1355,11 +1359,7 @@ impl RelayRuntime {
             .map(Arc::new);
 
         let pow_config = config.pow_config().clone();
-        let base_pow_params = PowParameters::new(
-            pow_config.difficulty.min(u8::MAX as u32) as u8,
-            Duration::from_secs(pow_config.max_future_skew_secs),
-            Duration::from_secs(pow_config.min_ticket_ttl_secs),
-        );
+        let base_pow_params = pow_config.parameters()?;
         let puzzle_params = pow_config.puzzle_parameters(&base_pow_params)?;
         let token_policy = pow_config.token_policy().map_err(RelayError::Config)?;
 
@@ -1424,7 +1424,8 @@ impl RelayRuntime {
             .vpn_config()
             .cloned()
             .filter(|cfg| cfg.enabled)
-            .map(VpnOverlay::from_config)
+            .map(VpnOverlay::try_from_config)
+            .transpose()?
             .map(Arc::new);
         if let Some(vpn) = vpn_overlay.as_ref() {
             let (session_label, byte_label) = vpn.billing_labels();
@@ -1470,7 +1471,7 @@ impl RelayRuntime {
             token_policy,
             Arc::clone(&metrics),
             config.mode,
-        ));
+        )?);
 
         let privacy = Arc::new(PrivacyAggregator::new(config.privacy_config().into()));
         let event_capacity = config.privacy_config().event_buffer_capacity;
@@ -2830,11 +2831,7 @@ impl RelayRuntime {
             return;
         }
 
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after unix epoch")
-            .as_millis()
-            .min(u128::from(u64::MAX)) as u64;
+        let now_ms = unix_time_ms(SystemTime::now());
         if helper_ticket.expires_at_ms <= now_ms {
             connection.close(0u32.into(), b"vpn helper ticket expired");
             return;
@@ -3864,11 +3861,7 @@ impl RelayRuntime {
 
             if let Some(secret) = helper_ticket_secret.as_ref() {
                 if VpnHelperTicketV1::looks_like(&first_frame) {
-                    let now_ms = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("system clock should be after unix epoch")
-                        .as_millis()
-                        .min(u128::from(u64::MAX)) as u64;
+                    let now_ms = unix_time_ms(SystemTime::now());
                     let helper_ticket = VpnHelperTicketV1::parse(&first_frame, secret, now_ms)?;
                     if helper_ticket.relay_id != context.relay_id {
                         return Err(HandshakeError::HelperTicket(
@@ -3959,11 +3952,11 @@ impl RelayRuntime {
         response_caps.grease.extend(context.grease.iter().cloned());
         let grease_entries = std::mem::take(&mut response_caps.grease);
         let relay_caps_bytes =
-            encode_relay_advertisement(&response_caps, context.server_caps.role_bits);
+            encode_relay_advertisement(&response_caps, context.server_caps.role_bits)?;
         let relay_caps_bytes =
             update_suite_list(&relay_caps_bytes, context.handshake_suites.as_slice(), true)
                 .map_err(HandshakeError::Noise)?;
-        let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries);
+        let relay_caps_bytes = append_grease_tlvs(relay_caps_bytes, &grease_entries)?;
 
         let mut rng = StdRng::from_os_rng();
         let runtime_params = NoiseRuntimeParams {
@@ -4117,13 +4110,8 @@ impl RelayRuntime {
         send: &mut SendStream,
         payload: &[u8],
     ) -> Result<(), HandshakeError> {
-        if payload.len() > MAX_HANDSHAKE_FRAME_LEN {
-            return Err(HandshakeError::FrameTooLarge(payload.len()));
-        }
-        let len = u16::try_from(payload.len()).expect("handshake payload fits in u16");
-        send.write_all(&len.to_be_bytes())
-            .await
-            .map_err(HandshakeError::Write)?;
+        let len = handshake_frame_len_prefix(payload.len())?;
+        send.write_all(&len).await.map_err(HandshakeError::Write)?;
         send.write_all(payload)
             .await
             .map_err(HandshakeError::Write)?;
@@ -4482,13 +4470,30 @@ fn validate_client_selection(
     Ok(())
 }
 
-fn append_grease_tlvs(mut base: Vec<u8>, grease: &[GreaseEntry]) -> Vec<u8> {
+fn handshake_frame_len_prefix(payload_len: usize) -> Result<[u8; 2], HandshakeError> {
+    if payload_len > MAX_HANDSHAKE_FRAME_LEN {
+        return Err(HandshakeError::FrameTooLarge(payload_len));
+    }
+    let len = u16::try_from(payload_len).map_err(|_| HandshakeError::FrameTooLarge(payload_len))?;
+    Ok(len.to_be_bytes())
+}
+
+fn append_grease_tlvs(
+    mut base: Vec<u8>,
+    grease: &[GreaseEntry],
+) -> Result<Vec<u8>, CapabilityError> {
     for entry in grease {
         base.extend_from_slice(&entry.ty.to_be_bytes());
-        base.extend_from_slice(&(entry.value.len() as u16).to_be_bytes());
+        let len = u16::try_from(entry.value.len()).map_err(|_| {
+            CapabilityError::CapabilityValueTooLarge {
+                ty: entry.ty,
+                length: entry.value.len(),
+            }
+        })?;
+        base.extend_from_slice(&len.to_be_bytes());
         base.extend_from_slice(&entry.value);
     }
-    base
+    Ok(base)
 }
 
 fn downgrade_detail_from_warnings(warnings: &[CapabilityWarning]) -> Option<String> {
@@ -4593,6 +4598,33 @@ mod tests {
     };
 
     const TEST_RELAY_ID: RelayId = [0xAB; 32];
+
+    #[test]
+    fn unix_time_ms_saturates_pre_epoch_clock() {
+        assert_eq!(unix_time_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);
+        assert_eq!(unix_time_ms(UNIX_EPOCH + Duration::from_millis(42)), 42);
+    }
+
+    #[test]
+    fn handshake_frame_len_prefix_encodes_boundary() {
+        assert_eq!(
+            handshake_frame_len_prefix(MAX_HANDSHAKE_FRAME_LEN).expect("max frame fits"),
+            u16::try_from(MAX_HANDSHAKE_FRAME_LEN)
+                .expect("max frame length fits u16")
+                .to_be_bytes()
+        );
+    }
+
+    #[test]
+    fn handshake_frame_len_prefix_rejects_oversized_payload_without_panic() {
+        let err = handshake_frame_len_prefix(MAX_HANDSHAKE_FRAME_LEN + 1)
+            .expect_err("oversized handshake frame must fail");
+
+        assert!(matches!(
+            err,
+            HandshakeError::FrameTooLarge(length) if length == MAX_HANDSHAKE_FRAME_LEN + 1
+        ));
+    }
 
     fn sample_metering_key_pair() -> KeyPair {
         KeyPair::from_seed(vec![0x66; 32], Algorithm::Ed25519)
@@ -5785,11 +5817,31 @@ mod tests {
                 value: vec![0x02, 0x03],
             },
         ];
-        let appended = append_grease_tlvs(base.clone(), &grease);
+        let appended = append_grease_tlvs(base.clone(), &grease).expect("append grease");
         let expected = [
             0xAA, 0xBB, 0x7f, 0x10, 0x00, 0x01, 0x01, 0x7f, 0x11, 0x00, 0x02, 0x02, 0x03,
         ];
         assert_eq!(appended, expected);
+    }
+
+    #[test]
+    fn append_grease_tlvs_rejects_oversized_values_without_truncation() {
+        let err = append_grease_tlvs(
+            Vec::new(),
+            &[GreaseEntry {
+                ty: 0x7F20,
+                value: vec![0xAB; usize::from(u16::MAX) + 1],
+            }],
+        )
+        .expect_err("oversized GREASE TLV must fail");
+
+        assert!(matches!(
+            err,
+            CapabilityError::CapabilityValueTooLarge {
+                ty: 0x7F20,
+                length
+            } if length == usize::from(u16::MAX) + 1
+        ));
     }
 
     #[test]

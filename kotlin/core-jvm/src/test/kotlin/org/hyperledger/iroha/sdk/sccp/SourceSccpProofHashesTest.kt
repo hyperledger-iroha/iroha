@@ -1802,6 +1802,10 @@ class SourceSccpProofHashesTest {
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalEvmReceiptRootMptValue("1234")
         }
+        val zeroHash = "00".repeat(32)
+        assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalEvmReceiptRootMptValue(zeroHash)
+        }
         assertEquals(
             "f8419f736363703a74726f6e3a726563656970742d726f6f742d76616c75653a7631a0" + "bb".repeat(32),
             SccpSourceProofs.canonicalTronReceiptRootMptValue("bb".repeat(32)).hex(),
@@ -1809,7 +1813,6 @@ class SourceSccpProofHashesTest {
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalTronReceiptRootMptValue("1234")
         }
-        val zeroHash = "00".repeat(32)
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.canonicalTronReceiptRootMptValue(zeroHash)
         }

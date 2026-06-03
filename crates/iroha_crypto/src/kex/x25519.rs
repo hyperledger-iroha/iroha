@@ -70,7 +70,7 @@ impl KeyExchangeScheme for X25519Sha256 {
         let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), shared_secret.as_bytes());
         let mut okm = [0u8; 32];
         hkdf.expand(HKDF_INFO, &mut okm)
-            .expect("hkdf expansion to 32 bytes must succeed");
+            .map_err(|_| Error::Other("x25519 hkdf expansion failed".into()))?;
         Ok(SessionKey::new(okm.to_vec()))
     }
 

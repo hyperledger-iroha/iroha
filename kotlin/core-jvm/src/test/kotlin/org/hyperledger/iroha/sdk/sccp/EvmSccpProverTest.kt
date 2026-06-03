@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.sdk.sccp
 
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -778,6 +780,24 @@ class EvmSccpProverTest {
                 ),
             )
         }
+        var outboundProverCalled = false
+        val guardedProveFacade = EthereumMainnetSccp(
+            proofEngine = EvmSccpProofEngine {
+                outboundProverCalled = true
+                proofBytes
+            },
+        )
+        assertFailsWith<IllegalArgumentException> {
+            guardedProveFacade.proveOutboundToEthereum(
+                input.copy(publicInputs = samplePublicInputs(targetDomain = SccpEvm.DOMAIN_BSC)),
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("target ETH") == true)
+        }
+        assertFalse(
+            outboundProverCalled,
+            "Ethereum outbound prover callback must not see BSC requests",
+        )
         val wrongSourceRequest = assertFailsWith<IllegalArgumentException> {
             SccpEthereumMainnet.buildProofRequest(input.copy(sourceDomain = SccpEvm.DOMAIN_BSC))
         }
@@ -914,6 +934,28 @@ class EvmSccpProverTest {
     }
 
     @Test
+    fun ethereumMainnetBeaconRestHttpTransportRejectsOversizedBodies() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/oversized") { exchange ->
+            val body = ByteArray(1024 * 1024 + 1) { 0x7b }
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+        }
+        server.start()
+        try {
+            val error = assertFailsWith<IllegalArgumentException> {
+                EthereumMainnetBeaconRestHttpTransport.get(
+                    "http://127.0.0.1:${server.address.port}/oversized",
+                    emptyMap(),
+                )
+            }
+            assertTrue(error.message?.contains("response body must be at most") == true)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
     fun ethereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality() {
         val block = mapOf<String, Any?>(
             "hash" to ("0x" + "bb".repeat(32)),
@@ -962,10 +1004,56 @@ class EvmSccpProverTest {
                 provider(
                     header = EthereumMainnetBeaconRestResponse(
                         200,
+                        ByteArray(1024 * 1024 + 1),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("response body must be at most") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    header = EthereumMainnetBeaconRestResponse(
+                        200,
                         beaconHeaderJson(executionOptimistic = true).toByteArray(Charsets.UTF_8),
                     ),
                 ).collectFinalityEvidence(null, block, null)
             }.message?.contains("must not be execution optimistic") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    header = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconHeaderJson()
+                            .replace("\"execution_optimistic\": false", "\"execution_optimistic\": \"false\"")
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("execution_optimistic must be a boolean") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    header = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconHeaderJson()
+                            .replace("\"finalized\": true", "\"finalized\": \"true\"")
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("finalized must be a boolean") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    header = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconHeaderJson()
+                            .replace("\"canonical\": true", "\"canonical\": \"true\"")
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("canonical must be a boolean") == true,
         )
         assertTrue(
             assertFailsWith<IllegalArgumentException> {
@@ -1737,6 +1825,40 @@ class EvmSccpProverTest {
         assertEquals("0x" + hexLower(SccpSourceProofs.canonicalEvmReceiptRlp(receipt)), proof.receiptRlp)
         assertTrue(proof.receiptsRoot.matches(Regex("0x[0-9a-f]{64}")))
         assertTrue(proof.receiptTrieProofNodes.isNotEmpty())
+        val zeroTopicReceipt = sampleEvmReceipt(
+            transactionIndex = 1,
+            transactionHash = "0x" + "ab".repeat(32),
+            blockHash = "0x" + "bb".repeat(32),
+            blockNumber = "0x1234",
+        ) + ("logs" to listOf(
+            mapOf(
+                "address" to "0x" + "12".repeat(20),
+                "topics" to listOf("0x" + "00".repeat(32)),
+                "data" to "0x",
+            ),
+        ))
+        val zeroTopicProof = SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+            listOf(receipt, zeroTopicReceipt),
+            "0x0",
+        )
+        assertEquals(proof.receiptRlp, zeroTopicProof.receiptRlp)
+        val zeroAddressReceipt = sampleEvmReceipt(
+            transactionIndex = 1,
+            transactionHash = "0x" + "ac".repeat(32),
+            blockHash = "0x" + "bb".repeat(32),
+            blockNumber = "0x1234",
+        ) + ("logs" to listOf(
+            mapOf(
+                "address" to "0x" + "00".repeat(20),
+                "topics" to listOf("0x" + "44".repeat(32)),
+                "data" to "0x",
+            ),
+        ))
+        val zeroAddressProof = SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+            listOf(receipt, zeroAddressReceipt),
+            "0x0",
+        )
+        assertEquals(proof.receiptRlp, zeroAddressProof.receiptRlp)
 
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(

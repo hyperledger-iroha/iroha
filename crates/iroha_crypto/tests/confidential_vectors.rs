@@ -17,7 +17,7 @@ fn confidential_vectors_match_fixture() {
         let seed_bytes = decode(seed_hex).expect("seed decode");
         let mut seed_array = [0u8; 32];
         seed_array.copy_from_slice(&seed_bytes);
-        let derived = derive_keyset(seed_array);
+        let derived = derive_keyset(seed_array).expect("derive keyset");
 
         assert_eq!(
             hex::encode(derived.nullifier_key()),

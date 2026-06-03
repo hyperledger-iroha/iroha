@@ -156,9 +156,9 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         }
     }
 
-    fn load_secret(&self) -> W3fSecretKey<C::Engine> {
+    fn try_load_secret(&self) -> Result<W3fSecretKey<C::Engine>, ParseError> {
         W3fSecretKey::<C::Engine>::from_bytes(&self.bytes)
-            .expect("stored BLS secret key must decode")
+            .map_err(|err| ParseError(err.to_string()))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -172,7 +172,12 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     }
 
     pub fn public_key(&self) -> PublicKey<C::Engine> {
-        self.load_secret().into_public()
+        self.try_public_key()
+            .expect("stored BLS secret key must decode")
+    }
+
+    pub fn try_public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
+        Ok(self.try_load_secret()?.into_public())
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
@@ -182,15 +187,30 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
     }
 
     fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
-        let mut guard = self.load_secret();
+        self.try_sign_bytes(message)
+            .expect("stored BLS secret key must decode before signing")
+    }
+
+    fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut guard = self
+            .try_load_secret()
+            .map_err(|err| Error::Signing(err.to_string()))?;
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         #[cfg(feature = "rand")]
         {
-            guard.sign(&msg, os_rng()).to_bytes()
+            Ok(guard.sign(&msg, os_rng()).to_bytes())
         }
         #[cfg(not(feature = "rand"))]
         {
-            guard.sign_once(&msg).to_bytes()
+            Ok(guard.sign_once(&msg).to_bytes())
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_unchecked_bytes_for_test(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            _marker: PhantomData,
         }
     }
 }
@@ -265,6 +285,14 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
 
     pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Vec<u8> {
         sk.sign_bytes(message)
+    }
+
+    pub fn try_sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
+        sk.try_sign_bytes(message)
+    }
+
+    pub fn derive_public_key(sk: &ManagedSecretKey<C>) -> Result<PublicKey<C::Engine>, ParseError> {
+        sk.try_public_key()
     }
 
     pub fn verify(
@@ -490,7 +518,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
         let key = ManagedSecretKey::from_bytes(payload)?;
         let identity = PublicKey::<C::Engine>(Default::default());
-        if key.public_key().to_bytes() == identity.to_bytes() {
+        if key.try_public_key()?.to_bytes() == identity.to_bytes() {
             return Err(ParseError("BLS secret key is zero".to_string()));
         }
         Ok(key)

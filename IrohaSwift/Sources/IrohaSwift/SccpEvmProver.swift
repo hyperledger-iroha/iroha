@@ -30,6 +30,7 @@ public func evmSccpSourceEventTopic() -> String {
 private let sccpSubmitMessageProofSelectorBytesV1 = Data([0xbd, 0x57, 0x82, 0x6c])
 private let sccpEvmSubmitMessageProofEntrypointV1 =
     "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)"
+private let ethereumMainnetBeaconRestMaxResponseBytes = 1024 * 1024
 
 /// SCCP public inputs shared by EVM-family Groth16 proof requests.
 public struct EvmSccpPublicInputsInput: Equatable {
@@ -568,6 +569,10 @@ public final class EvmSccpProver {
 
     public func prove(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
         let request = try await buildRequest(input)
+        return try await prove(request)
+    }
+
+    public func prove(_ request: EvmSccpProofRequest) async throws -> EvmSccpProofResult {
         guard let proveFunction else {
             throw EvmSccpProverError.localProverUnavailable
         }
@@ -1357,9 +1362,22 @@ public final class EthereumMainnetBeaconRestURLSessionTransport: EthereumMainnet
         for (header, value) in headers {
             request.setValue(value, forHTTPHeaderField: header)
         }
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        if http.expectedContentLength > Int64(ethereumMainnetBeaconRestMaxResponseBytes) {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
+        var data = Data()
+        if http.expectedContentLength > 0 {
+            data.reserveCapacity(Int(http.expectedContentLength))
+        }
+        for try await byte in bytes {
+            guard data.count < ethereumMainnetBeaconRestMaxResponseBytes else {
+                throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+            }
+            data.append(byte)
         }
         return EthereumMainnetBeaconRestResponse(
             statusCode: http.statusCode,
@@ -1455,9 +1473,10 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             ),
             label: "Ethereum mainnet Beacon REST finalized header.data"
         )
-        if let canonical = headerData["canonical"] as? Bool, canonical == false {
-            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
-        }
+        try Self.rejectNonBooleanBeaconRestCanonical(
+            headerData,
+            label: "Ethereum mainnet Beacon REST finalized header"
+        )
         let finalizedHeaderRoot = try Self.normalizeRpcHex(
             Self.requireField(
                 headerData,
@@ -1549,6 +1568,9 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         guard (200..<300).contains(response.statusCode) else {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
         }
+        guard response.body.count <= ethereumMainnetBeaconRestMaxResponseBytes else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.response")
+        }
         let parsed = try JSONSerialization.jsonObject(with: response.body)
         return try Self.expectObject(parsed, label: label)
     }
@@ -1566,7 +1588,6 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             suffix = String(suffix.dropFirst("/eth/v1".count))
         }
         components.path = basePath + suffix
-        components.query = nil
         components.fragment = nil
         guard let url = components.url else {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.endpoint")
@@ -1610,15 +1631,46 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
     }
 
     private static func rejectUnsafeBeaconRestPayload(_ payload: [String: Any], label: String) throws {
-        if let executionOptimistic = payload["execution_optimistic"] as? Bool, executionOptimistic {
+        let executionOptimistic = try optionalBeaconRestBoolean(
+            payload,
+            field: "execution_optimistic",
+            label: label
+        )
+        let executionOptimisticAlias = try optionalBeaconRestBoolean(
+            payload,
+            field: "executionOptimistic",
+            label: label
+        )
+        let finalized = try optionalBeaconRestBoolean(payload, field: "finalized", label: label)
+        if executionOptimistic == true || executionOptimisticAlias == true {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
         }
-        if let finalized = payload["finalized"] as? Bool, finalized == false {
+        if finalized == false {
             throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
         }
         guard payload["data"] != nil else {
             throw EvmSccpProverError.invalidPublicInputs(label)
         }
+    }
+
+    private static func rejectNonBooleanBeaconRestCanonical(_ payload: [String: Any], label: String) throws {
+        if try optionalBeaconRestBoolean(payload, field: "canonical", label: label) == false {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedHeader")
+        }
+    }
+
+    private static func optionalBeaconRestBoolean(
+        _ payload: [String: Any],
+        field: String,
+        label: String
+    ) throws -> Bool? {
+        guard let value = payload[field] else {
+            return nil
+        }
+        guard let boolean = value as? Bool else {
+            throw EvmSccpProverError.invalidPublicInputs("\(label).\(field)")
+        }
+        return boolean
     }
 
     private static func expectObject(_ value: Any, label: String) throws -> [String: Any] {
@@ -2413,7 +2465,8 @@ public final class EthereumMainnetSccp {
     }
 
     public func proveOutboundToEthereum(_ input: EvmSccpProofRequestInput) async throws -> EvmSccpProofResult {
-        let result = try await prover.prove(input)
+        let request = try await buildOutboundProofRequest(input)
+        let result = try await prover.prove(request)
         guard result.publicInputs.targetDomain == sccpDomainEthereum else {
             throw EvmSccpProverError.invalidPublicInputs("proofResult.publicInputs.targetDomain")
         }

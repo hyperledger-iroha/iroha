@@ -28,6 +28,12 @@ pub enum ConfidentialKeyError {
     /// Spend key must be exactly 32 bytes.
     #[error("expected 32-byte spend key, got {0} bytes")]
     InvalidSpendKeyLength(usize),
+    /// HKDF expansion failed for the labelled derived key.
+    #[error("HKDF expand for {label} failed")]
+    HkdfExpand {
+        /// Domain-separated key label being expanded.
+        label: &'static str,
+    },
 }
 
 /// Result type for confidential key derivations.
@@ -94,52 +100,53 @@ impl ConfidentialKeyset {
     }
 }
 
+fn expand_key(hkdf: &Hkdf<Sha3_512>, label: &'static str, info: &[u8]) -> Result<[u8; 32]> {
+    let mut out = [0u8; 32];
+    hkdf.expand(info, &mut out)
+        .map_err(|_| ConfidentialKeyError::HkdfExpand { label })?;
+    Ok(out)
+}
+
 /// Derive the confidential key hierarchy from a 32-byte spend key.
-#[must_use]
-pub fn derive_keyset(spend_key: [u8; 32]) -> ConfidentialKeyset {
+///
+/// # Errors
+/// Returns [`ConfidentialKeyError::HkdfExpand`] if domain-separated key expansion fails.
+pub fn derive_keyset(spend_key: [u8; 32]) -> Result<ConfidentialKeyset> {
     let hkdf = Hkdf::<Sha3_512>::new(Some(KEY_SALT), &spend_key);
 
-    let mut nk = [0u8; 32];
-    hkdf.expand(INFO_NK, &mut nk)
-        .expect("HKDF expand for nk must succeed");
+    let nk = expand_key(&hkdf, "nk", INFO_NK)?;
+    let ivk = expand_key(&hkdf, "ivk", INFO_IVK)?;
+    let ovk = expand_key(&hkdf, "ovk", INFO_OVK)?;
+    let fvk = expand_key(&hkdf, "fvk", INFO_FVK)?;
 
-    let mut ivk = [0u8; 32];
-    hkdf.expand(INFO_IVK, &mut ivk)
-        .expect("HKDF expand for ivk must succeed");
-
-    let mut ovk = [0u8; 32];
-    hkdf.expand(INFO_OVK, &mut ovk)
-        .expect("HKDF expand for ovk must succeed");
-
-    let mut fvk = [0u8; 32];
-    hkdf.expand(INFO_FVK, &mut fvk)
-        .expect("HKDF expand for fvk must succeed");
-
-    ConfidentialKeyset {
+    Ok(ConfidentialKeyset {
         spend: spend_key,
         nullifier: nk,
         incoming_view: ivk,
         outgoing_view: ovk,
         full_view: fvk,
-    }
+    })
 }
 
 /// Derive the confidential key hierarchy from an arbitrary slice.
 ///
 /// # Errors
-/// Returns [`ConfidentialKeyError::InvalidSpendKeyLength`] when the slice does not contain exactly 32 bytes.
+/// Returns [`ConfidentialKeyError::InvalidSpendKeyLength`] when the slice does not contain exactly 32 bytes,
+/// or [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
 pub fn derive_keyset_from_slice(spend_key: &[u8]) -> Result<ConfidentialKeyset> {
     if spend_key.len() != 32 {
         return Err(ConfidentialKeyError::InvalidSpendKeyLength(spend_key.len()));
     }
     let mut seed = [0u8; 32];
     seed.copy_from_slice(spend_key);
-    Ok(derive_keyset(seed))
+    derive_keyset(seed)
 }
 
 /// Generate a fresh random spend key and derive the associated hierarchy.
-#[must_use]
-pub fn generate_keyset<R: RngCore + CryptoRng>(rng: &mut R) -> ConfidentialKeyset {
+///
+/// # Errors
+/// Returns [`ConfidentialKeyError::HkdfExpand`] if key expansion fails.
+pub fn generate_keyset<R: RngCore + CryptoRng>(rng: &mut R) -> Result<ConfidentialKeyset> {
     let mut seed = [0u8; 32];
     rng.fill_bytes(&mut seed);
     derive_keyset(seed)
@@ -148,12 +155,13 @@ pub fn generate_keyset<R: RngCore + CryptoRng>(rng: &mut R) -> ConfidentialKeyse
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng as _;
 
     #[test]
     fn derive_keyset_is_deterministic() {
         let seed = [0x11u8; 32];
-        let first = derive_keyset(seed);
-        let second = derive_keyset(seed);
+        let first = derive_keyset(seed).expect("derive first keyset");
+        let second = derive_keyset(seed).expect("derive second keyset");
         assert_eq!(first.nullifier_key(), second.nullifier_key());
         assert_eq!(first.incoming_view_key(), second.incoming_view_key());
         assert_eq!(first.outgoing_view_key(), second.outgoing_view_key());
@@ -168,7 +176,7 @@ mod tests {
     #[test]
     fn derive_keyset_matches_expected_vectors() {
         let seed = [0x42u8; 32];
-        let keyset = derive_keyset(seed);
+        let keyset = derive_keyset(seed).expect("derive keyset");
         assert_eq!(
             hex::encode(keyset.nullifier_key()),
             "cb7149cc545b97fe5ab1ffe85550f9b0146f3dbff7cf9d2921b9432b641bf0dc"
@@ -188,11 +196,28 @@ mod tests {
     }
 
     #[test]
+    fn generate_keyset_derives_from_rng_bytes() {
+        let mut rng = rand::rngs::StdRng::from_seed([0xA5; 32]);
+        let mut expected_rng = rand::rngs::StdRng::from_seed([0xA5; 32]);
+        let mut expected_seed = [0u8; 32];
+        expected_rng.fill_bytes(&mut expected_seed);
+
+        let generated = generate_keyset(&mut rng).expect("generate keyset");
+        let expected = derive_keyset(expected_seed).expect("derive expected keyset");
+
+        assert_eq!(generated.spend_key(), &expected_seed);
+        assert_eq!(generated.nullifier_key(), expected.nullifier_key());
+        assert_eq!(generated.incoming_view_key(), expected.incoming_view_key());
+        assert_eq!(generated.outgoing_view_key(), expected.outgoing_view_key());
+        assert_eq!(generated.full_view_key(), expected.full_view_key());
+    }
+
+    #[test]
     #[ignore = "generates example vectors for manual inspection"]
     fn dump_confidential_vectors() {
         for byte in [0x00u8, 0x42, 0xFF] {
             let seed = [byte; 32];
-            let keyset = derive_keyset(seed);
+            let keyset = derive_keyset(seed).expect("derive keyset");
             println!(
                 "seed={:02x} nk={} ivk={} ovk={} fvk={}",
                 byte,

@@ -696,7 +696,7 @@ fn x25519_process_remote_key_update_resets_on_session_change() {
 }
 
 #[test]
-fn x25519_process_remote_key_update_requires_local_ephemeral_without_state_change() {
+fn x25519_process_remote_key_update_lazily_generates_local_ephemeral() {
     let publisher_keys = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let suite = EncryptionSuite::X25519ChaCha20Poly1305([0xAD; 32]);
     let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
@@ -706,14 +706,13 @@ fn x25519_process_remote_key_update_requires_local_ephemeral_without_state_chang
         .expect("publisher key update");
 
     let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
-    let err = viewer_session
+    viewer_session
         .process_remote_key_update(&key_update, publisher_keys.public_key())
-        .expect_err("viewer must prepare local x25519 material first");
-    assert!(matches!(err, HandshakeError::MissingX25519LocalEphemeral));
-    assert_eq!(viewer_session.negotiated_suite(), None);
-    assert!(viewer_session.transport_keys().is_none());
-    assert!(viewer_session.sts_root().is_none());
-    assert_eq!(viewer_session.snapshot_state(), None);
+        .expect("viewer lazily prepares local x25519 material");
+    assert_eq!(viewer_session.negotiated_suite(), Some(&suite));
+    assert!(viewer_session.transport_keys().is_some());
+    assert!(viewer_session.sts_root().is_some());
+    assert!(viewer_session.snapshot_state().is_some());
 }
 
 #[test]

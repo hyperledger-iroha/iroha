@@ -582,6 +582,7 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert summary["offline_toml_sha256"]
 
     rendered = module.render_offline_toml(summary)
+    assert '# sccp_evm_source_block_tag = "finalized"' in rendered
     assert '# sccp_evm_source_rpc_chain_id = "1"' in rendered
     assert '# sccp_evm_source_bridge_address = "' + fake.bridge + '"' in rendered
     assert (
@@ -613,6 +614,7 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
         in rendered
     )
     assert rendered.count("# sccp_evm_source_rpc_chain_id") == 1
+    assert rendered.count("# sccp_evm_source_block_tag") == 1
     assert rendered.count("# sccp_evm_source_bridge_address") == 1
     assert rendered.count("# sccp_evm_source_bridge_runtime_code_hash") == 1
     assert rendered.count("# sccp_evm_source_bridge_runtime_bytecode_hex") == 1
@@ -1327,6 +1329,7 @@ def test_evm_source_live_cli_json_and_toml_outputs(capsys):
         rendered = capsys.readouterr().out
         assert "[[zk.sccp_source_verifier_materials]]" in rendered
         assert "[[zk.sccp_source_adapter_engine_deployments]]" in rendered
+        assert "# sccp_evm_source_block_tag" in rendered
         assert "# sccp_evm_source_bridge_runtime_bytecode_hex" in rendered
     finally:
         module.collect_live_evidence = original_collect

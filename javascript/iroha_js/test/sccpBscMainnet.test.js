@@ -452,6 +452,23 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
   assert.equal(seenRequest.targetDomain, SCCP_DOMAIN_BSC);
   assert.equal(Object.isFrozen(seenRequest), true);
 
+  const zeroProofBytes = new Uint8Array(GROTH16_PROOF_BYTES.length);
+  assert.throws(
+    () => wrapBscMainnetSccpDestinationProofResult(zeroProofBytes, expectedRequest),
+    /proofBytes must not be all zero/u,
+  );
+  const zeroProofSdk = new BscMainnetSccp({
+    outboundProver: {
+      async prove() {
+        return { proofBytes: zeroProofBytes };
+      },
+    },
+  });
+  await assert.rejects(
+    () => zeroProofSdk.proveOutboundToBsc(input),
+    /proofBytes must not be all zero/u,
+  );
+
   let acceptedRequest;
   const acceptingSdk = new BscMainnetSccp({
     outboundProver: {

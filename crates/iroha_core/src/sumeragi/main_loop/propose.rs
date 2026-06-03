@@ -1715,7 +1715,8 @@ impl Actor {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
-                && self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view)
+                && (!missing_qc_liveness_active
+                    || self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view))
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
@@ -2163,7 +2164,7 @@ impl Actor {
                             >= repair_window)
             });
         self.frontier_missing_qc_liveness_active(proposal_height, proposal_view)
-            || pending_allows_stale_branch_rotation
+            && pending_allows_stale_branch_rotation
     }
 
     pub(super) fn local_same_height_vote_is_committed_parent_marker(
@@ -6471,12 +6472,14 @@ impl Actor {
         };
         if local_pos != leader_index {
             let leader_peer = topology.iter().next().cloned();
-            if self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
-                height,
-                view_idx,
-                pending_queue_len,
-                now,
-            ) {
+            if self.frontier_missing_qc_liveness_active(height, view_idx)
+                && self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+                    height,
+                    view_idx,
+                    pending_queue_len,
+                    now,
+                )
+            {
                 self.warn_resilience_frontier_proposal_deferred(
                     height,
                     view_idx,

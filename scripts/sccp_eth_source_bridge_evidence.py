@@ -85,6 +85,7 @@ ETH_TEMPLATE_TRANSCRIPT_PREFIXES = (
     b"sccp:eth:ssz-execution-payload-branch:deneb-fulu:v1",
 )
 ETH_SOURCE_BRIDGE_CONFIG_PREFIX = b"iroha:sccp:eth-source-bridge-config:v1"
+ETH_SOURCE_BLOCK_TAGS = ("finalized", "safe", "latest")
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -248,6 +249,13 @@ def _require_nonzero_fixed_bytes(
     if not any(raw):
         raise ValueError(f"{label} must not be zero")
     return raw
+
+
+def _block_tag_from_args(args: argparse.Namespace) -> str:
+    block_tag = getattr(args, "block_tag", None) or "finalized"
+    if block_tag not in ETH_SOURCE_BLOCK_TAGS:
+        raise ValueError("block_tag must be finalized, safe, or latest")
+    return block_tag
 
 
 def _evm_family_template_component_hash(component_id: str, component_kind: str) -> bytes:
@@ -919,8 +927,12 @@ def render_toml(args: argparse.Namespace) -> str:
     _require_expected_record_hashes(args, output="toml")
     _require_toml_receipt_metadata(args, output="toml")
     _require_toml_runtime_bytecode_metadata(args, output="toml")
+    block_tag = _block_tag_from_args(args)
+    if block_tag != "finalized":
+        raise ValueError("Ethereum source TOML requires --block-tag finalized")
     comments = [
         "# sccp_evm_source_rpc_chain_id = " + json.dumps(str(ETH_RPC_CHAIN_ID)),
+        "# sccp_evm_source_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_source_bridge_address = "
         + json.dumps(_hex(args.bridge_address)),
         "# sccp_evm_source_bridge_runtime_code_hash = "
@@ -999,6 +1011,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "source_domain": args.source_domain,
         "target_domain": args.target_domain,
         "source_chain": "eth",
+        "block_tag": _block_tag_from_args(args),
         "source_proof_plan": "EthereumBeaconReceiptProof",
         "finality_model": "EthereumBeaconExecution",
         "source_bridge_emitter_id": ETH_SOURCE_BRIDGE_EMITTER_ID,
@@ -1074,6 +1087,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=lambda value: parse_evm_address(value, label="bridge address"),
         help="Ethereum source bridge address as a non-zero 20-byte EVM hex address.",
+    )
+    parser.add_argument(
+        "--block-tag",
+        choices=ETH_SOURCE_BLOCK_TAGS,
+        default="finalized",
+        help=(
+            "Ethereum block tag represented by the audited source evidence. "
+            "Production TOML requires finalized."
+        ),
     )
     parser.add_argument(
         "--source-bridge-runtime-bytecode-hex",

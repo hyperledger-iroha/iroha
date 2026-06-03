@@ -1418,19 +1418,19 @@ pub fn bls_normal_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
     use crate::secrecy::ExposeSecret as _;
     match sk.0.expose_secret() {
         PrivateKeyInner::BlsNormal(_inner) => {
-            let pk = PublicKey::from(sk.clone());
+            let pk = PublicKey::from_private_key(sk)?;
             let (_alg, pk_bytes) = pk.to_bytes();
             let mut msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
             msg.extend_from_slice(POP_DST.as_bytes());
             msg.extend_from_slice(pk_bytes);
             let msg_h: [u8; 32] = Hash::new(&msg).into();
-            Ok(signature::bls::BlsNormal::sign(
+            signature::bls::BlsNormal::try_sign(
                 &msg_h,
                 match sk.0.expose_secret() {
                     PrivateKeyInner::BlsNormal(v) => v,
                     _ => unreachable!(),
                 },
-            ))
+            )
         }
         _ => Err(Error::BadSignature),
     }
@@ -1472,19 +1472,19 @@ pub fn bls_small_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
     use crate::secrecy::ExposeSecret as _;
     match sk.0.expose_secret() {
         PrivateKeyInner::BlsSmall(_inner) => {
-            let pk = PublicKey::from(sk.clone());
+            let pk = PublicKey::from_private_key(sk)?;
             let (_alg, pk_bytes) = pk.to_bytes();
             let mut msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
             msg.extend_from_slice(POP_DST.as_bytes());
             msg.extend_from_slice(pk_bytes);
             let msg_h: [u8; 32] = Hash::new(&msg).into();
-            Ok(signature::bls::BlsSmall::sign(
+            signature::bls::BlsSmall::try_sign(
                 &msg_h,
                 match sk.0.expose_secret() {
                     PrivateKeyInner::BlsSmall(v) => v,
                     _ => unreachable!(),
                 },
-            ))
+            )
         }
         _ => Err(Error::BadSignature),
     }
@@ -1738,11 +1738,13 @@ impl PublicKey {
             }
             #[cfg(feature = "bls")]
             PrivateKeyInner::BlsNormal(secret) => PublicKeyFull::BlsNormal(
-                bls::BlsNormal::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
+                bls::BlsNormal::derive_public_key(secret)
+                    .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
             #[cfg(feature = "bls")]
             PrivateKeyInner::BlsSmall(secret) => PublicKeyFull::BlsSmall(
-                bls::BlsSmall::keypair(KeyGenOption::FromPrivateKey(secret.clone())).0,
+                bls::BlsSmall::derive_public_key(secret)
+                    .map_err(|err| Error::KeyGen(err.to_string()))?,
             ),
             #[cfg(feature = "sm")]
             PrivateKeyInner::Sm2(key) => PublicKeyFull::Sm2(key.public_key()),
@@ -2852,7 +2854,7 @@ mod tests {
 
         let secret =
             w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>::from_seed(b"iroha:test:canceling-bls-normal");
-        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>(-secret.0.clone());
+        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::ZBLS>(-secret.0);
         let sk1 =
             PrivateKey::from_bytes(Algorithm::BlsNormal, &secret.to_bytes()).expect("secret key");
         let sk2 = PrivateKey::from_bytes(Algorithm::BlsNormal, &opposite.to_bytes())
@@ -2871,15 +2873,20 @@ mod tests {
         sig2.verify(&pk2, msg).expect("signature 2 verifies");
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
-        let pops: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+        let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
 
         assert!(
-            bls_normal_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
-                .is_err(),
+            bls_normal_verify_aggregate_same_message_fast(
+                msg,
+                &signatures,
+                &public_keys,
+                &pop_refs
+            )
+            .is_err(),
             "fast aggregate wrapper must reject identity aggregate"
         );
         assert!(
-            bls_normal_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops)
+            bls_normal_verify_aggregate_same_message(msg, &signatures, &public_keys, &pop_refs)
                 .is_err(),
             "fallback wrapper must not bypass identity aggregate rejection"
         );
@@ -2952,7 +2959,7 @@ mod tests {
         let secret = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(
             b"iroha:test:canceling-bls-small",
         );
-        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>(-secret.0.clone());
+        let opposite = w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>(-secret.0);
         let sk1 =
             PrivateKey::from_bytes(Algorithm::BlsSmall, &secret.to_bytes()).expect("secret key");
         let sk2 = PrivateKey::from_bytes(Algorithm::BlsSmall, &opposite.to_bytes())
@@ -2971,15 +2978,16 @@ mod tests {
         sig2.verify(&pk2, msg).expect("signature 2 verifies");
         let signatures: Vec<&[u8]> = vec![sig1.payload(), sig2.payload()];
         let public_keys: Vec<&PublicKey> = vec![&pk1, &pk2];
-        let pops: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
+        let pop_refs: Vec<&[u8]> = vec![pop1.as_slice(), pop2.as_slice()];
 
         assert!(
-            bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pops)
+            bls_small_verify_aggregate_same_message_fast(msg, &signatures, &public_keys, &pop_refs)
                 .is_err(),
             "fast aggregate wrapper must reject identity aggregate"
         );
         assert!(
-            bls_small_verify_aggregate_same_message(msg, &signatures, &public_keys, &pops).is_err(),
+            bls_small_verify_aggregate_same_message(msg, &signatures, &public_keys, &pop_refs)
+                .is_err(),
             "fallback wrapper must not bypass identity aggregate rejection"
         );
     }

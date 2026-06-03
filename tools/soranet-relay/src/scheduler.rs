@@ -318,7 +318,10 @@ impl CellScheduler {
 
             if self.deficit[idx] > 0 {
                 self.deficit[idx] -= 1; // "Cost" of one cell (abstract unit)
-                return self.queues[idx].pop_front().expect("checked not empty");
+                if let Some(cell) = self.queues[idx].pop_front() {
+                    return cell;
+                }
+                self.deficit[idx] = 0;
             }
         }
 
@@ -360,7 +363,10 @@ impl CellScheduler {
             for (idx, _) in classes.iter().enumerate() {
                 if !self.queues[idx].is_empty() && self.deficit[idx] > 0 {
                     self.deficit[idx] -= 1;
-                    return self.queues[idx].pop_front().expect("checked non-empty");
+                    if let Some(cell) = self.queues[idx].pop_front() {
+                        return cell;
+                    }
+                    self.deficit[idx] = 0;
                 }
             }
         }
@@ -474,6 +480,24 @@ mod tests {
 
         assert!(c_count > b_count, "Control should be prioritized");
         assert!(b_count > 0, "Bulk should not be starved");
+    }
+
+    #[test]
+    fn scheduler_dequeue_path_clears_drained_positive_deficit_queue() {
+        let mut scheduler = CellScheduler::new(SchedulerConfig::default());
+        let bulk_idx = scheduler.class_index(CellClass::Bulk);
+
+        scheduler.enqueue(Cell::new(CellClass::Bulk, vec![0xAA]));
+        scheduler.deficit[bulk_idx] = 3;
+
+        let cell = scheduler.force_tick();
+        assert!(!cell.is_dummy);
+        assert_eq!(cell.class, CellClass::Bulk);
+        assert_eq!(cell.data, vec![0xAA]);
+
+        let dummy = scheduler.force_tick();
+        assert!(dummy.is_dummy);
+        assert_eq!(scheduler.deficit[bulk_idx], 0);
     }
 
     #[test]

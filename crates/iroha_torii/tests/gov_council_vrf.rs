@@ -71,11 +71,14 @@ async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
     let input_carol = parliament::build_input(&seed, &account_carol);
 
     let (_y1, pi1) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk1, chain_id.as_bytes(), &input_alice);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk1, chain_id.as_bytes(), &input_alice)
+            .expect("alice normal VRF proof");
     let (_y2, pi2) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk2, chain_id.as_bytes(), &input_bob);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk2, chain_id.as_bytes(), &input_bob)
+            .expect("bob normal VRF proof");
     let (_y3, pi3) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk3, chain_id.as_bytes(), &input_carol);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk3, chain_id.as_bytes(), &input_carol)
+            .expect("carol normal VRF proof");
 
     let pk1_bytes = KeyPair::from((pk1.clone(), sk1.clone()))
         .public_key()

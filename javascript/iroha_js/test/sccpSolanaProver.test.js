@@ -11041,6 +11041,7 @@ test("derives EVM, BSC, TRON, and Substrate source proof hashes from UI witness 
     EVM_RECEIPT_ROOT_MPT_VALUE_HEX,
   );
   assert.throws(() => canonicalEvmReceiptRootMptValue("0x1234"), /32 bytes/);
+  assert.throws(() => canonicalEvmReceiptRootMptValue(SCCP_ZERO_HASH_V1), /must not be zero/);
   assert.equal(
     `0x${Buffer.from(canonicalTronReceiptRootMptValue(HEX32_B)).toString("hex")}`,
     TRON_RECEIPT_ROOT_MPT_VALUE_HEX,

@@ -56,6 +56,23 @@ pub enum VrfProof {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
 pub struct VrfOutput(pub [u8; 32]);
 
+/// VRF proof construction error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VrfProofError {
+    /// Stored BLS secret-key bytes are not a valid non-zero scalar.
+    InvalidSecretKey,
+}
+
+impl core::fmt::Display for VrfProofError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidSecretKey => f.write_str("invalid BLS secret key for VRF proof"),
+        }
+    }
+}
+
+impl std::error::Error for VrfProofError {}
+
 /// VRF algorithm variant over BLS.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VrfBlsVariant {
@@ -94,56 +111,74 @@ fn blake2b_256(bytes: &[u8]) -> [u8; 32] {
 }
 
 /// Produce a VRF proof and output using the BLS Normal variant.
+///
+/// # Errors
+///
+/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
+/// bytes do not decode to a valid non-zero scalar.
 pub fn prove_normal_with_chain(
     sk: &BlsNormalPrivateKey,
     chain_id: &[u8],
     input: &[u8],
-) -> (VrfOutput, VrfProof) {
-    use blstrs::{G2Projective, Scalar};
+) -> Result<(VrfOutput, VrfProof), VrfProofError> {
+    use blstrs::G2Projective;
     let msg = prehash_input_with_chain(chain_id, input);
-    let sk_bytes = sk.to_bytes();
-    let sk_slice: &[u8; 32] = (&sk_bytes[..])
-        .try_into()
-        .expect("BLS secret keys must be 32 bytes");
-    let x = Scalar::from_bytes_le(sk_slice).unwrap();
+    let x = scalar_from_secret_key_bytes(&sk.to_bytes())?;
     let h = G2Projective::hash_to_curve(&msg, DST_G2, &[]);
     let sig = (h * x).to_affine().to_compressed();
     let y = output_from_sigma(&sig);
     let mut arr = [0u8; 96];
     arr.copy_from_slice(&sig);
-    (y, VrfProof::SigInG2(arr))
+    Ok((y, VrfProof::SigInG2(arr)))
 }
 
 /// Produce a VRF proof and output using the BLS Normal variant with an empty chain-id.
 /// The proof is a signature in G2 over a pre-hashed input; the output is a 32-byte digest.
-pub fn prove_normal(sk: &BlsNormalPrivateKey, input: &[u8]) -> (VrfOutput, VrfProof) {
+///
+/// # Errors
+///
+/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
+/// bytes do not decode to a valid non-zero scalar.
+pub fn prove_normal(
+    sk: &BlsNormalPrivateKey,
+    input: &[u8],
+) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     prove_normal_with_chain(sk, &[], input)
 }
 
 /// Produce a VRF proof and output using the BLS Small variant.
+///
+/// # Errors
+///
+/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
+/// bytes do not decode to a valid non-zero scalar.
 pub fn prove_small_with_chain(
     sk: &BlsSmallPrivateKey,
     chain_id: &[u8],
     input: &[u8],
-) -> (VrfOutput, VrfProof) {
-    use blstrs::{G1Projective, Scalar};
+) -> Result<(VrfOutput, VrfProof), VrfProofError> {
+    use blstrs::G1Projective;
     let msg = prehash_input_with_chain(chain_id, input);
-    let sk_bytes = sk.to_bytes();
-    let sk_slice: &[u8; 32] = (&sk_bytes[..])
-        .try_into()
-        .expect("BLS secret keys must be 32 bytes");
-    let x = Scalar::from_bytes_le(sk_slice).unwrap();
+    let x = scalar_from_secret_key_bytes(&sk.to_bytes())?;
     let h = G1Projective::hash_to_curve(&msg, DST_G1, &[]);
     let sig = (h * x).to_affine().to_compressed();
     let y = output_from_sigma(&sig);
     let mut arr = [0u8; 48];
     arr.copy_from_slice(&sig);
-    (y, VrfProof::SigInG1(arr))
+    Ok((y, VrfProof::SigInG1(arr)))
 }
 
 /// Produce a VRF proof and output using the BLS Small variant with an empty chain-id.
 /// The proof is a signature in G1 over a pre-hashed input; the output is a 32-byte digest.
-pub fn prove_small(sk: &BlsSmallPrivateKey, input: &[u8]) -> (VrfOutput, VrfProof) {
+///
+/// # Errors
+///
+/// Returns [`VrfProofError::InvalidSecretKey`] when the stored BLS secret-key
+/// bytes do not decode to a valid non-zero scalar.
+pub fn prove_small(
+    sk: &BlsSmallPrivateKey,
+    input: &[u8],
+) -> Result<(VrfOutput, VrfProof), VrfProofError> {
     prove_small_with_chain(sk, &[], input)
 }
 
@@ -249,11 +284,7 @@ fn to_g1(bytes: &[u8]) -> Option<blstrs::G1Affine> {
     }
     let mut arr = [0u8; 48];
     arr.copy_from_slice(bytes);
-    let ct = blstrs::G1Affine::from_compressed(&arr);
-    if !bool::from(ct.is_some()) {
-        return None;
-    }
-    let point = ct.unwrap();
+    let point = blstrs::G1Affine::from_compressed(&arr).into_option()?;
     if point.is_identity().into() {
         return None;
     }
@@ -269,11 +300,7 @@ fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
     }
     let mut arr = [0u8; 96];
     arr.copy_from_slice(bytes);
-    let ct = blstrs::G2Affine::from_compressed(&arr);
-    if !bool::from(ct.is_some()) {
-        return None;
-    }
-    let point = ct.unwrap();
+    let point = blstrs::G2Affine::from_compressed(&arr).into_option()?;
     if point.is_identity().into() {
         return None;
     }
@@ -281,6 +308,18 @@ fn to_g2(bytes: &[u8]) -> Option<blstrs::G2Affine> {
         return None;
     }
     Some(point)
+}
+
+fn scalar_from_secret_key_bytes(bytes: &[u8]) -> Result<blstrs::Scalar, VrfProofError> {
+    let sk_slice: &[u8; 32] = bytes
+        .try_into()
+        .map_err(|_| VrfProofError::InvalidSecretKey)?;
+    if sk_slice.iter().all(|byte| *byte == 0) {
+        return Err(VrfProofError::InvalidSecretKey);
+    }
+    blstrs::Scalar::from_bytes_le(sk_slice)
+        .into_option()
+        .ok_or(VrfProofError::InvalidSecretKey)
 }
 
 fn hash_msg_to_g2(msg: &[u8]) -> blstrs::G2Affine {
@@ -307,7 +346,7 @@ mod tests {
         let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
         let input = b"vrf:test:normal";
         let chain = b"test-chain";
-        let (y1, pi) = prove_normal_with_chain(&sk, chain, input);
+        let (y1, pi) = prove_normal_with_chain(&sk, chain, input).expect("normal VRF proof");
         // Re-derive pk from sk for verification
         let (pk2, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
         let y2 = verify_normal_with_chain(&pk2, chain, input, &pi).expect("valid proof");
@@ -321,7 +360,7 @@ mod tests {
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
         let input = b"vrf:test:small";
         let chain = b"test-chain";
-        let (y1, pi) = prove_small_with_chain(&sk, chain, input);
+        let (y1, pi) = prove_small_with_chain(&sk, chain, input).expect("small VRF proof");
         let (pk2, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
         let y2 = verify_small_with_chain(&pk2, chain, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
@@ -334,7 +373,8 @@ mod tests {
         let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![9, 9, 9]));
         let chain = b"chain-A";
         let input = b"input";
-        let (y, pi) = prove_normal_with_chain(&sk, chain, input);
+        let (y, pi) =
+            prove_normal_with_chain(&sk, chain, input).expect("normal cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
         let (pk, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
         // Attempt to verify VRF proof as a regular BLS signature
@@ -374,7 +414,8 @@ mod tests {
         let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![3, 3, 3]));
         let chain = b"chain-B";
         let input = b"inputB";
-        let (y, pi) = prove_small_with_chain(&sk, chain, input);
+        let (y, pi) =
+            prove_small_with_chain(&sk, chain, input).expect("small cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
         let (pk, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
         if let VrfProof::SigInG1(sig) = pi {
@@ -437,6 +478,36 @@ mod tests {
     fn vrf_to_g2_rejects_invalid_length() {
         assert!(to_g2(&[0u8; 95]).is_none());
         assert!(to_g2(&[0u8; 97]).is_none());
+    }
+
+    #[test]
+    fn vrf_rejects_malformed_compressed_signatures() {
+        let (normal_pk, _normal_sk) =
+            bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        let normal_proof = VrfProof::SigInG2([0xFF; 96]);
+        assert!(verify_normal_with_chain(&normal_pk, b"chain", b"input", &normal_proof).is_none());
+
+        let (small_pk, _small_sk) =
+            bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
+        let small_proof = VrfProof::SigInG1([0xFF; 48]);
+        assert!(verify_small_with_chain(&small_pk, b"chain", b"input", &small_proof).is_none());
+    }
+
+    #[cfg(not(feature = "bls-backend-blstrs"))]
+    #[test]
+    fn vrf_prove_rejects_invalid_secret_without_panic() {
+        let invalid_normal =
+            bls::BlsNormalPrivateKey::from_unchecked_bytes_for_test(vec![0xFF; 32]);
+        assert_eq!(
+            prove_normal_with_chain(&invalid_normal, b"chain", b"input"),
+            Err(VrfProofError::InvalidSecretKey)
+        );
+
+        let invalid_small = bls::BlsSmallPrivateKey::from_unchecked_bytes_for_test(vec![0xFF; 32]);
+        assert_eq!(
+            prove_small_with_chain(&invalid_small, b"chain", b"input"),
+            Err(VrfProofError::InvalidSecretKey)
+        );
     }
 
     #[test]

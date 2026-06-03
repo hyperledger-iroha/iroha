@@ -76,27 +76,54 @@ Substrate-family proof engines alongside their existing bundle-byte snapshot
 checks.
 Core admission tests pin the same production gate ordering: lane-specific
 source-adapter evidence is checked before destination or route activation. The
-active launch policy is Ethereum-mainnet lane readiness, so complete Ethereum
-mainnet source-proof, destination-rollout, route-allowlist, and route-canary
-records can open without waiting for BSC, Solana, TON, TRON, or
-Substrate-family lanes. Non-ETH lanes remain fail-closed until their own launch
-policy opens, while the all-lanes checker remains as a diagnostic and
-release-evidence consistency helper. Strict release-bundle verification applies
-complete cryptographic-evidence row checks to the active Ethereum launch lane
+active launch policy is BSC-mainnet lane readiness, so complete BSC mainnet
+source-proof, source-adapter deployment, destination-rollout, route-allowlist,
+and route-canary records can open without waiting for Ethereum, Solana, TON,
+TRON, or Substrate-family lanes. Non-BSC lanes remain fail-closed until their
+own launch policy opens, while the all-lanes checker remains as a diagnostic
+and release-evidence consistency helper. Strict release-bundle verification
+applies complete cryptographic-evidence row checks to the active BSC launch lane
 and keeps future-lane rows diagnostic until their launch policy opens. Core
-admission regressions now assert that BSC, Solana, TON, and TRON route-canary,
-route-allowlist, and destination-rollout drift checks remain behind that
-non-ETH lane-launch gate in the first-release policy.
+admission regressions now assert that Ethereum, Solana, TON, and TRON
+route-canary, route-allowlist, and destination-rollout drift checks remain
+behind that non-BSC lane-launch gate in the first-release policy.
 The Rust helper API exposes `build_sccp_eth_mainnet_source_adapter_deployment`,
 `verified_sccp_eth_mainnet_source_chain_proof_envelope_for_production`, and
 `verify_sccp_eth_mainnet_source_chain_proof_envelope_production` for the
-deployment-bound ETH -> SORA source-admission path; BSC keeps its separate
-helper names for the future BSC lane.
+deployment-bound ETH -> SORA source-admission path. The active BSC lane uses the
+parallel BSC helper family and requires governed source-adapter deployment
+evidence before BSC -> SORA source proofs can pass admission.
 Release-readiness user-prover surface rows therefore require the
 `core-admission` corridor phase in addition to the web, Python,
 Swift, Kotlin, Java Android, and .NET SDK phases, so a portal/mobile proof path
 cannot be marked validated until generated proofs also pass the on-chain
 admission surface.
+Ethereum mainnet Beacon REST finality collectors in the browser and native
+SDKs fail closed when safety flags are malformed: present
+`execution_optimistic`, `executionOptimistic`, `finalized`, and finalized-header
+`canonical` fields must be JSON booleans before the SDK accepts finalized
+header, checkpoint, or receipt-bound finality evidence. The JavaScript
+collector also requires `verifyFinalityCheckpoint` / `verify_finality_checkpoint`
+overrides to be real booleans, so dynamic browser code cannot accidentally
+disable checkpoint matching with numeric or string coercion. SDK Beacon REST URL
+builders preserve endpoint query strings when appending finalized-header and
+checkpoint paths, allowing apps to use provider URLs that carry query-scoped
+credentials while still sending headers separately. Browser fetch adapters also
+validate Response-like `ok` and `status` fields before parsing JSON, so
+malformed custom stubs or non-2xx status codes cannot be treated as finalized
+Beacon REST evidence; real browser `fetch` responses prefer bounded
+`ReadableStream` reads capped at 1 MiB, fall back to size-checked `text()` when
+streams are unavailable, and parse locally before the object-root check, while
+lightweight `json()` stubs remain supported for tests.
+Native Beacon REST parsers require object-root JSON responses before inspecting
+safety fields, keeping malformed roots on the same fail-closed path as
+incomplete finality data. Swift, Kotlin/JVM, Java Android, and C# cap Beacon
+REST finality response bodies at 1 MiB before JSON parsing, matching the
+bounded-response model used by the live evidence tooling; Kotlin/JVM, Java
+Android, C#, and Swift also bound their default HTTP transport reads, with
+Swift using a URLSession async-byte reader plus an early declared
+`Content-Length` rejection and keeping the provider body cap as the final parse
+guard.
 For Solana source-state proofs, those wrappers also reject prover output unless
 the SDK-built request still binds the expected Solana source-domain and
 mainnet-genesis public-input columns, recomputes the AccountsLtHash or
@@ -1082,6 +1109,10 @@ dependency. Swift, Kotlin/JVM, and Java Android now also provide
 `submitOutboundToEthereum` methods backed by app-owned outbound submitter
 callbacks, so their Ethereum mainnet easy paths build and validate verifier
 calldata before handing it to the wallet/RPC integration supplied by the app.
+When an Ethereum execution provider is configured on those facades, the
+outbound submitter path checks `eth_chainId == 1` before invoking the app-owned
+submit callback, so a configured BSC or non-mainnet provider cannot be silently
+ignored during SORA -> Ethereum submission.
 The Python Ethereum mainnet facade mirrors that final step with
 `submit_outbound_to_ethereum`, which passes the validated calldata package to an
 app-owned transaction hook.
@@ -1805,8 +1836,9 @@ transition header `stateRoot`, verifies the account `storageRoot`, opens the
 `currentValidatorSet[index].consensusAddress` storage slot. The verifier
 requires those proven storage addresses, in order, to match the Parlia
 header-derived next-validator-set payload before the parent set signature can
-activate the transition. Full BSC production still needs recursive deployment
-evidence for the source-adapter verifier.
+activate the transition. BSC production admission requires the governed
+source-adapter deployment record to bind the canonical recursive verifier key
+and mined deployment receipt evidence.
 The BSC adapter also carries `receipt_root_index` plus bounded
 `receipt_trie_proof_nodes`; the verifier derives the RLP transaction-index key,
 opens the receipt trie under the BSC header `receipts_root`, and requires
@@ -1817,8 +1849,9 @@ equal to the governed source bridge emitter address before checking the
 receipt-proof transcript hash. The same strict receipt decoder rejects
 failed or malformed receipts, rejects logs with more than four topics, permits
 unrelated valid `LOG0` entries, and accepts the typed EVM-family receipt-root
-envelope only for placeholder structural fixtures. Full BSC production still
-needs recursive deployment evidence for the source-adapter verifier.
+envelope only for placeholder structural fixtures. The active BSC lane still
+fails closed unless configured governance records supply the source material,
+source-adapter deployment evidence, destination rollout, and route allowlist.
 
 Operators can now render the BSC -> SORA source material and source-adapter
 deployment records from governed live evidence with
@@ -1887,7 +1920,19 @@ requires the hash and bytecode to match the selected collection block tag.
 Production TOML rendering requires that receipt-block hash/root/code-hash check,
 an explicit `--expected-source-bridge-code-hash` pin, plus expected source
 material and source-adapter deployment record hashes, so the observed live
-bytecode cannot self-authorize governance evidence.
+bytecode cannot self-authorize governance evidence. Ethereum source TOML also
+requires the collection block tag to be `finalized`; explicit `latest` or
+`safe` Ethereum reads remain available for JSON inspection, but they cannot
+render governed production TOML. BSC source TOML keeps its `latest` default.
+Both the live collector and direct audited ETH/BSC source renderer emit
+`sccp_evm_source_block_tag` metadata; the all-lanes preflight requires that
+comment and rejects Ethereum source material unless it is `finalized`. The
+public all-lanes lane summary also exposes this as
+`evm_live_metadata.source_block_tag`, so release-bundle verification can reject
+forged summaries that hide non-finalized Ethereum source reads. The
+release-readiness report also mirrors this value in each cryptographic-evidence
+row as `evm_source_block_tag`, making the finalized source pin visible in both
+JSON and Markdown release artifacts.
 The helper treats chain-id selectors, fixed-width component hashes, and
 JSON-RPC returned quantities or hex byte strings as exact evidence; surrounding
 whitespace fails before live source material or deployment receipt metadata is
@@ -3036,11 +3081,10 @@ material, replayed adapter verifier commitment, non-SORA source-adapter target,
 missing source-record hash comments, stale source-record hash comments,
 missing destination rollout, missing route allowlist, or replayed route material
 fails closed. Admission also enforces the configured launch policy against
-configured material: with the first-release Ethereum-mainnet launch policy,
-complete ETH evidence can open the ETH inbound lane independently, while
-non-ETH lanes remain blocked until their own lane policy opens. The all-lanes
-checker remains available as a diagnostic for future coordinated launches. The
-default
+configured material: with the first-release BSC-mainnet launch policy, complete
+BSC evidence can open the BSC inbound lane independently, while non-BSC lanes
+remain blocked until their own lane policy opens. The all-lanes checker remains
+available as a diagnostic for future coordinated launches. The default
 production verifier continues to use the built-in catalog and therefore remains
 closed when no explicit lane material is configured.
 
@@ -3200,7 +3244,20 @@ rendering also requires the RPC chain-id match, `--expected-network-id`, and
 `--expected-bridge-code-hash`, so both the bridge wrapper runtime observed
 through `eth_getCode` and the wrapper's governed network id are pinned to
 audited values before the same TOML shape consumed by the all-lanes preflight is
-emitted. Production full TOML also requires the same route canary evidence hash
+emitted. Ethereum destination full TOML also requires the collection block tag
+to be `finalized`; explicit `latest` or `safe` Ethereum reads remain available
+for JSON inspection, but they cannot render governed production TOML. BSC
+destination TOML keeps its `latest` default. Both the live collector and direct
+audited ETH/BSC destination renderer emit `sccp_evm_block_tag` metadata; the
+all-lanes preflight requires that comment and rejects Ethereum destination
+rollout evidence unless it is `finalized`. The public all-lanes lane summary
+also exposes this as `evm_live_metadata.destination_block_tag`, so
+release-bundle verification can reject forged summaries that hide
+non-finalized Ethereum destination reads. The release-readiness report mirrors
+this value in each cryptographic-evidence row as `evm_destination_block_tag`,
+making the finalized destination pin visible in both JSON and Markdown release
+artifacts. Production full TOML also requires
+the same route canary evidence hash
 as the direct helper, but live collection derives it by fetching the supplied
 `--route-canary-transaction-hash`, checking the receipt status, the
 `MessageProofAccepted` log at `--route-canary-log-index`, the receipt block

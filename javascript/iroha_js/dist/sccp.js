@@ -477,6 +477,7 @@ const SCCP_TON_VALIDATORS_EXT_CONSTRUCTOR = 0x12;
 const SCCP_TON_ED25519_PUBKEY_CONSTRUCTOR = 0x8e81278a;
 const SCCP_MAX_SOURCE_MERKLE_BRANCH_NODES = 64;
 const SCCP_EVM_MAX_BLOCK_RECEIPTS = 4096;
+const SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
 const SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
 const SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES = 48;
 const SCCP_ETH_SYNC_COMMITTEE_POP_BYTES = 96;
@@ -7574,6 +7575,67 @@ const requireEthereumMainnetBeaconRestFetch = (fetchFn) => {
   return resolved;
 };
 
+const ethereumMainnetBeaconRestParseJsonText = (text, label) => {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new TypeError(`${label} response JSON must be an object`);
+  }
+  if (!isPlainObjectLike(payload)) {
+    throw new TypeError(`${label} response JSON must be an object`);
+  }
+  return payload;
+};
+
+const ethereumMainnetBeaconRestStreamBytes = async (body, label) => {
+  const reader = body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (!next || typeof next !== "object") {
+        throw new TypeError(`${label} response body reader must return objects`);
+      }
+      if ("done" in next && typeof next.done !== "boolean") {
+        throw new TypeError(`${label} response body reader done must be a boolean`);
+      }
+      if (next.done === true) break;
+      const value = next.value;
+      let chunk;
+      if (value instanceof Uint8Array) {
+        chunk = value;
+      } else if (value instanceof ArrayBuffer) {
+        chunk = new Uint8Array(value);
+      } else if (ArrayBuffer.isView(value)) {
+        chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      } else {
+        throw new TypeError(`${label} response body chunks must be bytes`);
+      }
+      total += chunk.length;
+      if (total > SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES) {
+        if (typeof reader.cancel === "function") {
+          try {
+            await reader.cancel();
+          } catch {
+            // Ignore cancellation errors after the response has already failed closed.
+          }
+        }
+        throw new RangeError(
+          `${label} response body must be at most ${SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES} bytes`,
+        );
+      }
+      chunks.push(Uint8Array.from(chunk));
+    }
+  } finally {
+    if (typeof reader.releaseLock === "function") {
+      reader.releaseLock();
+    }
+  }
+  return concatBytes(...chunks);
+};
+
 const ethereumMainnetBeaconRestJson = async (fetchFn, url, headers, label) => {
   const response = await fetchFn(url.toString(), {
     method: "GET",
@@ -7582,13 +7644,52 @@ const ethereumMainnetBeaconRestJson = async (fetchFn, url, headers, label) => {
   if (!response || typeof response !== "object") {
     throw new TypeError(`${label} must return a fetch Response-like object`);
   }
+  if ("ok" in response && typeof response.ok !== "boolean") {
+    throw new TypeError(`${label} response ok must be a boolean`);
+  }
+  if ("status" in response && response.status !== undefined) {
+    if (!Number.isSafeInteger(response.status)) {
+      throw new TypeError(`${label} response status must be an integer`);
+    }
+    if (response.status < 200 || response.status > 299) {
+      const statusText = "statusText" in response && response.statusText ? ` ${response.statusText}` : "";
+      throw new Error(`${label} request failed ${response.status}${statusText}`);
+    }
+  }
   if ("ok" in response && response.ok === false) {
     const status = "status" in response ? ` ${response.status}` : "";
     const statusText = "statusText" in response && response.statusText ? ` ${response.statusText}` : "";
     throw new Error(`${label} request failed${status}${statusText}`);
   }
+  if (
+    response.body &&
+    typeof response.body === "object" &&
+    typeof response.body.getReader === "function"
+  ) {
+    const bytes = await ethereumMainnetBeaconRestStreamBytes(response.body, label);
+    let text;
+    try {
+      text = textDecoder.decode(bytes);
+    } catch {
+      throw new TypeError(`${label} response body must be valid UTF-8`);
+    }
+    return ethereumMainnetBeaconRestParseJsonText(text, label);
+  }
+  if (typeof response.text === "function") {
+    const text = await response.text();
+    if (typeof text !== "string") {
+      throw new TypeError(`${label} response text must be a string`);
+    }
+    const byteLength = textEncoder.encode(text).length;
+    if (byteLength > SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES) {
+      throw new RangeError(
+        `${label} response body must be at most ${SCCP_ETH_BEACON_REST_MAX_RESPONSE_BYTES} bytes`,
+      );
+    }
+    return ethereumMainnetBeaconRestParseJsonText(text, label);
+  }
   if (typeof response.json !== "function") {
-    throw new TypeError(`${label} response must expose json()`);
+    throw new TypeError(`${label} response must expose text() or json()`);
   }
   const payload = await response.json();
   if (!isPlainObjectLike(payload)) {
@@ -7613,11 +7714,39 @@ const requireEthereumMainnetBeaconRestField = (value, label, field) => {
 };
 
 const rejectEthereumMainnetBeaconRestUnfinalized = (payload, label) => {
-  if (payload.execution_optimistic === true || payload.executionOptimistic === true) {
+  const executionOptimistic = payload.execution_optimistic;
+  if (
+    executionOptimistic !== undefined &&
+    typeof executionOptimistic !== "boolean"
+  ) {
+    throw new TypeError(`${label}.execution_optimistic must be a boolean`);
+  }
+  const executionOptimisticAlias = payload.executionOptimistic;
+  if (
+    executionOptimisticAlias !== undefined &&
+    typeof executionOptimisticAlias !== "boolean"
+  ) {
+    throw new TypeError(`${label}.executionOptimistic must be a boolean`);
+  }
+  const finalized = payload.finalized;
+  if (finalized !== undefined && typeof finalized !== "boolean") {
+    throw new TypeError(`${label}.finalized must be a boolean`);
+  }
+  if (executionOptimistic === true || executionOptimisticAlias === true) {
     throw new TypeError(`${label} must not be execution optimistic`);
   }
-  if (payload.finalized === false) {
+  if (finalized === false) {
     throw new TypeError(`${label} must be finalized`);
+  }
+};
+
+const rejectEthereumMainnetBeaconRestNonBooleanCanonical = (payload, label) => {
+  const canonical = payload.canonical;
+  if (canonical !== undefined && typeof canonical !== "boolean") {
+    throw new TypeError(`${label}.canonical must be a boolean`);
+  }
+  if (canonical === false) {
+    throw new TypeError(`${label} must be canonical`);
   }
 };
 
@@ -7634,6 +7763,20 @@ const normalizeEthereumMainnetBeaconRestHeaders = (headers) => {
 const optionalEthereumMainnetBeaconRestMaterialField = (input, label, ...names) => {
   const value = maybeStrictOptionalResultField(input, label, ...names);
   return value === null ? undefined : value;
+};
+
+const optionalEthereumMainnetBeaconRestBoolean = (value, label, defaultValue) => {
+  if (
+    value === undefined ||
+    value === null ||
+    value === SCCP_OPTIONAL_FIELD_MISSING
+  ) {
+    return defaultValue;
+  }
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${label} must be a boolean`);
+  }
+  return value;
 };
 
 const ethereumMainnetBeaconRestSyncCommitteeRoot = (input, options = {}) => {
@@ -7748,9 +7891,11 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       "verifyFinalityCheckpoint",
       "verify_finality_checkpoint",
     );
-    this.verifyFinalityCheckpoint = verifyFinalityCheckpoint == null
-      ? true
-      : Boolean(verifyFinalityCheckpoint);
+    this.verifyFinalityCheckpoint = optionalEthereumMainnetBeaconRestBoolean(
+      verifyFinalityCheckpoint,
+      "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+      true,
+    );
   }
 
   async collectFinalityEvidence(input = {}, options = {}) {
@@ -7799,9 +7944,10 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       ),
       "Ethereum mainnet Beacon REST finalized header.data",
     );
-    if (headerData.canonical === false) {
-      throw new TypeError("Ethereum mainnet Beacon REST finalized header must be canonical");
-    }
+    rejectEthereumMainnetBeaconRestNonBooleanCanonical(
+      headerData,
+      "Ethereum mainnet Beacon REST finalized header",
+    );
     const finalizedHeaderRoot = requireEthereumRpcHexData(
       requireEthereumMainnetBeaconRestField(
         headerData,
@@ -7838,10 +7984,16 @@ export class EthereumMainnetBeaconRestConsensusProvider {
     if (beaconSlot === 0n) {
       throw new RangeError("beaconFinality.beaconSlot must be positive");
     }
-    const verifyFinalityCheckpoint =
-      options.verifyFinalityCheckpoint ??
-      options.verify_finality_checkpoint ??
-      this.verifyFinalityCheckpoint;
+    const verifyFinalityCheckpoint = optionalEthereumMainnetBeaconRestBoolean(
+      strictOptionalConstructorOption(
+        options,
+        "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+        "verifyFinalityCheckpoint",
+        "verify_finality_checkpoint",
+      ),
+      "Ethereum mainnet Beacon REST verifyFinalityCheckpoint",
+      this.verifyFinalityCheckpoint,
+    );
     if (verifyFinalityCheckpoint) {
       const checkpointResponse = await ethereumMainnetBeaconRestJson(
         fetchFn,
@@ -11982,6 +12134,7 @@ const evmReceiptLogsForRlp = (receipt) => {
           log.address,
           `receipt.logs[${index}].address`,
           20,
+          { nonzero: false },
         ),
         `receipt.logs[${index}].address`,
         20,
@@ -11992,6 +12145,7 @@ const evmReceiptLogsForRlp = (receipt) => {
             topic,
             `receipt.logs[${index}].topics[${topicIndex}]`,
             32,
+            { nonzero: false },
           ),
           `receipt.logs[${index}].topics[${topicIndex}]`,
           32,
@@ -20466,7 +20620,7 @@ export function tonValidatorSetTransitionSignatureHash(input) {
 }
 
 export function canonicalEvmReceiptRootMptValue(receiptRoot) {
-  const root = hexToBytes(receiptRoot, "receiptRoot", 32);
+  const root = nonZeroHex32Bytes(receiptRoot, "receiptRoot");
   const value = rlpList([
     rlpBytes(textEncoder.encode(SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1)),
     rlpBytes(root),

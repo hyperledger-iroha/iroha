@@ -1,5 +1,8 @@
 package org.hyperledger.iroha.android.sccp;
 
+import com.sun.net.httpserver.HttpServer;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -10,7 +13,7 @@ import java.util.Map;
 public final class EvmSccpProverTests {
   private EvmSccpProverTests() {}
 
-  public static void main(final String[] args) {
+  public static void main(final String[] args) throws Exception {
     proofRequestBindsPublicSignalsAndRelayContext();
     proverRequiresLinkedProofEngine();
     proverWrapsExternalProofBytes();
@@ -24,6 +27,7 @@ public final class EvmSccpProverTests {
     ethereumInboundCollectionBuildsReceiptProofFromBlockReceipts();
     ethereumMainnetFacadeBuildsLocalAdmissionSubmission();
     ethereumMainnetBeaconRestConsensusProviderCollectsFinalizedEvidence();
+    ethereumMainnetBeaconRestHttpTransportRejectsOversizedBodies();
     ethereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality();
     bscMainnetInboundFacadeUsesMainnetRpcAndRejectsDrift();
     mainnetFacadesSnapshotWitnessProviderInputs();
@@ -1201,6 +1205,28 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("target ETH");
     }
     assert threw : "Ethereum request helper must reject BSC public inputs";
+    final boolean[] outboundProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                outboundProverCalled[0] = true;
+                return proofBytes;
+              })
+          .proveOutboundToEthereum(
+              new EvmSccpProver.ProofRequestInput(
+                  samplePublicInputs(EvmSccpProver.DOMAIN_BSC),
+                  new byte[] {5, 6, 7},
+                  new byte[0],
+                  repeat("56", 32),
+                  binding));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("target ETH");
+    }
+    assert threw : "Ethereum outbound prove facade must reject BSC requests";
+    assert !outboundProverCalled[0]
+        : "Ethereum outbound prover callback must not see BSC requests";
 
     threw = false;
     try {
@@ -2587,6 +2613,35 @@ public final class EvmSccpProverTests {
     assert proof.receiptsRoot.matches("0x[0-9a-f]{64}") : "proof must derive a receiptsRoot";
     assert !proof.receiptTrieProofNodes().isEmpty() : "proof must include MPT nodes";
 
+    final Map<String, Object> zeroTopicReceipt =
+        sampleEvmReceipt(1, "0x" + repeat("ab", 32), "0x" + repeat("bb", 32), "0x1234");
+    zeroTopicReceipt.put(
+        "logs",
+        Arrays.asList(
+            linkedMap(
+                "address", "0x" + repeat("12", 20),
+                "topics", Arrays.asList("0x" + repeat("00", 32)),
+                "data", "0x")));
+    final SourceSccpProofs.EvmReceiptTrieProof zeroTopicProof =
+        SourceSccpProofs.buildEvmReceiptTrieProofFromReceipts(
+            Arrays.asList(receipt, zeroTopicReceipt), "0x0");
+    assert proof.receiptRlp.equals(zeroTopicProof.receiptRlp)
+        : "generic Ethereum receipt RLP must allow zero log topics";
+    final Map<String, Object> zeroAddressReceipt =
+        sampleEvmReceipt(1, "0x" + repeat("ac", 32), "0x" + repeat("bb", 32), "0x1234");
+    zeroAddressReceipt.put(
+        "logs",
+        Arrays.asList(
+            linkedMap(
+                "address", "0x" + repeat("00", 20),
+                "topics", Arrays.asList("0x" + repeat("44", 32)),
+                "data", "0x")));
+    final SourceSccpProofs.EvmReceiptTrieProof zeroAddressProof =
+        SourceSccpProofs.buildEvmReceiptTrieProofFromReceipts(
+            Arrays.asList(receipt, zeroAddressReceipt), "0x0");
+    assert proof.receiptRlp.equals(zeroAddressProof.receiptRlp)
+        : "generic Ethereum receipt RLP must allow zero log addresses";
+
     final Map<String, Object> wrongIndex = new LinkedHashMap<>(receipt);
     wrongIndex.put("transactionIndex", "0x1");
     threw = false;
@@ -2962,6 +3017,36 @@ public final class EvmSccpProverTests {
     assert "Bearer local".equals(headerCalls.get(0).get("Authorization"));
   }
 
+  private static void ethereumMainnetBeaconRestHttpTransportRejectsOversizedBodies()
+      throws Exception {
+    final HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/oversized",
+        exchange -> {
+          final byte[] body = new byte[1024 * 1024 + 1];
+          Arrays.fill(body, (byte) 0x7b);
+          exchange.sendResponseHeaders(200, body.length);
+          try (OutputStream output = exchange.getResponseBody()) {
+            output.write(body);
+          }
+        });
+    server.start();
+    try {
+      boolean threw = false;
+      try {
+        new EthereumMainnetSccp.BeaconRestHttpTransport()
+            .get(
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/oversized",
+                java.util.Collections.emptyMap());
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains("response body must be at most");
+      }
+      assert threw : "Beacon REST HTTP transport must reject oversized response bodies";
+    } finally {
+      server.stop(0);
+    }
+  }
+
   private static void ethereumMainnetBeaconRestConsensusProviderRejectsUnsafeFinality() {
     final Map<String, Object> block =
         linkedMap(
@@ -2999,6 +3084,19 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       beaconRestProvider(
+              new EthereumMainnetSccp.BeaconRestResponse(200, new byte[1024 * 1024 + 1]),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("response body must be at most");
+    }
+    assert threw : "Beacon REST provider must reject oversized header responses";
+
+    threw = false;
+    try {
+      beaconRestProvider(
               beaconResponse(beaconHeaderJson(true, true)),
               beaconResponse(beaconCheckpointJson("dd")),
               "0x" + repeat("ee", 32),
@@ -3008,6 +3106,49 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("must not be execution optimistic");
     }
     assert threw : "Beacon REST provider must reject optimistic headers";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(
+                  beaconHeaderJson(false, true)
+                      .replace("\"execution_optimistic\":false", "\"execution_optimistic\":\"false\"")),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("execution_optimistic must be a boolean");
+    }
+    assert threw : "Beacon REST provider must reject malformed optimistic flags";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(
+                  beaconHeaderJson(false, true).replace("\"finalized\":true", "\"finalized\":\"true\"")),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("finalized must be a boolean");
+    }
+    assert threw : "Beacon REST provider must reject malformed finalized flags";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(
+                  beaconHeaderJson(false, true).replace("\"canonical\":true", "\"canonical\":\"true\"")),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical must be a boolean");
+    }
+    assert threw : "Beacon REST provider must reject malformed canonical flags";
 
     threw = false;
     try {

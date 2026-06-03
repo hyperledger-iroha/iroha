@@ -7750,17 +7750,20 @@ Invariants:
 - `CommitImpliesDelivered`
 - `CommitImpliesRbcEvidence`
 - `FinalityCertificateStackComplete`
+- `FinalityCertificateStackMatchesFinality`
 - `CommitDisablesProgressActions`
 - `CommittedPhaseMatchesFinality`
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
+- `LiveNewViewVotesStayInHandoff`
 - `ViewEvidenceIsCompleteOrEmpty`
 - `PreCommitPhasesHaveNoCommitVotes`
 - `PrePreparePhasesHaveNoPrepareVotes`
 - `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
+- `LiveCommitVotesRequirePrepareQuorum`
 - `CommitImpliesPrepareQuorum`
 - `CommitEvidenceMatchesVoteCounters`
 - `CommitEvidenceIsBounded`
@@ -8675,6 +8678,10 @@ Temporal properties:
 - `NewViewQuorumHandoffNeverStalls` proves that a quorum-satisfied `NewView`
   phase immediately hands off to proposal-ready state instead of remaining in a
   view-change phase with enough votes already collected.
+- `LiveNewViewVotesNeverLeakPastHandoff` proves that live NewView vote counters
+  remain confined to the NewView collection phase or the immediate proposal
+  handoff with quorum evidence, and never leak into prepare, commit-vote, or
+  committed execution.
 - `ViewEvidenceNeverPartial` proves that the latched view-change witness is
   either absent or quorum-complete, never a partial vote count.
 - `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
@@ -8685,12 +8692,20 @@ Temporal properties:
   next prepare or commit path.
 - `CommitPhasesNeverBypassPrepareQuorum` proves that execution never reaches
   commit-vote or committed phases without prepare-quorum evidence.
+- `LiveCommitVotesNeverBypassPrepareQuorum` proves that any live commit-vote
+  counter or signed-stake evidence can only appear in commit-vote or committed
+  phases after prepare quorum, ruling out stale live commit votes leaking across
+  view changes or earlier phases.
 - `PreFinalityCommitArtifactsNeverAppear` proves that commit-certificate
   votes/stake and the commit-view witness stay absent until finality is reached.
 - `FinalityCertificateStackNeverIncomplete` proves that every finalized state
   carries the complete certificate stack: terminal phase, prepare quorum, live
   and latched commit vote/stake evidence, honest support, RBC delivery evidence,
   and the required view-change witness for nonzero commit views.
+- `FinalityCertificateStackAlwaysMatchesFinality` proves that the complete
+  finality certificate stack is exact: it appears if and only if the abstract
+  finality latch is set, so a latent full certificate stack cannot exist before
+  finality.
 - `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
   their view-change quorum witness after commit.
 - `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required

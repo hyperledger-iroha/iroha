@@ -3055,9 +3055,7 @@ pub mod chunk {
                 if chunk.len() < FRAME_HEADER_LEN {
                     return Err(CodecError::ChunkTooShort);
                 }
-                let mut index_bytes = [0u8; 4];
-                index_bytes.copy_from_slice(&chunk[..4]);
-                let frame_index = u32::from_le_bytes(index_bytes);
+                let frame_index = read_frame_header_u32_le(chunk, 0)?;
                 if frame_index != idx as u32 {
                     return Err(CodecError::FrameIndexMismatch(
                         super::chunk::FrameIndexMismatchInfo {
@@ -3066,9 +3064,7 @@ pub mod chunk {
                         },
                     ));
                 }
-                let mut pts_bytes = [0u8; 8];
-                pts_bytes.copy_from_slice(&chunk[4..12]);
-                let pts_ns = u64::from_le_bytes(pts_bytes);
+                let pts_ns = read_frame_header_u64_le(chunk, 4)?;
                 let delta = frame_step
                     .checked_mul(idx as u64)
                     .ok_or(CodecError::FramePtsOverflow(saturating_usize_to_u32(idx)))?;
@@ -3088,8 +3084,7 @@ pub mod chunk {
                 }
                 let frame_type = FrameType::from_byte(chunk[12])?;
                 let quantizer = chunk[13];
-                let block_count =
-                    u16::from_le_bytes(chunk[14..16].try_into().expect("header has enough bytes"));
+                let block_count = read_frame_header_u16_le(chunk, 14)?;
                 if block_count as usize != expected_blocks {
                     return Err(CodecError::BlockCountMismatch(BlockCountMismatchInfo {
                         expected: saturating_usize_to_u32(expected_blocks),
@@ -3135,13 +3130,20 @@ pub mod chunk {
                             ChromaPayloadTruncatedInfo,
                         ));
                     }
-                    let mut u_len_bytes = [0u8; 4];
-                    u_len_bytes.copy_from_slice(&chunk[offset..offset + 4]);
-                    let u_len = u32::from_le_bytes(u_len_bytes) as usize;
-                    let mut v_len_bytes = [0u8; 4];
-                    v_len_bytes.copy_from_slice(&chunk[offset + 4..offset + 8]);
-                    let v_len = u32::from_le_bytes(v_len_bytes) as usize;
-                    let chroma_start = offset + 8;
+                    let u_len = read_chroma_len(chunk, offset)?;
+                    let v_len_offset =
+                        offset
+                            .checked_add(4)
+                            .ok_or(CodecError::ChromaPayloadTruncated(
+                                ChromaPayloadTruncatedInfo,
+                            ))?;
+                    let v_len = read_chroma_len(chunk, v_len_offset)?;
+                    let chroma_start =
+                        offset
+                            .checked_add(8)
+                            .ok_or(CodecError::ChromaPayloadTruncated(
+                                ChromaPayloadTruncatedInfo,
+                            ))?;
                     let u_end = chroma_start.checked_add(u_len).ok_or(
                         CodecError::ChromaPayloadTruncated(ChromaPayloadTruncatedInfo),
                     )?;
@@ -3188,6 +3190,45 @@ pub mod chunk {
             }
             Ok(frames)
         }
+    }
+
+    pub(crate) fn read_frame_header_field<const N: usize>(
+        chunk: &[u8],
+        offset: usize,
+    ) -> Result<[u8; N], CodecError> {
+        let end = offset.checked_add(N).ok_or(CodecError::ChunkTooShort)?;
+        let slice = chunk.get(offset..end).ok_or(CodecError::ChunkTooShort)?;
+        let mut raw = [0u8; N];
+        raw.copy_from_slice(slice);
+        Ok(raw)
+    }
+
+    pub(crate) fn read_frame_header_u16_le(chunk: &[u8], offset: usize) -> Result<u16, CodecError> {
+        Ok(u16::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_frame_header_u32_le(chunk: &[u8], offset: usize) -> Result<u32, CodecError> {
+        Ok(u32::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_frame_header_u64_le(chunk: &[u8], offset: usize) -> Result<u64, CodecError> {
+        Ok(u64::from_le_bytes(read_frame_header_field(chunk, offset)?))
+    }
+
+    pub(crate) fn read_chroma_len(chunk: &[u8], offset: usize) -> Result<usize, CodecError> {
+        let end = offset
+            .checked_add(4)
+            .ok_or(CodecError::ChromaPayloadTruncated(
+                ChromaPayloadTruncatedInfo,
+            ))?;
+        let slice = chunk
+            .get(offset..end)
+            .ok_or(CodecError::ChromaPayloadTruncated(
+                ChromaPayloadTruncatedInfo,
+            ))?;
+        let mut raw = [0u8; 4];
+        raw.copy_from_slice(slice);
+        Ok(u32::from_le_bytes(raw) as usize)
     }
 
     fn decode_chroma_plane(
@@ -8014,13 +8055,7 @@ pub mod codec {
         let mut cursor = header_len;
         let mut lengths = [0usize; 4];
         for slot in lengths.iter_mut() {
-            let mut buf = [0u8; 4];
-            if cursor + 4 > stream.len() {
-                return Err(BundleDecodeError::InvalidSimdHeader);
-            }
-            buf.copy_from_slice(&stream[cursor..cursor + 4]);
-            *slot = u32::from_le_bytes(buf) as usize;
-            cursor += 4;
+            *slot = read_simd_bundle_lane_len(stream, &mut cursor)?;
         }
         let total_len = lengths
             .iter()
@@ -8054,6 +8089,22 @@ pub mod codec {
             out.push(decoder.decode_record(record)?);
         }
         Ok(out)
+    }
+
+    fn read_simd_bundle_lane_len(
+        stream: &[u8],
+        cursor: &mut usize,
+    ) -> Result<usize, BundleDecodeError> {
+        let end = (*cursor)
+            .checked_add(4)
+            .ok_or(BundleDecodeError::InvalidSimdHeader)?;
+        let slice = stream
+            .get(*cursor..end)
+            .ok_or(BundleDecodeError::InvalidSimdHeader)?;
+        let mut buf = [0u8; 4];
+        buf.copy_from_slice(slice);
+        *cursor = end;
+        Ok(u32::from_le_bytes(buf) as usize)
     }
 
     fn bundle_bits(value: i16, width: u8) -> (BundleType, u8, u8) {
@@ -8203,18 +8254,48 @@ pub mod codec {
         hooks.record_eob();
     }
 
+    fn take_block_i16_le(
+        bytes: &[u8],
+        offset: &mut usize,
+        block_index: u32,
+    ) -> Result<i16, CodecError> {
+        let end = (*offset)
+            .checked_add(2)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let slice = bytes
+            .get(*offset..end)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let mut raw = [0u8; 2];
+        raw.copy_from_slice(slice);
+        *offset = end;
+        Ok(i16::from_le_bytes(raw))
+    }
+
+    fn take_rle_record(
+        bytes: &[u8],
+        offset: &mut usize,
+        block_index: u32,
+    ) -> Result<(u8, i16), CodecError> {
+        let end = (*offset)
+            .checked_add(3)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let record = bytes
+            .get(*offset..end)
+            .ok_or(CodecError::TruncatedBlock(block_index))?;
+        let mut raw = [0u8; 2];
+        raw.copy_from_slice(&record[1..3]);
+        *offset = end;
+        Ok((record[0], i16::from_le_bytes(raw)))
+    }
+
     pub(crate) fn decode_block_rle(
         bytes: &[u8],
         offset: &mut usize,
         prev_dc: &mut i16,
         block_index: u32,
     ) -> Result<[i16; BLOCK_PIXELS], CodecError> {
-        if *offset + 2 > bytes.len() {
-            return Err(CodecError::TruncatedBlock(block_index));
-        }
         let mut coeffs = [0i16; BLOCK_PIXELS];
-        let dc_diff = i16::from_le_bytes(bytes[*offset..*offset + 2].try_into().unwrap());
-        *offset += 2;
+        let dc_diff = take_block_i16_le(bytes, offset, block_index)?;
         let dc = prev_dc.wrapping_add(dc_diff);
         coeffs[0] = dc;
         *prev_dc = dc;
@@ -8222,12 +8303,7 @@ pub mod codec {
         let mut pos = 1usize;
         let mut finished = false;
         while pos < BLOCK_PIXELS {
-            if *offset + 3 > bytes.len() {
-                return Err(CodecError::TruncatedBlock(block_index));
-            }
-            let run = bytes[*offset];
-            let value = i16::from_le_bytes(bytes[*offset + 1..*offset + 3].try_into().unwrap());
-            *offset += 3;
+            let (run, value) = take_rle_record(bytes, offset, block_index)?;
 
             if run == RLE_EOB {
                 finished = true;
@@ -8624,7 +8700,13 @@ pub mod codec {
         use std::{str::FromStr, sync::Arc};
 
         use super::*;
-        use crate::streaming::{Hash, chunk::BaselineDecoder};
+        use crate::streaming::{
+            Hash,
+            chunk::{
+                BaselineDecoder, read_chroma_len, read_frame_header_u16_le,
+                read_frame_header_u32_le, read_frame_header_u64_le,
+            },
+        };
 
         fn hash_seed(seed: u8) -> Hash {
             let mut bytes = [0u8; 32];
@@ -9665,6 +9747,28 @@ pub mod codec {
         }
 
         #[test]
+        fn simd_bundle_lane_len_reader_rejects_truncated_or_overflowed_offsets() {
+            let bytes = 13u32.to_le_bytes();
+            let mut cursor = 0usize;
+            assert_eq!(read_simd_bundle_lane_len(&bytes, &mut cursor).unwrap(), 13);
+            assert_eq!(cursor, 4);
+
+            for len in 0..4 {
+                let mut cursor = 0usize;
+                let err = read_simd_bundle_lane_len(&bytes[..len], &mut cursor)
+                    .expect_err("truncated lane length should fail closed");
+                assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
+                assert_eq!(cursor, 0);
+            }
+
+            let mut overflow_cursor = usize::MAX;
+            let err = read_simd_bundle_lane_len(&[], &mut overflow_cursor)
+                .expect_err("cursor overflow should fail closed");
+            assert!(matches!(err, BundleDecodeError::InvalidSimdHeader));
+            assert_eq!(overflow_cursor, usize::MAX);
+        }
+
+        #[test]
         fn bundle_stream_acceleration_matches_header() {
             let tables = default_bundle_tables();
             let bundles = sample_bundles();
@@ -10292,6 +10396,71 @@ pub mod codec {
             let err = decode_block_rle(&payload, &mut offset2, &mut prev_dc2, 4)
                 .expect_err("missing run payload");
             assert!(matches!(err, CodecError::TruncatedBlock(4)));
+
+            let mut overflow_offset = usize::MAX;
+            let mut prev_dc3 = 0i16;
+            let err = decode_block_rle(&[], &mut overflow_offset, &mut prev_dc3, 6)
+                .expect_err("offset arithmetic overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(6)));
+            assert_eq!(overflow_offset, usize::MAX);
+        }
+
+        #[test]
+        fn rle_block_readers_reject_offset_overflow_without_advancing() {
+            let mut i16_offset = usize::MAX;
+            let err = take_block_i16_le(&[], &mut i16_offset, 7)
+                .expect_err("i16 reader offset overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(7)));
+            assert_eq!(i16_offset, usize::MAX);
+
+            let mut record_offset = usize::MAX;
+            let err = take_rle_record(&[], &mut record_offset, 8)
+                .expect_err("RLE record reader offset overflow should fail closed");
+            assert!(matches!(err, CodecError::TruncatedBlock(8)));
+            assert_eq!(record_offset, usize::MAX);
+        }
+
+        #[test]
+        fn frame_header_readers_reject_truncated_or_overflowed_offsets() {
+            let mut header = [0u8; FRAME_HEADER_LEN];
+            header[..4].copy_from_slice(&42u32.to_le_bytes());
+            header[4..12].copy_from_slice(&1234u64.to_le_bytes());
+            header[14..16].copy_from_slice(&9u16.to_le_bytes());
+
+            assert_eq!(read_frame_header_u32_le(&header, 0).unwrap(), 42);
+            assert_eq!(read_frame_header_u64_le(&header, 4).unwrap(), 1234);
+            assert_eq!(read_frame_header_u16_le(&header, 14).unwrap(), 9);
+
+            assert!(matches!(
+                read_frame_header_u32_le(&header[..3], 0),
+                Err(CodecError::ChunkTooShort)
+            ));
+            assert!(matches!(
+                read_frame_header_u64_le(&header[..11], 4),
+                Err(CodecError::ChunkTooShort)
+            ));
+            assert!(matches!(
+                read_frame_header_u16_le(&header, usize::MAX),
+                Err(CodecError::ChunkTooShort)
+            ));
+        }
+
+        #[test]
+        fn chroma_len_reader_rejects_truncated_or_overflowed_offsets() {
+            let mut metadata = [0u8; 8];
+            metadata[..4].copy_from_slice(&5u32.to_le_bytes());
+            metadata[4..8].copy_from_slice(&7u32.to_le_bytes());
+
+            assert_eq!(read_chroma_len(&metadata, 0).unwrap(), 5);
+            assert_eq!(read_chroma_len(&metadata, 4).unwrap(), 7);
+            assert!(matches!(
+                read_chroma_len(&metadata[..3], 0),
+                Err(CodecError::ChromaPayloadTruncated(_))
+            ));
+            assert!(matches!(
+                read_chroma_len(&metadata, usize::MAX),
+                Err(CodecError::ChromaPayloadTruncated(_))
+            ));
         }
 
         fn deterministic_payloads(seed: u8, count: usize) -> Vec<Vec<u8>> {

@@ -1943,9 +1943,9 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
             let (pk, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(bls_seed.as_ref().to_vec()));
             let (pubkey, _) = KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, &account_id);
-            if let Ok((_y, proof)) = std::panic::catch_unwind(|| {
+            if let Ok((_y, proof)) =
                 iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id.as_bytes(), &input)
-            }) {
+            {
                 let (_alg, pk_payload) = pubkey.to_bytes();
                 let proof_bytes = match proof {
                     VrfProof::SigInG2(bytes) => bytes,

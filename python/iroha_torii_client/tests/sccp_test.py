@@ -12537,6 +12537,15 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
     async_result = asyncio.run(BscMainnetSccpProver(prove=prove).prove(input_value))
     assert async_result["destination_binding_hash"] == binding["binding_hash"]
 
+    async def zero_prove(
+        _callback_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        return {"proof_bytes": bytes(len(GROTH16_PROOF_BYTES))}
+
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(BscMainnetSccpProver(prove=zero_prove).prove(input_value))
+
     facade = BscMainnetSccp(prove=prove)
     facade_request = asyncio.run(facade.build_outbound_proof_request(input_value))
     facade_result = asyncio.run(facade.prove_outbound_to_bsc(input_value))
@@ -12547,6 +12556,9 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
     assert facade_request["target_domain"] == SCCP_DOMAIN_BSC
     assert facade_result["destination_binding_hash"] == binding["binding_hash"]
     assert facade_submission["target_domain"] == SCCP_DOMAIN_BSC
+
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(BscMainnetSccp(prove=zero_prove).prove_outbound_to_bsc(input_value))
 
     async def submit_outbound(
         callback_submission: Mapping[str, Any],

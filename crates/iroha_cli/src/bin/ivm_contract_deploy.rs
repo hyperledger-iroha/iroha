@@ -126,6 +126,7 @@ fn default_rollout_phase() -> SorafsRolloutPhase {
     SorafsRolloutPhase::parse(DEFAULT_ROLLOUT_PHASE).unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_client(
     torii_url: &str,
     chain_id: &str,
@@ -146,9 +147,10 @@ fn make_client(
         torii_api_version: config::default_torii_api_version(),
         torii_api_min_proof_version: config::DEFAULT_TORII_API_MIN_PROOF_VERSION.to_string(),
         torii_request_timeout: Duration::from_millis(torii_request_timeout_ms),
-        transaction_ttl: transaction_ttl_ms
-            .map(Duration::from_millis)
-            .unwrap_or(config::DEFAULT_TRANSACTION_TIME_TO_LIVE),
+        transaction_ttl: transaction_ttl_ms.map_or(
+            config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+            Duration::from_millis,
+        ),
         transaction_status_timeout: Duration::from_millis(status_timeout_ms),
         transaction_add_nonce: false,
         connect_queue_root: config::default_connect_queue_root(),
@@ -863,12 +865,12 @@ fn main() -> Result<()> {
     let nonce_key =
         Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY).expect("static metadata key is valid");
     let mut activate_instructions = Vec::new();
-    if let Some(previous_contract_address) = previous_contract_address {
-        if previous_contract_address != contract_address {
-            activate_instructions.push(InstructionBox::from(SetContractAlias::clear(
-                previous_contract_address,
-            )));
-        }
+    if let Some(previous_contract_address) = previous_contract_address
+        && previous_contract_address != contract_address
+    {
+        activate_instructions.push(InstructionBox::from(SetContractAlias::clear(
+            previous_contract_address,
+        )));
     }
     activate_instructions.extend([
         InstructionBox::from(ActivateContractInstance {

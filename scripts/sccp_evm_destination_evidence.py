@@ -44,6 +44,7 @@ DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
         "chain": "eth",
         "rpc_chain_id": "1",
+        "block_tag": "finalized",
         "network_id": ETH_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
         "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
@@ -51,11 +52,13 @@ DOMAIN_PROFILES = {
     SCCP_DOMAIN_BSC: {
         "chain": "bsc",
         "rpc_chain_id": "56",
+        "block_tag": "latest",
         "network_id": BSC_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:bsc:destination-anchor:bsc-mainnet:v1",
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
     },
 }
+EVM_BLOCK_TAGS = ("finalized", "safe", "latest")
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -786,6 +789,14 @@ def _profile(args: argparse.Namespace) -> dict[str, str]:
         raise ValueError("domain must be ETH or BSC") from exc
 
 
+def _block_tag_from_args(args: argparse.Namespace) -> str:
+    profile = _profile(args)
+    block_tag = getattr(args, "block_tag", None) or profile["block_tag"]
+    if block_tag not in EVM_BLOCK_TAGS:
+        raise ValueError("block_tag must be finalized, safe, or latest")
+    return block_tag
+
+
 def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
     profile = _profile(args)
     yield "[[zk.sccp_destination_rollouts]]"
@@ -1401,6 +1412,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
 
     apply_runtime_bytecode_hash(args)
     apply_bridge_runtime_bytecode_hash(args)
+    block_tag = _block_tag_from_args(args)
+    if args.domain == SCCP_DOMAIN_ETH and block_tag != "finalized":
+        raise ValueError("Ethereum destination TOML requires --block-tag finalized")
     expected_hash = _destination_binding_hash_from_args(args)
     expected_pin = getattr(args, "expected_destination_binding_hash", None)
     if expected_pin is None:
@@ -1453,6 +1467,7 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
     sections = [
         "# sccp_evm_rpc_chain_id = "
         + json.dumps(str(_profile(args)["rpc_chain_id"])),
+        "# sccp_evm_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(_hex(args.bridge_code_hash)),
     ]
@@ -1541,6 +1556,7 @@ def _json_summary(
         "source_domain": SCCP_DOMAIN_SORA,
         "target_domain": args.domain,
         "chain": profile["chain"],
+        "block_tag": _block_tag_from_args(args),
         "verifier_backend": SCCP_EVM_GROTH16_BACKEND,
         "proof_family": SCCP_PROOF_FAMILY_STARK_FRI,
         "network_id": _hex(args.network_id),
@@ -1642,6 +1658,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=lambda value: parse_evm_address(value, label="bridge address"),
         help="Deployed SCCP message bridge wrapper address.",
+    )
+    parser.add_argument(
+        "--block-tag",
+        choices=EVM_BLOCK_TAGS,
+        help=(
+            "EVM block tag represented by the audited rollout evidence. "
+            "Defaults to finalized for Ethereum and latest for BSC; production "
+            "Ethereum TOML requires finalized."
+        ),
     )
     parser.add_argument(
         "--bridge-code-hash",

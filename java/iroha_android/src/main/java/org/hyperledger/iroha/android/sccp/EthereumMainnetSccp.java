@@ -29,6 +29,7 @@ public final class EthereumMainnetSccp {
   public static final String SOURCE_EVENT_TOPIC_V1 =
       "0x577b41c65ffbce226de59f224b464797257063747891b88ebec1bcd57af82727";
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+  private static final int BEACON_REST_MAX_RESPONSE_BYTES = 1024 * 1024;
 
   private final EvmSccpProver.WitnessProvider witnessProvider;
   private final EvmSccpProver.ProofEngine proofEngine;
@@ -1278,8 +1279,16 @@ public final class EthereumMainnetSccp {
   private static byte[] readAll(final InputStream stream) throws java.io.IOException {
     try (InputStream input = stream; ByteArrayOutputStream out = new ByteArrayOutputStream()) {
       final byte[] buffer = new byte[8192];
+      int total = 0;
       int read;
       while ((read = input.read(buffer)) >= 0) {
+        total += read;
+        if (total > BEACON_REST_MAX_RESPONSE_BYTES) {
+          throw new IllegalArgumentException(
+              "Ethereum mainnet Beacon REST response body must be at most "
+                  + BEACON_REST_MAX_RESPONSE_BYTES
+                  + " bytes");
+        }
         out.write(buffer, 0, read);
       }
       return out.toByteArray();
@@ -1304,13 +1313,37 @@ public final class EthereumMainnetSccp {
 
   private static void rejectUnsafeBeaconRestPayload(
       final Map<String, Object> payload, final String label) {
-    if (Boolean.TRUE.equals(payload.get("execution_optimistic"))
-        || Boolean.TRUE.equals(payload.get("executionOptimistic"))) {
+    final Boolean executionOptimistic =
+        optionalBeaconRestBoolean(payload, "execution_optimistic", label);
+    final Boolean executionOptimisticAlias =
+        optionalBeaconRestBoolean(payload, "executionOptimistic", label);
+    final Boolean finalized = optionalBeaconRestBoolean(payload, "finalized", label);
+    if (Boolean.TRUE.equals(executionOptimistic)
+        || Boolean.TRUE.equals(executionOptimisticAlias)) {
       throw new IllegalArgumentException(label + " must not be execution optimistic");
     }
-    if (Boolean.FALSE.equals(payload.get("finalized"))) {
+    if (Boolean.FALSE.equals(finalized)) {
       throw new IllegalArgumentException(label + " must be finalized");
     }
+  }
+
+  private static void rejectNonBooleanBeaconRestCanonical(
+      final Map<String, Object> payload, final String label) {
+    if (Boolean.FALSE.equals(optionalBeaconRestBoolean(payload, "canonical", label))) {
+      throw new IllegalArgumentException(label + " must be canonical");
+    }
+  }
+
+  private static Boolean optionalBeaconRestBoolean(
+      final Map<String, Object> payload, final String field, final String label) {
+    if (!payload.containsKey(field)) {
+      return null;
+    }
+    final Object value = payload.get(field);
+    if (!(value instanceof Boolean)) {
+      throw new IllegalArgumentException(label + "." + field + " must be a boolean");
+    }
+    return (Boolean) value;
   }
 
   private static String resolveBeaconRestSyncCommitteeRoot(
@@ -1463,10 +1496,8 @@ public final class EthereumMainnetSccp {
               requireBeaconRestField(
                   headerRoot, "Ethereum mainnet Beacon REST finalized header", "data"),
               "Ethereum mainnet Beacon REST finalized header.data");
-      if (Boolean.FALSE.equals(headerData.get("canonical"))) {
-        throw new IllegalArgumentException(
-            "Ethereum mainnet Beacon REST finalized header must be canonical");
-      }
+      rejectNonBooleanBeaconRestCanonical(
+          headerData, "Ethereum mainnet Beacon REST finalized header");
       final String finalizedHeaderRoot =
           normalizeRpcHex(
               requireBeaconRestField(
@@ -1548,6 +1579,10 @@ public final class EthereumMainnetSccp {
             response.statusMessage() == null ? "" : " " + response.statusMessage();
         throw new IllegalArgumentException(
             label + " request failed " + response.statusCode() + suffix);
+      }
+      if (response.body().length > BEACON_REST_MAX_RESPONSE_BYTES) {
+        throw new IllegalArgumentException(
+            label + " response body must be at most " + BEACON_REST_MAX_RESPONSE_BYTES + " bytes");
       }
       final Object parsed = JsonParser.parse(new String(response.body(), StandardCharsets.UTF_8));
       return expectBeaconRestObject(parsed, label + " response JSON");

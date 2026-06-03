@@ -6,6 +6,7 @@ use iroha_crypto::sm::{
     OpenSslProvider, OpenSslSmBackend, Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key,
     openssl_sm::OpenSslSmError,
 };
+use std::sync::{Mutex, MutexGuard};
 
 const ANNEX_PUBLIC_KEY_HEX: &str = "040AE4C7798AA0F119471BEE11825BE46202BB79E2A5844495E97C04FF4DF2548A7C0240F88F1CD4E16352A73C17B7F16F07353E53A176D684A9FE0C6BB798E857";
 const ANNEX_SIGNATURE_HEX: &str = "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D16FC6DAC32C5D5CF10C77DFB20F7C2EB667A457872FB09EC56327A67EC7DEEBE7";
@@ -14,13 +15,22 @@ const ANNEX_MESSAGE: &[u8] = b"message digest";
 
 struct PreviewGuard {
     previous: bool,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl PreviewGuard {
     fn enable() -> Self {
+        static PREVIEW_FLAG_LOCK: Mutex<()> = Mutex::new(());
+
+        let lock = PREVIEW_FLAG_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let previous = OpenSslProvider::is_enabled();
         OpenSslProvider::set_preview_enabled(true);
-        Self { previous }
+        Self {
+            previous,
+            _lock: lock,
+        }
     }
 }
 

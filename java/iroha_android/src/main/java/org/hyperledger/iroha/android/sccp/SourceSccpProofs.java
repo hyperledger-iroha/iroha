@@ -2848,7 +2848,7 @@ public final class SourceSccpProofs {
   public static byte[] canonicalEvmReceiptRootMptValue(final String receiptRoot) {
     final List<byte[]> fields = new ArrayList<byte[]>();
     fields.add(rlpBytes(EVM_RECEIPT_ROOT_VALUE_MARKER));
-    fields.add(rlpBytes(hex32Bytes(receiptRoot, "receiptRoot")));
+    fields.add(rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")));
     final byte[] value = rlpList(fields);
     if (value.length == 0 || value.length > EVM_MAX_RECEIPT_VALUE_BYTES) {
       throw new IllegalArgumentException(
@@ -6172,7 +6172,7 @@ public final class SourceSccpProofs {
                     topics.get(topicIndex),
                     "receipt.logs[" + index + "].topics[" + topicIndex + "]",
                     Integer.valueOf(32),
-                    true,
+                    false,
                     false)));
       }
       encodedLogs.add(
@@ -6183,7 +6183,7 @@ public final class SourceSccpProofs {
                           log.get("address"),
                           "receipt.logs[" + index + "].address",
                           Integer.valueOf(20),
-                          true,
+                          false,
                           false)),
                   rlpList(topicFields),
                   rlpBytes(

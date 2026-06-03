@@ -81,7 +81,7 @@ fn assert_positive_case(case: &PositiveCase) {
         case.case_id
     );
 
-    let keyset = derive_keyset(seed);
+    let keyset = derive_keyset(seed).expect("derive keyset");
     assert_eq!(
         hex::encode(keyset.nullifier_key()),
         case.derived.nullifier_key_hex.to_ascii_lowercase(),

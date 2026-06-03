@@ -279,10 +279,9 @@ impl GenVrfArgs {
             ));
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
-            let proof_result = std::panic::catch_unwind(|| {
+            if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_bytes, &input)
-            });
-            if let Ok((_output, proof)) = proof_result {
+            {
                 let (_alg, pk_payload) = public_key.to_bytes();
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG2(bytes) => bytes,
@@ -317,10 +316,9 @@ impl GenVrfArgs {
             ));
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
-            let proof_result = std::panic::catch_unwind(|| {
+            if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_small_with_chain(&sk, chain_bytes, &input)
-            });
-            if let Ok((_output, proof)) = proof_result {
+            {
                 let (_alg, pk_payload) = public_key.to_bytes();
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG1(bytes) => bytes,
