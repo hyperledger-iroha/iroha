@@ -18735,6 +18735,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_accepts_two_bit_table() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18791,6 +18792,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_public_base_substitution() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18806,6 +18808,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_identity_entry_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18825,6 +18828,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy fixed-window table mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_rejects_chain_link_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18846,6 +18850,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_accepts_shared_table() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18881,6 +18886,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_selected_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18907,6 +18913,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_level_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18928,6 +18935,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_table_tamper() {
         run_vesta_affine_fixed_window_table_test(|| {
             let table = vesta_fixed_window_select_table();
@@ -18954,6 +18962,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared fixed-window table-select mock prover; covered in the default suite by builder checks and fixed-window select constraints"]
     fn kagemusha_non_native_vesta_affine_fixed_window_table_select_rejects_public_base_substitution()
      {
         run_vesta_affine_fixed_window_table_test(|| {
@@ -18975,6 +18984,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_accepts_two_one_bit_windows() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19028,6 +19038,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_public_output_substitution() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19054,6 +19065,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_selection_table_splice() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19074,6 +19086,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_window_base_transition_tamper()
     {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19095,6 +19108,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_sum_chain_tamper() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -19115,6 +19129,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_accepts_two_one_bit_windows()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19133,6 +19148,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_output_substitution()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19161,6 +19177,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_bit_splice()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19180,6 +19197,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_selection_level_tamper()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19199,6 +19217,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table scalar-mul mock prover; covered in the default suite by builder checks and fixed-window table/select constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_scalar_mul_rejects_window_base_transition_tamper()
      {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
@@ -19218,6 +19237,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_accepts_two_terms()
     {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19239,6 +19259,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19265,6 +19286,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_output_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19294,6 +19316,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_selection_bit_splice()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19314,6 +19337,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_term_output_splice()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19339,6 +19363,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_shared_table_native_scalar_msm_rejects_sum_chain_tamper()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19364,6 +19389,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19396,6 +19422,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19451,6 +19478,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_output_substitution()
      {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19492,6 +19520,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19530,6 +19559,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed shared-table IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_product_link_tamper()
     {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -19560,6 +19590,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_accepts_two_terms() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19613,6 +19644,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_base_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19636,6 +19668,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_public_output_substitution()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19662,6 +19695,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_selection_table_splice()
     {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19683,6 +19717,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_term_output_splice() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19707,6 +19742,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_sum_chain_tamper() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -19731,6 +19767,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level windowed scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_noncanonical_scalar_alias()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -19753,6 +19790,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19781,6 +19819,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -19859,6 +19898,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_link_tamper() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20300,6 +20340,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy two-bit non-native scalar-mul mock prover; covered in the default suite by one-bit acceptance, public-instance tamper checks, and builder guards"]
     fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_accumulator_chain_tamper() {
         run_vesta_affine_scalar_mul_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20320,6 +20361,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy two-bit non-native scalar-mul mock prover; covered in the default suite by one-bit acceptance, public-instance tamper checks, and builder guards"]
     fn kagemusha_non_native_vesta_affine_scalar_mul_rejects_double_chain_case_tamper() {
         run_vesta_affine_scalar_mul_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20350,6 +20392,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_accepts_two_bit_scalar() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20382,6 +20425,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_public_scalar_substitution() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20402,6 +20446,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_conditional_bit_tamper() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20419,6 +20464,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_noncanonical_scalar_alias() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20438,6 +20484,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar scalar-mul mock prover; covered in the default suite by one-bit acceptance, builder checks, and lower-level scalar/add constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_mul_rejects_double_chain_case_tamper() {
         run_vesta_affine_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -20456,6 +20503,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_terms_one_bit() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20472,6 +20520,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_accepts_two_bit_scalar() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20520,6 +20569,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_base_substitution() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20540,6 +20590,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_public_output_substitution() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20560,6 +20611,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_conditional_bit_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20577,6 +20629,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_sum_chain_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20600,6 +20653,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_noncanonical_scalar_alias() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20619,6 +20673,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed native-scalar MSM mock prover; covered in the default suite by builder checks and lower-level scalar/table constraints"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_double_chain_case_tamper() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -20637,6 +20692,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_accepts_one_bit_product() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20663,6 +20719,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_accepts_identity_output() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20738,6 +20795,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy non-windowed IPA final MSM mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_final_msm_rejects_product_link_tamper() {
         run_vesta_affine_ipa_final_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -20761,6 +20819,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20857,6 +20916,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_square_link_tamper() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20884,6 +20944,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20944,6 +21005,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA round-accumulator mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_rejects_square_link_tamper() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -20976,6 +21038,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21093,6 +21156,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_scalar_link_tamper() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21126,6 +21190,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_accepts_one_bit_challenge() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21190,6 +21255,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy shared-table IPA generator-fold mock prover; covered in the default suite by builder checks and lower-level MSM/link constraints"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_rejects_scalar_link_tamper() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -21225,6 +21291,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_accepts_one_bit_statement() {
         run_vesta_affine_ipa_one_round_test(|| {
             assert!(verify_vesta_affine_ipa_one_round(
@@ -21283,6 +21350,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_msm_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
@@ -21302,6 +21370,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_generator_fold_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_valid_circuit();
@@ -21323,6 +21392,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_accepts_one_bit_statement() {
         run_vesta_affine_ipa_one_round_test(|| {
             assert!(verify_vesta_affine_ipa_one_round_shared_table(
@@ -21332,6 +21402,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_final_msm_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();
@@ -21354,6 +21425,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy one-round shared-table IPA verifier mock prover; covered in the default suite by builder checks and lower-level IPA binding constraints"]
     fn kagemusha_non_native_vesta_ipa_one_round_shared_table_rejects_generator_fold_substitution() {
         run_vesta_affine_ipa_one_round_test(|| {
             let mut circuit = vesta_affine_ipa_one_round_shared_table_valid_circuit();

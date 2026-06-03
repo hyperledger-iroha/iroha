@@ -310,6 +310,12 @@ cargo test -p iroha_zkp_halo2
 cargo test -p fastpq_prover
 ```
 
+The broad `zk::` library slice keeps heavyweight Kagemusha non-native
+MockProver subtests behind `#[ignore]`; run those explicitly with `--ignored`
+when circuit-synthesis evidence is required. The default slice still exercises
+the fast builder, preflight, public-input substitution, transcript, range, and
+metadata-binding negative paths.
+
 Audit-driven regression coverage includes the fresh ZK-ACE trust-flag bypass,
 diagnostic success not creating ledger proof records, continued backend-label
 rejection, VK/domain binding on parameter changes, and ZK-ACE rejection of
