@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
@@ -19,6 +21,22 @@ def load_module():
 class FakeResponse:
     def __init__(self, payload):
         self.payload = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return False
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            return self.payload
+        return self.payload[:size]
+
+
+class FakeRawResponse:
+    def __init__(self, payload):
+        self.payload = payload.encode("utf-8")
 
     def __enter__(self):
         return self
@@ -165,12 +183,15 @@ def test_collect_receipt_proof_evidence_builds_verified_source_event_proof():
     )
 
     assert summary["read_only"] is True
+    assert summary["evidence_mode"] == "sccp_source_event"
     assert summary["chain"] == "eth"
     assert summary["rpc_chain_id"] == 1
     assert summary["transaction_hash"] == "0x" + "11" * 32
     assert summary["transaction_index"] == 0
     assert summary["receipt_status"] == "0x1"
     assert summary["receipt_root_verified"] is True
+    assert summary["source_event_validated"] is True
+    assert summary["receipt_only_evidence"] is False
     assert summary["execution_receipts_root"] == summary["computed_receipts_root"]
     assert summary["source_event_digest"] == "0x" + "55" * 32
     assert summary["receipt_rlp"].startswith("0x02")
@@ -182,6 +203,87 @@ def test_collect_receipt_proof_evidence_builds_verified_source_event_proof():
         "eth_getBlockByHash",
         "eth_getBlockReceipts",
     ]
+
+
+def test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge():
+    module = load_module()
+    opener = fake_opener_for(module)
+
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            opener=opener,
+        )
+    except ValueError as exc:
+        assert "source_bridge_address is required for SCCP source-event evidence" in str(exc)
+    else:
+        raise AssertionError("receipt-only evidence was accepted without explicit opt-in")
+    assert [call[0] for call in opener.calls] == ["eth_chainId"]
+
+
+def test_collect_receipt_proof_allows_explicit_receipt_only_mode():
+    module = load_module()
+    opener = fake_opener_for(module)
+
+    summary = module.collect_receipt_proof_evidence(
+        "https://rpc.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        transaction_hash=bytes.fromhex("11" * 32),
+        allow_receipt_only_evidence=True,
+        opener=opener,
+    )
+
+    assert summary["evidence_mode"] == "receipt_only"
+    assert summary["source_event_validated"] is False
+    assert summary["receipt_only_evidence"] is True
+    assert "source_event_digest" not in summary
+
+
+def test_cli_requires_source_bridge_or_explicit_receipt_only_mode():
+    module = load_module()
+    stderr = io.StringIO()
+
+    with contextlib.redirect_stderr(stderr):
+        try:
+            module.main(
+                [
+                    "--rpc-url",
+                    "https://rpc.example",
+                    "--domain",
+                    "eth",
+                    "--expected-rpc-chain-id",
+                    "1",
+                    "--transaction-hash",
+                    "0x" + "11" * 32,
+                ]
+            )
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError("CLI accepted source-event evidence without a bridge")
+
+    assert "--source-bridge-address" in stderr.getvalue()
+    assert "--allow-receipt-only-evidence" in stderr.getvalue()
+
+
+def test_cli_exposes_explicit_receipt_only_mode():
+    module = load_module()
+    args = module.build_parser().parse_args(
+        [
+            "--rpc-url",
+            "https://rpc.example",
+            "--domain",
+            "eth",
+            "--transaction-hash",
+            "0x" + "11" * 32,
+            "--allow-receipt-only-evidence",
+        ]
+    )
+
+    assert args.allow_receipt_only_evidence is True
+    assert args.source_bridge_address is None
 
 
 def test_receipt_rlp_rejects_unknown_typed_receipt_prefix():
@@ -267,6 +369,7 @@ def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
             opener=opener,
         )
     except ValueError as exc:
@@ -274,6 +377,95 @@ def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
     else:
         raise AssertionError("non-mainnet ETH chain id was accepted")
     assert [call[0] for call in opener.calls] == ["eth_chainId"]
+
+
+def test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity():
+    module = load_module()
+    calls = []
+
+    def opener(request, timeout=15.0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        calls.append(payload["method"])
+        return FakeResponse(rpc_response("0x01"))
+
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        assert "eth_chainId returned non-canonical quantity" in str(exc)
+    else:
+        raise AssertionError("noncanonical eth_chainId quantity was accepted")
+    assert calls == ["eth_chainId"]
+
+
+def test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys():
+    module = load_module()
+    calls = []
+
+    def opener(request, timeout=15.0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        calls.append(payload["method"])
+        return FakeRawResponse(
+            '{"jsonrpc":"2.0","id":1,"result":"0x1","result":"0x2"}'
+        )
+
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        assert "JSON-RPC returned duplicate JSON key 'result'" in str(exc)
+    else:
+        raise AssertionError("duplicate JSON-RPC result keys were accepted")
+    assert calls == ["eth_chainId"]
+
+
+def test_collect_receipt_proof_rejects_duplicate_json_receipt_fields():
+    module = load_module()
+    calls = []
+    transaction_receipt = json.dumps(
+        receipt(module, index=0, tx_byte=0x11, logs=source_log(module)),
+        separators=(",", ":"),
+    )
+    duplicated_receipt = (
+        transaction_receipt[:-1] + ',"transactionHash":"0x' + "22" * 32 + '"}'
+    )
+
+    def opener(request, timeout=15.0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        method = payload["method"]
+        calls.append(method)
+        if method == "eth_chainId":
+            return FakeResponse(rpc_response("0x1"))
+        if method == "eth_getTransactionReceipt":
+            return FakeRawResponse(f'{{"jsonrpc":"2.0","id":1,"result":{duplicated_receipt}}}')
+        raise AssertionError(f"unexpected method {method}")
+
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        assert "JSON-RPC returned duplicate JSON key 'transactionHash'" in str(exc)
+    else:
+        raise AssertionError("duplicate JSON receipt fields were accepted")
+    assert calls == ["eth_chainId", "eth_getTransactionReceipt"]
 
 
 def test_collect_receipt_proof_rejects_failed_receipt():
@@ -286,6 +478,7 @@ def test_collect_receipt_proof_rejects_failed_receipt():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
             opener=opener,
         )
     except RuntimeError as exc:
@@ -303,6 +496,7 @@ def test_collect_receipt_proof_rejects_receipts_root_mismatch():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
             opener=opener,
         )
     except RuntimeError as exc:
@@ -364,6 +558,7 @@ def test_collect_receipt_proof_rejects_direct_receipt_rlp_drift():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
+            allow_receipt_only_evidence=True,
             opener=opener,
         )
     except RuntimeError as exc:
@@ -455,6 +650,30 @@ def test_collect_receipt_proof_rejects_source_event_non_empty_data():
         raise AssertionError("source event log with non-empty data was accepted")
 
 
+def test_collect_receipt_proof_rejects_zero_source_event_digest():
+    module = load_module()
+    receipts = block_receipts(
+        module,
+        source_log_overrides={
+            "topics": [module.EVM_SOURCE_EVENT_TOPIC, "0x" + "00" * 32],
+        },
+    )
+    opener = fake_opener_for(module, receipts=receipts)
+
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            source_bridge_address=bytes.fromhex("33" * 20),
+            opener=opener,
+        )
+    except RuntimeError as exc:
+        assert "receipt.logs[0].topics[1] returned zero data" in str(exc)
+    else:
+        raise AssertionError("zero source event digest was accepted")
+
+
 def test_receipt_trie_builder_rejects_receipt_order_drift():
     module = load_module()
     receipts = block_receipts(module, transaction_index_override=2)
@@ -465,6 +684,19 @@ def test_receipt_trie_builder_rejects_receipt_order_drift():
         assert "transactionIndex must match receipt order" in str(exc)
     else:
         raise AssertionError("receipt transactionIndex order drift was accepted")
+
+
+def test_receipt_trie_builder_rejects_duplicate_transaction_hashes():
+    module = load_module()
+    receipts = block_receipts(module)
+    receipts[1]["transactionHash"] = receipts[0]["transactionHash"]
+
+    try:
+        module.build_receipt_trie_proof_from_receipts(receipts, transaction_index=0)
+    except RuntimeError as exc:
+        assert "transactionHash values must be unique" in str(exc)
+    else:
+        raise AssertionError("duplicate block receipt transaction hashes were accepted")
 
 
 def test_receipt_trie_key_uses_rlp_transaction_index_not_hashed_key():

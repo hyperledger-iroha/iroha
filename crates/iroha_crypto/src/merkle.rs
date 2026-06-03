@@ -533,10 +533,9 @@ impl<T> MerkleTree<T> {
                 _ => unreachable!(),
             };
             let parent_node = Self::pair_hash(l_node, r_node);
-            let parent_mut = self
-                .0
-                .get_mut(parent_index)
-                .expect("bug: missing parent node at computed index");
+            let Some(parent_mut) = self.0.get_mut(parent_index) else {
+                return;
+            };
             *parent_mut = parent_node;
             index = parent_index;
             node = parent_node;
@@ -1421,6 +1420,15 @@ mod tests {
         assert_eq!(leaves_iter.next_back(), None);
         assert_eq!(leaves_iter.len(), 0);
         assert_eq!(leaves_iter.next(), None);
+    }
+
+    #[test]
+    fn update_stops_on_missing_parent_slot() {
+        let mut tree = MerkleTree::<()>(vec![None]);
+
+        tree.update(3);
+
+        assert_eq!(tree.0, vec![None]);
     }
 
     #[test]

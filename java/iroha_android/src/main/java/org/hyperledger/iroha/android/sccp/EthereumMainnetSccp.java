@@ -626,7 +626,12 @@ public final class EthereumMainnetSccp {
         || request.publicInputs().targetDomain() != DOMAIN_ETH) {
       throw new IllegalArgumentException("Ethereum mainnet proof requests must target ETH");
     }
-    requireEthereumDestinationBinding(request.destinationBinding());
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        requireEthereumDestinationBinding(request.destinationBinding());
+    if (!binding.hash.equals(request.destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "destinationBindingHash must match Ethereum mainnet destinationBinding");
+    }
   }
 
   private static SourceSccpProofs.EvmDestinationBinding requireEthereumDestinationBinding(
@@ -1265,12 +1270,14 @@ public final class EthereumMainnetSccp {
       while (basePath.endsWith("/")) {
         basePath = basePath.substring(0, basePath.length() - 1);
       }
-      final String apiPath =
-          basePath.endsWith("/eth/v1") && path.startsWith("/eth/v1/")
-              ? path.substring("/eth/v1".length())
-              : path;
+      final String apiPath;
+      if (basePath.matches(".*/eth/v[0-9]+") && path.matches("/eth/v[0-9]+/.*")) {
+        apiPath = basePath.replaceFirst("/eth/v[0-9]+$", "") + path;
+      } else {
+        apiPath = basePath + path;
+      }
       final String query = url.getQuery() == null ? "" : "?" + url.getQuery();
-      return url.getProtocol() + "://" + url.getAuthority() + basePath + apiPath + query;
+      return url.getProtocol() + "://" + url.getAuthority() + apiPath + query;
     } catch (final java.net.MalformedURLException ex) {
       throw new IllegalArgumentException("Ethereum mainnet Beacon REST endpoint must be a valid URL", ex);
     }
@@ -1516,6 +1523,20 @@ public final class EthereumMainnetSccp {
                   "Ethereum mainnet Beacon REST finalized header.data.header",
                   "message"),
               "Ethereum mainnet Beacon REST finalized header.data.header.message");
+      for (final String field : Arrays.asList("parent_root", "state_root", "body_root")) {
+        normalizeRpcHex(
+            requireBeaconRestField(
+                message,
+                "Ethereum mainnet Beacon REST finalized header.data.header.message",
+                field),
+            "Ethereum mainnet Beacon REST finalized header.data.header.message." + field,
+            32);
+      }
+      normalizeRpcHex(
+          requireBeaconRestField(
+              header, "Ethereum mainnet Beacon REST finalized header.data.header", "signature"),
+          "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+          96);
       final long beaconSlot =
           normalizeUnsignedInteger(
               requireBeaconRestField(
@@ -1525,6 +1546,109 @@ public final class EthereumMainnetSccp {
               "beaconFinality.beaconSlot");
       if (beaconSlot == 0) {
         throw new IllegalArgumentException("beaconFinality.beaconSlot must be positive");
+      }
+      final Map<String, Object> finalizedBlockRootResponse =
+          fetchJsonObject(
+              "/eth/v1/beacon/blocks/finalized/root",
+              "Ethereum mainnet Beacon REST finalized block root");
+      rejectUnsafeBeaconRestPayload(
+          finalizedBlockRootResponse, "Ethereum mainnet Beacon REST finalized block root");
+      final Map<String, Object> finalizedBlockRootData =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedBlockRootResponse,
+                  "Ethereum mainnet Beacon REST finalized block root",
+                  "data"),
+              "Ethereum mainnet Beacon REST finalized block root.data");
+      final String finalizedBlockRootHash =
+          normalizeRpcHex(
+              requireBeaconRestField(
+                  finalizedBlockRootData,
+                  "Ethereum mainnet Beacon REST finalized block root.data",
+                  "root"),
+              "finalizedBlockRoot",
+              32);
+      if (!finalizedBlockRootHash.equals(finalizedHeaderRoot)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finalized block root must match finalized header root");
+      }
+      final Map<String, Object> finalizedBlockRoot =
+          fetchJsonObject(
+              "/eth/v2/beacon/blocks/finalized",
+              "Ethereum mainnet Beacon REST finalized block");
+      rejectUnsafeBeaconRestPayload(
+          finalizedBlockRoot, "Ethereum mainnet Beacon REST finalized block");
+      final Map<String, Object> finalizedBlockData =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedBlockRoot, "Ethereum mainnet Beacon REST finalized block", "data"),
+              "Ethereum mainnet Beacon REST finalized block.data");
+      final Map<String, Object> finalizedBlockMessage =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedBlockData,
+                  "Ethereum mainnet Beacon REST finalized block.data",
+                  "message"),
+              "Ethereum mainnet Beacon REST finalized block.data.message");
+      final long finalizedBlockSlot =
+          normalizeUnsignedInteger(
+              requireBeaconRestField(
+                  finalizedBlockMessage,
+                  "Ethereum mainnet Beacon REST finalized block.data.message",
+                  "slot"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.slot");
+      if (finalizedBlockSlot != beaconSlot) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finalized block slot must match finalized header slot");
+      }
+      final Map<String, Object> finalizedBlockBody =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedBlockMessage,
+                  "Ethereum mainnet Beacon REST finalized block.data.message",
+                  "body"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.body");
+      final Map<String, Object> executionPayload =
+          expectBeaconRestObject(
+              requireBeaconRestField(
+                  finalizedBlockBody,
+                  "Ethereum mainnet Beacon REST finalized block.data.message.body",
+                  "execution_payload"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload");
+      final String payloadBlockHash =
+          normalizeRpcHex(
+              requireBeaconRestField(
+                  executionPayload,
+                  "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                  "block_hash"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash",
+              32);
+      if (!payloadBlockHash.equals(blockHash)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash");
+      }
+      final long payloadBlockNumber =
+          normalizeUnsignedInteger(
+              requireBeaconRestField(
+                  executionPayload,
+                  "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                  "block_number"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number");
+      if (payloadBlockNumber != normalizeUnsignedInteger(blockNumber, "block.number")) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST execution payload block_number must match block.number");
+      }
+      final String payloadReceiptsRoot =
+          normalizeRpcHex(
+              requireBeaconRestField(
+                  executionPayload,
+                  "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                  "receipts_root"),
+              "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root",
+              32);
+      if (!payloadReceiptsRoot.equals(receiptsRoot)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot");
       }
       if (verifyFinalityCheckpoint) {
         final Map<String, Object> checkpointRoot =

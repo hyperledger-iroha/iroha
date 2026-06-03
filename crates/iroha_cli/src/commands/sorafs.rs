@@ -4029,7 +4029,7 @@ mod manifest_envelope_tests {
     #[test]
     fn load_manifest_envelope_encodes_valid_envelope() {
         let mut rng = StdRng::seed_from_u64(7);
-        let key_pair = HybridKeyPair::generate(&mut rng);
+        let key_pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let envelope = encrypt_payload(
             b"manifest payload",
             b"sorafs:manifest:test",
@@ -12275,7 +12275,8 @@ mod tests {
         let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
         let mldsa_public = mldsa_keys.public_key().to_vec();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public);
+        let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public)
+            .expect("sample issuer fingerprint should compute");
 
         let directory_hash = [0xAB; 32];
         let preferred_kem_suite = MlKemSuite::MlKem1024;

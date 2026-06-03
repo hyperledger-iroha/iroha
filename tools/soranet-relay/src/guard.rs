@@ -807,7 +807,8 @@ mod tests {
         let issuer_public = issuer_signing.verifying_key().to_bytes();
         let issuer_mldsa = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("issuer keypair");
         let issuer_fingerprint =
-            compute_issuer_fingerprint(&issuer_public, issuer_mldsa.public_key());
+            compute_issuer_fingerprint(&issuer_public, issuer_mldsa.public_key())
+                .expect("sample issuer fingerprint should compute");
 
         let relay_id = issuer_public;
         let descriptor_commit = [0xAB; 32];

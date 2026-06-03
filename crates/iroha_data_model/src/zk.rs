@@ -308,6 +308,10 @@ fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// Derive a private prover-side AIR statement digest from public inputs and witness.
+///
+/// # Errors
+///
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_air_statement_digest(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -325,6 +329,10 @@ pub fn derive_zk_ace_air_statement_digest(
 }
 
 /// Derive the verifier-side public AIR word for a ZK-ACE proof.
+///
+/// # Errors
+///
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {
@@ -394,6 +402,10 @@ pub fn derive_zk_ace_transfer_digest(
 }
 
 /// Hash canonical public inputs into a STARK public-input word.
+///
+/// # Errors
+///
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_public_inputs_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {

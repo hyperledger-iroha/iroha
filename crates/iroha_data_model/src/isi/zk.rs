@@ -381,6 +381,7 @@ isi! {
 impl crate::seal::Instruction for RotateZkAceIdentityCommitment {}
 impl RotateZkAceIdentityCommitment {
     /// Construct a new identity-commitment rotation.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         asset: AssetDefinitionId,
         old_identity_commitment: [u8; 32],

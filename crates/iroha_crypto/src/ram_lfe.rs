@@ -62,6 +62,7 @@ const BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS: u64 = 1_u64 << 52;
 const BFV_PROGRAM_REGISTER_COUNT_U16: u16 = 4;
 const BFV_PROGRAM_STATE_WIDTH_U16: u16 = 32;
 const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = 64;
+const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16: u16 = 64;
 const RAM_LFE_PROOF_BACKEND_MAX_BYTES: usize = 128;
 const RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES: usize = 256;
 const RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES: usize = 1_048_576;
@@ -375,14 +376,12 @@ pub const fn bfv_program_profile() -> BfvRamProgramProfile {
 /// Return the canonical hidden program used by the historical identifier-programmed backend.
 #[must_use]
 pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
-    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT)
+    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16)
         .flat_map(|slot| {
-            let slot_u16 = u16::try_from(slot).expect("identifier slot index fits into u16");
-            let lane_u16 =
-                u16::try_from(slot % BFV_PROGRAM_STATE_WIDTH).expect("state lane fits into u16");
+            let lane = slot % BFV_PROGRAM_STATE_WIDTH_U16;
             [
-                HiddenRamFheInstruction::LoadInput(0, slot_u16),
-                HiddenRamFheInstruction::LoadState(1, lane_u16),
+                HiddenRamFheInstruction::LoadInput(0, slot),
+                HiddenRamFheInstruction::LoadState(1, lane),
                 HiddenRamFheInstruction::Add(2, 0, 1),
                 HiddenRamFheInstruction::Output(2),
             ]
@@ -1063,7 +1062,7 @@ fn derive_program_rng(
     secret: &[u8],
     commitment: &PolicyCommitment,
     request: &ClientRequest,
-    step: usize,
+    step: u64,
     domain: &[u8],
 ) -> ChaCha20Rng {
     let seed: [u8; Hash::LENGTH] = Hash::new(
@@ -1072,9 +1071,7 @@ fn derive_program_rng(
             secret,
             commitment.policy_hash.as_ref(),
             request.associated_data.as_slice(),
-            &u64::try_from(step)
-                .expect("step fits into u64")
-                .to_le_bytes(),
+            &step.to_le_bytes(),
         ]
         .concat(),
     )
@@ -1617,6 +1614,44 @@ mod tests {
     }
 
     #[test]
+    fn program_rng_derivation_binds_step_without_conversion() {
+        let commitment = PolicyCommitment {
+            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            policy_hash: Hash::new(b"program-rng-policy"),
+            public_parameters: Vec::new(),
+        };
+        let request = ClientRequest {
+            normalized_input: Vec::new(),
+            associated_data: b"phone#retail".to_vec(),
+        };
+
+        let mut first = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            1,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let mut second = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            1,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let mut other_step = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            2,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let first_value = first.random::<u64>();
+        assert_eq!(first_value, second.random::<u64>());
+        assert_ne!(first_value, other_step.random::<u64>());
+    }
+
+    #[test]
     fn bfv_affine_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();
@@ -1738,16 +1773,44 @@ mod tests {
     }
 
     #[test]
+    fn default_bfv_programmed_hidden_program_uses_profile_indexes() {
+        let program = default_bfv_programmed_hidden_program();
+        validate_hidden_ram_fhe_program(&program).expect("default program validates");
+        assert_eq!(program.register_count, BFV_PROGRAM_REGISTER_COUNT_U16);
+        assert_eq!(program.memory_lane_count, BFV_PROGRAM_STATE_WIDTH_U16);
+        assert_eq!(
+            program.instructions.len(),
+            BFV_PROGRAM_IDENTIFIER_SLOT_COUNT * 4
+        );
+        assert_eq!(
+            program.instructions.first(),
+            Some(&HiddenRamFheInstruction::LoadInput(0, 0))
+        );
+        assert_eq!(
+            program.instructions.get(4),
+            Some(&HiddenRamFheInstruction::LoadInput(0, 1))
+        );
+        assert_eq!(
+            program.instructions.get(4 * BFV_PROGRAM_STATE_WIDTH),
+            Some(&HiddenRamFheInstruction::LoadInput(
+                0,
+                BFV_PROGRAM_STATE_WIDTH_U16
+            ))
+        );
+        assert_eq!(
+            program.instructions.last(),
+            Some(&HiddenRamFheInstruction::Output(2))
+        );
+    }
+
+    #[test]
     fn hidden_program_validation_rejects_static_index_overflow() {
         let program = HiddenRamFheProgram {
             version: 1,
             register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
             memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
             instructions: vec![
-                HiddenRamFheInstruction::LoadInput(
-                    0,
-                    u16::try_from(BFV_PROGRAM_IDENTIFIER_SLOT_COUNT).expect("slot count fits"),
-                ),
+                HiddenRamFheInstruction::LoadInput(0, BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
         };

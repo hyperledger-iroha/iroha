@@ -8821,6 +8821,108 @@ impl Actor {
         true
     }
 
+    fn seed_exact_frontier_slot_from_pending_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+        reason: &'static str,
+    ) -> bool {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+
+        let Some(frontier_info) = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .filter(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == height
+                    && pending.view == view
+                    && self.pending_block_is_active_for_tip(
+                        block_hash,
+                        pending,
+                        self.state.committed_height(),
+                        self.state.latest_block_hash_fast(),
+                    )
+            })
+            .map(|pending| {
+                self.authoritative_slot_frontier_info(pending.height, pending.view, block_hash)
+            })
+        else {
+            return false;
+        };
+
+        if self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && (slot.block_hash != block_hash || slot.view != view)
+                && self.frontier_slot_has_live_local_owner_work_for_view(slot, view)
+        }) {
+            return false;
+        }
+
+        let _ = self.handle_frontier_slot_event(
+            now,
+            FrontierSlotEvent::OnBlockCreated {
+                block_hash,
+                view,
+                frontier_info,
+                leader: None,
+                voters: BTreeSet::new(),
+                body_present: true,
+                requester: None,
+            },
+        );
+        if let Some(slot) = self.frontier_slot.as_mut()
+            && slot.height == height
+            && slot.view == view
+            && slot.block_hash == block_hash
+        {
+            slot.repair_state.last_reason = Some(reason);
+            slot.note_lag_if_needed(now);
+            slot.sync_compat_fields();
+            if self
+                .frontier_recovery
+                .as_ref()
+                .is_some_and(|state| state.frontier_height == height)
+            {
+                self.frontier_recovery = None;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn route_frontier_pending_quorum_timeout_to_exact_slot(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if !self.seed_exact_frontier_slot_from_pending_block(
+            block_hash,
+            height,
+            view,
+            now,
+            "quorum_timeout",
+        ) {
+            return false;
+        }
+        let _ = self.handle_frontier_slot_event(
+            now,
+            FrontierSlotEvent::OnQuorumTimeout {
+                cause: ViewChangeCause::QuorumTimeout,
+                requested_view: view,
+            },
+        );
+        true
+    }
+
     fn seed_frontier_recovery_for_frontier_stall(
         &mut self,
         frontier_height: u64,
@@ -37092,7 +37194,9 @@ impl Actor {
             .unwrap_or(near_quorum_timeout)
             .max(Duration::from_millis(200));
         let mut near_quorum_recovery_candidates = Vec::new();
+        let mut near_quorum_exact_slot_seed_candidates = Vec::new();
         let mut local_quorum_completion_candidates = Vec::new();
+        let mut stalled_frontier_near_quorum_missing_payload = None;
 
         for (block_hash, pending) in &self.pending.pending_blocks {
             if !self.pending_block_is_active_for_tip(
@@ -37128,6 +37232,10 @@ impl Actor {
                 decision.class,
                 StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
             );
+            let near_quorum_missing_payload = decision.vote_count > 0
+                && decision.vote_count < decision.min_votes_for_commit
+                && decision.vote_count.saturating_add(1) >= decision.min_votes_for_commit
+                && decision.missing_local_data;
             let stall_age = pending.progress_age(now);
             if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
                 near_quorum_recovery_candidates.push((
@@ -37137,6 +37245,16 @@ impl Actor {
                     stall_age,
                     decision.vote_count,
                     decision.min_votes_for_commit,
+                ));
+            }
+            if near_quorum_missing_payload
+                && pending.height == frontier_height
+                && stall_age >= near_quorum_recovery_window
+            {
+                near_quorum_exact_slot_seed_candidates.push((
+                    *block_hash,
+                    pending.height,
+                    pending.view,
                 ));
             }
             if decision.vote_count > 0
@@ -37206,6 +37324,13 @@ impl Actor {
             near_quorum_stalled |= near_quorum_fast_timeout_allowed;
             recovery_backlog_stalled |= recovery_backlog_active;
             same_block_recovery_stalled |= decision.same_block_recovery_active;
+            if near_quorum_missing_payload && pending.height == frontier_height {
+                stalled_frontier_near_quorum_missing_payload.get_or_insert((
+                    *block_hash,
+                    pending.height,
+                    pending.view,
+                ));
+            }
         }
 
         let inflight_stall = self
@@ -37237,6 +37362,10 @@ impl Actor {
                     decision.class,
                     StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
                 );
+                let near_quorum_missing_payload = decision.vote_count > 0
+                    && decision.vote_count < decision.min_votes_for_commit
+                    && decision.vote_count.saturating_add(1) >= decision.min_votes_for_commit
+                    && decision.missing_local_data;
                 let stall_age = inflight.pending.progress_age(now);
                 if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
                     let vote_status = self.commit_vote_quorum_status_for_block_detail(
@@ -37267,6 +37396,16 @@ impl Actor {
                         min_votes,
                     ));
                 }
+                if near_quorum_missing_payload
+                    && inflight.pending.height == frontier_height
+                    && stall_age >= near_quorum_recovery_window
+                {
+                    near_quorum_exact_slot_seed_candidates.push((
+                        inflight.block_hash,
+                        inflight.pending.height,
+                        inflight.pending.view,
+                    ));
+                }
                 let stalled = if near_quorum_fast_timeout_allowed {
                     stall_age >= pending_timeout && stall_age >= near_quorum_recent_progress_grace
                 } else if recovery_backlog_active {
@@ -37281,9 +37420,14 @@ impl Actor {
                     pending_timeout,
                     decision.class,
                     decision.same_block_recovery_active,
+                    near_quorum_missing_payload.then_some((
+                        inflight.block_hash,
+                        inflight.pending.height,
+                        inflight.pending.view,
+                    )),
                 )
             });
-        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _, _)| stalled);
+        let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _, _, _)| stalled);
         if let Some((
             height,
             true,
@@ -37291,6 +37435,7 @@ impl Actor {
             pending_timeout,
             timeout_class,
             same_block_recovery_active,
+            near_quorum_missing_payload,
         )) = inflight_stall
         {
             stalled_height = Some(stalled_height.map_or(height, |current| current.min(height)));
@@ -37311,6 +37456,11 @@ impl Actor {
                 StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
             );
             same_block_recovery_stalled |= same_block_recovery_active;
+            if let Some(candidate) = near_quorum_missing_payload
+                && height == frontier_height
+            {
+                stalled_frontier_near_quorum_missing_payload.get_or_insert(candidate);
+            }
         }
         if stalled_pending == 0 && inflight_stalled {
             if let Some((
@@ -37320,6 +37470,7 @@ impl Actor {
                 pending_timeout,
                 timeout_class,
                 same_block_recovery_active,
+                _,
             )) = inflight_stall
             {
                 debug!(
@@ -37364,6 +37515,23 @@ impl Actor {
         }
         if local_quorum_completion_emitted > 0 {
             return false;
+        }
+        if !near_quorum_exact_slot_seed_candidates.is_empty() {
+            let mut seeded_candidates = BTreeSet::<(HashOf<BlockHeader>, u64, u64)>::new();
+            for (block_hash, candidate_height, candidate_view) in
+                near_quorum_exact_slot_seed_candidates.into_iter().take(4)
+            {
+                if !seeded_candidates.insert((block_hash, candidate_height, candidate_view)) {
+                    continue;
+                }
+                let _ = self.seed_exact_frontier_slot_from_pending_block(
+                    block_hash,
+                    candidate_height,
+                    candidate_view,
+                    now,
+                    "near_quorum_missing_payload",
+                );
+            }
         }
         let mut near_quorum_preemptive_escalations = 0usize;
         if !near_quorum_recovery_candidates.is_empty() {
@@ -37686,6 +37854,17 @@ impl Actor {
             return false;
         }
         if height == frontier_height {
+            if let Some((block_hash, candidate_height, candidate_view)) =
+                stalled_frontier_near_quorum_missing_payload
+                && self.route_frontier_pending_quorum_timeout_to_exact_slot(
+                    block_hash,
+                    candidate_height,
+                    candidate_view,
+                    now,
+                )
+            {
+                return true;
+            }
             self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
             return true;
         }

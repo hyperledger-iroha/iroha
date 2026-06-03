@@ -1715,8 +1715,7 @@ impl Actor {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
-                && (!missing_qc_liveness_active
-                    || self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view))
+                && self.same_height_block_has_observed_qc(vote.block_hash, height, vote.view)
         });
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
@@ -2146,6 +2145,18 @@ impl Actor {
             .known_block_commit_qc_recovery_view_change_window()
             .max(self.quorum_timeout(self.runtime_da_enabled()))
             .max(Duration::from_millis(1));
+        let stale_branch_terminal = self
+            .pending
+            .pending_blocks
+            .get(&existing_vote.block_hash)
+            .filter(|pending| {
+                pending.height == proposal_height && pending.view == existing_vote.view
+            })
+            .is_some_and(|pending| {
+                pending.is_retired_same_height()
+                    || pending.is_retry_aborted()
+                    || pending.validation_status == ValidationStatus::Invalid
+            });
         let pending_allows_stale_branch_rotation = self
             .pending
             .pending_blocks
@@ -2163,7 +2174,8 @@ impl Actor {
                             .max(now.saturating_duration_since(pending.inserted_at))
                             >= repair_window)
             });
-        self.frontier_missing_qc_liveness_active(proposal_height, proposal_view)
+        (stale_branch_terminal
+            || self.frontier_missing_qc_liveness_active(proposal_height, proposal_view))
             && pending_allows_stale_branch_rotation
     }
 
@@ -4657,6 +4669,15 @@ impl Actor {
                 .get_proposal(tracked_height, tracked_view)
                 .is_some();
         if frontier_proposal_ingress_deferring && !active_cached_frontier_slot {
+            if frontier_recovery_ingress_override {
+                let _ = self.seed_frontier_slot_from_same_height_evidence(
+                    tracked_height,
+                    tracked_view,
+                    now,
+                    "vote_locked_ingress_override",
+                    false,
+                );
+            }
             self.subsystems.propose.pacemaker.next_deadline = now
                 .checked_add(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL)
                 .unwrap_or(now);

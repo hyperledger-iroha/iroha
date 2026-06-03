@@ -15,10 +15,10 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
-ACTIVE_LAUNCH_DOMAIN = 1
-ACTIVE_LAUNCH_CHAIN = "eth"
-ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
-ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"
+ACTIVE_LAUNCH_DOMAIN = 2
+ACTIVE_LAUNCH_CHAIN = "bsc"
+ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
+ACTIVE_LAUNCH_DISPLAY = "BSC mainnet"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 CORRIDOR_COMPLETION_SENTINEL = "SCCP production corridor completed."
 CORRIDOR_DRY_RUN_SENTINEL = "SCCP production corridor dry run completed."
@@ -973,6 +973,44 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def _active_launch_evm_live_metadata_blockers(
+    lane_label: str,
+    lane: dict[str, Any],
+) -> list[str]:
+    """Return EVM live-read blockers for the active launch lane."""
+
+    evm_live_metadata = lane.get("evm_live_metadata")
+    if not isinstance(evm_live_metadata, dict):
+        evm_live_metadata = {}
+    expected_chain_ids = {
+        "eth": {"1", "0x1"},
+        "bsc": {"56", "0x38"},
+    }.get(ACTIVE_LAUNCH_CHAIN, set())
+    expected_chain_id_label = {
+        "eth": "1 (0x1)",
+        "bsc": "56 (0x38)",
+    }.get(ACTIVE_LAUNCH_CHAIN, "the configured mainnet chain id")
+
+    blockers: list[str] = []
+    if evm_live_metadata.get("source_rpc_chain_id") not in expected_chain_ids:
+        blockers.append(
+            f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live eth_chainId must be {expected_chain_id_label}"
+        )
+    if evm_live_metadata.get("destination_rpc_chain_id") not in expected_chain_ids:
+        blockers.append(
+            f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live eth_chainId must be {expected_chain_id_label}"
+        )
+    if evm_live_metadata.get("source_block_tag") != "finalized":
+        blockers.append(
+            f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} source live block tag must be finalized"
+        )
+    if evm_live_metadata.get("destination_block_tag") != "finalized":
+        blockers.append(
+            f"{lane_label}: {ACTIVE_LAUNCH_DISPLAY} destination live block tag must be finalized"
+        )
+    return blockers
+
+
 def _active_launch_release_checklist(evidence: dict[str, Any]) -> dict[str, Any]:
     lane = _active_launch_lane(evidence) or {}
     lane_label = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN})"
@@ -1010,6 +1048,10 @@ def _active_launch_release_checklist(evidence: dict[str, Any]) -> dict[str, Any]
             )
         )
     ]
+    if lane:
+        deployment_blockers.extend(
+            _active_launch_evm_live_metadata_blockers(lane_label, lane)
+        )
     route_blockers = [
         f"{lane_label}: {blocker}"
         for blocker in lane_blockers
@@ -1259,6 +1301,20 @@ def _cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
                 "route_canary_evidence_hash": route_canary.get("evidence_hash"),
                 "route_canary_evidence_source": route_canary.get("evidence_source"),
                 "route_canary_evidence_bound": bool(route_canary.get("evidence_bound")),
+                "route_canary_transaction_hash": route_canary.get("transaction_hash"),
+                "route_canary_receipt_block_number": route_canary.get(
+                    "receipt_block_number"
+                ),
+                "route_canary_receipt_block_hash": route_canary.get(
+                    "receipt_block_hash"
+                ),
+                "route_canary_receipt_block_finalized": route_canary.get(
+                    "receipt_block_finalized"
+                ),
+                "route_canary_block_receipts_root": route_canary.get(
+                    "block_receipts_root"
+                ),
+                "route_canary_message_id": route_canary.get("message_id"),
                 "route_canary_block_number": route_canary.get("block_number"),
                 "route_canary_block_timestamp": route_canary.get("block_timestamp"),
                 "source_adapter_gate_required": bool(source_gate.get("required")),
@@ -1290,6 +1346,12 @@ def _audit_hashes_cell(value: Any) -> str:
 def _integer_cell(value: Any) -> str:
     if type(value) is int:
         return f"`{value}`"
+    return "-"
+
+
+def _boolean_cell(value: Any) -> str:
+    if type(value) is bool:
+        return "`true`" if value else "`false`"
     return "-"
 
 
@@ -1356,11 +1418,13 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         "EVM Destination Chain ID | EVM Destination Tag | "
         "Source Material | Source Deployment | "
         "Destination Binding | Source Gate | Source Gate Audits | "
-        "Route Allowlist | Route Canary | Canary Source | Canary Block | "
+        "Route Allowlist | Route Canary | Canary Source | Canary Tx | "
+        "Canary Receipt Block | Canary Receipt Hash | Canary Receipt Finalized | "
+        "Canary Receipts Root | Canary Message ID | Canary Block | "
         "Canary Timestamp |"
     )
     lines.append(
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     )
     for row in report["cryptographic_evidence"]:
         canary_source = row["route_canary_evidence_source"] or "-"
@@ -1375,7 +1439,10 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "`{evm_dest_tag}` | "
             "{source} | {deploy} | {dest} | "
             "{source_gate} | {source_gate_audits} | {route} | {canary} | "
-            "`{canary_source}` | {canary_block} | {canary_timestamp} |".format(
+            "`{canary_source}` | {canary_tx} | {canary_receipt_block} | "
+            "{canary_receipt_hash} | {canary_receipt_finalized} | "
+            "{canary_receipts_root} | "
+            "{canary_message_id} | {canary_block} | {canary_timestamp} |".format(
                 domain=row["domain"],
                 chain=row["chain"],
                 evm_source_rpc_chain_id=row["evm_source_rpc_chain_id"] or "-",
@@ -1392,6 +1459,20 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
                 route=_hash_cell(row["route_allowlist_hash"]),
                 canary=_hash_cell(row["route_canary_evidence_hash"]),
                 canary_source=canary_source,
+                canary_tx=_hash_cell(row["route_canary_transaction_hash"]),
+                canary_receipt_block=_integer_cell(
+                    row["route_canary_receipt_block_number"]
+                ),
+                canary_receipt_hash=_hash_cell(
+                    row["route_canary_receipt_block_hash"]
+                ),
+                canary_receipt_finalized=_boolean_cell(
+                    row["route_canary_receipt_block_finalized"]
+                ),
+                canary_receipts_root=_hash_cell(
+                    row["route_canary_block_receipts_root"]
+                ),
+                canary_message_id=_hash_cell(row["route_canary_message_id"]),
                 canary_block=_integer_cell(row["route_canary_block_number"]),
                 canary_timestamp=_integer_cell(row["route_canary_block_timestamp"]),
             )
@@ -1457,7 +1538,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- A passing `bash scripts/check_sccp_production_corridor.sh` run, recorded with `--require-phase-evidence` and one hashed `--phase-evidence` artifact for every passed phase.",
             "- Passing web/mobile SDK artifacts for the user-prover helper surface, including the JavaScript/web source, packaged `dist`, and TypeScript declaration exports used by portal builds.",
             f"- Complete {ACTIVE_LAUNCH_DISPLAY} launch-lane evidence containing source verifier material, source-adapter deployment, destination rollout, route allowlist, and route canary records; the all-lanes summary remains attached as diagnostic evidence for future lanes.",
-            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 1` and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
+            f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report `eth_chainId == 0x38` (56) and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]

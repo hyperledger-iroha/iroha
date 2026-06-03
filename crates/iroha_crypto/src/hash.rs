@@ -5,8 +5,8 @@ use std::{
 
 #[cfg(not(feature = "ffi_import"))]
 use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
+    Blake2b,
+    digest::{Digest, consts::U32},
 };
 use derive_more::{Debug, Deref, DerefMut, Display};
 use iroha_schema::{IntoSchema, TypeId};
@@ -35,7 +35,7 @@ impl Hash {
     /// Length of hash
     pub const LENGTH: usize = 32;
 
-    /// Wrap the given bytes; they must be prehashed with `Blake2bVar`
+    /// Wrap the given bytes; they must be prehashed with Blake2b-32.
     pub fn prehashed(mut hash: [u8; Self::LENGTH]) -> Self {
         hash[Self::LENGTH - 1] |= 1;
         // SAFETY:
@@ -57,39 +57,35 @@ impl Hash {
     /// Hash the given bytes.
     #[must_use]
     pub fn new(bytes: impl AsRef<[u8]>) -> Self {
-        let mut hasher =
-            Blake2bVar::new(Self::LENGTH).expect("Failed to initialize variable size hash");
-        Update::update(&mut hasher, bytes.as_ref());
+        let mut hasher = Blake2b256::new();
+        Digest::update(&mut hasher, bytes.as_ref());
         finalize_blake2b(hasher)
     }
 
     pub(crate) fn new_from_chunks(chunks: &[&[u8]]) -> Self {
-        let mut hasher =
-            Blake2bVar::new(Self::LENGTH).expect("Failed to initialize variable size hash");
+        let mut hasher = Blake2b256::new();
         for chunk in chunks {
-            Update::update(&mut hasher, chunk);
+            Digest::update(&mut hasher, chunk);
         }
         finalize_blake2b(hasher)
     }
 }
 
-fn finalize_blake2b(hasher: Blake2bVar) -> Hash {
-    let mut hash = [0; Hash::LENGTH];
-    hasher
-        .finalize_variable(&mut hash)
-        .expect("Blake2b output length matches Hash::LENGTH");
+type Blake2b256 = Blake2b<U32>;
 
+fn finalize_blake2b(hasher: Blake2b256) -> Hash {
+    let hash: [u8; Hash::LENGTH] = hasher.finalize().into();
     Hash::prehashed(hash)
 }
 
 struct HashWriter {
-    hasher: Blake2bVar,
+    hasher: Blake2b256,
 }
 
 impl HashWriter {
     fn new() -> Self {
         Self {
-            hasher: Blake2bVar::new(Hash::LENGTH).expect("Failed to initialize variable size hash"),
+            hasher: Blake2b256::new(),
         }
     }
 
@@ -100,7 +96,7 @@ impl HashWriter {
 
 impl std::io::Write for HashWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Update::update(&mut self.hasher, buf);
+        Digest::update(&mut self.hasher, buf);
         Ok(buf.len())
     }
 
@@ -458,10 +454,9 @@ mod tests {
 
     #[test]
     fn blake2_32b() {
-        let mut hasher = Blake2bVar::new(32).unwrap();
-        hasher.update(&hex_literal::hex!("6920616d2064617461"));
-        let mut hash = [0_u8; Hash::LENGTH];
-        hasher.finalize_variable(&mut hash).unwrap();
+        let mut hasher = Blake2b256::new();
+        Digest::update(&mut hasher, hex_literal::hex!("6920616d2064617461"));
+        let hash: [u8; Hash::LENGTH] = hasher.finalize().into();
         assert_eq!(
             hash,
             hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2")

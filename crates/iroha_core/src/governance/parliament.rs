@@ -208,7 +208,8 @@ mod tests {
         key_seed: u8,
     ) -> (Vec<u8>, Vec<u8>, [u8; 32]) {
         let input = build_input(seed, account);
-        let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
+        let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+            .expect("deterministic BLS keypair");
         let (vrf_output, proof) =
             prove_normal_with_chain(&sk, chain_id.as_str().as_bytes(), &input)
                 .expect("deterministic normal VRF proof");

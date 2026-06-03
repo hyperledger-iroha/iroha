@@ -27372,6 +27372,8 @@ class BscMainnetSccp:
             evidence["receipt"] = normalized_receipt
         if normalized_block is not None:
             evidence["block"] = normalized_block
+        if receipt_proof is not None:
+            evidence["receipt_proof"] = _immutable_prover_envelope_value(receipt_proof)
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
         if supplied_finality is not None:
@@ -27418,6 +27420,8 @@ class BscMainnetSccp:
         parlia_finality = evidence.get("parlia_finality")
         if not isinstance(parlia_finality, Mapping) or not parlia_finality:
             raise TypeError("BSC mainnet SCCP inbound proof requires parliaFinality")
+        if evidence.get("receipt_proof") is None:
+            raise TypeError("BSC mainnet SCCP inbound proof requires receiptProof")
         proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
 

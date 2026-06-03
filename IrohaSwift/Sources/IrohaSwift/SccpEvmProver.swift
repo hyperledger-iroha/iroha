@@ -1502,6 +1502,26 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
             ),
             label: "Ethereum mainnet Beacon REST finalized header.data.header.message"
         )
+        for field in ["parent_root", "state_root", "body_root"] {
+            _ = try Self.normalizeRpcHex(
+                Self.requireField(
+                    message,
+                    label: "Ethereum mainnet Beacon REST finalized header.data.header.message",
+                    field: field
+                ),
+                label: "Ethereum mainnet Beacon REST finalized header.data.header.message.\(field)",
+                byteLength: 32
+            )
+        }
+        _ = try Self.normalizeRpcHex(
+            Self.requireField(
+                header,
+                label: "Ethereum mainnet Beacon REST finalized header.data.header",
+                field: "signature"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            byteLength: 96
+        )
         let beaconSlot = try Self.normalizeUnsignedInteger(
             Self.requireField(
                 message,
@@ -1512,6 +1532,121 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         )
         guard beaconSlot != 0 else {
             throw EvmSccpProverError.zeroField("beaconFinality.beaconSlot")
+        }
+        let finalizedBlockRootResponse = try await fetchJsonObject(
+            path: "/eth/v1/beacon/blocks/finalized/root",
+            label: "Ethereum mainnet Beacon REST finalized block root"
+        )
+        try Self.rejectUnsafeBeaconRestPayload(
+            finalizedBlockRootResponse,
+            label: "Ethereum mainnet Beacon REST finalized block root"
+        )
+        let finalizedBlockRootData = try Self.expectObject(
+            Self.requireField(
+                finalizedBlockRootResponse,
+                label: "Ethereum mainnet Beacon REST finalized block root",
+                field: "data"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block root.data"
+        )
+        let finalizedBlockRootHash = try Self.normalizeRpcHex(
+            Self.requireField(
+                finalizedBlockRootData,
+                label: "Ethereum mainnet Beacon REST finalized block root.data",
+                field: "root"
+            ),
+            label: "finalizedBlockRoot",
+            byteLength: 32
+        )
+        guard finalizedBlockRootHash == finalizedHeaderRoot else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.finalizedBlockRoot")
+        }
+        let finalizedBlockRoot = try await fetchJsonObject(
+            path: "/eth/v2/beacon/blocks/finalized",
+            label: "Ethereum mainnet Beacon REST finalized block"
+        )
+        try Self.rejectUnsafeBeaconRestPayload(
+            finalizedBlockRoot,
+            label: "Ethereum mainnet Beacon REST finalized block"
+        )
+        let blockData = try Self.expectObject(
+            Self.requireField(
+                finalizedBlockRoot,
+                label: "Ethereum mainnet Beacon REST finalized block",
+                field: "data"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data"
+        )
+        let blockMessage = try Self.expectObject(
+            Self.requireField(
+                blockData,
+                label: "Ethereum mainnet Beacon REST finalized block.data",
+                field: "message"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message"
+        )
+        let finalizedBlockSlot = try Self.normalizeUnsignedInteger(
+            Self.requireField(
+                blockMessage,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message",
+                field: "slot"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.slot"
+        )
+        guard finalizedBlockSlot == beaconSlot else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.executionPayload.slot")
+        }
+        let blockBody = try Self.expectObject(
+            Self.requireField(
+                blockMessage,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message",
+                field: "body"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.body"
+        )
+        let executionPayload = try Self.expectObject(
+            Self.requireField(
+                blockBody,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message.body",
+                field: "execution_payload"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload"
+        )
+        let payloadBlockHash = try Self.normalizeRpcHex(
+            Self.requireField(
+                executionPayload,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                field: "block_hash"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash",
+            byteLength: 32
+        )
+        guard payloadBlockHash == blockHash else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.executionPayload.blockHash")
+        }
+        let payloadBlockNumber = try Self.normalizeUnsignedInteger(
+            Self.requireField(
+                executionPayload,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                field: "block_number"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number"
+        )
+        let expectedPayloadBlockNumber = try Self.normalizeUnsignedInteger(blockNumber, label: "block.number")
+        guard payloadBlockNumber == expectedPayloadBlockNumber else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.executionPayload.blockNumber")
+        }
+        let payloadReceiptsRoot = try Self.normalizeRpcHex(
+            Self.requireField(
+                executionPayload,
+                label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                field: "receipts_root"
+            ),
+            label: "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root",
+            byteLength: 32
+        )
+        guard payloadReceiptsRoot == receiptsRoot else {
+            throw EvmSccpProverError.invalidPublicInputs("beaconRest.executionPayload.receiptsRoot")
         }
         if verifyFinalityCheckpoint {
             let checkpointRoot = try await fetchJsonObject(
@@ -1583,9 +1718,10 @@ public final class EthereumMainnetBeaconRestConsensusProvider: EthereumMainnetCo
         while basePath.hasSuffix("/") {
             basePath.removeLast()
         }
-        var suffix = path
-        if basePath.hasSuffix("/eth/v1"), suffix.hasPrefix("/eth/v1/") {
-            suffix = String(suffix.dropFirst("/eth/v1".count))
+        let suffix = path
+        if let versionRange = basePath.range(of: #"/eth/v[0-9]+$"#, options: .regularExpression),
+           suffix.range(of: #"^/eth/v[0-9]+/"#, options: .regularExpression) != nil {
+            basePath.removeSubrange(versionRange)
         }
         components.path = basePath + suffix
         components.fragment = nil
@@ -2423,7 +2559,7 @@ public final class EthereumMainnetSccp {
         guard evidence.receiptProof != nil else {
             throw EvmSccpProverError.invalidPublicInputs("receiptProof")
         }
-        if evidence.receipt != nil, evidence.sourceEventDigest == nil {
+        guard evidence.sourceEventDigest != nil else {
             throw EvmSccpProverError.invalidPublicInputs("receipt.sourceEvent")
         }
         guard evidence.beaconFinality?["finalizedHeaderRoot"] != nil else {

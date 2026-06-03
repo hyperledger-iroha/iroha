@@ -1009,12 +1009,10 @@ mod sm_accel {
     }
 
     fn forced_override() -> Option<bool> {
-        if cfg!(feature = "sm-neon-force") {
-            return Some(true);
-        }
         match current_override() {
             IntrinsicOverride::ForceEnable => Some(true),
             IntrinsicOverride::ForceDisable => Some(false),
+            IntrinsicOverride::Auto if cfg!(feature = "sm-neon-force") => Some(true),
             IntrinsicOverride::Auto => None,
         }
     }
@@ -1186,9 +1184,6 @@ mod sm_accel {
     pub fn neon_policy() -> NeonPolicy {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         {
-            if cfg!(feature = "sm-neon-force") {
-                return NeonPolicy::ForceEnable;
-            }
             match forced_override() {
                 Some(true) => NeonPolicy::ForceEnable,
                 Some(false) => NeonPolicy::ForceDisable,

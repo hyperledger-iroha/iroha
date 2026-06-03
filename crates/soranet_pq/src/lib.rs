@@ -34,8 +34,9 @@ pub use crate::{
         MlKemSharedSecret, MlKemSuite, SuiteParseError, decapsulate_mlkem, encapsulate_mlkem,
         encapsulate_mlkem_from_os, encapsulate_mlkem_from_seed, generate_mlkem_keypair,
         generate_mlkem_keypair_from_os, generate_mlkem_keypair_from_seed, mlkem_metadata,
-        mlkem_parameters, validate_mlkem_ciphertext, validate_mlkem_key_pair,
-        validate_mlkem_public_key, validate_mlkem_secret_key,
+        mlkem_parameters, try_generate_mlkem_keypair, try_generate_mlkem_keypair_from_seed,
+        validate_mlkem_ciphertext, validate_mlkem_key_pair, validate_mlkem_public_key,
+        validate_mlkem_secret_key,
     },
     rng::{
         HedgedChaCha20Rng, HedgedEntropyStatus, HedgedRngSeed, RngError,

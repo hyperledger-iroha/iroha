@@ -223,9 +223,13 @@ impl KeyPair {
                 KeyPair::new(public_key, private_key)
             }
             #[cfg(feature = "bls")]
-            Algorithm::BlsNormal => Ok(bls::BlsNormal::keypair(KeyGenOption::Random).into()),
+            Algorithm::BlsNormal => bls::BlsNormal::try_keypair(KeyGenOption::Random)
+                .map(Into::into)
+                .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "bls")]
-            Algorithm::BlsSmall => Ok(bls::BlsSmall::keypair(KeyGenOption::Random).into()),
+            Algorithm::BlsSmall => bls::BlsSmall::try_keypair(KeyGenOption::Random)
+                .map(Into::into)
+                .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
                 let mut rng = sm2::elliptic_curve::rand_core::OsRng;
@@ -287,9 +291,13 @@ impl KeyPair {
                 KeyPair::new(public_key, private_key)
             }
             #[cfg(feature = "bls")]
-            Algorithm::BlsNormal => Ok(bls::BlsNormal::keypair(KeyGenOption::UseSeed(seed)).into()),
+            Algorithm::BlsNormal => bls::BlsNormal::try_keypair(KeyGenOption::UseSeed(seed))
+                .map(Into::into)
+                .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "bls")]
-            Algorithm::BlsSmall => Ok(bls::BlsSmall::keypair(KeyGenOption::UseSeed(seed)).into()),
+            Algorithm::BlsSmall => bls::BlsSmall::try_keypair(KeyGenOption::UseSeed(seed))
+                .map(Into::into)
+                .map_err(|err| Error::KeyGen(err.to_string())),
             #[cfg(feature = "sm")]
             Algorithm::Sm2 => {
                 let private_inner =
@@ -322,11 +330,16 @@ impl KeyPair {
     /// See [`Self::into_parts`] for an opposite conversion.
     ///
     /// # Errors
-    /// If public and private keys don't match, i.e. if they don't make a pair
+    /// Returns [`Error::Parse`] if the public key payload is malformed, or
+    /// [`Error::KeyGen`] if public and private keys don't make a pair.
     pub fn new(public_key: PublicKey, private_key: PrivateKey) -> Result<Self, Error> {
         let algorithm = private_key.algorithm();
+        let (public_algorithm, public_payload) = public_key.try_to_bytes()?;
+        let public_full = PublicKeyFull::from_bytes(public_algorithm, public_payload)?;
+        #[cfg(not(feature = "gost"))]
+        let _ = &public_full;
 
-        if algorithm != public_key.algorithm() {
+        if algorithm != public_algorithm {
             return Err(Error::KeyGen("Mismatch of key algorithms".to_owned()));
         }
 
@@ -340,10 +353,13 @@ impl KeyPair {
                 | Algorithm::Gost3410_2012_512ParamSetB
         ) {
             use crate::secrecy::ExposeSecret;
-            let public_full = PublicKeyFull::from(&public_key.0);
             let gost_public = match &public_full {
                 PublicKeyFull::Gost { key, .. } => key,
-                _ => unreachable!("algorithm indicates GOST"),
+                _ => {
+                    return Err(Error::Parse(ParseError(
+                        "public key algorithm mismatch".to_owned(),
+                    )));
+                }
             };
             let gost_private = match private_key.0.expose_secret() {
                 PrivateKeyInner::Gost { secret, .. } => secret,
@@ -359,8 +375,7 @@ impl KeyPair {
 
             use crate::secrecy::ExposeSecret;
 
-            let pk_bytes = public_key.to_bytes().1;
-            let mldsa_pk = mldsa65::PublicKey::from_bytes(pk_bytes)
+            let mldsa_pk = mldsa65::PublicKey::from_bytes(public_payload)
                 .map_err(|_| Error::KeyGen(String::from("Invalid ML-DSA public key")))?;
 
             let secret_bytes = match private_key.0.expose_secret() {
@@ -592,10 +607,11 @@ impl PublicKeyFull {
     }
 }
 
-impl From<&PublicKeyCompact> for PublicKeyFull {
-    fn from(public_key: &PublicKeyCompact) -> Self {
-        Self::from_bytes(public_key.algorithm(), public_key.payload())
-            .expect("`PublicKeyEncoded` must contain valid payload")
+impl TryFrom<&PublicKeyCompact> for PublicKeyFull {
+    type Error = ParseError;
+
+    fn try_from(public_key: &PublicKeyCompact) -> Result<Self, Self::Error> {
+        Self::from_bytes(public_key.try_algorithm()?, public_key.try_payload()?)
     }
 }
 
@@ -1046,10 +1062,7 @@ fn bls_collect_pks_with_pop<'a>(
     let mut seen = BTreeSet::new();
     let mut pk_bytes = Vec::with_capacity(public_keys.len());
     for (pk, pop) in public_keys.iter().zip(pops.iter()) {
-        if pk.algorithm() != algorithm {
-            return Err(Error::BadSignature);
-        }
-        let (_, bytes) = pk.to_bytes();
+        let bytes = bls_public_key_payload(pk, algorithm)?;
         if !seen.insert(bytes) {
             return Err(Error::BadSignature);
         }
@@ -1067,6 +1080,23 @@ fn bls_collect_pks_with_pop<'a>(
         pk_bytes.push(bytes);
     }
     Ok(pk_bytes)
+}
+
+#[cfg(feature = "bls")]
+fn bls_public_key_payload(pk: &PublicKey, expected: Algorithm) -> Result<&[u8], Error> {
+    let (algorithm, payload) = pk.try_to_bytes()?;
+    if algorithm != expected {
+        return Err(Error::BadSignature);
+    }
+    Ok(payload)
+}
+
+#[cfg(feature = "bls")]
+fn bls_pop_message_hash(pk_bytes: &[u8]) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
+    buf.extend_from_slice(POP_DST.as_bytes());
+    buf.extend_from_slice(pk_bytes);
+    Hash::new(&buf).into()
 }
 
 /// Attempt aggregate verification for BLS (normal) when all messages are identical.
@@ -1390,21 +1420,9 @@ pub fn bls_normal_verify_preaggregated_same_message(
 /// cannot be parsed, or verification fails.
 #[cfg(feature = "bls")]
 pub fn bls_normal_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
-    if pk.algorithm() != Algorithm::BlsNormal {
-        return Err(Error::BadSignature);
-    }
-    let (_alg, pk_bytes) = pk.to_bytes();
-    let msg_hashed: [u8; 32] = {
-        let mut buf = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-        buf.extend_from_slice(POP_DST.as_bytes());
-        buf.extend_from_slice(pk_bytes);
-        Hash::new(&buf).into()
-    };
-    let (alg, payload) = pk.to_bytes();
-    if alg != Algorithm::BlsNormal {
-        return Err(Error::BadSignature);
-    }
-    let vk = signature::bls::BlsNormal::parse_public_key(payload)?;
+    let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsNormal)?;
+    let vk = signature::bls::BlsNormal::parse_public_key(pk_bytes)?;
+    let msg_hashed = bls_pop_message_hash(pk_bytes);
     signature::bls::BlsNormal::verify(&msg_hashed, pop, &vk)
 }
 
@@ -1419,11 +1437,8 @@ pub fn bls_normal_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
     match sk.0.expose_secret() {
         PrivateKeyInner::BlsNormal(_inner) => {
             let pk = PublicKey::from_private_key(sk)?;
-            let (_alg, pk_bytes) = pk.to_bytes();
-            let mut msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-            msg.extend_from_slice(POP_DST.as_bytes());
-            msg.extend_from_slice(pk_bytes);
-            let msg_h: [u8; 32] = Hash::new(&msg).into();
+            let pk_bytes = bls_public_key_payload(&pk, Algorithm::BlsNormal)?;
+            let msg_h = bls_pop_message_hash(pk_bytes);
             signature::bls::BlsNormal::try_sign(
                 &msg_h,
                 match sk.0.expose_secret() {
@@ -1444,21 +1459,9 @@ pub fn bls_normal_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
 /// or verification fails.
 #[cfg(feature = "bls")]
 pub fn bls_small_pop_verify(pk: &PublicKey, pop: &[u8]) -> Result<(), Error> {
-    if pk.algorithm() != Algorithm::BlsSmall {
-        return Err(Error::BadSignature);
-    }
-    let (_alg, pk_bytes) = pk.to_bytes();
-    let msg_h: [u8; 32] = {
-        let mut buf = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-        buf.extend_from_slice(POP_DST.as_bytes());
-        buf.extend_from_slice(pk_bytes);
-        Hash::new(&buf).into()
-    };
-    let (alg, payload) = pk.to_bytes();
-    if alg != Algorithm::BlsSmall {
-        return Err(Error::BadSignature);
-    }
-    let vk = signature::bls::BlsSmall::parse_public_key(payload)?;
+    let pk_bytes = bls_public_key_payload(pk, Algorithm::BlsSmall)?;
+    let vk = signature::bls::BlsSmall::parse_public_key(pk_bytes)?;
+    let msg_h = bls_pop_message_hash(pk_bytes);
     signature::bls::BlsSmall::verify(&msg_h, pop, &vk)
 }
 
@@ -1473,11 +1476,8 @@ pub fn bls_small_pop_prove(sk: &PrivateKey) -> Result<Vec<u8>, Error> {
     match sk.0.expose_secret() {
         PrivateKeyInner::BlsSmall(_inner) => {
             let pk = PublicKey::from_private_key(sk)?;
-            let (_alg, pk_bytes) = pk.to_bytes();
-            let mut msg = Vec::with_capacity(POP_DST.len() + pk_bytes.len());
-            msg.extend_from_slice(POP_DST.as_bytes());
-            msg.extend_from_slice(pk_bytes);
-            let msg_h: [u8; 32] = Hash::new(&msg).into();
+            let pk_bytes = bls_public_key_payload(&pk, Algorithm::BlsSmall)?;
+            let msg_h = bls_pop_message_hash(pk_bytes);
             signature::bls::BlsSmall::try_sign(
                 &msg_h,
                 match sk.0.expose_secret() {
@@ -1561,13 +1561,29 @@ impl PublicKeyCompact {
         }
     }
 
-    fn algorithm(&self) -> Algorithm {
-        let algorithm = self.algorithm_and_payload[0];
-        Algorithm::try_from(algorithm).expect("Invalid PublicKeyCompact::algorithm_and_payload")
+    fn try_algorithm(&self) -> Result<Algorithm, ParseError> {
+        let Some(&algorithm) = self.algorithm_and_payload.first() else {
+            return Err(ParseError("missing public key algorithm tag".to_owned()));
+        };
+        Algorithm::try_from(algorithm)
+            .map_err(|()| ParseError(format!("invalid public key algorithm tag {algorithm}")))
     }
 
-    fn payload(&self) -> &[u8] {
-        &self.algorithm_and_payload[1..]
+    fn algorithm(&self) -> Algorithm {
+        self.try_algorithm()
+            .expect("Invalid PublicKeyCompact::algorithm_and_payload")
+    }
+
+    fn try_payload(&self) -> Result<&[u8], ParseError> {
+        if self.algorithm_and_payload.is_empty() {
+            return Err(ParseError("missing public key payload".to_owned()));
+        }
+        Ok(&self.algorithm_and_payload[1..])
+    }
+
+    fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
+        let algorithm = self.try_algorithm()?;
+        PublicKeyFull::from_bytes(algorithm, self.try_payload()?)
     }
 }
 
@@ -1580,21 +1596,27 @@ impl From<PublicKeyFull> for PublicKeyCompact {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKeyCompact {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
+        let compact = PublicKeyCompact::from(
+            self.validated_full()
+                .map_err(|err| norito::core::Error::Message(err.to_string()))?,
+        );
         <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
-            &self.algorithm_and_payload,
+            &compact.algorithm_and_payload,
             writer,
         )
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
+        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_hint(
-            &self.algorithm_and_payload,
+            &compact.algorithm_and_payload,
         )
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
+        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
         <ConstVec<u8> as norito::core::NoritoSerialize>::encoded_len_exact(
-            &self.algorithm_and_payload,
+            &compact.algorithm_and_payload,
         )
     }
 }
@@ -1758,7 +1780,29 @@ impl PublicKey {
     /// `into_bytes()` without copying is not provided because underlying crypto
     /// libraries do not provide move functionality.
     pub fn to_bytes(&self) -> (Algorithm, &[u8]) {
-        (self.0.algorithm(), self.0.payload())
+        self.try_to_bytes().expect("Invalid PublicKey::to_bytes")
+    }
+
+    /// Fallibly extracts the signature algorithm and raw public-key payload.
+    ///
+    /// This is the checked counterpart to [`Self::to_bytes`]. Use it for
+    /// `Result`-returning paths that may receive in-memory public keys from
+    /// fallible decoding or FFI boundaries.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] if the compact public-key state is missing its
+    /// algorithm tag or otherwise cannot expose a well-formed payload envelope.
+    pub fn try_to_bytes(&self) -> Result<(Algorithm, &[u8]), ParseError> {
+        Ok((self.0.try_algorithm()?, self.0.try_payload()?))
+    }
+
+    #[cfg(not(feature = "ffi_import"))]
+    fn validated_full(&self) -> Result<PublicKeyFull, ParseError> {
+        signature::public_key_full_cached(self).map_err(|err| match err {
+            Error::Parse(err) => err,
+            err => ParseError(err.to_string()),
+        })
     }
 
     /// Construct from hex encoded string. A shorthand over [`Self::from_bytes`].
@@ -1788,8 +1832,10 @@ impl PublicKey {
     /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_multihash_string(&self) -> Result<String, ParseError> {
-        let (algorithm, payload) = self.to_bytes();
-        let bytes = multihash::encode_public_key(algorithm, payload)
+        let full = self.validated_full()?;
+        let algorithm = full.algorithm();
+        let canonical_payload = full.payload();
+        let bytes = multihash::encode_public_key(algorithm, canonical_payload.as_ref())
             .map_err(|err| ParseError(err.to_string()))?;
 
         multihash::multihash_to_hex_string(&bytes)
@@ -1808,8 +1854,10 @@ impl PublicKey {
     /// Returns [`ParseError`] if the public-key payload cannot be encoded as a
     /// canonical multihash string.
     pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
-        let (algorithm, payload) = self.to_bytes();
-        multihash::encode_public_key_prefixed(algorithm, payload)
+        let full = self.validated_full()?;
+        let algorithm = full.algorithm();
+        let canonical_payload = full.payload();
+        multihash::encode_public_key_prefixed(algorithm, canonical_payload.as_ref())
             .map_err(|err| ParseError(err.to_string()))
     }
 
@@ -1926,15 +1974,21 @@ impl FromStr for PublicKey {
 #[cfg(not(feature = "ffi_import"))]
 impl norito::core::NoritoSerialize for PublicKey {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        norito::core::NoritoSerialize::serialize(&self.0, writer)
+        let full = self
+            .validated_full()
+            .map_err(|err| norito::core::Error::Message(err.to_string()))?;
+        let compact = PublicKeyCompact::from(full);
+        norito::core::NoritoSerialize::serialize(&compact, writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_hint(&self.0)
+        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        norito::core::NoritoSerialize::encoded_len_hint(&compact)
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        norito::core::NoritoSerialize::encoded_len_exact(&self.0)
+        let compact = PublicKeyCompact::from(self.validated_full().ok()?);
+        norito::core::NoritoSerialize::encoded_len_exact(&compact)
     }
 }
 
@@ -3126,7 +3180,8 @@ mod tests {
                 PrivateKeyInner::BlsNormal(sk) => sk,
                 _ => unreachable!(),
             },
-        );
+        )
+        .expect("BLS sign");
         assert!(bls_normal_pop_verify(kp.public_key(), &pop).is_err());
     }
 
@@ -3138,6 +3193,32 @@ mod tests {
         bls_small_pop_verify(kp.public_key(), &pop).expect("small pop verify");
         let other = KeyPair::random_with_algorithm(Algorithm::BlsSmall);
         assert!(bls_small_pop_verify(other.public_key(), &pop).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "bls")]
+    fn bls_pop_paths_reject_malformed_public_key_without_panic() {
+        let malformed_normal = PublicKey(PublicKeyCompact::new(Algorithm::BlsNormal, &[]));
+        let err = bls_normal_pop_verify(&malformed_normal, &[])
+            .expect_err("malformed normal BLS key must fail closed");
+        assert!(matches!(err, Error::Parse(_)));
+
+        let public_keys = vec![&malformed_normal];
+        let signatures: Vec<&[u8]> = vec![&[]];
+        let pops: Vec<&[u8]> = vec![&[]];
+        let err = bls_normal_verify_aggregate_same_message(
+            b"malformed-bls-pop-aggregate",
+            &signatures,
+            &public_keys,
+            &pops,
+        )
+        .expect_err("malformed aggregate key must fail during PoP collection");
+        assert!(matches!(err, Error::Parse(_)));
+
+        let malformed_small = PublicKey(PublicKeyCompact::new(Algorithm::BlsSmall, &[]));
+        let err = bls_small_pop_verify(&malformed_small, &[])
+            .expect_err("malformed small BLS key must fail closed");
+        assert!(matches!(err, Error::Parse(_)));
     }
 
     #[test]
@@ -3217,11 +3298,13 @@ mod tests {
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_normal_multi_message_duplicates_are_rejected() {
-        let (pk1, sk1) = signature::bls::BlsNormal::keypair(super::KeyGenOption::Random);
-        let (pk2, sk2) = signature::bls::BlsNormal::keypair(super::KeyGenOption::Random);
+        let (pk1, sk1) =
+            signature::bls::BlsNormal::keypair(super::KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            signature::bls::BlsNormal::keypair(super::KeyGenOption::Random).expect("BLS keypair");
         let message = b"duplicate-multi-msg".to_vec();
-        let sig1 = signature::bls::BlsNormal::sign(&message, &sk1);
-        let sig2 = signature::bls::BlsNormal::sign(&message, &sk2);
+        let sig1 = signature::bls::BlsNormal::sign(&message, &sk1).expect("BLS sign");
+        let sig2 = signature::bls::BlsNormal::sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
 
@@ -3243,11 +3326,13 @@ mod tests {
     #[test]
     #[cfg(all(feature = "bls", feature = "rand"))]
     fn bls_small_multi_message_duplicates_are_rejected() {
-        let (pk1, sk1) = signature::bls::BlsSmall::keypair(super::KeyGenOption::Random);
-        let (pk2, sk2) = signature::bls::BlsSmall::keypair(super::KeyGenOption::Random);
+        let (pk1, sk1) =
+            signature::bls::BlsSmall::keypair(super::KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            signature::bls::BlsSmall::keypair(super::KeyGenOption::Random).expect("BLS keypair");
         let message = b"duplicate-multi-msg-small".to_vec();
-        let sig1 = signature::bls::BlsSmall::sign(&message, &sk1);
-        let sig2 = signature::bls::BlsSmall::sign(&message, &sk2);
+        let sig1 = signature::bls::BlsSmall::sign(&message, &sk1).expect("BLS sign");
+        let sig2 = signature::bls::BlsSmall::sign(&message, &sk2).expect("BLS sign");
         let pk1_bytes = pk1.to_bytes();
         let pk2_bytes = pk2.to_bytes();
 
@@ -3379,7 +3464,11 @@ mod tests {
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_compact_try_deserialize_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
-        let framed = norito::core::to_bytes(&compact).expect("encode compact");
+        let (payload, flags) =
+            norito::codec::encode_with_header_flags(&compact.algorithm_and_payload);
+        let framed =
+            norito::core::frame_bare_with_header_flags::<PublicKeyCompact>(&payload, flags)
+                .expect("frame compact");
         let archived = norito::from_bytes::<PublicKeyCompact>(&framed).expect("archive");
         let err = <PublicKeyCompact as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("invalid compact payload");
@@ -3391,11 +3480,38 @@ mod tests {
     fn public_key_compact_decode_from_slice_rejects_invalid_payload() {
         let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
         let mut payload = Vec::new();
-        <PublicKeyCompact as norito::core::NoritoSerialize>::serialize(&compact, &mut payload)
-            .expect("serialize compact");
+        <ConstVec<u8> as norito::core::NoritoSerialize>::serialize(
+            &compact.algorithm_and_payload,
+            &mut payload,
+        )
+        .expect("serialize raw compact bytes");
         let err = <PublicKeyCompact as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
             .expect_err("invalid compact payload");
         assert!(matches!(err, norito::core::Error::Message(_)));
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_compact_serialize_rejects_malformed_payload_without_panic() {
+        let compact = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
+
+        let err = norito::core::to_bytes(&compact)
+            .expect_err("malformed compact public key must not serialize to Norito");
+
+        assert!(matches!(err, norito::core::Error::Message(_)));
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&compact).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&compact).is_none());
+    }
+
+    #[test]
+    fn public_key_compact_to_full_rejects_malformed_state_without_panic() {
+        let malformed_payload = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
+        assert!(PublicKeyFull::try_from(&malformed_payload).is_err());
+
+        let missing_tag = PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(Vec::new()),
+        };
+        assert!(PublicKeyFull::try_from(&missing_tag).is_err());
     }
 
     #[test]
@@ -3417,13 +3533,64 @@ mod tests {
     #[cfg(not(feature = "ffi_import"))]
     fn public_key_try_deserialize_rejects_invalid_payload() {
         let bogus = PublicKeyCompact::new(Algorithm::Ed25519, &[]);
-        let (payload, flags) = norito::codec::encode_with_header_flags(&bogus);
+        let (payload, flags) =
+            norito::codec::encode_with_header_flags(&bogus.algorithm_and_payload);
         let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
             .expect("frame");
         let archived = norito::from_bytes::<PublicKey>(&framed).expect("archive");
         let err = <PublicKey as norito::core::NoritoDeserialize>::try_deserialize(archived)
             .expect_err("invalid key");
         assert!(matches!(err, norito::core::Error::Message(_)));
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_norito_serialize_rejects_malformed_payload_without_panic() {
+        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+
+        let err = norito::core::to_bytes(&malformed)
+            .expect_err("malformed public key must not serialize to Norito");
+
+        assert!(matches!(err, norito::core::Error::Message(_)));
+        assert!(norito::core::NoritoSerialize::encoded_len_hint(&malformed).is_none());
+        assert!(norito::core::NoritoSerialize::encoded_len_exact(&malformed).is_none());
+    }
+
+    #[test]
+    fn public_key_try_to_bytes_rejects_malformed_compact_state_without_panic() {
+        let missing_tag = PublicKey(PublicKeyCompact {
+            algorithm_and_payload: ConstVec::new(Vec::new()),
+        });
+
+        missing_tag
+            .try_to_bytes()
+            .expect_err("missing compact algorithm tag must fail closed");
+    }
+
+    #[test]
+    #[cfg(not(feature = "ffi_import"))]
+    fn public_key_fallible_string_encoders_reject_malformed_payload_without_panic() {
+        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+
+        malformed
+            .try_to_multihash_string()
+            .expect_err("malformed public key must not format as multihash");
+        malformed
+            .try_to_prefixed_string()
+            .expect_err("malformed public key must not format as prefixed multihash");
+    }
+
+    #[test]
+    fn keypair_new_rejects_malformed_public_key_without_panic() {
+        let (_, private_key) = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("seeded keypair")
+            .into_parts();
+        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+
+        let err = KeyPair::new(malformed, private_key)
+            .expect_err("malformed public key must fail closed");
+
+        assert!(matches!(err, Error::Parse(_)));
     }
 
     #[test]

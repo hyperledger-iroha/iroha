@@ -937,6 +937,9 @@ object SccpEthereumMainnet {
         require(request.destinationBinding.networkId == MAINNET_NETWORK_ID) {
             "Ethereum mainnet proof results require chain id 1 destinationBinding"
         }
+        require(request.destinationBinding.hash == request.destinationBindingHash) {
+            "destinationBindingHash must match Ethereum mainnet destinationBinding"
+        }
         return SccpEvm.wrapProofResult(proofBytes, request)
     }
 
@@ -1136,6 +1139,9 @@ object SccpBsc {
         }
         require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
             "BSC mainnet proof results require chain id 56 destinationBinding"
+        }
+        require(request.destinationBinding.hash == request.destinationBindingHash) {
+            "destinationBindingHash must match BSC mainnet destinationBinding"
         }
         return SccpEvm.wrapProofResult(proofBytes, request)
     }
@@ -2004,6 +2010,26 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             ),
             "Ethereum mainnet Beacon REST finalized header.data.header.message",
         )
+        for (field in listOf("parent_root", "state_root", "body_root")) {
+            normalizeEthereumBeaconRestHex(
+                requireBeaconRestField(
+                    message,
+                    "Ethereum mainnet Beacon REST finalized header.data.header.message",
+                    field,
+                ),
+                "Ethereum mainnet Beacon REST finalized header.data.header.message.$field",
+                32,
+            )
+        }
+        normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                header,
+                "Ethereum mainnet Beacon REST finalized header.data.header",
+                "signature",
+            ),
+            "Ethereum mainnet Beacon REST finalized header.data.header.signature",
+            96,
+        )
         val beaconSlot = normalizeEthereumBeaconRestUnsigned(
             requireBeaconRestField(
                 message,
@@ -2013,6 +2039,117 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             "beaconFinality.beaconSlot",
         )
         require(beaconSlot > BigInteger.ZERO) { "beaconFinality.beaconSlot must be positive" }
+        val finalizedBlockRootResponse = fetchJsonObject(
+            "/eth/v1/beacon/blocks/finalized/root",
+            "Ethereum mainnet Beacon REST finalized block root",
+        )
+        rejectUnsafeBeaconRestPayload(
+            finalizedBlockRootResponse,
+            "Ethereum mainnet Beacon REST finalized block root",
+        )
+        val finalizedBlockRootData = expectBeaconRestObject(
+            requireBeaconRestField(
+                finalizedBlockRootResponse,
+                "Ethereum mainnet Beacon REST finalized block root",
+                "data",
+            ),
+            "Ethereum mainnet Beacon REST finalized block root.data",
+        )
+        val finalizedBlockRootHash = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                finalizedBlockRootData,
+                "Ethereum mainnet Beacon REST finalized block root.data",
+                "root",
+            ),
+            "finalizedBlockRoot",
+            32,
+        )
+        require(finalizedBlockRootHash == finalizedHeaderRoot) {
+            "Ethereum mainnet Beacon REST finalized block root must match finalized header root"
+        }
+        val finalizedBlockRoot = fetchJsonObject(
+            "/eth/v2/beacon/blocks/finalized",
+            "Ethereum mainnet Beacon REST finalized block",
+        )
+        rejectUnsafeBeaconRestPayload(finalizedBlockRoot, "Ethereum mainnet Beacon REST finalized block")
+        val blockData = expectBeaconRestObject(
+            requireBeaconRestField(
+                finalizedBlockRoot,
+                "Ethereum mainnet Beacon REST finalized block",
+                "data",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data",
+        )
+        val blockMessage = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockData,
+                "Ethereum mainnet Beacon REST finalized block.data",
+                "message",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message",
+        )
+        val finalizedBlockSlot = normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(
+                blockMessage,
+                "Ethereum mainnet Beacon REST finalized block.data.message",
+                "slot",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.slot",
+        )
+        require(finalizedBlockSlot == beaconSlot) {
+            "Ethereum mainnet Beacon REST finalized block slot must match finalized header slot"
+        }
+        val blockBody = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockMessage,
+                "Ethereum mainnet Beacon REST finalized block.data.message",
+                "body",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body",
+        )
+        val executionPayload = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockBody,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body",
+                "execution_payload",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+        )
+        val payloadBlockHash = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "block_hash",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash",
+            32,
+        )
+        require(payloadBlockHash == blockHash) {
+            "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash"
+        }
+        val payloadBlockNumber = normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "block_number",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number",
+        )
+        require(payloadBlockNumber == normalizeEthereumBeaconRestUnsigned(blockNumber, "block.number")) {
+            "Ethereum mainnet Beacon REST execution payload block_number must match block.number"
+        }
+        val payloadReceiptsRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "receipts_root",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root",
+            32,
+        )
+        require(payloadReceiptsRoot == receiptsRoot) {
+            "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot"
+        }
         if (verifyFinalityCheckpoint) {
             val checkpointRoot = fetchJsonObject(
                 "/eth/v1/beacon/states/finalized/finality_checkpoints",
@@ -2089,13 +2226,15 @@ private fun normalizeEthereumBeaconRestEndpoint(endpoint: String): String {
 private fun beaconRestUrl(endpoint: String, path: String): String {
     val url = URL(endpoint)
     val basePath = url.path.trimEnd('/')
-    val apiPath = if (basePath.endsWith("/eth/v1") && path.startsWith("/eth/v1/")) {
-        path.removePrefix("/eth/v1")
+    val apiPath = if (Regex("/eth/v[0-9]+$").containsMatchIn(basePath) &&
+        Regex("^/eth/v[0-9]+/").containsMatchIn(path)
+    ) {
+        Regex("/eth/v[0-9]+$").replace(basePath, "") + path
     } else {
-        path
+        basePath + path
     }
     val query = url.query?.let { "?$it" } ?: ""
-    return "${url.protocol}://${url.authority}$basePath$apiPath$query"
+    return "${url.protocol}://${url.authority}$apiPath$query"
 }
 
 private fun expectBeaconRestObject(value: Any?, label: String): Map<String, Any?> {

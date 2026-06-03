@@ -24,7 +24,8 @@ fn make_candidate(
     let chain_bytes = chain_id.as_str().as_bytes();
     match variant {
         CandidateVariant::Normal => {
-            let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
+            let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+                .expect("deterministic BLS normal keypair");
             let (vrf_output, proof) =
                 prove_normal_with_chain(&sk, chain_bytes, &input).expect("normal VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
@@ -38,7 +39,8 @@ fn make_candidate(
             (pk_payload.to_vec(), proof_bytes, vrf_output.0)
         }
         CandidateVariant::Small => {
-            let (pk_raw, sk) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
+            let (pk_raw, sk) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+                .expect("deterministic BLS small keypair");
             let (vrf_output, proof) =
                 prove_small_with_chain(&sk, chain_bytes, &input).expect("small VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));

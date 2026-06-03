@@ -735,6 +735,11 @@ PreCommitPhasesHaveNoCommitVotes ==
 PrePreparePhasesHaveNoPrepareVotes ==
   phase \in {"NewView", "Propose"} => prepareVotes = 0
 
+LivePrepareVotesStayInHandoff ==
+  prepareVotes > 0 =>
+    /\ phase \in {"Prepare", "CommitVote", "Committed"}
+    /\ (phase # "Prepare" => prepareVotes >= CommitQuorum)
+
 CommitImpliesViewQuorumEvidence ==
   committed => (commitView = 0 \/ viewEvidenceVotes >= ViewQuorum)
 
@@ -746,6 +751,13 @@ LiveCommitVotesRequirePrepareQuorum ==
     /\ phase \in {"CommitVote", "Committed"}
     /\ prepareVotes >= CommitQuorum
 
+LiveCommitVotesStayInCommitHandoff ==
+  (commitVotesHonest + commitVotesByz > 0 \/ stakeSigned > 0) =>
+    /\ phase \in {"CommitVote", "Committed"}
+    /\ (phase = "Committed" =>
+          /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+          /\ stakeSigned >= StakeQuorum)
+
 CommitImpliesPrepareQuorum ==
   committed => prepareVotes >= CommitQuorum
 
@@ -753,6 +765,12 @@ CommitEvidenceMatchesVoteCounters ==
   committed =>
     /\ commitEvidenceVotes = commitVotesHonest + commitVotesByz
     /\ commitEvidenceStake = stakeSigned
+
+CommitEvidenceIsCompleteOrEmpty ==
+  \/ /\ commitEvidenceVotes = 0
+     /\ commitEvidenceStake = 0
+  \/ /\ commitEvidenceVotes >= CommitQuorum
+     /\ commitEvidenceStake >= StakeQuorum
 
 CommitEvidenceIsBounded ==
   /\ commitEvidenceVotes \in 0..N
@@ -793,6 +811,27 @@ RbcProgressEvidenceMatchesState ==
         chunkCount >= MaxChunks)
   /\ (rbcState \in RbcReadyQuorumStates =>
         readyVotes >= CommitQuorum)
+
+LiveChunkEvidenceStayInRbcHandoff ==
+  chunkCount > 0 =>
+    \/ /\ rbcState = "Corrupted"
+       /\ ~digestValid
+    \/ /\ rbcState \in {"Chunking", "ChunksComplete", "ReadyPartial", "ReadyQuorum", "Delivered"}
+       /\ headerSeen
+       /\ digestValid
+       /\ (rbcState = "Chunking" => chunkCount < MaxChunks)
+       /\ (rbcState \in RbcChunkCoveredStates => chunkCount >= MaxChunks)
+
+LiveReadyVotesStayInRbcHandoff ==
+  readyVotes > 0 =>
+    \/ /\ rbcState = "Corrupted"
+       /\ ~digestValid
+    \/ /\ rbcState \in {"ReadyPartial", "ReadyQuorum", "Delivered"}
+       /\ headerSeen
+       /\ digestValid
+       /\ chunkCount >= MaxChunks
+       /\ (rbcState = "ReadyPartial" => readyVotes < CommitQuorum)
+       /\ (rbcState \in RbcReadyQuorumStates => readyVotes >= CommitQuorum)
 
 EventuallyCommit ==
   [] (gst => <> committed)
@@ -839,11 +878,20 @@ PreCommitVotesNeverCarryAcrossViews ==
 PrePrepareVotesNeverCarryAcrossViews ==
   [] PrePreparePhasesHaveNoPrepareVotes
 
+LivePrepareVotesNeverBypassPrepareHandoff ==
+  [] LivePrepareVotesStayInHandoff
+
+CommitEvidenceNeverPartial ==
+  [] CommitEvidenceIsCompleteOrEmpty
+
 CommitPhasesNeverBypassPrepareQuorum ==
   [] CommitVotePhaseRequiresPrepareQuorum
 
 LiveCommitVotesNeverBypassPrepareQuorum ==
   [] LiveCommitVotesRequirePrepareQuorum
+
+LiveCommitVotesNeverBypassCommitHandoff ==
+  [] LiveCommitVotesStayInCommitHandoff
 
 PreFinalityCommitArtifactsNeverAppear ==
   [] (NoCommitEvidenceBeforeCommit /\ NoCommitViewBeforeCommit)
@@ -905,5 +953,11 @@ RbcDeliveryNeverLost ==
 
 RbcProgressEvidenceNeverDiverges ==
   [] RbcProgressEvidenceMatchesState
+
+LiveChunkEvidenceNeverBypassRbcHandoff ==
+  [] LiveChunkEvidenceStayInRbcHandoff
+
+LiveReadyVotesNeverBypassRbcHandoff ==
+  [] LiveReadyVotesStayInRbcHandoff
 
 ====

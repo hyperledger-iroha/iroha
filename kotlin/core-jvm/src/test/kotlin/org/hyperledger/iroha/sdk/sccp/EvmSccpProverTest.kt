@@ -571,6 +571,14 @@ class EvmSccpProverTest {
         assertEquals(binding.hash, request.destinationBindingHash)
 
         val result = SccpBsc.wrapProofResult(proofBytes, request)
+        assertFailsWith<IllegalArgumentException> {
+            SccpBsc.wrapProofResult(
+                proofBytes,
+                request.copy(destinationBindingHash = "0x" + "99".repeat(32)),
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("destinationBindingHash") == true)
+        }
         val submission = SccpBsc.buildSubmission(EvmSccpSubmissionInput(result))
         assertEquals(SccpEvm.DOMAIN_BSC, submission.targetDomain)
         assertEquals("evm_groth16_contract_call", submission.platformPayload)
@@ -719,6 +727,14 @@ class EvmSccpProverTest {
         assertEquals(request, EthereumMainnetSccp().buildOutboundProofRequest(input))
 
         val result = SccpEthereumMainnet.wrapProofResult(proofBytes, request)
+        assertFailsWith<IllegalArgumentException> {
+            SccpEthereumMainnet.wrapProofResult(
+                proofBytes,
+                request.copy(destinationBindingHash = "0x" + "99".repeat(32)),
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("destinationBindingHash") == true)
+        }
         val submission = EthereumMainnetSccp().buildEthereumCalldata(EvmSccpSubmissionInput(result))
         assertEquals(SccpEvm.DOMAIN_ETH, submission.targetDomain)
         assertContentEquals(proofBytes, submission.proofBytes)
@@ -903,6 +919,10 @@ class EvmSccpProverTest {
             when (url) {
                 "https://beacon.example/eth/v1/beacon/headers/finalized" ->
                     EthereumMainnetBeaconRestResponse(200, beaconHeaderJson().toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v1/beacon/blocks/finalized/root" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson().toByteArray(Charsets.UTF_8))
+                "https://beacon.example/eth/v2/beacon/blocks/finalized" ->
+                    EthereumMainnetBeaconRestResponse(200, beaconBlockJson().toByteArray(Charsets.UTF_8))
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" ->
                     EthereumMainnetBeaconRestResponse(200, beaconCheckpointJson().toByteArray(Charsets.UTF_8))
                 else -> error("unexpected Beacon REST URL $url")
@@ -926,6 +946,8 @@ class EvmSccpProverTest {
         assertEquals(
             listOf(
                 "https://beacon.example/eth/v1/beacon/headers/finalized",
+                "https://beacon.example/eth/v1/beacon/blocks/finalized/root",
+                "https://beacon.example/eth/v2/beacon/blocks/finalized",
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
             ),
             calls.map { it.first },
@@ -965,6 +987,10 @@ class EvmSccpProverTest {
         fun provider(
             header: EthereumMainnetBeaconRestResponse =
                 EthereumMainnetBeaconRestResponse(200, beaconHeaderJson().toByteArray(Charsets.UTF_8)),
+            finalizedBlockRoot: EthereumMainnetBeaconRestResponse =
+                EthereumMainnetBeaconRestResponse(200, beaconBlockRootJson().toByteArray(Charsets.UTF_8)),
+            finalizedBlock: EthereumMainnetBeaconRestResponse =
+                EthereumMainnetBeaconRestResponse(200, beaconBlockJson().toByteArray(Charsets.UTF_8)),
             checkpoint: EthereumMainnetBeaconRestResponse =
                 EthereumMainnetBeaconRestResponse(200, beaconCheckpointJson().toByteArray(Charsets.UTF_8)),
             syncCommitteeRoot: String? = "0x" + "ee".repeat(32),
@@ -977,6 +1003,8 @@ class EvmSccpProverTest {
                 transport = EthereumMainnetBeaconRestTransport { url, _ ->
                     when {
                         url.endsWith("/eth/v1/beacon/headers/finalized") -> header
+                        url.endsWith("/eth/v1/beacon/blocks/finalized/root") -> finalizedBlockRoot
+                        url.endsWith("/eth/v2/beacon/blocks/finalized") -> finalizedBlock
                         url.endsWith("/eth/v1/beacon/states/finalized/finality_checkpoints") -> checkpoint
                         else -> error("unexpected Beacon REST URL $url")
                     }
@@ -1054,6 +1082,92 @@ class EvmSccpProverTest {
                     ),
                 ).collectFinalityEvidence(null, block, null)
             }.message?.contains("canonical must be a boolean") == true,
+        )
+        for ((field, bytePair) in listOf(
+            "parent_root" to "01",
+            "state_root" to "02",
+            "body_root" to "03",
+        )) {
+            assertTrue(
+                assertFailsWith<IllegalArgumentException> {
+                    provider(
+                        header = EthereumMainnetBeaconRestResponse(
+                            200,
+                            beaconHeaderJson()
+                                .replace(
+                                    "\"$field\": \"0x${bytePair.repeat(32)}\"",
+                                    "\"$field\": \"0x\"",
+                                )
+                                .toByteArray(Charsets.UTF_8),
+                        ),
+                    ).collectFinalityEvidence(null, block, null)
+                }.message?.contains(field) == true,
+            )
+        }
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    header = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconHeaderJson()
+                            .replace(
+                                "\"signature\": \"0x${"12".repeat(96)}\"",
+                                "\"signature\": \"0x${"12".repeat(95)}\"",
+                            )
+                            .toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("signature") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalizedBlockRoot = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconBlockRootJson(rootByte = "99").toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("finalized block root must match finalized header root") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalizedBlock = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconBlockJson(slot = "65").toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("finalized block slot must match finalized header slot") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalizedBlock = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconBlockJson(blockHash = "0x" + "99".repeat(32)).toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("execution payload block_hash must match block.hash") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalizedBlock = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconBlockJson(blockNumber = "4661").toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("execution payload block_number must match block.number") == true,
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                provider(
+                    finalizedBlock = EthereumMainnetBeaconRestResponse(
+                        200,
+                        beaconBlockJson(receiptsRoot = "0x" + "99".repeat(32)).toByteArray(Charsets.UTF_8),
+                    ),
+                ).collectFinalityEvidence(null, block, null)
+            }.message?.contains("execution payload receipts_root must match block.receiptsRoot") == true,
         )
         assertTrue(
             assertFailsWith<IllegalArgumentException> {
@@ -1300,6 +1414,23 @@ class EvmSccpProverTest {
         assertContentEquals(ByteArray(32) { 0x11.toByte() }, receiptProofEvidence.receiptProof?.inclusionBranch?.get(0))
         mutableReceiptProofNode[0] = 0x01
         mutableReceiptProofBranch[0] = 0x11
+        val receiptProofHashOnlyEvidence = EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(receiptProofHash = receiptProofHash),
+        )
+        assertEquals(receiptProofHash, receiptProofHashOnlyEvidence.receiptProofHash)
+        assertNull(receiptProofHashOnlyEvidence.receiptProof)
+        val zeroReceiptProofHash = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receiptProofHash = "0x" + "00".repeat(32)),
+            )
+        }
+        assertTrue(zeroReceiptProofHash.message?.contains("receiptProofHash must not be zero") == true)
+        val noncanonicalReceiptProofHash = assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receiptProofHash = receiptProofHash + " "),
+            )
+        }
+        assertTrue(noncanonicalReceiptProofHash.message?.contains("receiptProofHash must be canonical") == true)
         assertFailsWith<IllegalArgumentException> {
             EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -1546,6 +1677,11 @@ class EvmSccpProverTest {
         }
         assertFailsWith<IllegalArgumentException> {
             EthereumMainnetSccp(
+                executionProvider = EthereumMainnetExecutionProvider { _, _ -> "0x01" },
+            ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
                 executionProvider = EthereumMainnetExecutionProvider { _, _ -> 1L },
             ).collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt = receipt))
         }
@@ -1762,6 +1898,18 @@ class EvmSccpProverTest {
                 ),
             )
         }
+        for (missingField in listOf("transactionHash", "blockHash", "blockNumber")) {
+            assertFailsWith<IllegalArgumentException> {
+                sdk.collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt = receipt + ("logs" to listOf(sourceEventLog - missingField)),
+                        block = block,
+                        beaconFinality = beaconFinality,
+                        sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    ),
+                )
+            }
+        }
         assertFailsWith<IllegalArgumentException> {
             sdk.collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -1866,6 +2014,19 @@ class EvmSccpProverTest {
                 "0x0",
             )
         }
+        val duplicateHashReceipt = sampleEvmReceipt(
+            transactionIndex = 1,
+            transactionHash = "0x" + "aa".repeat(32),
+            blockHash = "0x" + "bb".repeat(32),
+            blockNumber = "0x1234",
+        )
+        val duplicateHashError = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(
+                listOf(receipt, duplicateHashReceipt),
+                "0x0",
+            )
+        }
+        assertTrue(duplicateHashError.message?.contains("transactionHash values must be unique") == true)
         assertFailsWith<IllegalArgumentException> {
             SccpSourceProofs.buildEvmReceiptTrieProofFromReceipts(listOf(receipt), "0x1")
         }
@@ -2350,6 +2511,42 @@ class EvmSccpProverTest {
             "finalized": {
               "root": "0x${rootByte.repeat(32)}",
               "epoch": "2"
+            }
+          }
+        }
+        """.trimIndent()
+
+    private fun beaconBlockRootJson(rootByte: String = "dd"): String =
+        """
+        {
+          "execution_optimistic": false,
+          "finalized": true,
+          "data": {
+            "root": "0x${rootByte.repeat(32)}"
+          }
+        }
+        """.trimIndent()
+
+    private fun beaconBlockJson(
+        slot: String = "64",
+        blockHash: String = "0x" + "bb".repeat(32),
+        blockNumber: String = "4660",
+        receiptsRoot: String = "0x" + "cc".repeat(32),
+    ): String =
+        """
+        {
+          "execution_optimistic": false,
+          "finalized": true,
+          "data": {
+            "message": {
+              "slot": "$slot",
+              "body": {
+                "execution_payload": {
+                  "block_hash": "$blockHash",
+                  "block_number": "$blockNumber",
+                  "receipts_root": "$receiptsRoot"
+                }
+              }
             }
           }
         }

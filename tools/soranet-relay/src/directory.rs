@@ -260,6 +260,12 @@ pub enum DirectoryBuildError {
         #[source]
         source: ed25519_dalek::SignatureError,
     },
+    #[error("issuer {label} fingerprint could not be computed: {source}")]
+    IssuerFingerprint {
+        label: String,
+        #[source]
+        source: norito::Error,
+    },
     #[error("certificate references unknown issuer {fingerprint} ({path})")]
     UnknownIssuerForCertificate { fingerprint: String, path: PathBuf },
     #[error("certificate verification failed for {path}: {source}")]
@@ -355,6 +361,11 @@ pub enum DirectoryRotateError {
         suite: MlDsaSuite,
         #[source]
         source: MlDsaError,
+    },
+    #[error("rotated issuer fingerprint could not be computed: {source}")]
+    IssuerFingerprint {
+        #[source]
+        source: norito::Error,
     },
 }
 
@@ -714,7 +725,8 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
     let mldsa_public = mldsa_keys.public_key().to_vec();
     let mldsa_secret = mldsa_keys.secret_key().to_vec();
 
-    let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public);
+    let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public)
+        .map_err(|source| DirectoryRotateError::IssuerFingerprint { source })?;
 
     let mut relays: Vec<GuardDirectoryRelayEntryV2> = Vec::with_capacity(parsed_bundles.len());
     for (index, bundle) in parsed_bundles.into_iter().enumerate() {
@@ -865,7 +877,13 @@ fn load_issuers(
         })?;
         let mldsa_public =
             decode_mldsa_bytes(config.mldsa_hex.as_deref(), phase, label_display.clone())?;
-        let fingerprint = compute_issuer_fingerprint(&ed_bytes, &mldsa_public);
+        let fingerprint =
+            compute_issuer_fingerprint(&ed_bytes, &mldsa_public).map_err(|source| {
+                DirectoryBuildError::IssuerFingerprint {
+                    label: label_display.clone(),
+                    source,
+                }
+            })?;
         loaded.push(LoadedIssuer {
             label: config.label.clone(),
             verifying_key,
@@ -1149,7 +1167,7 @@ mod tests {
         handshake::HandshakeSuite,
     };
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
+    use soranet_pq::{MlKemSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::tempdir;
 
     use super::*;
@@ -1164,7 +1182,8 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key());
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
 
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
@@ -1222,7 +1241,8 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key());
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
 
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
@@ -1315,7 +1335,8 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key());
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
 
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
@@ -1402,7 +1423,8 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key());
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
 
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
@@ -1482,7 +1504,8 @@ mod tests {
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = signing_key.verifying_key().to_bytes();
-        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key());
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
 
         let certificate = sample_certificate(fingerprint);
         let bundle = certificate
@@ -1575,7 +1598,7 @@ mod tests {
             valid_until: 1_734_086_400,
             directory_hash: [0x55; 32],
             issuer_fingerprint: fingerprint,
-            pq_kem_public: vec![0x66; 1184],
+            pq_kem_public: vec![0x66; MlKemSuite::MlKem1024.public_key_len()],
         }
     }
 

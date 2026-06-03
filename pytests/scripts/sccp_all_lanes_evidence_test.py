@@ -611,13 +611,27 @@ def fake_evm_live_opener(module, *, domain):
                 }
             )
         if method == "eth_getBlockByNumber":
+            if params == ["finalized", False]:
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": "0x" + route_canary_receipt_block_hash.hex(),
+                            "number": "0x1234",
+                            "receiptsRoot": (
+                                "0x" + route_canary_block_receipts_root.hex()
+                            ),
+                        },
+                    }
+                )
             assert params == ["0x1234", False]
             return FakeResponse(
                 {
                     "jsonrpc": "2.0",
                     "id": payload["id"],
                     "result": {
-                        "hash": "0x" + "aa" * 32,
+                        "hash": "0x" + route_canary_receipt_block_hash.hex(),
                         "number": "0x1234",
                         "receiptsRoot": "0x" + route_canary_block_receipts_root.hex(),
                     },
@@ -1372,6 +1386,7 @@ def route_allowlist(
             module.SCCP_DOMAIN_SORA
         )
         route["_comment_evm_route_canary_used_message_proof"] = "true"
+        route["_comment_evm_route_canary_receipt_block_finalized"] = "true"
     elif profile.chain == "tron" and destination is not None:
         tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
         live_module = module._load_sibling_module("sccp_tron_live_evidence.py")
@@ -2051,6 +2066,10 @@ def route_comment_lines(entry):
         (
             "sccp_evm_route_canary_used_message_proof",
             "_comment_evm_route_canary_used_message_proof",
+        ),
+        (
+            "sccp_evm_route_canary_receipt_block_finalized",
+            "_comment_evm_route_canary_receipt_block_finalized",
         ),
         (
             "sccp_tron_route_canary_transaction_id",
@@ -2972,6 +2991,7 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
             route["_comment_evm_route_canary_proof_source_domain"]
         ),
         route_canary_used_message_proof=True,
+        route_canary_receipt_block_finalized=True,
     )
     evm_toml = evm_module.render_toml(
         args,
@@ -2988,9 +3008,11 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
     assert "# sccp_evm_route_canary_transaction_block_number" in evm_toml
     assert "# sccp_evm_route_canary_transaction_block_hash" in evm_toml
     assert "# sccp_evm_route_canary_receipt_block_hash" in evm_toml
+    assert "# sccp_evm_route_canary_receipt_block_finalized" in evm_toml
     assert "evm_route_canary_transaction_hash = " in evm_toml
     assert "evm_route_canary_transaction_block_hash = " in evm_toml
     assert "evm_route_canary_block_receipts_root = " in evm_toml
+    assert "evm_route_canary_receipt_block_finalized = true" in evm_toml
     evm_path = tmp_path / "eth-direct.toml"
     evm_path.write_text(evm_toml, encoding="utf-8")
     evm_records = module.load_evidence_bundle([evm_path])
@@ -4235,6 +4257,22 @@ def test_all_lanes_rejects_evm_route_canary_missing_used_message_state():
     assert summary["production_ready"] is False
     assert "EVM route canary usedMessageProofs metadata must be true" in "\n".join(
         summary["blockers"]
+    )
+
+
+def test_all_lanes_rejects_evm_route_canary_missing_finalized_receipt_state():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    route = records["sccp_route_allowlists"][eth_index]
+    del route["_comment_evm_route_canary_receipt_block_finalized"]
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    assert (
+        "EVM route canary receipt block finalized metadata must be true"
+        in "\n".join(summary["blockers"])
     )
 
 

@@ -39,13 +39,14 @@ Building & Testing
 cargo check -p sm4-neon
 cargo test  -p iroha_crypto --features "sm sm-neon" \
     sm::sm_accel::tests::neon_force_disable_disables_accel
-# Optional: exercise the forced feature flag that bypasses env gating
+# Optional: exercise the forced feature flag in auto mode
 cargo test  -p iroha_crypto --features "sm sm-neon sm-neon-force" \
     sm::sm_accel::tests::neon_force_feature_enables_accel
 ```
 
 The dedicated crate tests only run on `aarch64`; the cross‑crate test verifies
-that the runtime disable guard falls back to the scalar path.
+that the runtime disable guard falls back to the scalar path, including when the
+forced feature is compiled and an explicit disable policy is active.
 
 License
 -------

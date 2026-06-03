@@ -8,7 +8,8 @@ use std::{
     vec::Vec,
 };
 
-use blake2::Blake2bVar;
+use blake2::{Blake2b, digest::consts::U32};
+use sha2::Digest as _;
 use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
@@ -83,16 +84,12 @@ impl VerifyOkCache {
 }
 
 fn verify_ok_cache_key(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
-    let mut h = <Blake2bVar as blake2::digest::VariableOutput>::new(32)
-        .expect("blake2b init for signature verify cache");
-    blake2::digest::Update::update(&mut h, b"iroha:bls:verify_ok_cache:v1");
-    blake2::digest::Update::update(&mut h, pk_bytes);
-    blake2::digest::Update::update(&mut h, message);
-    blake2::digest::Update::update(&mut h, signature);
-    let mut out = [0u8; 32];
-    blake2::digest::VariableOutput::finalize_variable(h, &mut out)
-        .expect("blake2b output length must match");
-    out
+    let mut h = Blake2b::<U32>::new();
+    h.update(b"iroha:bls:verify_ok_cache:v1");
+    h.update(pk_bytes);
+    h.update(message);
+    h.update(signature);
+    h.finalize().into()
 }
 
 #[doc(hidden)]
@@ -171,9 +168,8 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         arr
     }
 
-    pub fn public_key(&self) -> PublicKey<C::Engine> {
+    pub fn public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
         self.try_public_key()
-            .expect("stored BLS secret key must decode")
     }
 
     pub fn try_public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
@@ -186,9 +182,8 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         Ok(Self::new(&secret))
     }
 
-    fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
+    fn sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
         self.try_sign_bytes(message)
-            .expect("stored BLS secret key must decode before signing")
     }
 
     fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
@@ -249,8 +244,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     // the names are from an RFC, not a good idea to change them
     #[allow(clippy::similar_names)]
     pub fn keypair(
+        option: KeyGenOption<ManagedSecretKey<C>>,
+    ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
+        Self::try_keypair(option)
+    }
+
+    #[allow(clippy::similar_names)]
+    pub fn try_keypair(
         mut option: KeyGenOption<ManagedSecretKey<C>>,
-    ) -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
+    ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
         let private_key = match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
@@ -261,14 +263,16 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             KeyGenOption::UseSeed(ref mut seed) => {
                 let salt = b"BLS-SIG-KEYGEN-SALT-";
-                let info = [0u8, C::Engine::SECRET_KEY_SIZE.try_into().unwrap()];
+                let secret_key_size = u8::try_from(C::Engine::SECRET_KEY_SIZE)
+                    .map_err(|_| Error::KeyGen("BLS secret-key size overflow".into()))?;
+                let info = [0u8, secret_key_size];
                 let mut ikm = vec![0u8; seed.len() + 1];
                 ikm[..seed.len()].copy_from_slice(seed);
                 seed.zeroize();
                 let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
                 let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
                 h.expand(&info[..], &mut okm)
-                    .expect("`okm` has the correct length");
+                    .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
                 ikm.zeroize();
 
                 let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
@@ -279,16 +283,18 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
-        let public_key = private_key.public_key();
-        (public_key, private_key)
+        let public_key = private_key
+            .try_public_key()
+            .map_err(|err| Error::KeyGen(err.to_string()))?;
+        Ok((public_key, private_key))
     }
 
-    pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Vec<u8> {
+    pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
         sk.sign_bytes(message)
     }
 
     pub fn try_sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
-        sk.try_sign_bytes(message)
+        Self::sign(message, sk)
     }
 
     pub fn derive_public_key(sk: &ManagedSecretKey<C>) -> Result<PublicKey<C::Engine>, ParseError> {

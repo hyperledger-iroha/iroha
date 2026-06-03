@@ -121,7 +121,12 @@ public final class BscSccpProver {
     if (request.targetDomain() != DOMAIN_BSC || request.publicInputs().targetDomain() != DOMAIN_BSC) {
       throw new IllegalArgumentException("BSC mainnet proof requests must target BSC");
     }
-    requireBscDestinationBinding(request.destinationBinding());
+    final SourceSccpProofs.EvmDestinationBinding binding =
+        requireBscDestinationBinding(request.destinationBinding());
+    if (!binding.hash.equals(request.destinationBindingHash())) {
+      throw new IllegalArgumentException(
+          "destinationBindingHash must match BSC mainnet destinationBinding");
+    }
   }
 
   private static SourceSccpProofs.EvmDestinationBinding requireBscDestinationBinding(

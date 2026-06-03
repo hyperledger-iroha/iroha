@@ -276,7 +276,8 @@ impl GenVrfArgs {
                 iroha_crypto::Hash::new(format!("{alias}|normal|{index}|{attempt}").as_bytes());
             let (pk, sk) = iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(
                 bls_seed.as_ref().to_vec(),
-            ));
+            ))
+            .wrap_err("failed to derive BLS normal keypair")?;
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
             if let Ok((_output, proof)) =
@@ -313,7 +314,8 @@ impl GenVrfArgs {
                 iroha_crypto::Hash::new(format!("{alias}|small|{index}|{attempt}").as_bytes());
             let (pk, sk) = iroha_crypto::BlsSmall::keypair(iroha_crypto::KeyGenOption::UseSeed(
                 bls_seed.as_ref().to_vec(),
-            ));
+            ))
+            .wrap_err("failed to derive BLS small keypair")?;
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
             if let Ok((_output, proof)) =

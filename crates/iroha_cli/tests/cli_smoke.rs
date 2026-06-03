@@ -1940,7 +1940,8 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
         let (pk_b64, proof_b64) = loop {
             let bls_seed =
                 iroha_crypto::Hash::new(format!("{alias}|normal|0|{attempt}").as_bytes());
-            let (pk, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(bls_seed.as_ref().to_vec()));
+            let (pk, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(bls_seed.as_ref().to_vec()))
+                .expect("deterministic BLS normal keypair");
             let (pubkey, _) = KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, &account_id);
             if let Ok((_y, proof)) =

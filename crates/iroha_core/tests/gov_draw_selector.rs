@@ -22,7 +22,8 @@ fn make_candidate_material(
     };
 
     let input = build_input(seed, &account);
-    let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
+    let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+        .expect("deterministic BLS normal keypair");
     let (_vrf_output, proof) =
         prove_normal_with_chain(&sk, chain.as_str().as_bytes(), &input).expect("normal VRF proof");
     let key_pair = KeyPair::from((pk_raw, sk));

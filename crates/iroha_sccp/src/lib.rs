@@ -65612,6 +65612,17 @@ mod tests {
             deployment_binding.binding_hash
         );
 
+        let mut forged_binding_hash_request = request.clone();
+        forged_binding_hash_request.destination_binding_hash = [0x99; 32];
+        assert!(
+            wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(
+                &proof_bytes,
+                &forged_binding_hash_request,
+            )
+            .is_none(),
+            "BSC mainnet proof-result wrapper must reject forged destination binding hashes"
+        );
+
         let wrong_network_binding =
             sample_evm_destination_binding(&manifest, [0x31; 32], [0x33; 20], [0x22; 20]);
         let mut wrong_target_request = request.clone();

@@ -167,16 +167,14 @@ impl BfvParameters {
 
         #[cfg(feature = "bfv-accel")]
         {
-            let required_log = self
-                .degree()
-                .checked_mul(2)
-                .expect("degree overflow")
-                .ilog2();
-            if self
-                .degree()
-                .checked_mul(2)
-                .expect("degree overflow")
-                .is_power_of_two()
+            let Some(convolution_len) = self.degree().checked_mul(2) else {
+                return BfvConvolutionBackend::ScalarSchoolbook;
+            };
+            if convolution_len == 0 {
+                return BfvConvolutionBackend::ScalarSchoolbook;
+            }
+            let required_log = convolution_len.ilog2();
+            if convolution_len.is_power_of_two()
                 && CRT_NTT_PRIMES
                     .iter()
                     .all(|prime| prime.max_power_of_two >= required_log)
@@ -925,7 +923,7 @@ pub fn encrypt_identifier_from_seed(
         .into_iter()
         .enumerate()
         .map(|(index, scalar)| {
-            let slot_seed = derive_identifier_slot_seed(seed, index);
+            let slot_seed = derive_identifier_slot_seed(seed, index)?;
             encrypt_from_seed(
                 &public_parameters.parameters,
                 &public_parameters.public_key,
@@ -1085,7 +1083,11 @@ fn encode_identifier_slots(
         });
     }
     let mut slots = vec![0_u64; usize::from(public_parameters.max_input_bytes).saturating_add(1)];
-    slots[0] = u64::try_from(input.len()).expect("identifier byte length fits into u64");
+    slots[0] = u64::try_from(input.len()).map_err(|_| {
+        BfvError::InvalidIdentifierEncoding(
+            "identifier byte length does not fit into u64".to_owned(),
+        )
+    })?;
     for (index, byte) in input.iter().enumerate() {
         slots[index + 1] = u64::from(*byte);
     }
@@ -1152,18 +1154,13 @@ fn decrypt_identifier_slot(
     Ok(plaintext[0])
 }
 
-fn derive_identifier_slot_seed(seed: &[u8], index: usize) -> [u8; Hash::LENGTH] {
-    Hash::new(
-        [
-            IDENTIFIER_SLOT_ENCRYPT_DOMAIN,
-            seed,
-            &u64::try_from(index)
-                .expect("slot index fits into u64")
-                .to_le_bytes(),
-        ]
-        .concat(),
-    )
-    .into()
+fn derive_identifier_slot_seed(seed: &[u8], index: usize) -> Result<[u8; Hash::LENGTH], BfvError> {
+    let index = u64::try_from(index).map_err(|_| {
+        BfvError::InvalidIdentifierEncoding(
+            "identifier slot index does not fit into u64".to_owned(),
+        )
+    })?;
+    Ok(Hash::new([IDENTIFIER_SLOT_ENCRYPT_DOMAIN, seed, &index.to_le_bytes()].concat()).into())
 }
 
 fn zero_poly(params: &BfvParameters) -> Polynomial {
@@ -1327,26 +1324,39 @@ fn poly_mul_raw_scalar_i128(params: &BfvParameters, lhs: &[i128], rhs: &[i128]) 
 
 #[cfg(feature = "bfv-accel")]
 fn poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Vec<i128> {
-    let n = params.degree();
-    let linear = convolve_linear_crt_ntt(lhs, rhs);
-    let mut folded = vec![0_i128; n];
-    for (index, slot) in folded.iter_mut().enumerate() {
-        let low = i128::try_from(linear[index]).expect("linear coefficient fits into i128");
-        let high = i128::try_from(linear[index + n]).expect("linear coefficient fits into i128");
-        *slot = low - high;
-    }
-    folded
+    try_poly_mul_raw_crt_ntt(params, lhs, rhs)
+        .unwrap_or_else(|| poly_mul_raw_scalar(params, lhs, rhs))
 }
 
 #[cfg(feature = "bfv-accel")]
-fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Vec<u128> {
-    let len = lhs
-        .len()
-        .checked_mul(2)
-        .expect("NTT convolution length overflow");
+fn try_poly_mul_raw_crt_ntt(params: &BfvParameters, lhs: &[u64], rhs: &[u64]) -> Option<Vec<i128>> {
+    let n = params.degree();
+    if n == 0 || lhs.len() != n || rhs.len() != n {
+        return None;
+    }
+    let linear = convolve_linear_crt_ntt(lhs, rhs)?;
+    let mut folded = vec![0_i128; n];
+    for (index, slot) in folded.iter_mut().enumerate() {
+        let low = i128::try_from(*linear.get(index)?).ok()?;
+        let high = i128::try_from(*linear.get(index + n)?).ok()?;
+        *slot = low - high;
+    }
+    Some(folded)
+}
+
+#[cfg(feature = "bfv-accel")]
+fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Option<Vec<u128>> {
+    let len = lhs.len().checked_mul(2)?;
+    if len == 0 || !len.is_power_of_two() {
+        return None;
+    }
+    let required_log = len.ilog2();
     let mut residues = Vec::with_capacity(CRT_NTT_PRIMES.len());
     for prime in CRT_NTT_PRIMES {
-        residues.push(convolve_linear_mod_prime(lhs, rhs, len, prime));
+        if required_log > prime.max_power_of_two {
+            return None;
+        }
+        residues.push(convolve_linear_mod_prime(lhs, rhs, len, prime)?);
     }
     (0..len)
         .map(|index| {
@@ -1358,11 +1368,19 @@ fn convolve_linear_crt_ntt(lhs: &[u64], rhs: &[u64]) -> Vec<u128> {
             ];
             garner_reconstruct_u128(&coeffs, &CRT_NTT_PRIMES)
         })
-        .collect()
+        .collect::<Option<Vec<_>>>()
 }
 
 #[cfg(feature = "bfv-accel")]
-fn convolve_linear_mod_prime(lhs: &[u64], rhs: &[u64], len: usize, prime: NttPrime) -> Vec<u64> {
+fn convolve_linear_mod_prime(
+    lhs: &[u64],
+    rhs: &[u64],
+    len: usize,
+    prime: NttPrime,
+) -> Option<Vec<u64>> {
+    if len == 0 || !len.is_power_of_two() || len.ilog2() > prime.max_power_of_two {
+        return None;
+    }
     let modulus = prime.modulus;
     let mut lhs_ntt = vec![0_u64; len];
     let mut rhs_ntt = vec![0_u64; len];
@@ -1372,21 +1390,21 @@ fn convolve_linear_mod_prime(lhs: &[u64], rhs: &[u64], len: usize, prime: NttPri
     for (slot, &coefficient) in rhs_ntt.iter_mut().zip(rhs) {
         *slot = coefficient % modulus;
     }
-    ntt_in_place(&mut lhs_ntt, prime, false);
-    ntt_in_place(&mut rhs_ntt, prime, false);
+    ntt_in_place(&mut lhs_ntt, prime, false)?;
+    ntt_in_place(&mut rhs_ntt, prime, false)?;
     for (left, right) in lhs_ntt.iter_mut().zip(&rhs_ntt) {
         *left = mul_mod_prime(*left, *right, modulus);
     }
-    ntt_in_place(&mut lhs_ntt, prime, true);
-    lhs_ntt
+    ntt_in_place(&mut lhs_ntt, prime, true)?;
+    Some(lhs_ntt)
 }
 
 #[cfg(feature = "bfv-accel")]
-fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) {
-    bit_reverse_permute(values);
+fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) -> Option<()> {
     let len = values.len();
     let modulus = prime.modulus;
-    let root = root_for_length(prime, len);
+    let root = root_for_length(prime, len)?;
+    bit_reverse_permute(values);
     let root = if invert {
         mod_inv_prime(root, modulus)
     } else {
@@ -1395,7 +1413,7 @@ fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) {
 
     let mut stage_len = 2_usize;
     while stage_len <= len {
-        let step = mod_pow_prime(root, (len / stage_len) as u64, modulus);
+        let step = mod_pow_prime(root, u64::try_from(len / stage_len).ok()?, modulus);
         for chunk in values.chunks_exact_mut(stage_len) {
             let (lo, hi) = chunk.split_at_mut(stage_len / 2);
             let mut twiddle = 1_u64;
@@ -1407,37 +1425,43 @@ fn ntt_in_place(values: &mut [u64], prime: NttPrime, invert: bool) {
                 twiddle = mul_mod_prime(twiddle, step, modulus);
             }
         }
-        stage_len <<= 1;
+        stage_len = match stage_len.checked_mul(2) {
+            Some(next) => next,
+            None => break,
+        };
     }
 
     if invert {
-        let inv_len = mod_inv_prime(
-            u64::try_from(len).expect("NTT length fits into u64"),
-            modulus,
-        );
+        let inv_len = mod_inv_prime(u64::try_from(len).ok()?, modulus);
         for value in values {
             *value = mul_mod_prime(*value, inv_len, modulus);
         }
     }
+    Some(())
 }
 
 #[cfg(feature = "bfv-accel")]
-fn root_for_length(prime: NttPrime, len: usize) -> u64 {
+fn root_for_length(prime: NttPrime, len: usize) -> Option<u64> {
+    if len == 0 || prime.modulus <= 1 {
+        return None;
+    }
     let log_len = len.ilog2();
-    assert!(
-        len.is_power_of_two() && log_len <= prime.max_power_of_two,
-        "unsupported NTT length {len} for modulus {}",
-        prime.modulus
-    );
-    mod_pow_prime(
+    if !len.is_power_of_two() || log_len > prime.max_power_of_two {
+        return None;
+    }
+    let len = u64::try_from(len).ok()?;
+    Some(mod_pow_prime(
         prime.primitive_root,
-        (prime.modulus - 1) / u64::try_from(len).expect("NTT length fits into u64"),
+        (prime.modulus - 1) / len,
         prime.modulus,
-    )
+    ))
 }
 
 #[cfg(feature = "bfv-accel")]
 fn bit_reverse_permute(values: &mut [u64]) {
+    if values.is_empty() {
+        return;
+    }
     let bits = values.len().ilog2();
     for index in 0..values.len() {
         let reversed = index.reverse_bits() >> (usize::BITS - bits);
@@ -1448,7 +1472,10 @@ fn bit_reverse_permute(values: &mut [u64]) {
 }
 
 #[cfg(feature = "bfv-accel")]
-fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> u128 {
+fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> Option<u128> {
+    if residues.len() != primes.len() {
+        return None;
+    }
     let mut mixed = vec![0_u64; residues.len()];
     for (index, (&residue, prime)) in residues.iter().zip(primes).enumerate() {
         let mut coefficient = residue;
@@ -1464,30 +1491,28 @@ fn garner_reconstruct_u128(residues: &[u64], primes: &[NttPrime]) -> u128 {
     let mut value = 0_u128;
     let mut weight = 1_u128;
     for (index, coefficient) in mixed.iter().enumerate() {
-        value = value
-            .checked_add(u128::from(*coefficient) * weight)
-            .expect("CRT reconstruction fits into u128");
+        let term = u128::from(*coefficient).checked_mul(weight)?;
+        value = value.checked_add(term)?;
         if index + 1 != mixed.len() {
-            weight = weight
-                .checked_mul(u128::from(primes[index].modulus))
-                .expect("CRT basis fits into u128");
+            weight = weight.checked_mul(u128::from(primes[index].modulus))?;
         }
     }
-    value
+    Some(value)
 }
 
 #[cfg(feature = "bfv-accel")]
 fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    let sum = lhs + rhs;
-    if sum >= modulus || sum < lhs {
-        sum.wrapping_sub(modulus)
-    } else {
-        sum
+    if modulus == 0 {
+        return 0;
     }
+    low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
 }
 
 #[cfg(feature = "bfv-accel")]
 fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    if modulus == 0 {
+        return 0;
+    }
     let lhs = lhs % modulus;
     let rhs = rhs % modulus;
     if lhs >= rhs {
@@ -1499,12 +1524,17 @@ fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
 
 #[cfg(feature = "bfv-accel")]
 fn mul_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    u64::try_from((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
-        .expect("reduced prime-field product fits into u64")
+    if modulus == 0 {
+        return 0;
+    }
+    low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
 }
 
 #[cfg(feature = "bfv-accel")]
 fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+    if modulus == 0 {
+        return 0;
+    }
     let mut result = 1_u64;
     while exponent != 0 {
         if exponent & 1 == 1 {
@@ -1518,12 +1548,24 @@ fn mod_pow_prime(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
 
 #[cfg(feature = "bfv-accel")]
 fn mod_inv_prime(value: u64, modulus: u64) -> u64 {
+    if modulus <= 1 {
+        return 0;
+    }
     mod_pow_prime(value, modulus - 2, modulus)
 }
 
+fn low_u64_from_u128(value: u128) -> u64 {
+    let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
+    u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+}
+
+fn low_u64_from_i128(value: i128) -> u64 {
+    let [b0, b1, b2, b3, b4, b5, b6, b7, _, _, _, _, _, _, _, _] = value.to_le_bytes();
+    u64::from_le_bytes([b0, b1, b2, b3, b4, b5, b6, b7])
+}
+
 fn add_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    u64::try_from((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
-        .expect("reduced ciphertext sum fits into u64")
+    low_u64_from_u128((u128::from(lhs) + u128::from(rhs)) % u128::from(modulus))
 }
 
 fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
@@ -1531,14 +1573,13 @@ fn sub_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
 }
 
 fn mul_mod_u64(lhs: u64, rhs: u64, modulus: u64) -> u64 {
-    u64::try_from((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
-        .expect("reduced ciphertext product fits into u64")
+    low_u64_from_u128((u128::from(lhs) * u128::from(rhs)) % u128::from(modulus))
 }
 
 fn mod_q(value: i128, modulus: u64) -> u64 {
     let modulus = i128::from(modulus);
     let reduced = value.rem_euclid(modulus);
-    u64::try_from(reduced).expect("reduced coefficient fits into u64")
+    low_u64_from_i128(reduced)
 }
 
 fn mod_t(value: i128, modulus: u64) -> u64 {
@@ -1784,11 +1825,21 @@ mod tests {
 
     #[cfg(feature = "bfv-accel")]
     #[test]
+    fn add_mod_prime_handles_large_modulus_without_overflow() {
+        let modulus = u64::MAX - 58;
+        assert_eq!(add_mod_prime(modulus - 2, 10, modulus), 8);
+        assert_eq!(add_mod_prime(u64::MAX, u64::MAX, modulus), 116);
+        assert_eq!(add_mod_prime(1, 1, 0), 0);
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
     fn sub_mod_prime_handles_large_modulus_without_overflow() {
         let modulus = u64::MAX - 58;
         let lhs = 7;
         let rhs = modulus - 11;
         assert_eq!(sub_mod_prime(lhs, rhs, modulus), 18);
+        assert_eq!(sub_mod_prime(1, 1, 0), 0);
     }
 
     #[cfg(feature = "bfv-accel")]
@@ -1798,6 +1849,15 @@ mod tests {
         let lhs = 3;
         let rhs = 41;
         assert_eq!(sub_mod_prime(lhs, rhs, modulus), 13);
+    }
+
+    #[test]
+    fn scalar_modular_helpers_handle_max_width_values() {
+        let modulus = u64::MAX;
+        assert_eq!(add_mod_u64(modulus - 1, modulus - 2, modulus), modulus - 3);
+        assert_eq!(mul_mod_u64(modulus - 1, modulus - 2, modulus), 2);
+        assert_eq!(sub_mod_u64(1, modulus - 1, modulus), 2);
+        assert_eq!(mod_q(-1, modulus), modulus - 1);
     }
 
     #[test]
@@ -1819,6 +1879,31 @@ mod tests {
         let plaintext =
             decrypt_identifier(&public_parameters, &secret_key, &ciphertext).expect("decrypt");
         assert_eq!(plaintext, b"+15551234567");
+    }
+
+    #[test]
+    fn identifier_slot_encoding_and_seed_derivation_are_deterministic() {
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: ram_lfe_bfv_parameters_v1(),
+            public_key: BfvPublicKey {
+                b: Vec::new(),
+                a: Vec::new(),
+            },
+            max_input_bytes: 3,
+        };
+
+        let slots = encode_identifier_slots(&public_parameters, b"abc")
+            .expect("identifier slots should encode");
+        assert_eq!(
+            slots,
+            vec![3, u64::from(b'a'), u64::from(b'b'), u64::from(b'c')]
+        );
+
+        let first = derive_identifier_slot_seed(b"seed", 1).expect("slot seed should derive");
+        let second = derive_identifier_slot_seed(b"seed", 1).expect("slot seed should repeat");
+        let other = derive_identifier_slot_seed(b"seed", 2).expect("other slot seed should derive");
+        assert_eq!(first, second);
+        assert_ne!(first, other);
     }
 
     #[test]
@@ -2003,6 +2088,56 @@ mod tests {
         assert_eq!(
             params.convolution_backend(),
             BfvConvolutionBackend::ScalarSchoolbook
+        );
+    }
+
+    #[test]
+    fn convolution_backend_handles_zero_degree_without_panic() {
+        let params = BfvParameters {
+            polynomial_degree: 0,
+            ciphertext_modulus: 257 * (1_u64 << 20),
+            plaintext_modulus: 257,
+            decomposition_base_log: 8,
+        };
+        assert_eq!(
+            params.convolution_backend(),
+            BfvConvolutionBackend::ScalarSchoolbook
+        );
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
+    fn crt_ntt_helpers_reject_invalid_lengths_without_panic() {
+        let params = sample_identifier_parameters();
+        let lhs = vec![1; params.degree() - 1];
+        let rhs = vec![1; params.degree()];
+        assert_eq!(try_poly_mul_raw_crt_ntt(&params, &lhs, &rhs), None);
+        assert_eq!(
+            poly_mul_raw_crt_ntt(&params, &lhs, &rhs),
+            poly_mul_raw_scalar(&params, &lhs, &rhs)
+        );
+
+        assert_eq!(convolve_linear_crt_ntt(&[], &[]), None);
+        assert_eq!(convolve_linear_crt_ntt(&[1, 2, 3], &[4, 5, 6]), None);
+        assert_eq!(root_for_length(CRT_NTT_PRIMES[0], 0), None);
+        assert_eq!(root_for_length(CRT_NTT_PRIMES[0], 3), None);
+        assert_eq!(root_for_length(CRT_NTT_PRIMES[1], 1_usize << 17), None);
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
+    fn crt_reconstruction_overflow_returns_none() {
+        let wide_prime = NttPrime {
+            modulus: u64::MAX,
+            primitive_root: 2,
+            max_power_of_two: 1,
+        };
+        assert_eq!(
+            garner_reconstruct_u128(
+                &[0, 0, 0, 0],
+                &[wide_prime, wide_prime, wide_prime, wide_prime]
+            ),
+            None
         );
     }
 

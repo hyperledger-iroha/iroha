@@ -279,13 +279,18 @@ final class SccpSolanaProverTests: XCTestCase {
           "data": {
             "root": "\(finalizedHeaderRoot)",
             "canonical": \(canonical),
-            "header": {
-              "message": {
-                "slot": "\(slot)"
+              "header": {
+                "message": {
+                  "slot": "\(slot)",
+                  "proposer_index": "1",
+                  "parent_root": "0x\(String(repeating: "01", count: 32))",
+                  "state_root": "0x\(String(repeating: "02", count: 32))",
+                  "body_root": "0x\(String(repeating: "03", count: 32))"
+                },
+                "signature": "0x\(String(repeating: "12", count: 96))"
               }
             }
           }
-        }
         """.utf8)
     }
 
@@ -299,6 +304,46 @@ final class SccpSolanaProverTests: XCTestCase {
           "data": {
             "finalized": {
               "root": "\(finalizedHeaderRoot)"
+            }
+          }
+        }
+        """.utf8)
+    }
+
+    private static func ethereumBeaconBlockRootJson(finalizedHeaderRoot: String = "0x" + String(repeating: "dd", count: 32),
+                                                    executionOptimistic: Bool = false,
+                                                    finalized: Bool = true) -> Data {
+        Data("""
+        {
+          "execution_optimistic": \(executionOptimistic),
+          "finalized": \(finalized),
+          "data": {
+            "root": "\(finalizedHeaderRoot)"
+          }
+        }
+        """.utf8)
+    }
+
+    private static func ethereumBeaconBlockJson(slot: String = "32",
+                                                blockHash: String = "0x" + String(repeating: "bb", count: 32),
+                                                blockNumber: String = "4660",
+                                                receiptsRoot: String = "0x" + String(repeating: "cc", count: 32),
+                                                executionOptimistic: Bool = false,
+                                                finalized: Bool = true) -> Data {
+        Data("""
+        {
+          "execution_optimistic": \(executionOptimistic),
+          "finalized": \(finalized),
+          "data": {
+            "message": {
+              "slot": "\(slot)",
+              "body": {
+                "execution_payload": {
+                  "block_hash": "\(blockHash)",
+                  "block_number": "\(blockNumber)",
+                  "receipts_root": "\(receiptsRoot)"
+                }
+              }
             }
           }
         }
@@ -8787,6 +8832,20 @@ final class SccpSolanaProverTests: XCTestCase {
 
         let proofBytes = Self.sampleGroth16ProofBytes()
         let proofResult = try wrapEvmSccpProofResult(proofBytes: proofBytes, request: ethRequest)
+        let forgedBindingHashRequest = try buildEvmSccpProofRequest(EvmSccpProofRequestInput(
+            publicInputs: ethRequest.publicInputs,
+            bundleBytes: ethRequest.bundleBytes,
+            sourceProofBytes: ethRequest.sourceProofBytes,
+            statementHash: ethRequest.statementHash,
+            destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+            destinationBinding: ethRequest.destinationBinding
+        ))
+        XCTAssertThrowsError(try wrapEvmSccpProofResult(
+            proofBytes: proofBytes,
+            request: forgedBindingHashRequest
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
+        }
         let submission = try facade.buildEthereumCalldata(EvmSccpSubmissionInput(proofResult: proofResult))
         XCTAssertEqual(submission.targetDomain, sccpDomainEthereum)
         XCTAssertEqual(submission.proofBytes, proofBytes)
@@ -9069,6 +9128,16 @@ final class SccpSolanaProverTests: XCTestCase {
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconHeaderJson(finalizedHeaderRoot: finalizedHeaderRoot, slot: "32")
             ),
+            "https://beacon.example/eth/v1/beacon/blocks/finalized/root?token=rpc": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: finalizedHeaderRoot)
+            ),
+            "https://beacon.example/eth/v2/beacon/blocks/finalized?token=rpc": Self.ethereumBeaconResponse(
+                Self.ethereumBeaconBlockJson(
+                    slot: "32",
+                    blockHash: blockHash,
+                    receiptsRoot: receiptsRoot
+                )
+            ),
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc": Self.ethereumBeaconResponse(
                 Self.ethereumBeaconCheckpointJson(finalizedHeaderRoot: finalizedHeaderRoot)
             ),
@@ -9098,9 +9167,11 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(finality["beaconSlot"] as? String, "32")
         XCTAssertEqual(transport.calls.map { $0.url }, [
             "https://beacon.example/eth/v1/beacon/headers/finalized?token=rpc",
+            "https://beacon.example/eth/v1/beacon/blocks/finalized/root?token=rpc",
+            "https://beacon.example/eth/v2/beacon/blocks/finalized?token=rpc",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints?token=rpc",
         ])
-        XCTAssertEqual(transport.calls.map { $0.headers["Authorization"] }, ["Bearer rpc", "Bearer rpc"])
+        XCTAssertEqual(transport.calls.map { $0.headers["Authorization"] }, ["Bearer rpc", "Bearer rpc", "Bearer rpc", "Bearer rpc"])
     }
 
     func testEthereumMainnetBeaconRestURLSessionTransportRejectsOversizedBodies() async throws {
@@ -9181,6 +9252,8 @@ final class SccpSolanaProverTests: XCTestCase {
 
         func provider(
             header: Data,
+            finalizedBlockRoot: Data = Self.ethereumBeaconBlockRootJson(finalizedHeaderRoot: finalizedHeaderRoot),
+            finalizedBlock: Data = Self.ethereumBeaconBlockJson(),
             checkpoint: Data = Self.ethereumBeaconCheckpointJson(finalizedHeaderRoot: finalizedHeaderRoot),
             statusCode: Int = 200
         ) throws -> EthereumMainnetBeaconRestConsensusProvider {
@@ -9188,6 +9261,12 @@ final class SccpSolanaProverTests: XCTestCase {
                 "https://beacon.example/eth/v1/beacon/headers/finalized": Self.ethereumBeaconResponse(
                     header,
                     statusCode: statusCode
+                ),
+                "https://beacon.example/eth/v1/beacon/blocks/finalized/root": Self.ethereumBeaconResponse(
+                    finalizedBlockRoot
+                ),
+                "https://beacon.example/eth/v2/beacon/blocks/finalized": Self.ethereumBeaconResponse(
+                    finalizedBlock
                 ),
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints": Self.ethereumBeaconResponse(
                     checkpoint
@@ -9256,6 +9335,64 @@ final class SccpSolanaProverTests: XCTestCase {
                     replacing: "\"canonical\": true",
                     with: "\"canonical\": \"true\""
                 )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        for (field, goodValue) in [
+            ("parent_root", String(repeating: "01", count: 32)),
+            ("state_root", String(repeating: "02", count: 32)),
+            ("body_root", String(repeating: "03", count: 32)),
+        ] {
+            await assertEvmError(
+                .invalidPublicInputs("Ethereum mainnet Beacon REST finalized header.data.header.message.\(field)")
+            ) {
+                _ = try await provider(
+                    header: malformedHeader(
+                        replacing: "\"\(field)\": \"0x\(goodValue)\"",
+                        with: "\"\(field)\": \"0x\""
+                    )
+                ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+            }
+        }
+        await assertEvmError(
+            .invalidPublicInputs("Ethereum mainnet Beacon REST finalized header.data.header.signature")
+        ) {
+            _ = try await provider(
+                header: malformedHeader(
+                    replacing: "\"signature\": \"0x\(String(repeating: "12", count: 96))\"",
+                    with: "\"signature\": \"0x\(String(repeating: "12", count: 95))\""
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(.invalidPublicInputs("beaconRest.finalizedBlockRoot")) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(),
+                finalizedBlockRoot: Self.ethereumBeaconBlockRootJson(
+                    finalizedHeaderRoot: "0x" + String(repeating: "99", count: 32)
+                )
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(.invalidPublicInputs("beaconRest.executionPayload.slot")) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(),
+                finalizedBlock: Self.ethereumBeaconBlockJson(slot: "33")
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(.invalidPublicInputs("beaconRest.executionPayload.blockHash")) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(),
+                finalizedBlock: Self.ethereumBeaconBlockJson(blockHash: "0x" + String(repeating: "99", count: 32))
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(.invalidPublicInputs("beaconRest.executionPayload.blockNumber")) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(),
+                finalizedBlock: Self.ethereumBeaconBlockJson(blockNumber: "4661")
+            ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
+        }
+        await assertEvmError(.invalidPublicInputs("beaconRest.executionPayload.receiptsRoot")) {
+            _ = try await provider(
+                header: Self.ethereumBeaconHeaderJson(),
+                finalizedBlock: Self.ethereumBeaconBlockJson(receiptsRoot: "0x" + String(repeating: "99", count: 32))
             ).collectFinalityEvidence(receipt: nil, block: block, transactionHash: nil)
         }
         await assertEvmError(.invalidPublicInputs("beaconRest.finalizedHeader")) {
@@ -9375,6 +9512,19 @@ final class SccpSolanaProverTests: XCTestCase {
             XCTAssertEqual(
                 error as? SccpSourceProofHashError,
                 .invalidRlp("blockReceipts[0].transactionIndex")
+            )
+        }
+        var duplicateHashReceipt = legacyReceipt
+        duplicateHashReceipt["transactionHash"] = typedReceipt["transactionHash"]
+        XCTAssertThrowsError(
+            try buildEvmReceiptTrieProofFromReceipts(
+                [typedReceipt, duplicateHashReceipt],
+                transactionIndex: "0x0"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SccpSourceProofHashError,
+                .invalidRlp("blockReceipts.transactionHash")
             )
         }
         XCTAssertThrowsError(
@@ -9770,6 +9920,23 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(receiptProofEvidence.receiptProofHash, receiptProofHash)
         XCTAssertEqual(receiptProofEvidence.receiptProof?.sourceEventDigest, receiptProof.sourceEventDigest)
+        let receiptProofHashOnlyEvidence = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+            EthereumMainnetInboundEvidence(receiptProofHash: receiptProofHash)
+        )
+        XCTAssertEqual(receiptProofHashOnlyEvidence.receiptProofHash, receiptProofHash)
+        XCTAssertNil(receiptProofHashOnlyEvidence.receiptProof)
+        await assertEvmError(.zeroField("receiptProofHash")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(
+                    receiptProofHash: "0x" + String(repeating: "00", count: 32)
+                )
+            )
+        }
+        await assertEvmError(.invalidPublicInputs("receiptProofHash")) {
+            _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                EthereumMainnetInboundEvidence(receiptProofHash: receiptProofHash + " ")
+            )
+        }
         await assertEvmError(.invalidPublicInputs("receipt.logs")) {
             _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
                 EthereumMainnetInboundEvidence(
@@ -9965,6 +10132,21 @@ final class SccpSolanaProverTests: XCTestCase {
                 )
             )
         }
+        for missingField in ["transactionHash", "blockHash", "blockNumber"] {
+            var missingContextLog = sourceEventLog()
+            missingContextLog.removeValue(forKey: missingField)
+            var missingContextReceipt = sourceReceipt
+            missingContextReceipt["logs"] = [missingContextLog]
+            await assertEvmError(.invalidPublicInputs("receipt.logs[0].\(missingField)")) {
+                _ = try await EthereumMainnetSccp().collectInboundEvidenceFromReceipt(
+                    EthereumMainnetInboundEvidence(
+                        receipt: missingContextReceipt,
+                        block: block,
+                        sourceBridgeEmitterAddress: sourceBridgeAddress
+                    )
+                )
+            }
+        }
         var driftedLogTransactionReceipt = sourceReceipt
         driftedLogTransactionReceipt["logs"] = [
             sourceEventLog(["transactionHash": "0x" + String(repeating: "ab", count: 32)]),
@@ -10028,6 +10210,21 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(perCallConsensusProvider.calls, 1)
         XCTAssertEqual(perCallProvider.calls, ["eth_chainId", "eth_getTransactionReceipt", "eth_getBlockByHash"])
 
+        await assertEvmError(.invalidPublicInputs("receipt.sourceEvent")) {
+            _ = try await EthereumMainnetSccp(
+                inboundProveFunction: { _ in
+                    XCTFail("prover callback must not run without source event validation")
+                    return Data([1, 2, 3])
+                }
+            ).proveInboundToSora(
+                EthereumMainnetInboundEvidence(
+                    beaconFinality: beaconFinality,
+                    receiptProof: receiptProof,
+                    receiptProofHash: receiptProofHash
+                )
+            )
+        }
+
         await assertEvmError(.invalidPublicInputs("beaconFinality")) {
             _ = try await EthereumMainnetSccp(
                 inboundProveFunction: { _ in
@@ -10073,10 +10270,11 @@ final class SccpSolanaProverTests: XCTestCase {
                 }
             ).proveInboundToSora(
                 EthereumMainnetInboundEvidence(
-                    receipt: receipt,
+                    receipt: sourceReceipt,
                     block: block,
                     beaconFinality: beaconFinality,
-                    receiptProof: driftedReceiptProof
+                    receiptProof: driftedReceiptProof,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
         }
@@ -10158,10 +10356,11 @@ final class SccpSolanaProverTests: XCTestCase {
                 }
             ).proveInboundToSora(
                 EthereumMainnetInboundEvidence(
-                    receipt: receipt,
+                    receipt: sourceReceipt,
                     block: block,
                     beaconFinality: beaconFinality,
-                    receiptProof: driftedFinalizedRootProof
+                    receiptProof: driftedFinalizedRootProof,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
         }
@@ -10186,10 +10385,11 @@ final class SccpSolanaProverTests: XCTestCase {
                 }
             ).proveInboundToSora(
                 EthereumMainnetInboundEvidence(
-                    receipt: receipt,
+                    receipt: sourceReceipt,
                     block: block,
                     beaconFinality: beaconFinality,
-                    receiptProof: driftedSyncCommitteeRootProof
+                    receiptProof: driftedSyncCommitteeRootProof,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
         }
@@ -10214,10 +10414,11 @@ final class SccpSolanaProverTests: XCTestCase {
                 }
             ).proveInboundToSora(
                 EthereumMainnetInboundEvidence(
-                    receipt: receipt,
+                    receipt: sourceReceipt,
                     block: block,
                     beaconFinality: beaconFinality,
-                    receiptProof: driftedBeaconSlotProof
+                    receiptProof: driftedBeaconSlotProof,
+                    sourceBridgeEmitterAddress: sourceBridgeAddress
                 )
             )
         }
@@ -10243,6 +10444,15 @@ final class SccpSolanaProverTests: XCTestCase {
                 block: block
             )
             _ = try await EthereumMainnetSccp(executionProvider: decimalProvider)
+                .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
+        }
+        await assertEvmError(.invalidPublicInputs("eth_chainId")) {
+            let leadingZeroProvider = EthereumMainnetExecutionProviderStub(
+                chainId: "0x01",
+                receipt: receipt,
+                block: block
+            )
+            _ = try await EthereumMainnetSccp(executionProvider: leadingZeroProvider)
                 .collectInboundEvidenceFromReceipt(EthereumMainnetInboundEvidence(receipt: receipt))
         }
         await assertEvmError(.invalidPublicInputs("eth_chainId")) {
@@ -10385,6 +10595,27 @@ final class SccpSolanaProverTests: XCTestCase {
             proofBytes: proofBytes,
             request: request
         )
+        XCTAssertThrowsError(try wrapBscMainnetSccpDestinationProofResult(
+            proofBytes: proofBytes,
+            request: EvmSccpProofRequest(
+                version: request.version,
+                backend: request.backend,
+                sourceDomain: request.sourceDomain,
+                targetDomain: request.targetDomain,
+                publicInputs: request.publicInputs,
+                publicInputsBytes: request.publicInputsBytes,
+                publicSignalWords: request.publicSignalWords,
+                bundleBytes: request.bundleBytes,
+                sourceProofBytes: request.sourceProofBytes,
+                proofContext: request.proofContext,
+                statementHash: request.statementHash,
+                destinationBindingHash: "0x" + String(repeating: "99", count: 32),
+                requestHash: request.requestHash,
+                destinationBinding: request.destinationBinding
+            )
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("destinationBindingHash"))
+        }
         let submission = try buildBscMainnetSccpDestinationSubmission(
             EvmSccpSubmissionInput(proofResult: proofResult)
         )
@@ -11550,6 +11781,49 @@ final class SccpSolanaProverTests: XCTestCase {
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("sourceEventDigest"))
         }
+        XCTAssertThrowsError(try canonicalEvmSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [],
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("receiptTrieProofNodes"))
+        }
+        XCTAssertThrowsError(try canonicalEvmSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: []
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidBranch("inclusionBranch"))
+        }
+        XCTAssertThrowsError(try canonicalEvmSccpReceiptProofBytes(
+            sourceDomain: sccpDomainBsc,
+            sourceEventDigest: sourceEventDigest,
+            beaconSlot: 11,
+            executionBlockNumber: 12,
+            executionBlockHash: String(repeating: "aa", count: 32),
+            executionReceiptsRoot: evmReceiptsRoot,
+            beaconFinalizedRoot: String(repeating: "cc", count: 32),
+            syncCommitteeRoot: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("sourceDomain"))
+        }
 
         XCTAssertEqual(try canonicalBscSccpReceiptProofBytes(
             sourceEventDigest: sourceEventDigest,
@@ -11576,6 +11850,49 @@ final class SccpSolanaProverTests: XCTestCase {
             inclusionBranch: branch
         )) { error in
             XCTAssertEqual(error as? SccpSourceProofHashError, .invalidHex32("sourceEventDigest"))
+        }
+        XCTAssertThrowsError(try canonicalBscSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            validatorEpoch: 21,
+            blockNumber: 22,
+            blockHash: String(repeating: "aa", count: 32),
+            receiptsRoot: evmReceiptsRoot,
+            validatorSetHash: String(repeating: "cc", count: 32),
+            commitSealHash: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [],
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("receiptTrieProofNodes"))
+        }
+        XCTAssertThrowsError(try canonicalBscSccpReceiptProofBytes(
+            sourceEventDigest: sourceEventDigest,
+            validatorEpoch: 21,
+            blockNumber: 22,
+            blockHash: String(repeating: "aa", count: 32),
+            receiptsRoot: evmReceiptsRoot,
+            validatorSetHash: String(repeating: "cc", count: 32),
+            commitSealHash: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: []
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidBranch("inclusionBranch"))
+        }
+        XCTAssertThrowsError(try canonicalBscSccpReceiptProofBytes(
+            sourceDomain: sccpDomainEthereum,
+            sourceEventDigest: sourceEventDigest,
+            validatorEpoch: 21,
+            blockNumber: 22,
+            blockHash: String(repeating: "aa", count: 32),
+            receiptsRoot: evmReceiptsRoot,
+            validatorSetHash: String(repeating: "cc", count: 32),
+            commitSealHash: String(repeating: "dd", count: 32),
+            receiptRootIndex: 0,
+            receiptTrieProofNodes: [evmReceiptStateNode],
+            inclusionBranch: branch
+        )) { error in
+            XCTAssertEqual(error as? SccpSourceProofHashError, .invalidValidatorSet("sourceDomain"))
         }
         XCTAssertNotEqual(
             try bscSccpReceiptProofHash(

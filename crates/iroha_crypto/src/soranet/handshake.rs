@@ -3153,7 +3153,8 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
         HedgedRngSeed::from_entropy(kem_seed),
         b"soranet-handshake:client-kem",
     );
-    let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng);
+    let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng)
+        .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let client_kem_public = kem_keys.public_key.clone();
     let client_kem_secret = {
         let secret = kem_keys.secret_key;

@@ -727,6 +727,13 @@ public sealed class SccpBscMainnetTests
                     DestinationBindingHash = "0x" + new string('9', 64),
                 }));
         Assert.Throws<ArgumentException>(
+            () => BscMainnetSccp.WrapOutboundProofResult(
+                Groth16ProofBytes(),
+                request with
+                {
+                    DestinationBindingHash = "0x" + new string('9', 64),
+                }));
+        Assert.Throws<ArgumentException>(
             () => BscMainnetSccp.BuildBscCalldata(
                 new BscMainnetSccpSubmissionInput(
                     proofResult with

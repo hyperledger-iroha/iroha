@@ -820,6 +820,14 @@ public final class EvmSccpProverTests {
 
     final EvmSccpProver.ProofResult result =
         BscSccpProver.wrapProofResult(proofBytes, request);
+    threw = false;
+    try {
+      BscSccpProver.wrapProofResult(
+          proofBytes, evmRequestWithDestinationBindingHash(request, "0x" + repeat("99", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "BSC wrapProofResult must reject forged destinationBindingHash";
     final EvmSccpProver.Submission submission =
         BscSccpProver.buildSubmission(new EvmSccpProver.SubmissionInput(result));
     assert submission.targetDomain() == EvmSccpProver.DOMAIN_BSC
@@ -1103,6 +1111,14 @@ public final class EvmSccpProverTests {
 
     final EvmSccpProver.ProofResult result =
         EthereumMainnetSccp.wrapProofResult(proofBytes, request);
+    threw = false;
+    try {
+      EthereumMainnetSccp.wrapProofResult(
+          proofBytes, evmRequestWithDestinationBindingHash(request, "0x" + repeat("99", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("destinationBindingHash");
+    }
+    assert threw : "Ethereum wrapProofResult must reject forged destinationBindingHash";
     final EvmSccpProver.Submission submission =
         new EthereumMainnetSccp().buildEthereumCalldata(new EvmSccpProver.SubmissionInput(result));
     assert submission.targetDomain() == EvmSccpProver.DOMAIN_ETH
@@ -1308,6 +1324,93 @@ public final class EvmSccpProverTests {
     assert "0x39f014e3f5f8d38b44d59f1afdf72ceb71d10d6d937f268c404b046f092b38f0"
             .equals(receiptProofHash)
         : "Ethereum receipt-proof vector must match the shared native hash";
+    threw = false;
+    try {
+      SourceSccpProofs.canonicalEvmReceiptProofBytes(
+          receiptProof.sourceEventDigest(),
+          receiptProof.beaconSlot(),
+          receiptProof.executionBlockNumber(),
+          receiptProof.executionBlockHash(),
+          receiptProof.executionReceiptsRoot(),
+          receiptProof.beaconFinalizedRoot(),
+          receiptProof.syncCommitteeRoot(),
+          receiptProof.receiptRootIndex(),
+          new ArrayList<byte[]>(),
+          receiptProof.inclusionBranch());
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptTrieProofNodes");
+    }
+    assert threw : "Ethereum receipt-proof transcript must reject empty receiptTrieProofNodes";
+    threw = false;
+    try {
+      SourceSccpProofs.evmReceiptProofHash(
+          receiptProof.sourceEventDigest(),
+          receiptProof.beaconSlot(),
+          receiptProof.executionBlockNumber(),
+          receiptProof.executionBlockHash(),
+          receiptProof.executionReceiptsRoot(),
+          receiptProof.beaconFinalizedRoot(),
+          receiptProof.syncCommitteeRoot(),
+          receiptProof.receiptRootIndex(),
+          receiptProof.receiptTrieProofNodes(),
+          new ArrayList<byte[]>());
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("inclusionBranch must not be empty");
+    }
+    assert threw : "Ethereum receipt-proof transcript must reject empty inclusionBranch";
+    threw = false;
+    try {
+      SourceSccpProofs.evmReceiptProofHash(
+          receiptProof.sourceEventDigest(),
+          receiptProof.beaconSlot(),
+          receiptProof.executionBlockNumber(),
+          receiptProof.executionBlockHash(),
+          receiptProof.executionReceiptsRoot(),
+          receiptProof.beaconFinalizedRoot(),
+          receiptProof.syncCommitteeRoot(),
+          receiptProof.receiptRootIndex(),
+          receiptProof.receiptTrieProofNodes(),
+          receiptProof.inclusionBranch(),
+          EvmSccpProver.DOMAIN_BSC);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceDomain must be ETH");
+    }
+    assert threw : "Ethereum receipt-proof transcript must reject BSC sourceDomain";
+    threw = false;
+    try {
+      SourceSccpProofs.canonicalBscReceiptProofBytes(
+          receiptProof.sourceEventDigest(),
+          "21",
+          "22",
+          receiptProof.executionBlockHash(),
+          receiptProof.executionReceiptsRoot(),
+          receiptProof.beaconFinalizedRoot(),
+          receiptProof.syncCommitteeRoot(),
+          receiptProof.receiptRootIndex(),
+          receiptProof.receiptTrieProofNodes(),
+          new ArrayList<byte[]>());
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("inclusionBranch must not be empty");
+    }
+    assert threw : "BSC receipt-proof transcript must reject empty inclusionBranch";
+    threw = false;
+    try {
+      SourceSccpProofs.canonicalBscReceiptProofBytes(
+          receiptProof.sourceEventDigest(),
+          "21",
+          "22",
+          receiptProof.executionBlockHash(),
+          receiptProof.executionReceiptsRoot(),
+          receiptProof.beaconFinalizedRoot(),
+          receiptProof.syncCommitteeRoot(),
+          receiptProof.receiptRootIndex(),
+          receiptProof.receiptTrieProofNodes(),
+          receiptProof.inclusionBranch(),
+          EvmSccpProver.DOMAIN_ETH);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceDomain must be BSC");
+    }
+    assert threw : "BSC receipt-proof transcript must reject ETH sourceDomain";
     final ArrayList<String> calls = new ArrayList<>();
     final int[] consensusCalls = new int[1];
     final EthereumMainnetSccp sdk =
@@ -1487,6 +1590,53 @@ public final class EvmSccpProverTests {
         : "Ethereum inbound collection must derive receiptProofHash from receiptProof";
     assert receiptProof == receiptProofEvidence.receiptProof()
         : "Ethereum inbound collection must retain app-collected receiptProof";
+    final EthereumMainnetSccp.InboundEvidence receiptProofHashOnlyEvidence =
+        new EthereumMainnetSccp()
+            .collectInboundEvidenceFromReceipt(
+                new EthereumMainnetSccp.InboundEvidence(
+                    EvmSccpProver.DOMAIN_ETH,
+                    EvmSccpProver.DOMAIN_SORA,
+                    null,
+                    null,
+                    null,
+                    null,
+                    receiptProofHash));
+    assert receiptProofHash.equals(receiptProofHashOnlyEvidence.receiptProofHash())
+        : "Ethereum inbound collection must accept hash-only receiptProofHash evidence";
+    assert receiptProofHashOnlyEvidence.receiptProof() == null
+        : "hash-only Ethereum evidence must not synthesize a receiptProof";
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  null,
+                  null,
+                  null,
+                  "0x" + repeat("00", 32)));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProofHash must not be zero");
+    }
+    assert threw : "Ethereum inbound collection must reject zero hash-only receiptProofHash";
+    threw = false;
+    try {
+      new EthereumMainnetSccp()
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  null,
+                  null,
+                  null,
+                  receiptProofHash + " "));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("receiptProofHash must be canonical");
+    }
+    assert threw : "Ethereum inbound collection must reject noncanonical hash-only receiptProofHash";
     final EthereumMainnetSccp.InboundEvidence unanchoredProofEvidence =
         new EthereumMainnetSccp.InboundEvidence(
             EvmSccpProver.DOMAIN_ETH,
@@ -2058,6 +2208,23 @@ public final class EvmSccpProverTests {
 
     threw = false;
     try {
+      new EthereumMainnetSccp(null, null, (method, params) -> "0x01", null, null)
+          .collectInboundEvidenceFromReceipt(
+              new EthereumMainnetSccp.InboundEvidence(
+                  EvmSccpProver.DOMAIN_ETH,
+                  EvmSccpProver.DOMAIN_SORA,
+                  null,
+                  receipt,
+                  null,
+                  null,
+                  null));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("canonical JSON-RPC quantity");
+    }
+    assert threw : "Ethereum inbound collection must reject leading-zero eth_chainId RPC";
+
+    threw = false;
+    try {
       new EthereumMainnetSccp(null, null, (method, params) -> Long.valueOf(1L), null, null)
           .collectInboundEvidenceFromReceipt(
               new EthereumMainnetSccp.InboundEvidence(
@@ -2513,6 +2680,31 @@ public final class EvmSccpProverTests {
     }
     assert threw : "Ethereum source-event validation must reject source logs without data";
 
+    for (final String missingField :
+        Arrays.asList("transactionHash", "blockHash", "blockNumber")) {
+      final Map<String, Object> missingContextLog = new LinkedHashMap<>(sourceEventLog);
+      missingContextLog.remove(missingField);
+      final Map<String, Object> missingContextReceipt = new LinkedHashMap<>(receipt);
+      missingContextReceipt.put("logs", Arrays.asList(missingContextLog));
+      threw = false;
+      try {
+        sdk.collectInboundEvidenceFromReceipt(
+            new EthereumMainnetSccp.InboundEvidence(
+                EvmSccpProver.DOMAIN_ETH,
+                EvmSccpProver.DOMAIN_SORA,
+                null,
+                missingContextReceipt,
+                block,
+                beaconFinality,
+                null,
+                null,
+                sourceBridgeEmitterAddress));
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains("receipt.logs[0]." + missingField);
+      }
+      assert threw : "Ethereum source-event validation must reject logs without " + missingField;
+    }
+
     final Map<String, Object> driftedLogTransaction = new LinkedHashMap<>(sourceEventLog);
     driftedLogTransaction.put("transactionHash", "0x" + repeat("ab", 32));
     final Map<String, Object> driftedLogTransactionReceipt = new LinkedHashMap<>(receipt);
@@ -2651,6 +2843,17 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("transactionIndex");
     }
     assert threw : "receipt proof builder must reject out-of-order block receipts";
+
+    final Map<String, Object> duplicateHashReceipt =
+        sampleEvmReceipt(1, "0x" + repeat("aa", 32), "0x" + repeat("bb", 32), "0x1234");
+    threw = false;
+    try {
+      SourceSccpProofs.buildEvmReceiptTrieProofFromReceipts(
+          Arrays.asList(receipt, duplicateHashReceipt), "0x0");
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("transactionHash values must be unique");
+    }
+    assert threw : "receipt proof builder must reject duplicate block receipt transaction hashes";
 
     threw = false;
     try {
@@ -2978,6 +3181,12 @@ public final class EvmSccpProverTests {
           if ("https://beacon.example/eth/v1/beacon/headers/finalized".equals(url)) {
             return beaconResponse(beaconHeaderJson(false, true));
           }
+          if ("https://beacon.example/eth/v1/beacon/blocks/finalized/root".equals(url)) {
+            return beaconResponse(beaconBlockRootJson("dd"));
+          }
+          if ("https://beacon.example/eth/v2/beacon/blocks/finalized".equals(url)) {
+            return beaconResponse(beaconBlockJson("64", blockHash, "4660", "0x" + repeat("cc", 32)));
+          }
           if ("https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints"
               .equals(url)) {
             return beaconResponse(beaconCheckpointJson("dd"));
@@ -3013,6 +3222,8 @@ public final class EvmSccpProverTests {
     assert calls.equals(
         Arrays.asList(
             "https://beacon.example/eth/v1/beacon/headers/finalized",
+            "https://beacon.example/eth/v1/beacon/blocks/finalized/root",
+            "https://beacon.example/eth/v2/beacon/blocks/finalized",
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints"));
     assert "Bearer local".equals(headerCalls.get(0).get("Authorization"));
   }
@@ -3149,6 +3360,118 @@ public final class EvmSccpProverTests {
       threw = ex.getMessage().contains("canonical must be a boolean");
     }
     assert threw : "Beacon REST provider must reject malformed canonical flags";
+
+    for (final String[] rootCase :
+        new String[][] {
+          {"parent_root", "01"},
+          {"state_root", "02"},
+          {"body_root", "03"},
+        }) {
+      threw = false;
+      try {
+        beaconRestProvider(
+                beaconResponse(
+                    beaconHeaderJson(false, true)
+                        .replace(
+                            "\"" + rootCase[0] + "\":\"0x" + repeat(rootCase[1], 32) + "\"",
+                            "\"" + rootCase[0] + "\":\"0x\"")),
+                beaconResponse(beaconCheckpointJson("dd")),
+                "0x" + repeat("ee", 32),
+                null)
+            .collectFinalityEvidence(null, block, null);
+      } catch (final IllegalArgumentException ex) {
+        threw = ex.getMessage().contains(rootCase[0]);
+      }
+      assert threw : "Beacon REST provider must reject malformed " + rootCase[0];
+    }
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(
+                  beaconHeaderJson(false, true)
+                      .replace(
+                          "\"signature\":\"0x" + repeat("12", 96) + "\"",
+                          "\"signature\":\"0x" + repeat("12", 95) + "\"")),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("signature");
+    }
+    assert threw : "Beacon REST provider must reject malformed finalized header signatures";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(beaconHeaderJson(false, true)),
+              beaconResponse(beaconBlockRootJson("99")),
+              beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("finalized block root must match finalized header root");
+    }
+    assert threw : "Beacon REST provider must reject finalized block root/header drift";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(beaconHeaderJson(false, true)),
+              beaconResponse(beaconBlockJson("65", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("finalized block slot must match finalized header slot");
+    }
+    assert threw : "Beacon REST provider must reject finalized block slot drift";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(beaconHeaderJson(false, true)),
+              beaconResponse(beaconBlockJson("64", "0x" + repeat("99", 32), "4660", "0x" + repeat("cc", 32))),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("execution payload block_hash must match block.hash");
+    }
+    assert threw : "Beacon REST provider must reject execution payload block-hash drift";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(beaconHeaderJson(false, true)),
+              beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4661", "0x" + repeat("cc", 32))),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("execution payload block_number must match block.number");
+    }
+    assert threw : "Beacon REST provider must reject execution payload block-number drift";
+
+    threw = false;
+    try {
+      beaconRestProvider(
+              beaconResponse(beaconHeaderJson(false, true)),
+              beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("99", 32))),
+              beaconResponse(beaconCheckpointJson("dd")),
+              "0x" + repeat("ee", 32),
+              null)
+          .collectFinalityEvidence(null, block, null);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("execution payload receipts_root must match block.receiptsRoot");
+    }
+    assert threw : "Beacon REST provider must reject execution payload receipts-root drift";
 
     threw = false;
     try {
@@ -4174,6 +4497,25 @@ public final class EvmSccpProverTests {
         request.destinationBinding());
   }
 
+  private static EvmSccpProver.ProofRequest evmRequestWithDestinationBindingHash(
+      final EvmSccpProver.ProofRequest request, final String destinationBindingHash) {
+    return new EvmSccpProver.ProofRequest(
+        request.version(),
+        request.backend(),
+        request.sourceDomain(),
+        request.targetDomain(),
+        request.publicInputs(),
+        request.publicInputsBytes(),
+        request.publicSignalWords(),
+        request.bundleBytes(),
+        request.sourceProofBytes(),
+        request.proofContext(),
+        request.statementHash(),
+        destinationBindingHash,
+        request.requestHash(),
+        request.destinationBinding());
+  }
+
   private static EvmSccpProver.ProofRequestInput sampleProofRequestInput(
       final EvmSccpProver.PublicInputsInput publicInputs,
       final byte[] sourceProofBytes,
@@ -4274,6 +4616,22 @@ public final class EvmSccpProverTests {
       final EthereumMainnetSccp.BeaconRestResponse checkpoint,
       final String syncCommitteeRoot,
       final byte[] syncCommitteePayload) {
+    return beaconRestProvider(
+        header,
+        beaconResponse(beaconBlockRootJson("dd")),
+        beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
+        checkpoint,
+        syncCommitteeRoot,
+        syncCommitteePayload);
+  }
+
+  private static EthereumMainnetSccp.BeaconRestConsensusProvider beaconRestProvider(
+      final EthereumMainnetSccp.BeaconRestResponse header,
+      final EthereumMainnetSccp.BeaconRestResponse finalizedBlockRoot,
+      final EthereumMainnetSccp.BeaconRestResponse finalizedBlock,
+      final EthereumMainnetSccp.BeaconRestResponse checkpoint,
+      final String syncCommitteeRoot,
+      final byte[] syncCommitteePayload) {
     return new EthereumMainnetSccp.BeaconRestConsensusProvider(
         "https://beacon.example",
         syncCommitteeRoot,
@@ -4284,11 +4642,32 @@ public final class EvmSccpProverTests {
           if (url.endsWith("/eth/v1/beacon/headers/finalized")) {
             return header;
           }
+          if (url.endsWith("/eth/v1/beacon/blocks/finalized/root")) {
+            return finalizedBlockRoot;
+          }
+          if (url.endsWith("/eth/v2/beacon/blocks/finalized")) {
+            return finalizedBlock;
+          }
           if (url.endsWith("/eth/v1/beacon/states/finalized/finality_checkpoints")) {
             return checkpoint;
           }
           throw new IllegalArgumentException("unexpected Beacon REST URL " + url);
         });
+  }
+
+  private static EthereumMainnetSccp.BeaconRestConsensusProvider beaconRestProvider(
+      final EthereumMainnetSccp.BeaconRestResponse header,
+      final EthereumMainnetSccp.BeaconRestResponse finalizedBlock,
+      final EthereumMainnetSccp.BeaconRestResponse checkpoint,
+      final String syncCommitteeRoot,
+      final byte[] syncCommitteePayload) {
+    return beaconRestProvider(
+        header,
+        beaconResponse(beaconBlockRootJson("dd")),
+        finalizedBlock,
+        checkpoint,
+        syncCommitteeRoot,
+        syncCommitteePayload);
   }
 
   private static String beaconHeaderJson(
@@ -4323,6 +4702,36 @@ public final class EvmSccpProverTests {
         + "\"data\":{\"finalized\":{\"root\":\"0x"
         + repeat(rootByte, 32)
         + "\",\"epoch\":\"2\"}}}";
+  }
+
+  private static String beaconBlockRootJson(final String rootByte) {
+    return "{"
+        + "\"execution_optimistic\":false,"
+        + "\"finalized\":true,"
+        + "\"data\":{\"root\":\"0x"
+        + repeat(rootByte, 32)
+        + "\"}}";
+  }
+
+  private static String beaconBlockJson(
+      final String slot,
+      final String blockHash,
+      final String blockNumber,
+      final String receiptsRoot) {
+    return "{"
+        + "\"execution_optimistic\":false,"
+        + "\"finalized\":true,"
+        + "\"data\":{\"message\":{"
+        + "\"slot\":\""
+        + slot
+        + "\",\"body\":{\"execution_payload\":{"
+        + "\"block_hash\":\""
+        + blockHash
+        + "\",\"block_number\":\""
+        + blockNumber
+        + "\",\"receipts_root\":\""
+        + receiptsRoot
+        + "\"}}}}}";
   }
 
   private static Map<String, String> linkedStringMap(final String key, final String value) {
