@@ -23,6 +23,15 @@ pub const ZK_ACE_MAX_ALLOWED_ACCOUNTS: usize = 16;
 /// Number of bytes packed into each Goldilocks field limb for ZK-ACE hashes.
 pub const ZK_ACE_PACKED_LIMB_BYTES: usize = 7;
 
+/// Default maximum proof payload size accepted by generic OpenVerify admission.
+pub const OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES: usize = 64 * 1024 * 1024;
+
+/// Default maximum public-input metadata size accepted by generic OpenVerify admission.
+pub const OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES: usize = 1024 * 1024;
+
+/// Default maximum auxiliary metadata size for non-admission OpenVerify callers.
+pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
+
 /// Backend tag for zero-knowledge verifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 pub enum BackendTag {
