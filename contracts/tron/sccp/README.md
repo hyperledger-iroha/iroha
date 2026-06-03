@@ -30,7 +30,37 @@ a separate TRON deployer account artifact under ignored `artifacts/sccp-tron/`.
 This deployer is only for contract deployment and evidence collection; end-user
 bridging must continue through WalletConnect-connected TRON wallets.
 
-Minimal operator sequence:
+Testnet-first operator sequence:
+
+```bash
+node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer \
+  --tron-network nile \
+  --out artifacts/sccp-tron/nile-taira-xor-deployer.secret.json
+node scripts/sccp_tron_taira_xor_deploy.mjs estimate-budget \
+  --tron-network nile \
+  --secret artifacts/sccp-tron/nile-taira-xor-deployer.secret.json \
+  --funding-mode staged
+# Fund the printed Nile address from the Nile faucet, then verify status.
+node scripts/sccp_tron_taira_xor_deploy.mjs account-status \
+  --tron-network nile \
+  --secret artifacts/sccp-tron/nile-taira-xor-deployer.secret.json \
+  --funding-mode staged
+NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules \
+  node scripts/sccp_tron_taira_xor_deploy.mjs deploy \
+    --tron-network nile \
+    --secret artifacts/sccp-tron/nile-taira-xor-deployer.secret.json \
+    --verifier artifacts/sccp-tron/nile-verifier-key.json \
+    --funding-mode staged \
+    --broadcast true \
+    --confirm-testnet nile
+```
+
+Nile uses `https://nile.trongrid.io`, chain id `0xcd8690dc`, explorer
+`https://nile.tronscan.org`, and faucet `https://nileex.io/join/getJoinPage`.
+Nile route manifests can be generated as disabled drafts for testing, but
+`--production-ready true` is rejected unless `--tron-network mainnet`.
+
+Minimal mainnet operator sequence:
 
 ```bash
 node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer
@@ -40,6 +70,13 @@ node scripts/sccp_tron_taira_xor_deploy.mjs doctor \
 node scripts/sccp_tron_taira_xor_deploy.mjs estimate-budget
 # Fund the printed address with at least the reported recommended_min_balance.
 node scripts/sccp_tron_taira_xor_deploy.mjs account-status
+node scripts/sccp_tron_taira_xor_deploy.mjs estimate-budget \
+  --fee-limit 500000000 \
+  --trigger-fee-limit 20000000 \
+  --funding-mode staged
+# Staged mode is the practical operator path when you do not want to pre-fund
+# the sum of every max fee cap. Fund enough for the expected full burn plus a
+# margin, then rerun account-status with the same fee/funding options.
 node scripts/sccp_tron_taira_xor_deploy.mjs doctor \
   --secret artifacts/sccp-tron/taira-xor-deployer.secret.json \
   --verifier artifacts/sccp-tron/production-verifier-key.json \
@@ -53,6 +90,9 @@ node scripts/sccp_tron_taira_xor_deploy.mjs compile-taira-contract
 NODE_PATH=/tmp/iroha-sccp-smoke-node/node_modules \
   node scripts/sccp_tron_taira_xor_deploy.mjs deploy \
     --verifier artifacts/sccp-tron/production-verifier-key.json \
+    --fee-limit 500000000 \
+    --trigger-fee-limit 20000000 \
+    --funding-mode staged \
     --broadcast true \
     --confirm-mainnet taira_tron_xor
 node scripts/sccp_tron_taira_xor_deploy.mjs evidence \
@@ -77,9 +117,14 @@ node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest \
 
 `deploy` compiles the TRON artifacts, creates java-tron
 `/wallet/deploycontract` transactions, signs them locally with the deployer key,
-broadcasts them only when `--confirm-mainnet taira_tron_xor` is present, and
+broadcasts them only when `--confirm-mainnet taira_tron_xor` is present for
+mainnet or `--confirm-testnet nile|shasta` is present for testnet, and
 first refuses broadcast mode if the deployer account is below the current
-`estimate-budget` recommended minimum. The deployed token, bridge, source
+`estimate-budget` recommended minimum. The default funding mode is aggregate
+and checks the sum of all configured max fee caps. `--funding-mode staged`
+checks the largest next transaction cap plus margin, so operators can fund a
+smaller deployment balance, deploy, and top up only if later steps consume more
+energy than expected. The deployed token, bridge, source
 bridge, and verifier addresses must be distinct; both the helper and the
 `TairaXorSccpBridge` constructor reject obvious wiring mistakes before route
 evidence is accepted. TRON gateway overrides must be HTTPS public endpoints

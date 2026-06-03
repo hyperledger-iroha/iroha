@@ -10,14 +10,18 @@ import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/sec
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import {
   ASSET_KEY,
+  CONTRACT_DEFINITIONS,
   ROUTE_ID,
   TAIRA_BURN_RECORD_ARTIFACT_MAX_BYTES,
   TRON_MAINNET_NETWORK_ID_HEX,
+  TRON_NILE_NETWORK_ID_HEX,
   assertDeploymentFundingReady,
   buildDeploymentDoctorReport,
   buildDeploymentConfigurationSpecs,
   buildDeploymentFundingReadiness,
+  buildMergedTairaXorRouteConfigToml,
   buildSignedTransactionArtifact,
+  buildTairaXorRouteConfigToml,
   buildUnsignedTransactionArtifact,
   buildTairaXorRouteManifestDraft,
   bytesToHex,
@@ -28,6 +32,7 @@ import {
   normalizeTronAddress,
   normalizeTronBase58Address,
   normalizeTronEndpoint,
+  normalizeTronNetwork,
   normalizeSignedTransactionArtifact,
   normalizeUnsignedTransactionArtifact,
   normalizeVerifierConstructorArgs,
@@ -181,6 +186,7 @@ const routeLiveEvidence = ({
   destinationVerifier = {},
   routeCanary = {},
   routeCanaryTransaction = {},
+  sourceEventTransaction = {},
   triggerContract = {},
   summary = {},
 } = {}) => {
@@ -264,6 +270,11 @@ const routeLiveEvidence = ({
         ...triggerContract,
       },
       ...routeCanaryTransaction,
+    },
+    source_event_transaction: {
+      transaction_id: routeHash("source-event-transaction"),
+      source_event_transaction_production_ready: true,
+      ...sourceEventTransaction,
     },
     offline_full_toml_sha256: routeHash("offline-full-toml"),
     ...summary,
@@ -837,6 +848,17 @@ test("generate-deployer writes restrictive secret files and refuses accidental o
       const rotatedSecret = JSON.parse(rotatedSecretText);
       assert.notEqual(rotatedSecret.private_key_hex, firstSecret.private_key_hex);
       assert.equal((await stat(secretPath)).mode & 0o777, 0o600);
+
+      const nileSecretPath = join(dir, "nile-deployer.secret.json");
+      await generateDeployer({ out: nileSecretPath, "tron-network": "nile" });
+      const nileSecret = JSON.parse(await readFile(nileSecretPath, "utf8"));
+      assert.equal(nileSecret.tron_network, "nile");
+      assert.equal(nileSecret.network, "tron-nile");
+      assert.equal(nileSecret.chain_id_hex, "0xcd8690dc");
+      assert.equal(nileSecret.network_id_hex, TRON_NILE_NETWORK_ID_HEX);
+      assert.equal(nileSecret.endpoint, "https://nile.trongrid.io");
+      assert.match(nileSecret.address_base58, /^T[1-9A-HJ-NP-Za-km-z]{33}$/u);
+      assert.equal((await stat(nileSecretPath)).mode & 0o777, 0o600);
     } finally {
       console.log = originalConsoleLog;
     }
@@ -897,6 +919,15 @@ test("deployment configuration specs define the required post-deploy trigger ord
   assert.equal(JSON.stringify(specs).includes("payload"), false);
 });
 
+test("TRON deploy names stay within java-tron contract name limits", () => {
+  for (const definition of CONTRACT_DEFINITIONS) {
+    assert.ok(
+      definition.deployName.length <= 32,
+      `${definition.key} deployName is too long for java-tron`,
+    );
+  }
+});
+
 test("deployment funding estimate is a conservative mainnet TRX and energy budget", () => {
   const estimate = estimateDeploymentFunding();
   assert.equal(
@@ -911,15 +942,23 @@ test("deployment funding estimate is a conservative mainnet TRX and energy budge
   assert.equal(estimate.schema, "iroha-sccp-tron-taira-xor-funding-estimate/v1");
   assert.equal(estimate.route_id, "taira_tron_xor");
   assert.equal(estimate.network, "tron-mainnet");
+  assert.equal(estimate.funding_mode, "aggregate");
   assert.equal(estimate.deployment_transaction_count, 4);
   assert.equal(estimate.post_deploy_trigger_transaction_count, 4);
-  assert.equal(estimate.deploy_fee_limit_sun, "15000000000");
-  assert.equal(estimate.trigger_fee_limit_sun, "1000000000");
-  assert.equal(estimate.total_fee_limit_sun, "64000000000");
-  assert.equal(estimate.total_fee_limit_trx, "64000");
+  assert.equal(estimate.deploy_fee_limit_sun, "500000000");
+  assert.equal(estimate.trigger_fee_limit_sun, "20000000");
+  assert.equal(estimate.max_single_fee_limit_sun, "500000000");
+  assert.equal(estimate.max_single_fee_limit_trx, "500");
+  assert.equal(estimate.total_fee_limit_sun, "2080000000");
+  assert.equal(estimate.total_fee_limit_trx, "2080");
   assert.equal(estimate.safety_margin_percent, 15);
-  assert.equal(estimate.recommended_min_balance_sun, "73600000000");
-  assert.equal(estimate.recommended_min_balance_trx, "73600");
+  assert.equal(estimate.aggregate_recommended_min_balance_sun, "2392000000");
+  assert.equal(estimate.aggregate_recommended_min_balance_trx, "2392");
+  assert.equal(estimate.staged_safety_margin_sun, "75000000");
+  assert.equal(estimate.staged_recommended_min_balance_sun, "575000000");
+  assert.equal(estimate.staged_recommended_min_balance_trx, "575");
+  assert.equal(estimate.recommended_min_balance_sun, "2392000000");
+  assert.equal(estimate.recommended_min_balance_trx, "2392");
   assert.equal(estimate.origin_energy_limit_per_deploy, "10000000");
   assert.equal(estimate.max_origin_energy_limit_total, "40000000");
 });
@@ -931,12 +970,63 @@ test("deployment funding estimate supports explicit operator fee limits", () => 
     "origin-energy-limit": "12345",
     "safety-margin-percent": "10",
   });
+  assert.equal(estimate.funding_mode, "aggregate");
+  assert.equal(estimate.max_single_fee_limit_sun, "2000000");
+  assert.equal(estimate.max_single_fee_limit_trx, "2");
   assert.equal(estimate.total_fee_limit_sun, "10000000");
   assert.equal(estimate.total_fee_limit_trx, "10");
   assert.equal(estimate.safety_margin_sun, "1000000");
+  assert.equal(estimate.aggregate_recommended_min_balance_sun, "11000000");
+  assert.equal(estimate.staged_recommended_min_balance_sun, "2200000");
   assert.equal(estimate.recommended_min_balance_sun, "11000000");
   assert.equal(estimate.recommended_min_balance_trx, "11");
   assert.equal(estimate.max_origin_energy_limit_total, "49380");
+});
+
+test("deployment funding estimate supports staged operator funding", () => {
+  const estimate = estimateDeploymentFunding({
+    "fee-limit": "2000000",
+    "trigger-fee-limit": "500000",
+    "safety-margin-percent": "10",
+    "funding-mode": "staged",
+  });
+  assert.equal(estimate.funding_mode, "staged");
+  assert.equal(estimate.aggregate_recommended_min_balance_sun, "11000000");
+  assert.equal(estimate.staged_safety_margin_sun, "200000");
+  assert.equal(estimate.staged_recommended_min_balance_sun, "2200000");
+  assert.equal(estimate.staged_recommended_min_balance_trx, "2.2");
+  assert.equal(estimate.recommended_min_balance_sun, "2200000");
+  assert.equal(estimate.recommended_min_balance_trx, "2.2");
+  assert.match(estimate.assumptions.join("\n"), /Staged mode/u);
+});
+
+test("TRON testnet profiles bind funding and verifier material to Nile", () => {
+  assert.equal(normalizeTronNetwork("nile"), "nile");
+  assert.equal(normalizeTronNetwork("tron-nile"), "nile");
+  assert.throws(() => normalizeTronNetwork("polygon"), /tron-network/u);
+
+  const estimate = estimateDeploymentFunding({
+    "tron-network": "nile",
+    "funding-mode": "staged",
+  });
+  assert.equal(estimate.tron_network, "nile");
+  assert.equal(estimate.network, "tron-nile");
+  assert.equal(estimate.chain_id_hex, "0xcd8690dc");
+  assert.equal(estimate.network_id_hex, TRON_NILE_NETWORK_ID_HEX);
+  assert.equal(estimate.recommended_min_balance_trx, "575");
+
+  const nileVerifierArgs = normalizeVerifierConstructorArgs(verifierMaterial(), {
+    "tron-network": "nile",
+  });
+  assert.equal(nileVerifierArgs[7], TRON_NILE_NETWORK_ID_HEX);
+  assert.throws(
+    () =>
+      normalizeVerifierConstructorArgs(
+        { ...verifierMaterial(), networkId: TRON_MAINNET_NETWORK_ID_HEX },
+        { "tron-network": "nile" },
+      ),
+    /tron-nile/u,
+  );
 });
 
 test("deployment funding estimate rejects unsafe fee and margin inputs", () => {
@@ -952,6 +1042,10 @@ test("deployment funding estimate rejects unsafe fee and margin inputs", () => {
   assert.throws(
     () => estimateDeploymentFunding({ "safety-margin-percent": "101" }),
     /safety-margin-percent/,
+  );
+  assert.throws(
+    () => estimateDeploymentFunding({ "funding-mode": "single-step" }),
+    /funding-mode/,
   );
 });
 
@@ -1012,6 +1106,20 @@ test("deployment funding readiness reports gaps and fails underfunded broadcast 
     () => buildDeploymentFundingReadiness({ balance: "-1" }, options),
     /account\.balance/,
   );
+
+  const stagedOptions = { ...options, "funding-mode": "staged" };
+  const stagedReady = buildDeploymentFundingReadiness({ balance: "2200000" }, stagedOptions);
+  assert.equal(stagedReady.funding_ready, true);
+  assert.equal(stagedReady.funding_estimate.funding_mode, "staged");
+  assert.equal(stagedReady.funding_estimate.aggregate_recommended_min_balance_sun, "11000000");
+  assert.equal(stagedReady.funding_estimate.staged_recommended_min_balance_sun, "2200000");
+  assert.equal(stagedReady.funding_gap_sun, "0");
+  const stagedUnderfunded = buildDeploymentFundingReadiness(
+    { balance: "2199999" },
+    stagedOptions,
+  );
+  assert.equal(stagedUnderfunded.funding_ready, false);
+  assert.equal(stagedUnderfunded.funding_gap_sun, "1");
 });
 
 test("deployment doctor reports ready local prerequisites without exposing deployer secrets", async () => {
@@ -1260,6 +1368,7 @@ test("route manifest draft binds deployment evidence, verifier material, and TAI
     assert.deepEqual(manifest.postDeployLiveEvidence, {
       fullTomlReady: true,
       sourceBridgeConfigHash: routeHash("source-bridge-config"),
+      sourceEventTransactionId: routeHash("source-event-transaction"),
       routeCanaryEvidenceHash: routeHash("route-canary-evidence"),
       routeCanaryTransactionId: routeHash("route-canary-transaction"),
       offlineFullTomlSha256: routeHash("offline-full-toml"),
@@ -1312,6 +1421,102 @@ test("route manifest draft defaults to disabled and requires production readines
           "confirm-mainnet": "taira_tron_xor",
         }),
       /live-evidence/u,
+    );
+  });
+});
+
+test("route manifest draft supports Nile evidence but blocks production readiness", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir, {
+      evidence: {
+        tron_network: "nile",
+        network: "tron-nile",
+        chain_id_hex: "0xcd8690dc",
+        network_id_hex: TRON_NILE_NETWORK_ID_HEX,
+      },
+    });
+    const baseOptions = {
+      "tron-network": "nile",
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": routeHash("deployed-verifier-code"),
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+    };
+
+    const disabled = await buildTairaXorRouteManifestDraft(baseOptions);
+    assert.equal(disabled.productionReady, false);
+    assert.equal(disabled.tronNetwork, "nile");
+    assert.equal(disabled.chain, "tron-nile");
+    assert.equal(disabled.chainIdHex, "0xcd8690dc");
+    assert.equal(disabled.networkIdHex, TRON_NILE_NETWORK_ID_HEX);
+    assert.equal(disabled.destinationRollout.destinationNetworkId, TRON_NILE_NETWORK_ID_HEX);
+    assert.equal(disabled.destinationBinding.networkIdHex, TRON_NILE_NETWORK_ID_HEX);
+
+    const toml = buildTairaXorRouteConfigToml(disabled);
+    assert.match(toml, /\[zk\]/u);
+    assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
+    assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
+    assert.match(toml, /route_id = "taira_tron_xor"/u);
+    assert.match(toml, /asset_key = "xor"/u);
+    assert.match(toml, /tron_network = "nile"/u);
+    assert.match(toml, /chain_id_hex = "0xcd8690dc"/u);
+    assert.match(toml, /network_id_hex = "0x00000000000000000000000000000000000000000000000000000000cd8690dc"/u);
+    assert.match(toml, /taira_xor_bridge_address = "/u);
+    assert.match(toml, /taira_burn_record_settlement_asset_definition_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"/u);
+    assert.match(toml, /taira_burn_record_vk_backend = "halo2\/ipa"/u);
+    assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
+    assert.equal(toml.includes("private_key"), false);
+
+    const baseConfig = [
+      "[torii]",
+      'address = "0.0.0.0:8080"',
+      "",
+      "[zk]",
+      "sccp_allow_unready_transparent_proofs = false",
+      "sccp_source_verifier_materials = []",
+      "",
+      "[zk.halo2]",
+      "enabled = true",
+      "",
+    ].join("\n");
+    const merged = buildMergedTairaXorRouteConfigToml(baseConfig, disabled);
+    assert.match(merged, /\[torii\]\naddress = "0\.0\.0\.0:8080"/u);
+    assert.match(merged, /\[zk\]\nsccp_allow_unready_transparent_proofs = true/u);
+    assert.match(merged, /sccp_source_verifier_materials = \[\]/u);
+    assert.match(merged, /\[\[zk\.sccp_route_manifests\]\]/u);
+    assert.match(merged, /tron_network = "nile"/u);
+    assert.match(merged, /\n\[zk\.halo2\]\nenabled = true/u);
+    assert.equal(
+      (merged.match(/sccp_allow_unready_transparent_proofs =/gu) ?? []).length,
+      1,
+    );
+    assert.equal(merged.includes("private_key"), false);
+    assert.throws(
+      () =>
+        buildMergedTairaXorRouteConfigToml(
+          `${baseConfig}\n[[zk.sccp_route_manifests]]\nroute_id = "other"\n`,
+          disabled,
+        ),
+      /already contains zk\.sccp_route_manifests/u,
+    );
+
+    assert.throws(
+      () => buildTairaXorRouteConfigToml(disabled, { "allow-unready": "false" }),
+      /non-production route manifests require --allow-unready true/u,
+    );
+
+    await assert.rejects(
+      () =>
+        buildTairaXorRouteManifestDraft({
+          ...baseOptions,
+          "production-ready": "true",
+          "live-readback-checked": "true",
+          "confirm-testnet": "nile",
+        }),
+      /production-ready.*mainnet/u,
     );
   });
 });
@@ -1455,6 +1660,30 @@ test("route manifest draft rejects forged or incomplete live evidence", async ()
       },
       error: /contract_address/u,
     },
+    {
+      name: "missing source event transaction proof readiness",
+      mutate: (live) => {
+        delete live.source_event_transaction;
+      },
+      error: /source_event_transaction/u,
+    },
+    {
+      name: "source event transaction proof blockers",
+      mutate: (live) => {
+        live.source_event_transaction.source_event_transaction_production_ready = false;
+        live.source_event_transaction.source_event_transaction_production_blockers = [
+          "witness seal proof required",
+        ];
+      },
+      error: /source_event_transaction_production_ready.*witness seal proof required/u,
+    },
+    {
+      name: "missing source event transaction id",
+      mutate: (live) => {
+        delete live.source_event_transaction.transaction_id;
+      },
+      error: /source_event_transaction.*transaction_id/u,
+    },
   ];
 
   for (const { name, mutate, error } of cases) {
@@ -1521,7 +1750,7 @@ test("route manifest draft rejects wrong route, wrong network, and duplicate dep
           "vk-backend": "halo2/ipa",
           "vk-name": "taira_xor_burn_record_v1",
         }),
-      /TRON mainnet/u,
+      /tron-mainnet/u,
     );
   });
   await withTempDir(async (dir) => {

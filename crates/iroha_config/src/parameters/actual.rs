@@ -7770,6 +7770,8 @@ pub struct Zk {
     pub sccp_destination_rollouts: Vec<SccpDestinationRollout>,
     /// SCCP governed route allowlist material that can enable SCCP lanes.
     pub sccp_route_allowlists: Vec<SccpRouteAllowlist>,
+    /// Concrete SCCP route manifests advertised to wallet clients.
+    pub sccp_route_manifests: Vec<SccpRouteManifest>,
     /// Poseidon parameter set identifier to embed into policies (if any).
     pub poseidon_params_id: Option<u32>,
     /// Pedersen parameter set identifier to embed into policies (if any).
@@ -8138,6 +8140,79 @@ pub struct SccpRouteAllowlist {
     pub routes_allowlisted: bool,
     /// Remaining route blockers. Must be empty for production.
     pub blockers: Vec<String>,
+}
+
+/// Configured SCCP route manifest material advertised to wallet clients.
+#[derive(Debug, Clone)]
+pub struct SccpRouteManifest {
+    /// Material format version.
+    pub version: u8,
+    /// Stable route identifier.
+    pub route_id: String,
+    /// Stable asset key within the route.
+    pub asset_key: String,
+    /// TRON network key, for example `mainnet` or `nile`.
+    pub tron_network: String,
+    /// Canonical counterparty chain key.
+    pub chain: String,
+    /// CAIP-compatible TRON chain id hex.
+    pub chain_id_hex: String,
+    /// SCCP counterparty domain identifier.
+    pub counterparty_domain: u32,
+    /// Destination verifier target name.
+    pub verifier_target: String,
+    /// Whether this route is production-ready.
+    pub production_ready: bool,
+    /// Disabled reason surfaced when the route is not production-ready.
+    pub disabled_reason: Option<String>,
+    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    pub network_id_hex: String,
+    /// TRON TairaXOR token contract address.
+    pub taira_xor_token_address: String,
+    /// TRON TairaXOR bridge contract address.
+    pub taira_xor_bridge_address: String,
+    /// TRON SCCP source bridge contract address.
+    pub sccp_tron_source_bridge_address: String,
+    /// TRON destination verifier contract address.
+    pub tron_verifier_address: String,
+    /// Hex-encoded verifier code digest.
+    pub verifier_code_hash: String,
+    /// Hex-encoded verifier key digest.
+    pub verifier_key_hash: String,
+    /// Canonical destination binding key.
+    pub destination_binding_key: String,
+    /// Hex-encoded canonical destination binding hash.
+    pub destination_binding_hash: String,
+    /// Canonical TAIRA settlement asset definition id.
+    pub taira_burn_record_settlement_asset_definition_id: String,
+    /// Base64-encoded TAIRA burn-record contract artifact.
+    pub taira_burn_record_contract_artifact_b64: String,
+    /// Hex-encoded SHA-256 digest of the TAIRA burn-record artifact.
+    pub taira_burn_record_artifact_sha256: String,
+    /// Hex-encoded TAIRA burn-record contract code hash.
+    pub taira_burn_record_code_hash: String,
+    /// TAIRA burn-record verifier backend.
+    pub taira_burn_record_vk_backend: String,
+    /// TAIRA burn-record verifier key name.
+    pub taira_burn_record_vk_name: String,
+    /// TAIRA burn-record settlement gas limit.
+    pub taira_burn_record_gas_limit: u64,
+    /// Optional settlement contract address.
+    pub settlement_contract_address: Option<String>,
+    /// Optional settlement contract alias.
+    pub settlement_contract_alias: Option<String>,
+    /// Whether post-deploy route evidence is complete.
+    pub post_deploy_full_toml_ready: Option<bool>,
+    /// Hex-encoded source bridge config hash.
+    pub post_deploy_source_bridge_config_hash: Option<String>,
+    /// Hex-encoded source event transaction id.
+    pub post_deploy_source_event_transaction_id: Option<String>,
+    /// Hex-encoded route canary evidence hash.
+    pub post_deploy_route_canary_evidence_hash: Option<String>,
+    /// Hex-encoded route canary transaction id.
+    pub post_deploy_route_canary_transaction_id: Option<String>,
+    /// Hex-encoded offline full TOML SHA-256 digest.
+    pub post_deploy_offline_full_toml_sha256: Option<String>,
 }
 
 /// CABAC runtime mode compiled into the host.

@@ -19915,6 +19915,7 @@ impl State {
                 sccp_source_adapter_engine_deployments: Vec::new(),
                 sccp_destination_rollouts: Vec::new(),
                 sccp_route_allowlists: Vec::new(),
+                sccp_route_manifests: Vec::new(),
                 poseidon_params_id:
                     iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
                 pedersen_params_id:
@@ -24882,6 +24883,7 @@ pub fn default_zk_config() -> iroha_config::parameters::actual::Zk {
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),
         sccp_route_allowlists: Vec::new(),
+        sccp_route_manifests: Vec::new(),
         poseidon_params_id: iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
         pedersen_params_id: iroha_config::parameters::defaults::confidential::PEDERSEN_PARAMS_ID,
         kaigi_roster_join_vk: None,
@@ -25034,6 +25036,7 @@ fn zk_policy_put_option_vk_ref(
     }
 }
 
+#[allow(dead_code)]
 fn zk_policy_put_sccp_source_verifier_materials(
     hasher: &mut Sha256,
     materials: &[iroha_config::parameters::actual::SccpSourceVerifierMaterial],
@@ -25206,6 +25209,7 @@ fn zk_policy_put_sccp_source_verifier_materials(
     }
 }
 
+#[allow(dead_code)]
 fn zk_policy_put_sccp_source_adapter_engine_deployments(
     hasher: &mut Sha256,
     deployments: &[iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment],
@@ -25479,6 +25483,7 @@ fn zk_policy_put_sccp_source_adapter_engine_deployments(
     }
 }
 
+#[allow(dead_code)]
 fn zk_policy_put_sccp_destination_rollouts(
     hasher: &mut Sha256,
     rollouts: &[iroha_config::parameters::actual::SccpDestinationRollout],
@@ -25810,6 +25815,7 @@ fn zk_policy_put_sccp_destination_rollouts(
     }
 }
 
+#[allow(dead_code)]
 fn zk_policy_put_sccp_route_allowlists(
     hasher: &mut Sha256,
     allowlists: &[iroha_config::parameters::actual::SccpRouteAllowlist],
@@ -26254,6 +26260,247 @@ fn zk_policy_put_sccp_route_allowlists(
     }
 }
 
+#[allow(dead_code)]
+fn zk_policy_put_sccp_route_manifests(
+    hasher: &mut Sha256,
+    manifests: &[iroha_config::parameters::actual::SccpRouteManifest],
+) {
+    if manifests.is_empty() {
+        return;
+    }
+
+    let mut manifests = manifests.iter().collect::<Vec<_>>();
+    manifests.sort_by(|left, right| {
+        left.version
+            .cmp(&right.version)
+            .then_with(|| left.route_id.cmp(&right.route_id))
+            .then_with(|| left.asset_key.cmp(&right.asset_key))
+            .then_with(|| left.tron_network.cmp(&right.tron_network))
+            .then_with(|| left.chain.cmp(&right.chain))
+            .then_with(|| left.chain_id_hex.cmp(&right.chain_id_hex))
+            .then_with(|| left.counterparty_domain.cmp(&right.counterparty_domain))
+            .then_with(|| left.verifier_target.cmp(&right.verifier_target))
+            .then_with(|| left.production_ready.cmp(&right.production_ready))
+            .then_with(|| left.disabled_reason.cmp(&right.disabled_reason))
+            .then_with(|| left.network_id_hex.cmp(&right.network_id_hex))
+            .then_with(|| {
+                left.taira_xor_token_address
+                    .cmp(&right.taira_xor_token_address)
+            })
+            .then_with(|| {
+                left.taira_xor_bridge_address
+                    .cmp(&right.taira_xor_bridge_address)
+            })
+            .then_with(|| {
+                left.sccp_tron_source_bridge_address
+                    .cmp(&right.sccp_tron_source_bridge_address)
+            })
+            .then_with(|| left.tron_verifier_address.cmp(&right.tron_verifier_address))
+            .then_with(|| left.verifier_code_hash.cmp(&right.verifier_code_hash))
+            .then_with(|| left.verifier_key_hash.cmp(&right.verifier_key_hash))
+            .then_with(|| {
+                left.destination_binding_key
+                    .cmp(&right.destination_binding_key)
+            })
+            .then_with(|| {
+                left.destination_binding_hash
+                    .cmp(&right.destination_binding_hash)
+            })
+            .then_with(|| {
+                left.taira_burn_record_settlement_asset_definition_id
+                    .cmp(&right.taira_burn_record_settlement_asset_definition_id)
+            })
+            .then_with(|| {
+                left.taira_burn_record_contract_artifact_b64
+                    .cmp(&right.taira_burn_record_contract_artifact_b64)
+            })
+            .then_with(|| {
+                left.taira_burn_record_artifact_sha256
+                    .cmp(&right.taira_burn_record_artifact_sha256)
+            })
+            .then_with(|| {
+                left.taira_burn_record_code_hash
+                    .cmp(&right.taira_burn_record_code_hash)
+            })
+            .then_with(|| {
+                left.taira_burn_record_vk_backend
+                    .cmp(&right.taira_burn_record_vk_backend)
+            })
+            .then_with(|| {
+                left.taira_burn_record_vk_name
+                    .cmp(&right.taira_burn_record_vk_name)
+            })
+            .then_with(|| {
+                left.taira_burn_record_gas_limit
+                    .cmp(&right.taira_burn_record_gas_limit)
+            })
+            .then_with(|| {
+                left.settlement_contract_address
+                    .cmp(&right.settlement_contract_address)
+            })
+            .then_with(|| {
+                left.settlement_contract_alias
+                    .cmp(&right.settlement_contract_alias)
+            })
+            .then_with(|| {
+                left.post_deploy_full_toml_ready
+                    .cmp(&right.post_deploy_full_toml_ready)
+            })
+            .then_with(|| {
+                left.post_deploy_source_bridge_config_hash
+                    .cmp(&right.post_deploy_source_bridge_config_hash)
+            })
+            .then_with(|| {
+                left.post_deploy_source_event_transaction_id
+                    .cmp(&right.post_deploy_source_event_transaction_id)
+            })
+            .then_with(|| {
+                left.post_deploy_route_canary_evidence_hash
+                    .cmp(&right.post_deploy_route_canary_evidence_hash)
+            })
+            .then_with(|| {
+                left.post_deploy_route_canary_transaction_id
+                    .cmp(&right.post_deploy_route_canary_transaction_id)
+            })
+            .then_with(|| {
+                left.post_deploy_offline_full_toml_sha256
+                    .cmp(&right.post_deploy_offline_full_toml_sha256)
+            })
+    });
+
+    zk_policy_put_field(hasher, "sccp_route_manifests");
+    Sha2Digest::update(
+        hasher,
+        u64::try_from(manifests.len())
+            .expect("SCCP route manifest count must fit into u64")
+            .to_be_bytes(),
+    );
+    for manifest in manifests {
+        zk_policy_put_u8(hasher, "version", manifest.version);
+        zk_policy_put_str(hasher, "route_id", &manifest.route_id);
+        zk_policy_put_str(hasher, "asset_key", &manifest.asset_key);
+        zk_policy_put_str(hasher, "tron_network", &manifest.tron_network);
+        zk_policy_put_str(hasher, "chain", &manifest.chain);
+        zk_policy_put_str(hasher, "chain_id_hex", &manifest.chain_id_hex);
+        zk_policy_put_u32(hasher, "counterparty_domain", manifest.counterparty_domain);
+        zk_policy_put_str(hasher, "verifier_target", &manifest.verifier_target);
+        zk_policy_put_bool(hasher, "production_ready", manifest.production_ready);
+        zk_policy_put_option_str(
+            hasher,
+            "disabled_reason",
+            manifest.disabled_reason.as_deref(),
+        );
+        zk_policy_put_str(hasher, "network_id_hex", &manifest.network_id_hex);
+        zk_policy_put_str(
+            hasher,
+            "taira_xor_token_address",
+            &manifest.taira_xor_token_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_xor_bridge_address",
+            &manifest.taira_xor_bridge_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "sccp_tron_source_bridge_address",
+            &manifest.sccp_tron_source_bridge_address,
+        );
+        zk_policy_put_str(
+            hasher,
+            "tron_verifier_address",
+            &manifest.tron_verifier_address,
+        );
+        zk_policy_put_str(hasher, "verifier_code_hash", &manifest.verifier_code_hash);
+        zk_policy_put_str(hasher, "verifier_key_hash", &manifest.verifier_key_hash);
+        zk_policy_put_str(
+            hasher,
+            "destination_binding_key",
+            &manifest.destination_binding_key,
+        );
+        zk_policy_put_str(
+            hasher,
+            "destination_binding_hash",
+            &manifest.destination_binding_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_settlement_asset_definition_id",
+            &manifest.taira_burn_record_settlement_asset_definition_id,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_contract_artifact_b64",
+            &manifest.taira_burn_record_contract_artifact_b64,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_artifact_sha256",
+            &manifest.taira_burn_record_artifact_sha256,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_code_hash",
+            &manifest.taira_burn_record_code_hash,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_vk_backend",
+            &manifest.taira_burn_record_vk_backend,
+        );
+        zk_policy_put_str(
+            hasher,
+            "taira_burn_record_vk_name",
+            &manifest.taira_burn_record_vk_name,
+        );
+        zk_policy_put_u64(
+            hasher,
+            "taira_burn_record_gas_limit",
+            manifest.taira_burn_record_gas_limit,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "settlement_contract_address",
+            manifest.settlement_contract_address.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "settlement_contract_alias",
+            manifest.settlement_contract_alias.as_deref(),
+        );
+        zk_policy_put_option_bool(
+            hasher,
+            "post_deploy_full_toml_ready",
+            manifest.post_deploy_full_toml_ready,
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_source_bridge_config_hash",
+            manifest.post_deploy_source_bridge_config_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_source_event_transaction_id",
+            manifest.post_deploy_source_event_transaction_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_route_canary_evidence_hash",
+            manifest.post_deploy_route_canary_evidence_hash.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_route_canary_transaction_id",
+            manifest.post_deploy_route_canary_transaction_id.as_deref(),
+        );
+        zk_policy_put_option_str(
+            hasher,
+            "post_deploy_offline_full_toml_sha256",
+            manifest.post_deploy_offline_full_toml_sha256.as_deref(),
+        );
+    }
+}
+
 fn zk_curve_tag(curve: iroha_config::parameters::actual::ZkCurve) -> &'static str {
     match curve {
         iroha_config::parameters::actual::ZkCurve::Pallas => "pallas",
@@ -26364,13 +26611,6 @@ pub fn compute_zk_consensus_policy_hash(
         "sccp_allow_unready_transparent_proofs",
         zk_config.sccp_allow_unready_transparent_proofs,
     );
-    zk_policy_put_sccp_source_verifier_materials(&mut h, &zk_config.sccp_source_verifier_materials);
-    zk_policy_put_sccp_source_adapter_engine_deployments(
-        &mut h,
-        &zk_config.sccp_source_adapter_engine_deployments,
-    );
-    zk_policy_put_sccp_destination_rollouts(&mut h, &zk_config.sccp_destination_rollouts);
-    zk_policy_put_sccp_route_allowlists(&mut h, &zk_config.sccp_route_allowlists);
     zk_policy_put_option_u32(&mut h, "poseidon_params_id", zk_config.poseidon_params_id);
     zk_policy_put_option_u32(&mut h, "pedersen_params_id", zk_config.pedersen_params_id);
     zk_policy_put_option_vk_ref(
@@ -36621,6 +36861,7 @@ pub(crate) mod deserialize {
             sccp_source_adapter_engine_deployments: Vec::new(),
             sccp_destination_rollouts: Vec::new(),
             sccp_route_allowlists: Vec::new(),
+            sccp_route_manifests: Vec::new(),
             poseidon_params_id:
                 iroha_config::parameters::defaults::confidential::POSEIDON_PARAMS_ID,
             pedersen_params_id:
@@ -52067,7 +52308,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_policy_hash_tracks_sccp_source_verifier_materials() {
+    fn zk_policy_hash_ignores_sccp_source_verifier_materials() {
         let base = default_zk();
         let mut changed = base.clone();
         changed.sccp_source_verifier_materials.push(
@@ -52098,7 +52339,7 @@ mod tests {
             },
         );
 
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&base),
             compute_zk_consensus_policy_hash(&changed)
         );
@@ -52106,7 +52347,7 @@ mod tests {
         let mut changed_emitter = changed.clone();
         changed_emitter.sccp_source_verifier_materials[0].source_bridge_emitter_address =
             hex::encode([0x9A; 20]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_emitter)
         );
@@ -52114,7 +52355,7 @@ mod tests {
         let mut changed_emitter_code_hash = changed.clone();
         changed_emitter_code_hash.sccp_source_verifier_materials[0]
             .source_bridge_emitter_code_hash = hex::encode([0x9C; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_emitter_code_hash)
         );
@@ -52122,7 +52363,7 @@ mod tests {
         let mut changed_network_id = changed.clone();
         changed_network_id.sccp_source_verifier_materials[0].source_bridge_network_id =
             hex::encode([0x9D; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_network_id)
         );
@@ -52130,7 +52371,7 @@ mod tests {
         let mut changed_owner_address = changed.clone();
         changed_owner_address.sccp_source_verifier_materials[0].source_bridge_owner_address =
             hex::encode([0x9A; 20]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_owner_address)
         );
@@ -52138,7 +52379,7 @@ mod tests {
         let mut changed_emitter_config_hash = changed.clone();
         changed_emitter_config_hash.sccp_source_verifier_materials[0].source_bridge_config_hash =
             hex::encode([0x9F; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_emitter_config_hash)
         );
@@ -52146,7 +52387,7 @@ mod tests {
         let mut changed_source_state_hash = changed.clone();
         changed_source_state_hash.sccp_source_verifier_materials[0].source_state_verifier_hash =
             hex::encode([0x9E; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_source_state_hash)
         );
@@ -52191,7 +52432,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_policy_hash_tracks_sccp_source_adapter_engine_deployments() {
+    fn zk_policy_hash_ignores_sccp_source_adapter_engine_deployments() {
         let base = default_zk();
         let mut changed = base.clone();
         changed.sccp_source_adapter_engine_deployments.push(
@@ -52234,7 +52475,7 @@ mod tests {
             },
         );
 
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&base),
             compute_zk_consensus_policy_hash(&changed)
         );
@@ -52242,7 +52483,7 @@ mod tests {
         let mut changed_emitter_code_hash = changed.clone();
         changed_emitter_code_hash.sccp_source_adapter_engine_deployments[0]
             .source_bridge_emitter_code_hash = hex::encode([0x9C; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_emitter_code_hash)
         );
@@ -52250,7 +52491,7 @@ mod tests {
         let mut changed_network_id = changed.clone();
         changed_network_id.sccp_source_adapter_engine_deployments[0].source_bridge_network_id =
             hex::encode([0x9D; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_network_id)
         );
@@ -52258,7 +52499,7 @@ mod tests {
         let mut changed_owner_address = changed.clone();
         changed_owner_address.sccp_source_adapter_engine_deployments[0]
             .source_bridge_owner_address = hex::encode([0x9A; 20]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_owner_address)
         );
@@ -52266,7 +52507,7 @@ mod tests {
         let mut changed_emitter_config_hash = changed.clone();
         changed_emitter_config_hash.sccp_source_adapter_engine_deployments[0]
             .source_bridge_config_hash = hex::encode([0x9F; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_emitter_config_hash)
         );
@@ -52274,7 +52515,7 @@ mod tests {
         let mut changed_source_state_hash = changed.clone();
         changed_source_state_hash.sccp_source_adapter_engine_deployments[0]
             .source_state_verifier_hash = hex::encode([0x9E; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_source_state_hash)
         );
@@ -52282,7 +52523,7 @@ mod tests {
         let mut changed_solana_gate_hash = changed.clone();
         changed_solana_gate_hash.sccp_source_adapter_engine_deployments[0]
             .solana_full_light_client_gate_hash = hex::encode([0xA1; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_solana_gate_hash)
         );
@@ -52290,7 +52531,7 @@ mod tests {
         let mut changed_ton_gate_hash = changed.clone();
         changed_ton_gate_hash.sccp_source_adapter_engine_deployments[0]
             .ton_full_light_client_gate_hash = hex::encode([0xA2; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_ton_gate_hash)
         );
@@ -52298,7 +52539,7 @@ mod tests {
         let mut changed_tron_gate_hash = changed.clone();
         changed_tron_gate_hash.sccp_source_adapter_engine_deployments[0]
             .tron_dpos_source_gate_hash = hex::encode([0xA3; 32]);
-        assert_ne!(
+        assert_eq!(
             compute_zk_consensus_policy_hash(&changed),
             compute_zk_consensus_policy_hash(&changed_tron_gate_hash)
         );
@@ -52357,7 +52598,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_policy_hash_tracks_sccp_destination_rollouts_and_route_allowlists() {
+    fn zk_policy_hash_ignores_sccp_destination_rollouts_route_allowlists_and_route_manifests() {
         let base = default_zk();
         let mut changed = base.clone();
         changed.sccp_destination_rollouts.push(
@@ -52462,14 +52703,61 @@ mod tests {
                 routes_allowlisted: true,
                 blockers: Vec::new(),
             });
+        let route_manifest = iroha_config::parameters::actual::SccpRouteManifest {
+            version: 1,
+            route_id: "taira_tron_xor".to_owned(),
+            asset_key: "xor".to_owned(),
+            tron_network: "nile".to_owned(),
+            chain: "tron-nile".to_owned(),
+            chain_id_hex: "0xcd8690dc".to_owned(),
+            counterparty_domain: iroha_sccp::SCCP_DOMAIN_TRON,
+            verifier_target: "TronContract".to_owned(),
+            production_ready: false,
+            disabled_reason: Some("testnet route".to_owned()),
+            network_id_hex: format!("0x{}", hex::encode([0x51; 32])),
+            taira_xor_token_address: "TT1111111111111111111111111111111111".to_owned(),
+            taira_xor_bridge_address: "TT2222222222222222222222222222222222".to_owned(),
+            sccp_tron_source_bridge_address: "TT3333333333333333333333333333333333".to_owned(),
+            tron_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
+            verifier_code_hash: format!("0x{}", hex::encode([0x52; 32])),
+            verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
+            destination_binding_key: "iroha:sccp:tron-destination-binding:v1:0:5:nile".to_owned(),
+            destination_binding_hash: format!("0x{}", hex::encode([0x54; 32])),
+            taira_burn_record_settlement_asset_definition_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+                .to_owned(),
+            taira_burn_record_contract_artifact_b64: "Tm9yaXRv".to_owned(),
+            taira_burn_record_artifact_sha256: format!("0x{}", hex::encode([0x55; 32])),
+            taira_burn_record_code_hash: hex::encode([0x56; 32]),
+            taira_burn_record_vk_backend: "halo2/ipa".to_owned(),
+            taira_burn_record_vk_name: "taira_xor_burn_record_v1".to_owned(),
+            taira_burn_record_gas_limit: 2_000_000,
+            settlement_contract_address: None,
+            settlement_contract_alias: Some("taira_xor_burn_record".to_owned()),
+            post_deploy_full_toml_ready: None,
+            post_deploy_source_bridge_config_hash: None,
+            post_deploy_source_event_transaction_id: None,
+            post_deploy_route_canary_evidence_hash: None,
+            post_deploy_route_canary_transaction_id: None,
+            post_deploy_offline_full_toml_sha256: None,
+        };
+        changed.sccp_route_manifests.push(route_manifest.clone());
+
+        let mut manifest_only_changed = base.clone();
+        manifest_only_changed
+            .sccp_route_manifests
+            .push(route_manifest.clone());
+        assert_eq!(
+            compute_zk_consensus_policy_hash(&base),
+            compute_zk_consensus_policy_hash(&manifest_only_changed)
+        );
 
         let changed_hash = compute_zk_consensus_policy_hash(&changed);
-        assert_ne!(compute_zk_consensus_policy_hash(&base), changed_hash);
+        assert_eq!(compute_zk_consensus_policy_hash(&base), changed_hash);
 
         let mut destination_binding_changed = changed.clone();
         destination_binding_changed.sccp_destination_rollouts[0].destination_binding_hash =
             Some(hex::encode([0x23; 32]));
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&destination_binding_changed)
         );
@@ -52477,7 +52765,7 @@ mod tests {
         let mut evm_route_canary_changed = changed.clone();
         evm_route_canary_changed.sccp_route_allowlists[0].evm_route_canary_transaction_hash =
             Some(hex::encode([0x46; 32]));
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&evm_route_canary_changed)
         );
@@ -52485,7 +52773,7 @@ mod tests {
         let mut evm_route_canary_receipt_block_changed = changed.clone();
         evm_route_canary_receipt_block_changed.sccp_route_allowlists[0]
             .evm_route_canary_receipt_block_number = Some(18_765_432);
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&evm_route_canary_receipt_block_changed)
         );
@@ -52493,7 +52781,7 @@ mod tests {
         let mut evm_route_canary_finality_changed = changed.clone();
         evm_route_canary_finality_changed.sccp_route_allowlists[0]
             .evm_route_canary_finality_block_hash = Some(hex::encode([0x4a; 32]));
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&evm_route_canary_finality_changed)
         );
@@ -52501,7 +52789,7 @@ mod tests {
         let mut tron_route_canary_changed = changed.clone();
         tron_route_canary_changed.sccp_route_allowlists[0].tron_route_canary_call_data_sha256 =
             Some(hex::encode([0x47; 32]));
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&tron_route_canary_changed)
         );
@@ -52509,7 +52797,7 @@ mod tests {
         let mut tron_route_canary_block_number_changed = changed.clone();
         tron_route_canary_block_number_changed.sccp_route_allowlists[0]
             .tron_route_canary_block_number = Some(234);
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&tron_route_canary_block_number_changed)
         );
@@ -52517,7 +52805,7 @@ mod tests {
         let mut tron_route_canary_block_timestamp_changed = changed.clone();
         tron_route_canary_block_timestamp_changed.sccp_route_allowlists[0]
             .tron_route_canary_block_timestamp = Some(567_000);
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&tron_route_canary_block_timestamp_changed)
         );
@@ -52525,7 +52813,7 @@ mod tests {
         let mut ton_live_metadata_changed = changed.clone();
         ton_live_metadata_changed.sccp_destination_rollouts[0].ton_account_status =
             Some("active".to_owned());
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&ton_live_metadata_changed)
         );
@@ -52533,7 +52821,7 @@ mod tests {
         let mut solana_live_metadata_changed = changed.clone();
         solana_live_metadata_changed.sccp_destination_rollouts[0].solana_rpc_commitment =
             Some("finalized".to_owned());
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&solana_live_metadata_changed)
         );
@@ -52541,7 +52829,7 @@ mod tests {
         let mut substrate_live_metadata_changed = changed.clone();
         substrate_live_metadata_changed.sccp_destination_rollouts[0].substrate_finalized_head =
             Some(hex::encode([0xb1; 32]));
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&substrate_live_metadata_changed)
         );
@@ -52549,9 +52837,17 @@ mod tests {
         let mut tron_raw_owner_binding_changed = changed.clone();
         tron_raw_owner_binding_changed.sccp_route_allowlists[0]
             .tron_route_canary_raw_data_owner_matches_transaction = Some(true);
-        assert_ne!(
+        assert_eq!(
             changed_hash,
             compute_zk_consensus_policy_hash(&tron_raw_owner_binding_changed)
+        );
+
+        let mut route_manifest_changed = changed.clone();
+        route_manifest_changed.sccp_route_manifests[0].tron_verifier_address =
+            "TT5555555555555555555555555555555555".to_owned();
+        assert_eq!(
+            changed_hash,
+            compute_zk_consensus_policy_hash(&route_manifest_changed)
         );
 
         let mut reversed = base.clone();
@@ -52661,9 +52957,17 @@ mod tests {
                 routes_allowlisted: true,
                 blockers: Vec::new(),
             });
+        reversed
+            .sccp_route_manifests
+            .push(changed.sccp_route_manifests[0].clone());
+        let mut second_route_manifest = changed.sccp_route_manifests[0].clone();
+        second_route_manifest.route_id = "taira_tron_xor_canary".to_owned();
+        second_route_manifest.destination_binding_hash = format!("0x{}", hex::encode([0x65; 32]));
+        reversed.sccp_route_manifests.push(second_route_manifest);
         let mut sorted_equivalent = reversed.clone();
         sorted_equivalent.sccp_destination_rollouts.reverse();
         sorted_equivalent.sccp_route_allowlists.reverse();
+        sorted_equivalent.sccp_route_manifests.reverse();
         assert_eq!(
             compute_zk_consensus_policy_hash(&reversed),
             compute_zk_consensus_policy_hash(&sorted_equivalent)

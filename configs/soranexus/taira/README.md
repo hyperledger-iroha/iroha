@@ -178,6 +178,30 @@ That avoids the common drift where the copied nginx snippet still points at
 different loopback ports such as `127.0.0.1:29080..29083`, which turns
 `GET /v1/mcp` and the generic public API surface into `502 Bad Gateway`.
 
+## SCCP TAIRA/TRON Nile Route
+
+For the `taira_tron_xor` Nile smoke route, generate the full validator config
+from the route manifest instead of hand-merging the `[zk]` overlay:
+
+```bash
+node scripts/sccp_tron_taira_xor_deploy.mjs route-config \
+  --manifest artifacts/sccp-tron/nile-taira-xor-route.manifest.json \
+  --base-config configs/soranexus/taira/config.toml \
+  --out artifacts/sccp-tron/nile-taira-xor-route.full-taira-config.toml
+```
+
+Install the generated full config on every public Taira validator and restart
+Iroha/Torii. Then rerun the wallet preflight without `--manifest-file`:
+
+```bash
+cd ../iroha-demo-javascript
+VITE_SCCP_TRON_NETWORK=nile node scripts/e2e/sccp-route-preflight.mjs \
+  --tron-network nile --check-tron-contracts true
+```
+
+The route is not ready for live UI bridge smoke until the public endpoint
+advertises `route=taira_tron_xor` and `asset=xor` from `/v1/sccp/manifests`.
+
 ## Validator container image
 
 The repo now supports a dedicated Taira validator runtime image via the main

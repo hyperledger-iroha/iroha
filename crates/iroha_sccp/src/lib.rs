@@ -64,6 +64,10 @@ pub const SCCP_DOMAIN_TRON: u32 = 5;
 pub const SCCP_DOMAIN_SORA_KUSAMA: u32 = 6;
 pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
 pub const SCCP_DOMAIN_SORA2: u32 = 8;
+/// TAIRA testnet SCCP route id used for the initial XOR bridge to TRON Nile.
+pub const SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1: &str = "taira_tron_xor";
+/// TAIRA SCCP asset key for XOR in the initial TRON bridge route.
+pub const SCCP_TAIRA_XOR_ASSET_KEY_V1: &str = "xor";
 /// Ethereum mainnet EIP-155 chain id.
 pub const SCCP_ETH_MAINNET_EVM_CHAIN_ID: u64 = 1;
 /// BNB Smart Chain mainnet EVM chain id.
@@ -122,6 +126,17 @@ const SCCP_SUBSTRATE_ROUTE_CANARY_FINALIZED_RUNTIME_LABEL_V1: &[u8] =
 const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: &str = "norito:sccp-local-admission:v1";
 const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: &str = "local_admission";
 const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: &str = "SubmitBridgeProof";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_ENVELOPE_ENCODING_V1: &str =
+    "norito:sccp-taira-tron-xor-diagnostic:v1";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SUBMISSION_KIND_V1: &str = "diagnostic_local_admission";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1: &[u8] =
+    b"sccp:taira-tron-xor:nile-diagnostic-finality:v1";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_PROOF_PREFIX_V1: &[u8] =
+    b"sccp:taira-tron-xor:nile-diagnostic-proof:v1";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1: &[u8] =
+    b"sccp:taira-tron-xor:nile-diagnostic-source-material:v1";
+const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1: &[u8] =
+    b"sccp:taira-tron-xor:nile-diagnostic-source-deployment:v1";
 /// Solana mainnet-beta destination anchor id required for SCCP verifier rollout.
 pub const SCCP_SOLANA_MAINNET_DESTINATION_ANCHOR_ID_V1: &str =
     "sccp:sol:destination-anchor:solana-mainnet-beta:v1";
@@ -18492,6 +18507,205 @@ pub fn build_nexus_sccp_message_transparent_proof_allow_unready(
     )
 }
 
+fn sccp_taira_tron_xor_diagnostic_transfer(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<&TransferPayloadV1> {
+    let SccpPayloadV1::Transfer(transfer) = &bundle.payload else {
+        return None;
+    };
+    (transfer.version == 1
+        && transfer.source_domain == SCCP_DOMAIN_TRON
+        && transfer.dest_domain == SCCP_DOMAIN_SORA
+        && transfer.asset_home_domain == SCCP_DOMAIN_SORA
+        && transfer.asset_id_codec == SCCP_CODEC_TEXT_UTF8
+        && transfer.asset_id == SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes()
+        && transfer.route_id_codec == SCCP_CODEC_TEXT_UTF8
+        && transfer.route_id == SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes()
+        && transfer.sender_codec == SCCP_CODEC_TRON_BASE58CHECK
+        && transfer.recipient_codec == SCCP_CODEC_TEXT_UTF8)
+        .then_some(transfer)
+}
+
+/// Return true when a bundle is the exact TAIRA XOR diagnostic TRON-Nile source route.
+///
+/// This helper intentionally does not replace production source-chain proof
+/// verification. It only validates the SCCP message commitment, payload shape,
+/// and non-empty source evidence carrier for the TAIRA testnet route.
+pub fn sccp_taira_tron_xor_diagnostic_message_bundle_structure(
+    bundle: &NexusSccpMessageProofV1,
+) -> bool {
+    if bundle.version != 1
+        || bundle.commitment.version != 1
+        || bundle.finality_proof.is_empty()
+        || sccp_taira_tron_xor_diagnostic_transfer(bundle).is_none()
+        || !verify_sccp_payload_structure(&bundle.payload)
+    {
+        return false;
+    }
+
+    let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
+    bundle.commitment.kind == sccp_message_kind(&bundle.payload)
+        && bundle.commitment.target_domain == SCCP_DOMAIN_SORA
+        && bundle.commitment.message_id == sccp_message_id(&bundle.payload)
+        && bundle.commitment.payload_hash == payload_hash(&payload_bytes)
+        && merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof)
+            == bundle.commitment_root
+}
+
+/// Build deterministic public inputs for the TAIRA XOR diagnostic TRON-Nile source route.
+pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<SccpMessageTransparentPublicInputsV1> {
+    let transfer = sccp_taira_tron_xor_diagnostic_transfer(bundle)?;
+    if !sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle) {
+        return None;
+    }
+    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    finality_context.extend_from_slice(&transfer.nonce.to_le_bytes());
+    let finality_block_hash = prefixed_blake2b(
+        SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1,
+        &finality_context,
+    );
+    h256_is_nonzero(&finality_block_hash).then_some(SccpMessageTransparentPublicInputsV1 {
+        version: 1,
+        message_id: bundle.commitment.message_id,
+        payload_hash: bundle.commitment.payload_hash,
+        target_domain: SCCP_DOMAIN_SORA,
+        commitment_root: bundle.commitment_root,
+        finality_height: transfer.nonce.max(1),
+        finality_block_hash,
+    })
+}
+
+fn sccp_taira_tron_xor_diagnostic_statement_hash(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+) -> Option<H256> {
+    let statement =
+        canonical_sccp_message_transparent_statement_bytes(bundle, manifest, public_inputs)?;
+    Some(prefixed_blake2b(
+        SCCP_TRANSPARENT_STATEMENT_PREFIX_V1,
+        &statement,
+    ))
+}
+
+fn sccp_taira_tron_xor_diagnostic_proof_bytes(
+    bundle: &NexusSccpMessageProofV1,
+    statement_hash: H256,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+) -> Vec<u8> {
+    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes(bundle);
+    proof_context.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
+        public_inputs,
+    ));
+    proof_context.extend_from_slice(&statement_hash);
+    let proof_hash = prefixed_blake2b(
+        SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_PROOF_PREFIX_V1,
+        &proof_context,
+    );
+    let mut proof_bytes = Vec::with_capacity(1 + 32 * 6);
+    push_u8(&mut proof_bytes, 1);
+    proof_bytes.extend_from_slice(&public_inputs.message_id);
+    proof_bytes.extend_from_slice(&public_inputs.payload_hash);
+    proof_bytes.extend_from_slice(&public_inputs.commitment_root);
+    proof_bytes.extend_from_slice(&public_inputs.finality_block_hash);
+    proof_bytes.extend_from_slice(&statement_hash);
+    proof_bytes.extend_from_slice(&proof_hash);
+    proof_bytes
+}
+
+fn sccp_taira_tron_xor_diagnostic_submission_package(
+    manifest: &SccpProofManifestV1,
+    bundle: &NexusSccpMessageProofV1,
+    proof_bytes: &[u8],
+    statement_hash: H256,
+    public_inputs: &SccpMessageTransparentPublicInputsV1,
+) -> Option<SccpCounterpartySubmissionPackageV1> {
+    let source_verifier_material_hash = prefixed_blake2b(
+        SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1,
+        &canonical_sccp_message_transparent_public_inputs_bytes(public_inputs),
+    );
+    let source_adapter_engine_deployment_hash = prefixed_blake2b(
+        SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1,
+        &canonical_nexus_sccp_message_bundle_bytes(bundle),
+    );
+    let platform_payload =
+        SccpPlatformSubmissionPayloadV1::LocalAdmission(SccpLocalAdmissionSubmissionPayloadV1 {
+            version: 1,
+            proof_bytes: proof_bytes.to_vec(),
+            public_inputs_bytes: canonical_sccp_message_transparent_public_inputs_bytes(
+                public_inputs,
+            ),
+            bundle_bytes: canonical_nexus_sccp_message_bundle_bytes(bundle),
+            statement_hash,
+            source_verifier_material_hash,
+            source_adapter_engine_deployment_hash,
+        });
+    let envelope_bytes = to_bytes(&platform_payload).ok()?;
+    Some(SccpCounterpartySubmissionPackageV1 {
+        version: 1,
+        proof_family: manifest.proof_family.clone(),
+        verifier_backend: manifest.verifier_backend.clone(),
+        envelope_encoding: SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_ENVELOPE_ENCODING_V1.to_owned(),
+        submission_kind: SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SUBMISSION_KIND_V1.to_owned(),
+        verifier_entrypoint: SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1.to_owned(),
+        platform_payload,
+        arguments: Vec::new(),
+        envelope_bytes,
+    })
+}
+
+/// Build a TAIRA-testnet diagnostic transparent proof for TRON Nile -> TAIRA XOR messages.
+///
+/// The returned artifact is only intended for a TAIRA testnet node whose
+/// `sccp_allow_unready_transparent_proofs` setting is enabled. Production
+/// non-SORA source lanes must continue to use governed source-adapter material.
+pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let public_inputs = sccp_taira_tron_xor_diagnostic_message_public_inputs(bundle)?;
+    let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TRON)?;
+    let statement_hash =
+        sccp_taira_tron_xor_diagnostic_statement_hash(bundle, &manifest, &public_inputs)?;
+    let proof_bytes =
+        sccp_taira_tron_xor_diagnostic_proof_bytes(bundle, statement_hash, &public_inputs);
+    let submission_package = sccp_taira_tron_xor_diagnostic_submission_package(
+        &manifest,
+        bundle,
+        &proof_bytes,
+        statement_hash,
+        &public_inputs,
+    )?;
+    Some(NexusSccpMessageTransparentProofV1 {
+        version: 1,
+        local_domain: manifest.local_domain,
+        counterparty_domain: SCCP_DOMAIN_TRON,
+        security_model: manifest.security_model,
+        anchor_governance: manifest.anchor_governance,
+        destination_binding: manifest.destination_binding.clone(),
+        proof_family: manifest.proof_family,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        proof_bytes,
+        submission_package,
+        bundle: bundle.clone(),
+    })
+}
+
+/// Verify a TAIRA-testnet diagnostic transparent proof for the TRON Nile XOR route.
+pub fn verify_sccp_taira_tron_xor_diagnostic_transparent_proof(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> bool {
+    build_sccp_taira_tron_xor_diagnostic_transparent_proof(&artifact.bundle)
+        .is_some_and(|expected| expected == *artifact)
+}
+
 pub fn build_nexus_sccp_message_transparent_proof_with_source_verifier_material(
     bundle: &NexusSccpMessageProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -34975,6 +35189,81 @@ mod tests {
     const TEST_TON_CODE_BOC_HEX: &str = "0xb5ee9c720101020100070001020101000202";
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
+
+    fn sample_taira_tron_xor_diagnostic_bundle(
+        route_id: &[u8],
+        asset_id: &[u8],
+    ) -> NexusSccpMessageProofV1 {
+        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_TRON,
+            dest_domain: SCCP_DOMAIN_SORA,
+            nonce: 42,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: asset_id.to_vec(),
+            amount: 7,
+            sender_codec: SCCP_CODEC_TRON_BASE58CHECK,
+            sender: b"TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_vec(),
+            recipient_codec: SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@universal".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: route_id.to_vec(),
+        });
+        let commitment = hub_commitment_from_sccp_payload(&payload);
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: b"tron-nile-diagnostic-source-finality".to_vec(),
+        }
+    }
+
+    #[test]
+    fn taira_tron_xor_diagnostic_transparent_proof_binds_bundle() {
+        let bundle = sample_taira_tron_xor_diagnostic_bundle(
+            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
+            SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes(),
+        );
+        let public_inputs = sccp_taira_tron_xor_diagnostic_message_public_inputs(&bundle)
+            .expect("diagnostic public inputs");
+        assert_eq!(public_inputs.message_id, bundle.commitment.message_id);
+        assert_eq!(public_inputs.payload_hash, bundle.commitment.payload_hash);
+        assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(public_inputs.commitment_root, bundle.commitment_root);
+        assert_eq!(public_inputs.finality_height, 42);
+
+        let artifact = build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
+            .expect("diagnostic artifact");
+        assert_eq!(artifact.public_inputs, public_inputs);
+        assert!(verify_sccp_taira_tron_xor_diagnostic_transparent_proof(
+            &artifact
+        ));
+
+        let mut tampered = artifact.clone();
+        tampered.public_inputs.finality_height += 1;
+        assert!(!verify_sccp_taira_tron_xor_diagnostic_transparent_proof(
+            &tampered
+        ));
+    }
+
+    #[test]
+    fn taira_tron_xor_diagnostic_transparent_proof_rejects_other_routes() {
+        let wrong_route = sample_taira_tron_xor_diagnostic_bundle(b"tron:sora:wtrx", b"xor");
+        assert!(sccp_taira_tron_xor_diagnostic_message_public_inputs(&wrong_route).is_none());
+        assert!(build_sccp_taira_tron_xor_diagnostic_transparent_proof(&wrong_route).is_none());
+
+        let wrong_asset = sample_taira_tron_xor_diagnostic_bundle(
+            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
+            b"wtrx#tron",
+        );
+        assert!(sccp_taira_tron_xor_diagnostic_message_public_inputs(&wrong_asset).is_none());
+        assert!(build_sccp_taira_tron_xor_diagnostic_transparent_proof(&wrong_asset).is_none());
+    }
 
     fn test_ton_mainnet_destination_rollout(verifier_identity: String) -> SccpDestinationRolloutV1 {
         sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
