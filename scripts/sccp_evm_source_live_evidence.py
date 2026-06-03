@@ -740,6 +740,30 @@ def _source_args(
             if source_bridge.get("deployment_transaction_hash") is not None
             else None
         ),
+        deployment_transaction_block_hash=(
+            _parse_hex32(
+                source_bridge["deployment_transaction_block_hash"],
+                label="deployment transaction block hash",
+            )
+            if source_bridge.get("deployment_transaction_block_hash") is not None
+            else None
+        ),
+        deployment_transaction_block_number=(
+            _require_exact_positive_u64(
+                source_bridge["deployment_transaction_block_number"],
+                label="deployment transaction block number",
+            )
+            if source_bridge.get("deployment_transaction_block_number") is not None
+            else None
+        ),
+        deployment_transaction_input_sha256=(
+            _parse_hex32(
+                "0x" + str(source_bridge["deployment_transaction_input_sha256"]),
+                label="deployment transaction input SHA-256",
+            )
+            if source_bridge.get("deployment_transaction_input_sha256") is not None
+            else None
+        ),
         deployment_receipt_contract_address=(
             evidence.parse_evm_address(
                 source_bridge["deployment_receipt_contract_address"],
@@ -831,6 +855,27 @@ def _offline_args(args: argparse.Namespace, source_bridge: dict[str, Any]) -> li
             [
                 "--deployment-transaction-hash",
                 _hex(source_args.deployment_transaction_hash),
+            ]
+        )
+    if source_args.deployment_transaction_block_hash is not None:
+        rendered.extend(
+            [
+                "--deployment-transaction-block-hash",
+                _hex(source_args.deployment_transaction_block_hash),
+            ]
+        )
+    if source_args.deployment_transaction_block_number is not None:
+        rendered.extend(
+            [
+                "--deployment-transaction-block-number",
+                str(source_args.deployment_transaction_block_number),
+            ]
+        )
+    if source_args.deployment_transaction_input_sha256 is not None:
+        rendered.extend(
+            [
+                "--deployment-transaction-input-sha256",
+                _hex(source_args.deployment_transaction_input_sha256),
             ]
         )
     if source_args.deployment_receipt_contract_address is not None:
@@ -1215,6 +1260,11 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     if not isinstance(source_bridge, dict):
         return ["source bridge evidence"]
     missing: list[str] = []
+    if (
+        source_bridge.get("domain") == SCCP_DOMAIN_ETH
+        and summary.get("block_tag") != "finalized"
+    ):
+        missing.append("--block-tag finalized")
     if source_bridge.get("expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
     if source_bridge.get("expected_source_bridge_code_hash_matches") is not True:

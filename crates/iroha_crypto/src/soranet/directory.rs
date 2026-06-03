@@ -128,32 +128,13 @@ impl GuardDirectorySnapshotV2 {
                         "guard directory issuer Ed25519 public key is invalid: {err}"
                     ))
                 })?;
+            Self::validate_issuer_mldsa65_public_key_len(validation_phase, &issuer.mldsa65_public)?;
             let computed =
-                compute_issuer_fingerprint(&issuer.ed25519_public, &issuer.mldsa65_public);
+                try_compute_issuer_fingerprint(&issuer.ed25519_public, &issuer.mldsa65_public)?;
             if computed != issuer.fingerprint {
                 return Err(norito::Error::Message(
                     "guard directory issuer fingerprint does not match advertised keys".to_string(),
                 ));
-            }
-            if issuer.mldsa65_public.is_empty() {
-                if validation_phase != CertificateValidationPhase::Phase1AllowSingle {
-                    return Err(norito::Error::Message(
-                        "guard directory issuer ML-DSA-65 public key is required for validation phase"
-                            .to_string(),
-                    ));
-                }
-                issuers_by_fingerprint.insert(
-                    issuer.fingerprint,
-                    (ed25519_public, issuer.mldsa65_public.as_slice()),
-                );
-                continue;
-            }
-            let expected = MlDsaSuite::MlDsa65.public_key_len();
-            if issuer.mldsa65_public.len() != expected {
-                return Err(norito::Error::Message(format!(
-                    "guard directory issuer ML-DSA-65 public key must be {expected} bytes, got {}",
-                    issuer.mldsa65_public.len()
-                )));
             }
             issuers_by_fingerprint.insert(
                 issuer.fingerprint,
@@ -161,6 +142,29 @@ impl GuardDirectorySnapshotV2 {
             );
         }
         Ok(issuers_by_fingerprint)
+    }
+
+    fn validate_issuer_mldsa65_public_key_len(
+        validation_phase: CertificateValidationPhase,
+        mldsa65_public: &[u8],
+    ) -> Result<(), norito::Error> {
+        if mldsa65_public.is_empty() {
+            if validation_phase != CertificateValidationPhase::Phase1AllowSingle {
+                return Err(norito::Error::Message(
+                    "guard directory issuer ML-DSA-65 public key is required for validation phase"
+                        .to_string(),
+                ));
+            }
+            return Ok(());
+        }
+        let expected = MlDsaSuite::MlDsa65.public_key_len();
+        if mldsa65_public.len() != expected {
+            return Err(norito::Error::Message(format!(
+                "guard directory issuer ML-DSA-65 public key must be {expected} bytes, got {}",
+                mldsa65_public.len()
+            )));
+        }
+        Ok(())
     }
 
     fn validate_relays(
@@ -259,13 +263,34 @@ pub struct GuardDirectoryRelayEntryV2 {
 /// Compute the canonical issuer fingerprint used by SRC v2.
 #[must_use]
 pub fn compute_issuer_fingerprint(ed25519: &[u8; 32], mldsa_public: &[u8]) -> [u8; 32] {
+    try_compute_issuer_fingerprint(ed25519, mldsa_public)
+        .expect("ML-DSA key length must fit into u32")
+}
+
+/// Compute the canonical issuer fingerprint used by SRC v2.
+///
+/// # Errors
+/// Returns an error if the ML-DSA public-key length cannot be represented in
+/// the fingerprint's fixed `u32` length field.
+pub fn try_compute_issuer_fingerprint(
+    ed25519: &[u8; 32],
+    mldsa_public: &[u8],
+) -> Result<[u8; 32], norito::Error> {
     let mut hasher = Blake3Hasher::new();
     hasher.update(SRC_V2_ISSUER_FINGERPRINT_DOMAIN);
     hasher.update(ed25519);
-    let length = u32::try_from(mldsa_public.len()).expect("ML-DSA key length must fit into u32");
-    hasher.update(&length.to_be_bytes());
+    hasher.update(&issuer_fingerprint_len_bytes(mldsa_public.len())?);
     hasher.update(mldsa_public);
-    hasher.finalize().into()
+    Ok(hasher.finalize().into())
+}
+
+fn issuer_fingerprint_len_bytes(len: usize) -> Result<[u8; 4], norito::Error> {
+    let len = u32::try_from(len).map_err(|_| {
+        norito::Error::Message(format!(
+            "guard directory issuer ML-DSA public key length {len} exceeds u32::MAX"
+        ))
+    })?;
+    Ok(len.to_be_bytes())
 }
 
 /// Encode the validation phase to its wire representation.
@@ -499,6 +524,32 @@ mod tests {
     }
 
     #[test]
+    fn try_compute_fingerprint_matches_infallible_helper() {
+        let ed25519 = [0x11; 32];
+        let mldsa_public = vec![0xAA; 1952];
+
+        let fallible = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+            .expect("canonical issuer fingerprint should compute");
+        let infallible = compute_issuer_fingerprint(&ed25519, &mldsa_public);
+
+        assert_eq!(fallible, infallible);
+    }
+
+    #[test]
+    fn issuer_fingerprint_length_overflow_fails_closed() {
+        let Some(too_long) = (u64::from(u32::MAX) + 1).try_into().ok() else {
+            return;
+        };
+
+        let err = issuer_fingerprint_len_bytes(too_long)
+            .expect_err("oversized issuer public-key length must fail closed");
+        assert!(
+            err.to_string().contains("exceeds u32::MAX"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn snapshot_roundtrip() {
         let snapshot = sample_snapshot();
 
@@ -591,6 +642,26 @@ mod tests {
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
             .expect_err("invalid ML-DSA-65 public key length should fail");
         assert!(err.to_string().contains("ML-DSA-65 public key"));
+    }
+
+    #[test]
+    fn snapshot_rejects_invalid_mldsa65_public_key_length_before_fingerprint() {
+        let mut snapshot = sample_snapshot();
+        snapshot.issuers[0].mldsa65_public.truncate(1);
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
+        let bytes = snapshot.to_bytes().expect("serialize");
+
+        let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
+            .expect_err("issuer ML-DSA-65 key shape must fail before fingerprint");
+        let message = err.to_string();
+        assert!(
+            message.contains("ML-DSA-65 public key"),
+            "unexpected message: {message}"
+        );
+        assert!(
+            !message.contains("fingerprint"),
+            "shape preflight should run before fingerprint comparison: {message}"
+        );
     }
 
     #[test]

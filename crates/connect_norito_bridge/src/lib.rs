@@ -1606,6 +1606,18 @@ unsafe fn read_vec_bytes(ptr: *const c_uchar, len: c_ulong) -> BridgeResult<Vec<
     Ok(slice.to_vec())
 }
 
+fn build_confidential_encrypted_payload(
+    ephemeral: [u8; 32],
+    nonce: [u8; 24],
+    ciphertext: Vec<u8>,
+) -> BridgeResult<ConfidentialEncryptedPayload> {
+    let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
+    payload
+        .validate()
+        .map_err(|_| BridgeError::ConfidentialPayload)?;
+    Ok(payload)
+}
+
 fn decode_hex_array<const N: usize>(hex_str: &str) -> BridgeResult<[u8; N]> {
     let body = hex_str.trim().trim_start_matches("0x");
     let bytes = hex::decode(body).map_err(|_| BridgeError::ProofAttachment)?;
@@ -1975,19 +1987,28 @@ pub unsafe extern "C" fn connect_norito_encode_confidential_encrypted_payload(
         return -2;
     }
     // Safety: caller guarantees buffers are valid for the declared length.
-    let ephemeral = unsafe { slice::from_raw_parts(ephemeral_ptr, 32) };
-    let nonce = unsafe { slice::from_raw_parts(nonce_ptr, 24) };
-    let ciphertext = if ciphertext_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { slice::from_raw_parts(ciphertext_ptr, ciphertext_len as usize) }.to_vec()
+    let mut ephemeral = [0u8; 32];
+    ephemeral.copy_from_slice(unsafe { slice::from_raw_parts(ephemeral_ptr, 32) });
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(unsafe { slice::from_raw_parts(nonce_ptr, 24) });
+    let ciphertext = match unsafe { read_vec_bytes(ciphertext_ptr, ciphertext_len) } {
+        Ok(ciphertext) => ciphertext,
+        Err(BridgeError::NullPtr) => return -1,
+        Err(_) => return -3,
     };
-    let mut encoded = Vec::with_capacity(1 + ephemeral.len() + nonce.len() + ciphertext.len() + 10);
+    let payload = match build_confidential_encrypted_payload(ephemeral, nonce, ciphertext) {
+        Ok(payload) => payload,
+        Err(_) => return -3,
+    };
+    let ciphertext = payload.ciphertext();
+    let mut encoded = Vec::with_capacity(
+        1 + payload.ephemeral_pubkey().len() + payload.nonce().len() + ciphertext.len() + 10,
+    );
     encoded.push(CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
-    encoded.extend_from_slice(ephemeral);
-    encoded.extend_from_slice(nonce);
+    encoded.extend_from_slice(payload.ephemeral_pubkey());
+    encoded.extend_from_slice(payload.nonce());
     encode_varint(ciphertext.len() as u64, &mut encoded);
-    encoded.extend_from_slice(&ciphertext);
+    encoded.extend_from_slice(ciphertext);
     unsafe { write_bytes(out_ptr, out_len, &encoded) }.map_or_else(|err| err, |_| 0)
 }
 
@@ -7728,7 +7749,7 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction(
         };
         let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
 
-        let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
         let asset = inputs.asset_definition.clone();
         let from_account = inputs.from_account.clone();
         let ttl = inputs.ttl;
@@ -7846,9 +7867,8 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
                 BridgeError::ConfidentialPayload,
             )?
         };
-        let ciphertext = unsafe {
-            slice::from_raw_parts(payload_ciphertext_ptr, payload_ciphertext_len as usize).to_vec()
-        };
+        let ciphertext = unsafe { read_vec_bytes(payload_ciphertext_ptr, payload_ciphertext_len)? };
+        let payload = build_confidential_encrypted_payload(ephemeral, nonce, ciphertext)?;
 
         let ShieldTxInputs {
             chain_id,
@@ -7867,7 +7887,6 @@ pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction_alg(
             ttl,
             private_key,
             || {
-                let payload = ConfidentialEncryptedPayload::new(ephemeral, nonce, ciphertext);
                 let instruction = zk::Shield::new(
                     asset_definition,
                     from_account,
@@ -10069,6 +10088,109 @@ mod accel_tests {
         cstring(&asset_definition_literal(domain, name))
     }
 
+    fn call_shield_encoder(
+        ephemeral: &[u8; 32],
+        ciphertext: &[u8],
+        algorithm: Option<Algorithm>,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let amount = cstring("7");
+        let note_commitment = [0x33_u8; 32];
+        let nonce = [0x44_u8; 24];
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0_u8; 32];
+        let result = unsafe {
+            if let Some(algorithm) = algorithm {
+                connect_norito_encode_shield_signed_transaction_alg(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    note_commitment.as_ptr(),
+                    note_commitment.len() as c_ulong,
+                    ephemeral.as_ptr(),
+                    ephemeral.len() as c_ulong,
+                    nonce.as_ptr(),
+                    nonce.len() as c_ulong,
+                    ciphertext.as_ptr(),
+                    ciphertext.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    algorithm as u8,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            } else {
+                connect_norito_encode_shield_signed_transaction(
+                    chain.as_ptr(),
+                    chain.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    1,
+                    0,
+                    0,
+                    asset_definition.as_ptr(),
+                    asset_definition.as_bytes().len() as c_ulong,
+                    authority.as_ptr(),
+                    authority.as_bytes().len() as c_ulong,
+                    amount.as_ptr(),
+                    amount.as_bytes().len() as c_ulong,
+                    note_commitment.as_ptr(),
+                    note_commitment.len() as c_ulong,
+                    ephemeral.as_ptr(),
+                    ephemeral.len() as c_ulong,
+                    nonce.as_ptr(),
+                    nonce.len() as c_ulong,
+                    ciphertext.as_ptr(),
+                    ciphertext.len() as c_ulong,
+                    private.as_ptr(),
+                    private.len() as c_ulong,
+                    &mut out_signed_ptr,
+                    &mut out_signed_len,
+                    out_hash.as_mut_ptr(),
+                    out_hash.len() as c_ulong,
+                )
+            }
+        };
+        (result, out_signed_ptr, out_signed_len, out_hash)
+    }
+
+    fn call_confidential_payload_encoder(
+        ephemeral: &[u8; 32],
+        ciphertext: &[u8],
+    ) -> (c_int, *mut u8, c_ulong) {
+        let nonce = [0x44_u8; 24];
+        let mut out_ptr: *mut u8 = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let result = unsafe {
+            connect_norito_encode_confidential_encrypted_payload(
+                ephemeral.as_ptr(),
+                ephemeral.len() as c_ulong,
+                nonce.as_ptr(),
+                nonce.len() as c_ulong,
+                ciphertext.as_ptr(),
+                ciphertext.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        (result, out_ptr, out_len)
+    }
+
     #[test]
     fn decode_asset_id_json_returns_canonical_fields() {
         let _guard = chain_guard();
@@ -11014,6 +11136,105 @@ mod accel_tests {
         unsafe {
             free(out_signed_ptr as *mut _);
         }
+    }
+
+    #[test]
+    fn shield_encoder_accepts_valid_confidential_payload() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x07; 32], &[0x09, 0x0A], algorithm);
+            assert_eq!(result, 0, "expected shield encoder success");
+            assert!(!out_signed_ptr.is_null());
+            assert!(out_signed_len > 0);
+            assert_ne!(out_hash, [0u8; 32]);
+            unsafe {
+                free(out_signed_ptr as *mut _);
+            }
+        }
+    }
+
+    #[test]
+    fn shield_encoder_rejects_low_order_confidential_payload_key() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x00; 32], &[0x09, 0x0A], algorithm);
+            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
+            assert!(out_signed_ptr.is_null());
+            assert_eq!(out_signed_len, 0);
+            assert_eq!(out_hash, [0u8; 32]);
+        }
+    }
+
+    #[test]
+    fn shield_encoder_rejects_empty_confidential_ciphertext() {
+        let _guard = chain_guard();
+        for algorithm in [None, Some(Algorithm::Ed25519)] {
+            let (result, out_signed_ptr, out_signed_len, out_hash) =
+                call_shield_encoder(&[0x07; 32], &[], algorithm);
+            assert_eq!(result, ERR_CONFIDENTIAL_PAYLOAD);
+            assert!(out_signed_ptr.is_null());
+            assert_eq!(out_signed_len, 0);
+            assert_eq!(out_hash, [0u8; 32]);
+        }
+    }
+
+    #[test]
+    fn confidential_payload_encoder_accepts_valid_payload() {
+        let (result, out_ptr, out_len) =
+            call_confidential_payload_encoder(&[0x07; 32], &[0x09, 0x0A]);
+        assert_eq!(result, 0);
+        assert!(!out_ptr.is_null());
+        let encoded = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) };
+        assert_eq!(encoded[0], CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1);
+        assert_eq!(&encoded[1..33], &[0x07; 32]);
+        assert_eq!(&encoded[33..57], &[0x44; 24]);
+        assert_eq!(encoded[57], 2);
+        assert_eq!(&encoded[58..], &[0x09, 0x0A]);
+        unsafe {
+            free(out_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn confidential_payload_encoder_rejects_low_order_ephemeral_key() {
+        let (result, out_ptr, out_len) =
+            call_confidential_payload_encoder(&[0x00; 32], &[0x09, 0x0A]);
+        assert_eq!(result, -3);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn confidential_payload_encoder_rejects_empty_ciphertext() {
+        let (result, out_ptr, out_len) = call_confidential_payload_encoder(&[0x07; 32], &[]);
+        assert_eq!(result, -3);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
+    }
+
+    #[test]
+    fn connect_derive_keys_rejects_low_order_peer_public_key() {
+        let local_private_key = [0x01_u8; 32];
+        let low_order_peer_public_key = [0x00_u8; 32];
+        let session_id = [0x02_u8; 32];
+        let mut app_key = [0xA5_u8; 32];
+        let mut wallet_key = [0x5A_u8; 32];
+
+        let result = unsafe {
+            connect_norito_connect_derive_keys(
+                local_private_key.as_ptr(),
+                low_order_peer_public_key.as_ptr(),
+                session_id.as_ptr(),
+                app_key.as_mut_ptr(),
+                wallet_key.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(result, -2);
+        assert_eq!(app_key, [0xA5_u8; 32]);
+        assert_eq!(wallet_key, [0x5A_u8; 32]);
     }
 
     #[test]

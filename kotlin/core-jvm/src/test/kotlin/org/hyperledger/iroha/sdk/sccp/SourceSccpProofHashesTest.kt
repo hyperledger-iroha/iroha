@@ -169,7 +169,7 @@ class SourceSccpProofHashesTest {
     @Test
     fun derivesSourceMaterialAndDeploymentRecordHashesForUiTooling() {
         val materialVectors = mapOf(
-            SccpSourceProofs.DOMAIN_ETH to "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+            SccpSourceProofs.DOMAIN_ETH to "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
             SccpSourceProofs.DOMAIN_BSC to "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a",
             SccpSourceProofs.DOMAIN_SOL to "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331",
             SccpSourceProofs.DOMAIN_TON to "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc",
@@ -179,7 +179,7 @@ class SourceSccpProofHashesTest {
             SccpSourceProofs.DOMAIN_SORA2 to "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d",
         )
         val deploymentVectors = mapOf(
-            SccpSourceProofs.DOMAIN_ETH to "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+            SccpSourceProofs.DOMAIN_ETH to "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
             SccpSourceProofs.DOMAIN_BSC to "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
             SccpSourceProofs.DOMAIN_SOL to "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
             SccpSourceProofs.DOMAIN_TON to "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
@@ -231,8 +231,40 @@ class SourceSccpProofHashesTest {
                     bridgeAddress = "0x" + "11".repeat(20),
                     sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
                     networkId = "0x" + "33".repeat(32),
+                    configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
                 )
             }.message.orEmpty().contains("sourceBridgeNetworkId"),
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalSourceVerifierMaterialBytes(
+                    sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                    sourceTrustAnchorHash = "0x" + "44".repeat(32),
+                    consensusVerifierHash = "0x" + "55".repeat(32),
+                    messageInclusionVerifierHash = "0x" + "66".repeat(32),
+                    finalityPolicyHash = "0x" + "88".repeat(32),
+                    bridgeAddress = "0x" + "11".repeat(20),
+                    sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                    networkId = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                    ownerAddress = "0x" + "22".repeat(20),
+                    configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
+                )
+            }.message.orEmpty().contains("sourceBridgeOwnerAddress"),
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalSourceVerifierMaterialBytes(
+                    sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+                    sourceTrustAnchorHash = "0x" + "44".repeat(32),
+                    consensusVerifierHash = "0x" + "55".repeat(32),
+                    messageInclusionVerifierHash = "0x" + "66".repeat(32),
+                    finalityPolicyHash = "0x" + "88".repeat(32),
+                    bridgeAddress = "0x" + "11".repeat(20),
+                    sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                    networkId = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                    configHash = "0x" + "99".repeat(32),
+                )
+            }.message.orEmpty().contains("sourceBridgeConfigHash"),
         )
         val tonTemplateComponentHashes = mapOf(
             "sourceTrustAnchorHash" to "0xd83b3a3eb920ac8338533535cf0d6c69c69d507e84aef8ec2094564b8427c56c",
@@ -321,6 +353,8 @@ class SourceSccpProofHashesTest {
                 finalityPolicyHash = "0x" + "88".repeat(32),
                 bridgeAddress = "0x" + "11".repeat(20),
                 sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                networkId = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -335,6 +369,8 @@ class SourceSccpProofHashesTest {
                 ),
                 bridgeAddress = "0x" + "11".repeat(20),
                 sourceBridgeEmitterCodeHash = "0x" + "77".repeat(32),
+                networkId = SccpSourceProofs.ETH_MAINNET_NETWORK_ID,
+                configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
             )
         }
         assertEquals(
@@ -2931,15 +2967,21 @@ class SourceSccpProofHashesTest {
         if (bridgeAddress(domain) != null) "0x" + "77".repeat(32) else null
 
     private fun networkId(domain: Int): String? =
-        if (domain == SccpSourceProofs.DOMAIN_TRON) "0x" + "33".repeat(32) else null
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH -> SccpSourceProofs.ETH_MAINNET_NETWORK_ID
+            SccpSourceProofs.DOMAIN_TRON -> "0x" + "33".repeat(32)
+            else -> null
+        }
 
     private fun ownerAddress(domain: Int): String? =
         if (domain == SccpSourceProofs.DOMAIN_TRON) "0x" + "22".repeat(20) else null
 
     private fun configHash(domain: Int): String? =
-        if (domain == SccpSourceProofs.DOMAIN_TRON) {
-            "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d"
-        } else {
-            null
+        when (domain) {
+            SccpSourceProofs.DOMAIN_ETH ->
+                "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"
+            SccpSourceProofs.DOMAIN_TRON ->
+                "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d"
+            else -> null
         }
 }

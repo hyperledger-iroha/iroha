@@ -443,6 +443,7 @@ public final class ConnectFrameCodec {
     final ConnectDirection direction =
         decodeLengthPrefixedField(frameCursor, DIRECTION_ADAPTER, "direction");
     final long sequence = decodeLengthPrefixedField(frameCursor, UINT64, "sequence");
+    requireNonNegativeSequence(sequence);
 
     final long kindLength = frameCursor.readU64();
     final byte[] kindBytes = frameCursor.readBytes(asInt(kindLength, "kind length"));
@@ -599,6 +600,7 @@ public final class ConnectFrameCodec {
       final long sequence,
       final byte[] kindPayload)
       throws ConnectProtocolException {
+    requireNonNegativeSequence(sequence);
     final byte[] sidField = encodeField(sessionId, FIXED_ARRAY_U8_32, "sid");
     final byte[] directionField = encodeField(direction, DIRECTION_ADAPTER, "direction");
     final byte[] sequenceField = encodeField(sequence, UINT64, "sequence");
@@ -609,6 +611,13 @@ public final class ConnectFrameCodec {
     writeLengthPrefixed(frame, sequenceField);
     writeLengthPrefixed(frame, kindPayload);
     return frame.toByteArray();
+  }
+
+  private static void requireNonNegativeSequence(final long sequence)
+      throws ConnectProtocolException {
+    if (sequence < 0L) {
+      throw new ConnectProtocolException("sequence must be non-negative");
+    }
   }
 
   private static byte[] wrapTaggedPayload(final int tag, final byte[] payload) {
@@ -622,7 +631,8 @@ public final class ConnectFrameCodec {
   private static <T> byte[] encodeField(
       final T value, final TypeAdapter<T> adapter, final String label) throws ConnectProtocolException {
     try {
-      final NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeWithHeaderFlags(value, adapter);
+      final NoritoCodec.AdaptiveEncoding encoding =
+          NoritoCodec.encodeAdaptive(value, adapter, CONNECT_LAYOUT_FLAGS);
       if (encoding.flags() != CONNECT_LAYOUT_FLAGS) {
         throw new ConnectProtocolException(
             "Unsupported Norito flags in " + label + ": " + encoding.flags());

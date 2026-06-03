@@ -84,6 +84,7 @@ ETH_TEMPLATE_TRANSCRIPT_PREFIXES = (
     b"sccp:eth:ssz-beacon-block-header:v1",
     b"sccp:eth:ssz-execution-payload-branch:deneb-fulu:v1",
 )
+ETH_SOURCE_BRIDGE_CONFIG_PREFIX = b"iroha:sccp:eth-source-bridge-config:v1"
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -213,6 +214,14 @@ def _push_vec(out: bytearray, value: bytes) -> None:
     out.extend(value)
 
 
+def _abi_word_address(address: bytes) -> bytes:
+    return b"\x00" * 12 + address
+
+
+def _abi_word_u32(value: int) -> bytes:
+    return value.to_bytes(32, "big")
+
+
 def _prefixed_blake2b(prefix: bytes, payload: bytes) -> bytes:
     hasher = hashlib.blake2b(digest_size=32)
     hasher.update(prefix)
@@ -305,6 +314,76 @@ def eth_source_adapter_verifier_vk_hash(
     ).digest()
 
 
+def eth_source_bridge_network_id() -> bytes:
+    """Return the ABI word used as the Ethereum mainnet source network id."""
+
+    return ETH_RPC_CHAIN_ID.to_bytes(32, "big")
+
+
+def eth_source_bridge_config_hash(
+    *,
+    bridge_address: bytes,
+    source_bridge_code_hash: bytes,
+    network_id: bytes | None = None,
+    source_domain: int = SCCP_DOMAIN_ETH,
+    target_domain: int = SCCP_DOMAIN_SORA,
+) -> bytes:
+    """Compute Rust's governed ETH mainnet source bridge config hash."""
+
+    source_domain = _require_exact_u32(source_domain, "source_domain")
+    target_domain = _require_exact_u32(target_domain, "target_domain")
+    if source_domain != SCCP_DOMAIN_ETH:
+        raise ValueError("source_domain must be ETH")
+    if target_domain != SCCP_DOMAIN_SORA:
+        raise ValueError("target_domain must be SORA")
+    bridge_address = _require_nonzero_fixed_bytes(
+        bridge_address,
+        label="bridge_address",
+        byte_length=20,
+    )
+    source_bridge_code_hash = _require_nonzero_fixed_bytes(
+        source_bridge_code_hash,
+        label="source_bridge_emitter_code_hash",
+        byte_length=32,
+    )
+    expected_network_id = eth_source_bridge_network_id()
+    if network_id is None:
+        network_id = expected_network_id
+    else:
+        network_id = _require_nonzero_fixed_bytes(
+            network_id,
+            label="source_bridge_network_id",
+            byte_length=32,
+        )
+        if network_id != expected_network_id:
+            raise ValueError("source_bridge_network_id must be Ethereum mainnet chain id 1")
+
+    return _keccak_256(
+        b"".join(
+            (
+                _keccak_256(ETH_SOURCE_BRIDGE_CONFIG_PREFIX),
+                _abi_word_address(bridge_address),
+                network_id,
+                _abi_word_u32(source_domain),
+                _abi_word_u32(target_domain),
+                source_bridge_code_hash,
+            )
+        )
+    )
+
+
+def _source_bridge_network_and_config(args: argparse.Namespace) -> tuple[bytes, bytes]:
+    network_id = eth_source_bridge_network_id()
+    config_hash = eth_source_bridge_config_hash(
+        bridge_address=args.bridge_address,
+        source_bridge_code_hash=args.source_bridge_emitter_code_hash,
+        network_id=network_id,
+        source_domain=args.source_domain,
+        target_domain=args.target_domain,
+    )
+    return network_id, config_hash
+
+
 def eth_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
     """Compute Rust's canonical ETH source verifier material record hash."""
 
@@ -370,9 +449,10 @@ def eth_source_verifier_material_record_hash(args: argparse.Namespace) -> bytes:
             byte_length=32,
         )
     )
-    payload.extend(bytes(32))
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(args)
+    payload.extend(source_bridge_network_id)
     _push_vec(payload, b"")
-    payload.extend(bytes(32))
+    payload.extend(source_bridge_config_hash)
     _push_u8(payload, 0)
     return _prefixed_blake2b(
         b"sccp:source-verifier-material-record:v1",
@@ -468,9 +548,10 @@ def eth_source_adapter_engine_deployment_record_hash(
             byte_length=32,
         )
     )
-    payload.extend(bytes(32))
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(args)
+    payload.extend(source_bridge_network_id)
     _push_vec(payload, b"")
-    payload.extend(bytes(32))
+    payload.extend(source_bridge_config_hash)
     payload.extend(
         _require_nonzero_fixed_bytes(
             args.deployment_receipt_hash,
@@ -537,7 +618,9 @@ def _require_canonical_adapter_verifier_vk_hash(args: argparse.Namespace) -> Non
 
 def _require_source_role_hash_separation(args: argparse.Namespace) -> None:
     seen: dict[bytes, str] = {}
-    for field in (
+    role_values = [
+        (field, getattr(args, field, None))
+        for field in (
         "source_trust_anchor_hash",
         "consensus_verifier_hash",
         "message_inclusion_verifier_hash",
@@ -545,8 +628,17 @@ def _require_source_role_hash_separation(args: argparse.Namespace) -> None:
         "source_bridge_emitter_code_hash",
         "adapter_verifier_vk_hash",
         "deployment_receipt_hash",
-    ):
-        value = getattr(args, field, None)
+        )
+    ]
+    if getattr(args, "source_bridge_emitter_code_hash", None) is not None:
+        network_id, config_hash = _source_bridge_network_and_config(args)
+        role_values.extend(
+            (
+                ("source_bridge_network_id", network_id),
+                ("source_bridge_config_hash", config_hash),
+            )
+        )
+    for field, value in role_values:
         if value is None:
             continue
         previous_field = seen.get(value)
@@ -772,6 +864,9 @@ def _material_lines(args: argparse.Namespace) -> Iterable[str]:
         "source_bridge_emitter_code_hash",
         _hex(args.source_bridge_emitter_code_hash),
     )
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(args)
+    yield _toml_line("source_bridge_network_id", _hex(source_bridge_network_id))
+    yield _toml_line("source_bridge_config_hash", _hex(source_bridge_config_hash))
     yield _toml_line("finality_policy_id", ETH_FINALITY_POLICY_ID)
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("placeholder_material", False)
@@ -806,6 +901,9 @@ def _deployment_lines(args: argparse.Namespace) -> Iterable[str]:
         "source_bridge_emitter_code_hash",
         _hex(args.source_bridge_emitter_code_hash),
     )
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(args)
+    yield _toml_line("source_bridge_network_id", _hex(source_bridge_network_id))
+    yield _toml_line("source_bridge_config_hash", _hex(source_bridge_config_hash))
     yield _toml_line("finality_policy_id", ETH_FINALITY_POLICY_ID)
     yield _toml_line("finality_policy_hash", _hex(args.finality_policy_hash))
     yield _toml_line("deployment_receipt_hash", _hex(args.deployment_receipt_hash))
@@ -828,6 +926,15 @@ def render_toml(args: argparse.Namespace) -> str:
         "# sccp_evm_source_bridge_runtime_code_hash = "
         + json.dumps(_hex(args.source_bridge_emitter_code_hash)),
     ]
+    source_bridge_network_id, source_bridge_config_hash = _source_bridge_network_and_config(args)
+    comments.extend(
+        [
+            "# sccp_eth_source_bridge_network_id = "
+            + json.dumps(_hex(source_bridge_network_id)),
+            "# sccp_eth_source_bridge_config_hash = "
+            + json.dumps(_hex(source_bridge_config_hash)),
+        ]
+    )
     runtime_bytecode_hex = getattr(
         args,
         "source_bridge_runtime_bytecode_hex_text",
@@ -897,6 +1004,15 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
         "source_bridge_emitter_id": ETH_SOURCE_BRIDGE_EMITTER_ID,
         "source_bridge_emitter_address": _hex(args.bridge_address),
         "source_bridge_emitter_code_hash": _hex(args.source_bridge_emitter_code_hash),
+        "source_bridge_network_id": _hex(eth_source_bridge_network_id()),
+        "source_bridge_config_hash": _hex(
+            eth_source_bridge_config_hash(
+                bridge_address=args.bridge_address,
+                source_bridge_code_hash=args.source_bridge_emitter_code_hash,
+                source_domain=args.source_domain,
+                target_domain=args.target_domain,
+            )
+        ),
         "adapter_verifier_vk_hash": _hex(args.adapter_verifier_vk_hash),
         "deployment_receipt_hash": _hex(args.deployment_receipt_hash),
         "source_verifier_material_hash": _hex(material_hash),

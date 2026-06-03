@@ -479,6 +479,7 @@ fn token_outcome_label(error: &TokenPolicyError) -> &'static str {
             TokenVerifyError::NotYetValid { .. } => "not_yet_valid",
             TokenVerifyError::Expired { .. } => "expired",
             TokenVerifyError::TtlExceeded { .. } => "ttl_exceeded",
+            TokenVerifyError::InvalidTemporalBounds => "invalid_temporal_bounds",
             TokenVerifyError::Clock(_) => "store_error",
             TokenVerifyError::Signature(_) => "signature_invalid",
             TokenVerifyError::Store(_) => "store_error",

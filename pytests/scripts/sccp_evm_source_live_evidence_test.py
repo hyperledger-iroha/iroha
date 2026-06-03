@@ -19,6 +19,12 @@ def load_live_module():
     return module
 
 
+def render_replayed_offline_toml(live_module, domain, offline_args):
+    evidence = live_module._load_evidence_module(domain)
+    args = evidence.build_parser().parse_args([*offline_args, "--toml"])
+    return evidence.render_toml(args)
+
+
 class FakeResponse:
     def __init__(self, payload):
         self.payload = json.dumps(payload).encode("utf-8")
@@ -621,8 +627,59 @@ def test_evm_source_live_evidence_collects_source_records_and_toml():
     assert rendered.count("# sccp_evm_source_deployment_block_receipts_root") == 1
     assert 'source_chain = "eth"' in rendered
     assert 'source_bridge_emitter_code_hash = "0x' + fake.bridge_code_hash.hex() in rendered
-    assert "--source-bridge-runtime-bytecode-hex" in summary["offline_evidence_args"]
-    assert "0x" + fake.bridge_runtime.hex() in summary["offline_evidence_args"]
+    offline_args = summary["offline_evidence_args"]
+    assert "--source-bridge-runtime-bytecode-hex" in offline_args
+    assert "0x" + fake.bridge_runtime.hex() in offline_args
+    assert "--deployment-transaction-block-hash" in offline_args
+    assert "0x" + "99" * 32 in offline_args
+    assert "--deployment-transaction-block-number" in offline_args
+    assert "4660" in offline_args
+    assert "--deployment-transaction-input-sha256" in offline_args
+    assert "0x" + hashlib.sha256(fake.bridge_runtime).hexdigest() in offline_args
+    replayed = render_replayed_offline_toml(
+        module,
+        module.SCCP_DOMAIN_ETH,
+        offline_args,
+    )
+    assert 'source_chain = "eth"' in replayed
+    assert "# sccp_evm_source_deployment_transaction_block_hash" in replayed
+
+
+def test_evm_source_live_eth_toml_requires_finalized_block_tag():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    args, material_hash, deployment_hash = source_args(module, fake)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_rpc_chain_id=1,
+            expected_source_bridge_code_hash=fake.bridge_code_hash,
+            deployment_transaction_hash=bytes.fromhex("de" * 32),
+            source_trust_anchor_hash=args.source_trust_anchor_hash,
+            consensus_verifier_hash=args.consensus_verifier_hash,
+            message_inclusion_verifier_hash=args.message_inclusion_verifier_hash,
+            finality_policy_hash=args.finality_policy_hash,
+            adapter_verifier_vk_hash=args.adapter_verifier_vk_hash,
+            deployment_receipt_hash=args.deployment_receipt_hash,
+            expected_source_verifier_material_hash=material_hash,
+            expected_source_adapter_engine_deployment_hash=deployment_hash,
+            block_tag="latest",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    assert summary["block_tag"] == "latest"
+    assert "offline_toml_sha256" not in summary
+    try:
+        module.render_offline_toml(summary)
+    except ValueError as exc:
+        assert "--block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("Ethereum source TOML rendered from non-finalized block tag")
 
 
 def test_evm_source_live_toml_revalidates_imported_summary_metadata():
@@ -752,6 +809,16 @@ def test_bsc_source_live_evidence_uses_canonical_bsc_profile():
     rendered = module.render_offline_toml(summary)
     assert 'source_domain = 2' in rendered
     assert 'source_chain = "bsc"' in rendered
+    offline_args = summary["offline_evidence_args"]
+    assert "--deployment-transaction-block-hash" in offline_args
+    assert "--deployment-transaction-block-number" in offline_args
+    assert "--deployment-transaction-input-sha256" in offline_args
+    replayed = render_replayed_offline_toml(
+        module,
+        module.SCCP_DOMAIN_BSC,
+        offline_args,
+    )
+    assert 'source_chain = "bsc"' in replayed
 
 
 def test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift():

@@ -307,6 +307,7 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_bsc_source_bridge_evidence_test.py
     pytests/scripts/sccp_evm_destination_evidence_test.py
     pytests/scripts/sccp_evm_live_evidence_test.py
+    pytests/scripts/sccp_evm_receipt_proof_evidence_test.py
     pytests/scripts/sccp_evm_source_live_evidence_test.py
     pytests/scripts/sccp_solana_destination_evidence_test.py
     pytests/scripts/sccp_solana_live_evidence_test.py

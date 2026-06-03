@@ -1919,6 +1919,35 @@ python3 scripts/sccp_evm_source_live_evidence.py \
   --toml
 ```
 
+Apps and operators that need concrete receipt-inclusion material can use
+`scripts/sccp_evm_receipt_proof_evidence.py` against their own read-only
+Ethereum/BSC JSON-RPC endpoint. The helper enforces the selected mainnet chain
+id, fetches the successful transaction receipt, fetches the containing block
+and full block receipt list, reconstructs the EIP-2718-aware receipt trie from
+typed receipt RLP, verifies the computed root against the block
+`receiptsRoot`, and emits the receipt RLP, RLP transaction-index trie key,
+proof nodes, and verified receipts root pair. Supplying `--source-bridge-address` additionally
+requires exactly one matching canonical `SccpSourceEvent(bytes32)` log in the
+receipt before a `source_event_digest` is rendered.
+
+```bash
+python3 scripts/sccp_evm_receipt_proof_evidence.py \
+  --rpc-url <ethereum-or-bsc-rpc-url> \
+  --domain eth \
+  --expected-rpc-chain-id 1 \
+  --transaction-hash <successful-source-bridge-tx-hash> \
+  --source-bridge-address <eth-source-bridge-address>
+```
+
+The browser, Swift, Kotlin/JVM, Java Android, and .NET SDKs expose the same
+receipt-side construction without WASM through `canonicalEvmReceiptRlp`,
+`evmReceiptTrieKey`, and `buildEvmReceiptTrieProofFromReceipts` (or native
+PascalCase equivalents). `EthereumMainnetSccp` uses those helpers to build
+`receiptProof` locally when the app supplies an SCCP `inclusionBranch`; if
+`blockReceipts` are absent, it fetches `eth_getBlockReceipts` through the
+app-owned execution provider and verifies the computed root and target
+transaction hash before invoking the local prover callback.
+
 The generated source TOML carries metadata comments for the observed RPC chain
 id, source bridge address, source bridge runtime code hash, and replayable
 source bridge runtime bytecode, plus the verified deployment transaction,
@@ -4038,8 +4067,10 @@ The helper recomputes
 the same deployment-specific binding that `SccpTronGroth16Bn254MessageVerifier`
 derives from the TRON network id, source/target domains, base58 verifier
 address, deployed bytecode hash, proof family, and Groth16 verifier-key hash.
-The source bridge config-hash helper is intentionally narrower: it only
-computes the TRON -> SORA source lane accepted by `SccpTronSourceBridge`.
+The source bridge config-hash helpers are intentionally lane-scoped: Ethereum
+computes only the ETH mainnet -> SORA source lane, binding EIP-155 chain id `1`,
+the source bridge address, and its runtime code hash, while TRON computes only
+the TRON -> SORA source lane accepted by `SccpTronSourceBridge`.
 The compact JSON mode also fails closed if the destination side is retargeted
 away from SORA -> TRON or a non-production proof family is supplied, so dry-run
 hashes match the same lane admitted by the TVM wrapper and Rust helper. A
@@ -5619,7 +5650,12 @@ gate applies the same recomputation whenever
 TRON source bridge config fields are populated, even for material-only structural
 fixtures without source-adapter deployment fields, so a mismatched rollout hash
 cannot be carried as a merely structural evidence value.
-The source bridge emits the config hash in `SourceBridgeConfigured` at
+Ethereum source verifier material follows the same deployment-record discipline
+without an owner field: the governed ETH mainnet source bridge config hash
+recomputes from chain id `1`, ETH -> SORA domains, the bridge address, and the
+runtime code hash, and production-ready material/deployment records must carry
+that network id and config hash.
+The TRON source bridge emits the config hash in `SourceBridgeConfigured` at
 deployment, and the owner can emit the current hash later through
 `emitSourceBridgeConfigHash()` after an ownership transfer or rollout audit.
 Its constructor accepts SORA's target domain id `0` for TRON -> SORA source

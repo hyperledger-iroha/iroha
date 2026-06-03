@@ -16,6 +16,7 @@ import org.bouncycastle.crypto.params.HKDFParameters
 import org.bouncycastle.crypto.params.KeyParameter
 import org.bouncycastle.crypto.params.X25519PrivateKeyParameters
 import org.bouncycastle.crypto.params.X25519PublicKeyParameters
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 
 /** Cryptographic helpers for the wallet-role Connect session. */
 object ConnectCrypto {
@@ -73,7 +74,15 @@ object ConnectCrypto {
         val agreement = X25519Agreement()
         agreement.init(local)
         val shared = ByteArray(KEY_LENGTH)
-        agreement.calculateAgreement(peer, shared, 0)
+        try {
+            agreement.calculateAgreement(peer, shared, 0)
+        } catch (ex: RuntimeException) {
+            Arrays.fill(shared, 0.toByte())
+            throw ConnectProtocolException(
+                "x25519 agreement failed (invalid public key or all-zero shared secret)",
+                ex,
+            )
+        }
         if (isAllZero(shared)) {
             Arrays.fill(shared, 0.toByte())
             throw ConnectProtocolException("x25519 shared secret is all-zero (invalid public key)")
@@ -109,8 +118,8 @@ object ConnectCrypto {
         requireLength(key, KEY_LENGTH, "key")
         requireLength(sessionId, KEY_LENGTH, "sessionId")
 
-        val aad = buildAad(sessionId, direction, sequence)
         val nonce = nonceFromSequence(sequence)
+        val aad = buildAad(sessionId, direction, sequence)
         return runAead(true, key, nonce, aad, envelope)
     }
 
@@ -126,8 +135,8 @@ object ConnectCrypto {
         requireLength(key, KEY_LENGTH, "key")
         requireLength(sessionId, KEY_LENGTH, "sessionId")
 
-        val aad = buildAad(sessionId, direction, sequence)
         val nonce = nonceFromSequence(sequence)
+        val aad = buildAad(sessionId, direction, sequence)
         return runAead(false, key, nonce, aad, ciphertext)
     }
 
@@ -145,12 +154,17 @@ object ConnectCrypto {
         requireLength(sessionId, KEY_LENGTH, "sessionId")
         requireLength(appPublicKey, KEY_LENGTH, "appPublicKey")
         requireLength(walletPublicKey, KEY_LENGTH, "walletPublicKey")
-        if (accountId.isNullOrBlank()) {
-            throw ConnectProtocolException("accountId must not be empty")
+        val normalizedAccountId = try {
+            requireCanonicalI105Address(accountId ?: "", "accountId")
+        } catch (ex: IllegalArgumentException) {
+            throw ConnectProtocolException(
+                ex.message ?: "accountId must use a canonical I105 encoded account literal",
+                ex,
+            )
         }
 
         val prefix = "iroha-connect|approve|v1".toByteArray(StandardCharsets.UTF_8)
-        val accountBytes = accountId.toByteArray(StandardCharsets.UTF_8)
+        val accountBytes = normalizedAccountId.toByteArray(StandardCharsets.UTF_8)
         val fields = mutableListOf(
             "domain" to prefix,
             "sid" to sessionId,
@@ -195,7 +209,9 @@ object ConnectCrypto {
     }
 
     @JvmStatic
+    @Throws(ConnectProtocolException::class)
     fun nonceFromSequence(sequence: Long): ByteArray {
+        requireNonNegativeSequence(sequence)
         val nonce = ByteArray(NONCE_LENGTH)
         val buffer = ByteBuffer.wrap(nonce).order(ByteOrder.LITTLE_ENDIAN)
         buffer.putInt(0)
@@ -273,6 +289,13 @@ object ConnectCrypto {
             if (b.toInt() != 0) return false
         }
         return true
+    }
+
+    @Throws(ConnectProtocolException::class)
+    private fun requireNonNegativeSequence(sequence: Long) {
+        if (sequence < 0L) {
+            throw ConnectProtocolException("sequence must be non-negative")
+        }
     }
 
     @Throws(ConnectProtocolException::class)

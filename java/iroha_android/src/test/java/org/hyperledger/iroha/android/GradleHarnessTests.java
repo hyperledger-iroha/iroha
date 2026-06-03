@@ -57,6 +57,7 @@ public final class GradleHarnessTests {
         "org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClientTests",
         "org.hyperledger.iroha.android.client.websocket.ToriiWebSocketSubscriptionTests",
         "org.hyperledger.iroha.android.connect.ConnectErrorTests",
+        "org.hyperledger.iroha.android.connect.ConnectEnvelopeCodecTest",
         "org.hyperledger.iroha.android.connect.ConnectQueueJournalTests",
         "org.hyperledger.iroha.android.connect.ConnectRetryPolicyTests",
         "org.hyperledger.iroha.android.crypto.Blake2sTests",

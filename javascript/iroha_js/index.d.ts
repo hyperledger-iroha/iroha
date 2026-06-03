@@ -4305,6 +4305,39 @@ export type EthereumMainnetExecutionProvider =
     }
   | ((args: { method: string; params?: readonly unknown[] }) => unknown | Promise<unknown>);
 
+export type EthereumMainnetBeaconRestFetchResponse = {
+  readonly ok?: boolean;
+  readonly status?: number;
+  readonly statusText?: string;
+  json(): unknown | Promise<unknown>;
+};
+
+export type EthereumMainnetBeaconRestFetch = (
+  input: string,
+  init?: { method?: string; headers?: unknown },
+) => EthereumMainnetBeaconRestFetchResponse | Promise<EthereumMainnetBeaconRestFetchResponse>;
+
+export interface EthereumMainnetBeaconRestConsensusProviderOptions {
+  endpoint?: string | URL;
+  baseUrl?: string | URL;
+  baseURL?: string | URL;
+  base_url?: string | URL;
+  beaconRestUrl?: string | URL;
+  beacon_rest_url?: string | URL;
+  beaconRestEndpoint?: string | URL;
+  beacon_rest_endpoint?: string | URL;
+  fetch?: EthereumMainnetBeaconRestFetch;
+  fetchFn?: EthereumMainnetBeaconRestFetch;
+  fetch_fn?: EthereumMainnetBeaconRestFetch;
+  headers?: unknown;
+  syncCommitteeRoot?: string;
+  sync_committee_root?: string;
+  syncCommitteePayload?: EthSyncCommitteePayloadInput | BinaryLike;
+  sync_committee_payload?: EthSyncCommitteePayloadInput | BinaryLike;
+  verifyFinalityCheckpoint?: boolean;
+  verify_finality_checkpoint?: boolean;
+}
+
 export interface EthereumMainnetBeaconFinalityEvidenceInput {
   executionBlockNumber?: string | number | bigint;
   execution_block_number?: string | number | bigint;
@@ -4318,6 +4351,17 @@ export interface EthereumMainnetBeaconFinalityEvidenceInput {
   execution_receipts_root?: string;
   receiptsRoot?: string;
   receipts_root?: string;
+  finalizedHeaderRoot?: string;
+  finalized_header_root?: string;
+  beaconFinalizedRoot?: string;
+  beacon_finalized_root?: string;
+  syncCommitteeRoot?: string;
+  sync_committee_root?: string;
+  beaconSlot?: string | number | bigint;
+  beacon_slot?: string | number | bigint;
+  finalizedSlot?: string | number | bigint;
+  finalized_slot?: string | number | bigint;
+  slot?: string | number | bigint;
   [key: string]: unknown;
 }
 
@@ -4326,6 +4370,9 @@ export interface EthereumMainnetBeaconFinalityEvidence
   readonly executionBlockNumber: string;
   readonly executionBlockHash: string;
   readonly executionReceiptsRoot: string;
+  readonly finalizedHeaderRoot?: string;
+  readonly syncCommitteeRoot?: string;
+  readonly beaconSlot?: string;
 }
 
 export interface EthereumMainnetConsensusProviderInput {
@@ -4341,6 +4388,26 @@ export type EthereumMainnetConsensusProvider = {
   ): EthereumMainnetBeaconFinalityEvidenceInput | Promise<EthereumMainnetBeaconFinalityEvidenceInput>;
 };
 
+export class EthereumMainnetBeaconRestConsensusProvider
+  implements EthereumMainnetConsensusProvider {
+  constructor(options: EthereumMainnetBeaconRestConsensusProviderOptions | string | URL);
+  collectFinalityEvidence(
+    input: EthereumMainnetConsensusProviderInput,
+    options?: {
+      fetch?: EthereumMainnetBeaconRestFetch;
+      fetchFn?: EthereumMainnetBeaconRestFetch;
+      fetch_fn?: EthereumMainnetBeaconRestFetch;
+      headers?: unknown;
+      syncCommitteeRoot?: string;
+      sync_committee_root?: string;
+      syncCommitteePayload?: EthSyncCommitteePayloadInput | BinaryLike;
+      sync_committee_payload?: EthSyncCommitteePayloadInput | BinaryLike;
+      verifyFinalityCheckpoint?: boolean;
+      verify_finality_checkpoint?: boolean;
+    } & Record<string, unknown>,
+  ): Promise<EthereumMainnetBeaconFinalityEvidence>;
+}
+
 export interface EthereumMainnetInboundEvidenceInput {
   sourceDomain?: SccpDomainIdInput;
   source_domain?: SccpDomainIdInput;
@@ -4349,6 +4416,10 @@ export interface EthereumMainnetInboundEvidenceInput {
   transactionHash?: string;
   transaction_hash?: string;
   receipt?: Record<string, unknown>;
+  blockReceipts?: readonly Record<string, unknown>[];
+  block_receipts?: readonly Record<string, unknown>[];
+  receiptBlockReceipts?: readonly Record<string, unknown>[];
+  receipt_block_receipts?: readonly Record<string, unknown>[];
   block?: Record<string, unknown>;
   blockHash?: string;
   block_hash?: string;
@@ -4366,6 +4437,8 @@ export interface EthereumMainnetInboundEvidenceInput {
   source_bridge_emitter_address?: string;
   expectedSourceBridgeEmitterAddress?: string;
   expected_source_bridge_emitter_address?: string;
+  inclusionBranch?: readonly BinaryLike[];
+  inclusion_branch?: readonly BinaryLike[];
   sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
   source_verifier_material?: SccpSourceVerifierMaterialInput;
   [key: string]: unknown;
@@ -4917,6 +4990,17 @@ export function buildSubstrateSccpSubmission(
 ): SubstrateSccpSubmission;
 export function canonicalEvmSccpReceiptProofBytes(input: EvmSccpReceiptProofInput): Uint8Array;
 export function evmSccpReceiptProofHash(input: EvmSccpReceiptProofInput): string;
+export function canonicalEvmReceiptRlp(receipt: Record<string, unknown>): Uint8Array;
+export function evmReceiptTrieKey(transactionIndex: number | bigint | string): string;
+export function buildEvmReceiptTrieProofFromReceipts(
+  receipts: readonly Record<string, unknown>[],
+  options: { transactionIndex?: number | bigint | string; transaction_index?: number | bigint | string },
+): {
+  readonly receiptsRoot: string;
+  readonly receiptRlp: string;
+  readonly receiptTrieKey: string;
+  readonly receiptTrieProofNodes: readonly Uint8Array[];
+};
 export function evmSccpSourceEventTopic(): string;
 export function canonicalEvmReceiptRootMptValue(receiptRoot: string): Uint8Array;
 export function canonicalEthSyncCommitteePayloadBytes(input: EthSyncCommitteePayloadInput): Uint8Array;

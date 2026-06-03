@@ -151,6 +151,7 @@ def fake_opener_for(
     route_canary_transaction_block_hash=None,
     route_canary_transaction_block_number=None,
     duplicate_route_canary_log=False,
+    extra_route_canary_log_index=None,
     route_canary_removed_log=False,
     route_canary_non_object_log=False,
 ):
@@ -270,6 +271,10 @@ def fake_opener_for(
     route_canary_logs = [route_canary_log]
     if duplicate_route_canary_log:
         route_canary_logs.append(dict(route_canary_log))
+    if extra_route_canary_log_index is not None:
+        extra_log = dict(route_canary_log)
+        extra_log["logIndex"] = extra_route_canary_log_index
+        route_canary_logs.append(extra_log)
     if route_canary_non_object_log:
         route_canary_logs.append("not-a-log")
     call_words = {
@@ -741,6 +746,46 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     )
 
 
+def test_live_evm_eth_toml_requires_finalized_block_tag():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://ethereum.example",
+            domain=module.evidence.SCCP_DOMAIN_ETH,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="latest",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    assert summary["block_tag"] == "latest"
+    assert "offline_toml_sha256" not in summary
+    try:
+        module.render_offline_toml(summary)
+    except ValueError as exc:
+        assert "--block-tag finalized" in str(exc)
+    else:
+        raise AssertionError("Ethereum destination TOML rendered from non-finalized block tag")
+
+
 def test_live_evm_evidence_rejects_aliased_verifier_and_bridge():
     module = load_live_module()
     fake = fake_opener_for(module, verifier_equals_bridge=True)
@@ -918,6 +963,11 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
         (
             fake_opener_for(module, duplicate_route_canary_log=True),
             "more than one matching MessageProofAccepted",
+            None,
+        ),
+        (
+            fake_opener_for(module, extra_route_canary_log_index="0x1"),
+            "unexpected log index",
             None,
         ),
         (
@@ -1332,6 +1382,43 @@ def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():
             raise AssertionError(
                 f"unstable/noncanonical block tag {value!r} was accepted"
             )
+
+
+def test_live_evm_cli_defaults_eth_to_finalized_and_bsc_to_latest():
+    module = load_live_module()
+    parser = module.build_parser()
+
+    eth_fake = fake_opener_for(module)
+    eth_args = parser.parse_args(
+        [
+            "--rpc-url",
+            "https://ethereum.example",
+            "--domain",
+            "eth",
+            "--bridge-address",
+            eth_fake.bridge,
+        ]
+    )
+    eth_summary = module.collect_live_evidence(eth_args, opener=eth_fake.opener)
+    assert eth_summary["block_tag"] == "finalized"
+
+    bsc_fake = fake_opener_for(
+        module,
+        rpc_chain_id=56,
+        target_domain=module.evidence.SCCP_DOMAIN_BSC,
+    )
+    bsc_args = parser.parse_args(
+        [
+            "--rpc-url",
+            "https://bsc.example",
+            "--domain",
+            "bsc",
+            "--bridge-address",
+            bsc_fake.bridge,
+        ]
+    )
+    bsc_summary = module.collect_live_evidence(bsc_args, opener=bsc_fake.opener)
+    assert bsc_summary["block_tag"] == "latest"
 
 
 def test_live_evm_direct_collectors_reject_unstable_block_tag_before_rpc():

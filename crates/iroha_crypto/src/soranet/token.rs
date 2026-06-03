@@ -72,41 +72,18 @@ impl AdmissionToken {
         }
 
         let mut cursor = TOKEN_MAGIC.len() + 1;
-        let flags = bytes[cursor];
-        cursor += 1;
+        let flags = read_token_field::<1>(bytes, &mut cursor)?[0];
         if flags & !TOKEN_FLAG_MASK != 0 {
             return Err(DecodeError::InvalidFlags(flags));
         }
 
-        let issued_at = u64::from_be_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
-        cursor += 8;
-        let expires_at = u64::from_be_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
-        cursor += 8;
-
-        let mut relay_id = [0u8; 32];
-        relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-
-        let mut transcript_hash = [0u8; 32];
-        transcript_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-
-        let mut nonce = [0u8; 16];
-        nonce.copy_from_slice(&bytes[cursor..cursor + 16]);
-        cursor += 16;
-
-        let mut issuer_fingerprint = [0u8; 32];
-        issuer_fingerprint.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-
-        if cursor + 2 > bytes.len() {
-            return Err(DecodeError::Truncated {
-                expected: cursor + 2,
-                actual: bytes.len(),
-            });
-        }
-        let sig_len = u16::from_be_bytes(bytes[cursor..cursor + 2].try_into().unwrap()) as usize;
-        cursor += 2;
+        let issued_at = u64::from_be_bytes(read_token_field::<8>(bytes, &mut cursor)?);
+        let expires_at = u64::from_be_bytes(read_token_field::<8>(bytes, &mut cursor)?);
+        let relay_id = read_token_field::<32>(bytes, &mut cursor)?;
+        let transcript_hash = read_token_field::<32>(bytes, &mut cursor)?;
+        let nonce = read_token_field::<16>(bytes, &mut cursor)?;
+        let issuer_fingerprint = read_token_field::<32>(bytes, &mut cursor)?;
+        let sig_len = u16::from_be_bytes(read_token_field::<2>(bytes, &mut cursor)?) as usize;
         if cursor + sig_len != bytes.len() {
             return Err(DecodeError::SignatureLength {
                 expected: sig_len,
@@ -275,6 +252,27 @@ impl AdmissionToken {
             &self.issuer_fingerprint,
         )
     }
+}
+
+fn read_token_field<const N: usize>(
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<[u8; N], DecodeError> {
+    let expected = cursor.checked_add(N).ok_or(DecodeError::Truncated {
+        expected: usize::MAX,
+        actual: bytes.len(),
+    })?;
+    if expected > bytes.len() {
+        return Err(DecodeError::Truncated {
+            expected,
+            actual: bytes.len(),
+        });
+    }
+
+    let mut out = [0u8; N];
+    out.copy_from_slice(&bytes[*cursor..expected]);
+    *cursor = expected;
+    Ok(out)
 }
 
 /// Admission token verifier configured with an issuer key.
@@ -1081,6 +1079,34 @@ mod tests {
         assert_eq!(token.token_id(), decoded.token_id());
         assert_eq!(token.relay_id, decoded.relay_id);
         assert_eq!(token.transcript_hash, decoded.transcript_hash);
+    }
+
+    #[test]
+    fn decode_truncated_token_prefixes_fail_closed() {
+        let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
+            .expect("ML-DSA keypair generation should succeed");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let mut rng = StdRng::seed_from_u64(0xFACE_FEED);
+        let token = AdmissionToken::mint(
+            MlDsaSuite::MlDsa44,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
+            UNIX_EPOCH + Duration::from_secs(1_700_000_600),
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+        let encoded = token.encode();
+
+        for len in 0..encoded.len() {
+            assert!(
+                AdmissionToken::decode(&encoded[..len]).is_err(),
+                "truncated prefix of length {len} must fail closed"
+            );
+        }
     }
 
     #[test]

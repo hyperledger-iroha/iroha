@@ -66,6 +66,7 @@ import {
   bscValidatorSetTransitionMessageHash,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
+  EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
   ethereumMainnetSccpDestinationBinding,
   BscMainnetSccp,
@@ -874,11 +875,11 @@ test("package declarations expose SCCP witness-provider hooks for portal provers
 test("package declarations expose Ethereum mainnet finality evidence hooks", () => {
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidenceInput[\s\S]*executionBlockNumber\?: string \| number \| bigint;[\s\S]*executionBlockHash\?: string;[\s\S]*executionReceiptsRoot\?: string;[\s\S]*finalizedHeaderRoot\?: string;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*beaconSlot\?: string \| number \| bigint;[\s\S]*finalizedSlot\?: string \| number \| bigint;[\s\S]*slot\?: string \| number \| bigint;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;/,
+    /export interface EthereumMainnetBeaconFinalityEvidence[\s\S]*readonly executionBlockNumber: string;[\s\S]*readonly executionBlockHash: string;[\s\S]*readonly executionReceiptsRoot: string;[\s\S]*readonly finalizedHeaderRoot\?: string;[\s\S]*readonly syncCommitteeRoot\?: string;[\s\S]*readonly beaconSlot\?: string;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -887,6 +888,14 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
   assert.match(
     DECLARATIONS_TEXT,
     /export type EthereumMainnetConsensusProvider = \{[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): EthereumMainnetBeaconFinalityEvidenceInput \| Promise<EthereumMainnetBeaconFinalityEvidenceInput>;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface EthereumMainnetBeaconRestConsensusProviderOptions[\s\S]*endpoint\?: string \| URL;[\s\S]*fetch\?: EthereumMainnetBeaconRestFetch;[\s\S]*syncCommitteeRoot\?: string;[\s\S]*syncCommitteePayload\?: EthSyncCommitteePayloadInput \| BinaryLike;[\s\S]*verifyFinalityCheckpoint\?: boolean;/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export class EthereumMainnetBeaconRestConsensusProvider[\s\S]*constructor\(options: EthereumMainnetBeaconRestConsensusProviderOptions \| string \| URL\);[\s\S]*collectFinalityEvidence\([\s\S]*input: EthereumMainnetConsensusProviderInput,[\s\S]*\): Promise<EthereumMainnetBeaconFinalityEvidence>;/,
   );
   assert.match(
     DECLARATIONS_TEXT,
@@ -899,6 +908,14 @@ test("package declarations expose Ethereum mainnet finality evidence hooks", () 
 });
 
 test("package declarations expose Ethereum mainnet SCCP facade methods", () => {
+  assert.equal(
+    new EthereumMainnetBeaconRestConsensusProvider({
+      endpoint: "https://beacon.example",
+      fetch: async () => ({ ok: true, json: async () => ({ data: {} }) }),
+      syncCommitteeRoot: "0x".padEnd(66, "1"),
+    }) instanceof EthereumMainnetBeaconRestConsensusProvider,
+    true,
+  );
   const declaration = declarationClass("EthereumMainnetSccp");
   assert.match(declaration, /validateExecutionProviderMainnet\([\s\S]*\): Promise<unknown>;/u);
   assert.match(
@@ -2331,11 +2348,13 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     finalityPolicyHash: `0x${"88".repeat(32)}`,
     bridgeAddress: `0x${"11".repeat(20)}`,
     sourceBridgeEmitterCodeHash: `0x${"77".repeat(32)}`,
+    networkId: SCCP_ETH_MAINNET_NETWORK_ID,
+    configHash: "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b",
   };
   assert.ok(canonicalSccpSourceVerifierMaterialBytes(material).length > 0);
   assert.equal(
     sccpSourceVerifierMaterialHash(material),
-    "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+    "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
   );
   assert.equal(SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1, "sccp-source-adapter-v1");
   assert.equal(SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1, "fastpq-lane-balanced");
@@ -2357,7 +2376,7 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.ok(canonicalSccpSourceAdapterEngineDeploymentBytes(deployment).length > 0);
   assert.equal(
     sccpSourceAdapterEngineDeploymentHash(deployment),
-    "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+    "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
   );
   assert.equal(sccpDestinationBindingKey(SCCP_DOMAIN_SOL), "sccp:0:3:sol:solana-program-v1:2");
   assert.equal(

@@ -35,6 +35,26 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
         "python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py",
+        "pytests/scripts/sccp_release_bundle_test.py",
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_evm_destination_evidence_test.py",
+        "pytests/scripts/sccp_evm_live_evidence_test.py",
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+        "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+        "pytests/scripts/sccp_solana_destination_evidence_test.py",
+        "pytests/scripts/sccp_solana_live_evidence_test.py",
+        "pytests/scripts/sccp_solana_source_state_evidence_test.py",
+        "pytests/scripts/sccp_substrate_destination_evidence_test.py",
+        "pytests/scripts/sccp_substrate_live_evidence_test.py",
+        "pytests/scripts/sccp_substrate_source_evidence_test.py",
+        "pytests/scripts/sccp_ton_destination_evidence_test.py",
+        "pytests/scripts/sccp_ton_live_evidence_test.py",
+        "pytests/scripts/sccp_ton_source_state_evidence_test.py",
+        "pytests/scripts/sccp_tron_live_evidence_test.py",
+        "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
     ),
     "js-sdk": (
         "node --test",
@@ -97,9 +117,9 @@ SCCP_DOMAIN_TRON = 5
 SCCP_DOMAIN_SORA_KUSAMA = 6
 SCCP_DOMAIN_SORA_POLKADOT = 7
 SCCP_DOMAIN_SORA2 = 8
-ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_BSC
-ACTIVE_LAUNCH_CHAIN = "bsc"
-ACTIVE_LAUNCH_POLICY = "BscMainnetLane"
+ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
+ACTIVE_LAUNCH_CHAIN = "eth"
+ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
 ACTIVE_LAUNCH_DISPLAY = f"{ACTIVE_LAUNCH_CHAIN.upper()} mainnet"
 ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_ETH,

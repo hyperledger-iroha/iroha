@@ -439,6 +439,7 @@ impl CapabilityNegotiation {
     where
         F: FnOnce(&TransportCapabilityResolution),
     {
+        validate_capability_report(&report)?;
         let mut record = Some(record);
         let local_frame = TransportCapabilitiesFrame {
             endpoint_role: streaming::CapabilityRole::Viewer,
@@ -488,18 +489,22 @@ impl CapabilityNegotiation {
                 .min(report.max_datagram_size);
         }
 
+        let expected_stream_id = report.stream_id;
+        let expected_version = report.protocol_version;
+        let expected_dplpmtud = report.dplpmtud;
         conn.send_control_frame(&ControlFrame::CapabilityReport(report))
             .await?;
         loop {
             let response = conn.next_control_frame().await?;
             match response {
                 ControlFrame::CapabilityAck(ack) => {
-                    if ack.max_datagram_size != resolution.max_segment_datagram_size {
-                        return Err(Error::ProtocolViolation(format!(
-                            "capability ack reported max_datagram_size={} but negotiated {}",
-                            ack.max_datagram_size, resolution.max_segment_datagram_size
-                        )));
-                    }
+                    validate_capability_ack_binding(
+                        &ack,
+                        expected_stream_id,
+                        expected_version,
+                        expected_dplpmtud,
+                        resolution,
+                    )?;
                     conn.apply_transport_resolution(resolution);
                     if let Some(callback) = record.take() {
                         callback(&resolution);
@@ -569,6 +574,7 @@ impl CapabilityNegotiation {
             let frame = conn.next_control_frame().await?;
             match frame {
                 ControlFrame::CapabilityReport(report) => {
+                    validate_capability_report(&report)?;
                     if resolution.use_datagram {
                         if report.max_datagram_size == 0 {
                             return Err(Error::ProtocolViolation(
@@ -598,6 +604,54 @@ impl CapabilityNegotiation {
             }
         }
     }
+}
+
+fn validate_capability_report(report: &CapabilityReport) -> Result<()> {
+    if report.endpoint_role != streaming::CapabilityRole::Viewer {
+        return Err(Error::ProtocolViolation(format!(
+            "expected viewer capability report, received {role:?}",
+            role = report.endpoint_role
+        )));
+    }
+    if report.protocol_version == 0 {
+        return Err(Error::ProtocolViolation(
+            "capability report advertised zero protocol version".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_capability_ack_binding(
+    ack: &CapabilityAck,
+    expected_stream_id: streaming::Hash,
+    expected_version: u16,
+    expected_dplpmtud: bool,
+    resolution: TransportCapabilityResolution,
+) -> Result<()> {
+    if ack.stream_id != expected_stream_id {
+        return Err(Error::ProtocolViolation(
+            "capability ack stream_id does not match report".into(),
+        ));
+    }
+    if ack.accepted_version != expected_version {
+        return Err(Error::ProtocolViolation(format!(
+            "capability ack accepted_version={} but report used {}",
+            ack.accepted_version, expected_version
+        )));
+    }
+    if ack.max_datagram_size != resolution.max_segment_datagram_size {
+        return Err(Error::ProtocolViolation(format!(
+            "capability ack reported max_datagram_size={} but negotiated {}",
+            ack.max_datagram_size, resolution.max_segment_datagram_size
+        )));
+    }
+    if ack.dplpmtud != expected_dplpmtud {
+        return Err(Error::ProtocolViolation(format!(
+            "capability ack dplpmtud={} but report used {}",
+            ack.dplpmtud, expected_dplpmtud
+        )));
+    }
+    Ok(())
 }
 
 struct ControlStreamWriter {
@@ -901,6 +955,145 @@ mod tests {
         }
     }
 
+    fn capability_report(protocol_version: u16) -> CapabilityReport {
+        CapabilityReport {
+            stream_id: hash(11),
+            endpoint_role: CapabilityRole::Viewer,
+            protocol_version,
+            max_resolution: Resolution::R1080p,
+            hdr_supported: false,
+            capture_hdr: false,
+            neural_bundles: vec!["bundle-v1".into()],
+            audio_caps: AudioCapability {
+                sample_rates: vec![48_000],
+                ambisonics: false,
+                max_channels: 2,
+            },
+            feature_bits: CapabilityFlags::from_bits(0b10),
+            max_datagram_size: 1_024,
+            dplpmtud: false,
+        }
+    }
+
+    fn capability_ack(report: &CapabilityReport, max_datagram_size: u16) -> CapabilityAck {
+        CapabilityAck {
+            stream_id: report.stream_id,
+            accepted_version: report.protocol_version,
+            negotiated_features: report.feature_bits,
+            max_datagram_size,
+            dplpmtud: report.dplpmtud,
+        }
+    }
+
+    fn capability_resolution() -> TransportCapabilityResolution {
+        let capabilities = TransportCapabilities {
+            max_segment_datagram_size: 1_024,
+            ..TransportCapabilities::kyber768_default()
+        };
+        norito::streaming::resolve_transport_capabilities(&capabilities, &capabilities)
+            .expect("default capabilities resolve")
+    }
+
+    #[test]
+    fn capability_report_zero_protocol_version_rejected() {
+        let report = capability_report(0);
+        let err = validate_capability_report(&report).expect_err("zero protocol version rejected");
+        match err {
+            Error::ProtocolViolation(reason) => {
+                assert!(reason.contains("zero protocol version"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capability_report_non_viewer_role_rejected() {
+        let mut report = capability_report(1);
+        report.endpoint_role = CapabilityRole::Publisher;
+        let err = validate_capability_report(&report).expect_err("non-viewer report role rejected");
+        match err {
+            Error::ProtocolViolation(reason) => {
+                assert!(reason.contains("expected viewer capability report"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capability_ack_binding_rejects_mismatched_report_echo() {
+        let report = capability_report(3);
+        let resolution = capability_resolution();
+        let valid_ack = capability_ack(&report, resolution.max_segment_datagram_size);
+        validate_capability_ack_binding(
+            &valid_ack,
+            report.stream_id,
+            report.protocol_version,
+            report.dplpmtud,
+            resolution,
+        )
+        .expect("matching ack accepted");
+
+        let mut wrong_stream = valid_ack.clone();
+        wrong_stream.stream_id = hash(12);
+        let err = validate_capability_ack_binding(
+            &wrong_stream,
+            report.stream_id,
+            report.protocol_version,
+            report.dplpmtud,
+            resolution,
+        )
+        .expect_err("stream id mismatch rejected");
+        match err {
+            Error::ProtocolViolation(reason) => assert!(reason.contains("stream_id")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut wrong_version = valid_ack.clone();
+        wrong_version.accepted_version = 2;
+        let err = validate_capability_ack_binding(
+            &wrong_version,
+            report.stream_id,
+            report.protocol_version,
+            report.dplpmtud,
+            resolution,
+        )
+        .expect_err("version mismatch rejected");
+        match err {
+            Error::ProtocolViolation(reason) => assert!(reason.contains("accepted_version")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut wrong_datagram = valid_ack;
+        wrong_datagram.max_datagram_size = resolution.max_segment_datagram_size - 1;
+        let err = validate_capability_ack_binding(
+            &wrong_datagram,
+            report.stream_id,
+            report.protocol_version,
+            report.dplpmtud,
+            resolution,
+        )
+        .expect_err("datagram mismatch rejected");
+        match err {
+            Error::ProtocolViolation(reason) => assert!(reason.contains("max_datagram_size")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let mut wrong_dplpmtud = capability_ack(&report, resolution.max_segment_datagram_size);
+        wrong_dplpmtud.dplpmtud = !report.dplpmtud;
+        let err = validate_capability_ack_binding(
+            &wrong_dplpmtud,
+            report.stream_id,
+            report.protocol_version,
+            report.dplpmtud,
+            resolution,
+        )
+        .expect_err("dplpmtud mismatch rejected");
+        match err {
+            Error::ProtocolViolation(reason) => assert!(reason.contains("dplpmtud")),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn capability_negotiation_and_datagram_roundtrip() {
         let settings = TransportConfigSettings::default();
@@ -1137,7 +1330,9 @@ mod tests {
                 )
                 .await
                 .expect("handshake");
-                session.record_transport_capabilities(resolution.clone());
+                session
+                    .record_transport_capabilities(resolution.clone())
+                    .expect("negotiated transport capabilities are valid");
 
                 let ack = CapabilityAck {
                     stream_id: report.stream_id,
@@ -1161,11 +1356,15 @@ mod tests {
                         .expect("frame")
                     {
                         ControlFrame::FeedbackHint(hint) => {
-                            session.process_feedback_hint(&hint);
+                            session
+                                .process_feedback_hint(&hint)
+                                .expect("feedback hint stream id matches session");
                             received_hint = true;
                         }
                         ControlFrame::ReceiverReport(report) => {
-                            let parity = session.process_receiver_report(&report);
+                            let parity = session
+                                .process_receiver_report(&report)
+                                .expect("receiver report stream id matches session");
                             assert_eq!(parity, 2);
                             received_report = true;
                         }

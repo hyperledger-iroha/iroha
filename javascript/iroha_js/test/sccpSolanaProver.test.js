@@ -13,6 +13,7 @@ import {
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_SORA_POLKADOT,
   SCCP_DOMAIN_SORA2,
+  SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_CODEC_TEXT_UTF8,
   SCCP_CODEC_EVM_HEX,
   SCCP_CODEC_SOLANA_BASE58,
@@ -6818,6 +6819,10 @@ const sampleSourceRecordInput = (sourceDomain) => {
     input.bridgeAddress = `0x${"11".repeat(20)}`;
     input.sourceBridgeEmitterCodeHash = `0x${"77".repeat(32)}`;
   }
+  if (sourceDomain === SCCP_DOMAIN_ETH) {
+    input.networkId = SCCP_ETH_MAINNET_NETWORK_ID;
+    input.configHash = "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
+  }
   if (
     [
       SCCP_DOMAIN_SOL,
@@ -6839,7 +6844,7 @@ const sampleSourceRecordInput = (sourceDomain) => {
 
 test("derives SCCP source material and deployment record hashes for UI tooling", () => {
   const materialVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd"],
+    [SCCP_DOMAIN_ETH, "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"],
     [SCCP_DOMAIN_BSC, "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a"],
     [SCCP_DOMAIN_SOL, "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331"],
     [SCCP_DOMAIN_TON, "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc"],
@@ -6849,7 +6854,7 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
     [SCCP_DOMAIN_SORA2, "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d"],
   ]);
   const deploymentVectors = new Map([
-    [SCCP_DOMAIN_ETH, "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d"],
+    [SCCP_DOMAIN_ETH, "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4"],
     [SCCP_DOMAIN_BSC, "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d"],
     [SCCP_DOMAIN_SOL, "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc"],
     [SCCP_DOMAIN_TON, "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887"],
@@ -6914,7 +6919,23 @@ test("derives SCCP source material and deployment record hashes for UI tooling",
         ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
         networkId: `0x${"33".repeat(32)}`,
       }),
-    /sourceBridgeNetworkId is not used for sourceDomain/,
+    /sourceBridgeNetworkId must be Ethereum mainnet chain id/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
+        ownerAddress: `0x${"22".repeat(20)}`,
+      }),
+    /sourceBridgeOwnerAddress is not used for sourceDomain/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceVerifierMaterial({
+        ...sampleSourceRecordInput(SCCP_DOMAIN_ETH),
+        configHash: `0x${"99".repeat(32)}`,
+      }),
+    /sourceBridgeConfigHash must match ETH source bridge config fields/,
   );
   assert.throws(
     () =>

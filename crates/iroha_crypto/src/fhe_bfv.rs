@@ -372,9 +372,10 @@ impl BfvIdentifierPublicParameters {
     /// Validate the public parameters and envelope capacity.
     ///
     /// # Errors
-    /// Returns [`BfvError`] when the envelope is internally inconsistent.
+    /// Returns [`BfvError`] when the envelope is internally inconsistent or
+    /// does not use a registered production BFV parameter profile.
     pub fn validate(&self) -> Result<(), BfvError> {
-        self.parameters.validate()?;
+        validate_registered_bfv_parameters(&self.parameters)?;
         validate_public_key(&self.parameters, &self.public_key)?;
         if self.max_input_bytes == 0 {
             return Err(BfvError::InvalidParameters(
@@ -1801,7 +1802,7 @@ mod tests {
 
     #[test]
     fn identifier_envelope_roundtrip() {
-        let params = sample_identifier_parameters();
+        let params = ram_lfe_bfv_parameters_v1();
         let (public_parameters, secret_key, _) = derive_identifier_key_material_from_seed(
             &params,
             63,
@@ -1818,6 +1819,32 @@ mod tests {
         let plaintext =
             decrypt_identifier(&public_parameters, &secret_key, &ciphertext).expect("decrypt");
         assert_eq!(plaintext, b"+15551234567");
+    }
+
+    #[test]
+    fn identifier_public_parameters_reject_unregistered_bfv_profile() {
+        let params = sample_identifier_parameters();
+        params
+            .validate()
+            .expect("sample profile is structurally valid");
+        assert_ne!(params, ram_lfe_bfv_parameters_v1());
+        let (_, public_key, _) =
+            keygen_from_seed(&params, b"bfv-unregistered-identifier-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 63,
+        };
+
+        let err = public_parameters
+            .validate()
+            .expect_err("identifier public parameters must use a registered BFV profile");
+        assert!(err.to_string().contains("not registered"));
+
+        let err =
+            encrypt_identifier_from_seed(&public_parameters, b"abc", b"bfv-unregistered-input")
+                .expect_err("identifier encryption must reject unregistered BFV profiles");
+        assert!(err.to_string().contains("not registered"));
     }
 
     #[test]

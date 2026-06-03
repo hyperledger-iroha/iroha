@@ -1240,6 +1240,30 @@ pub mod account {
     );
 }
 
+mod zk_ace {
+    use iroha_executor_data_model::permission::zk_ace::CanManageZkAceIdentityForAccount;
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanManageZkAceIdentityForAccount {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            account::Owner {
+                account: &self.account,
+            }
+            .validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            self.validate_grant(authority, context, host)
+        }
+    }
+}
+
 pub mod trigger {
     //! Module with pass conditions for trigger related tokens
     use iroha_executor_data_model::permission::trigger::{

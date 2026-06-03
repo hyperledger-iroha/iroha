@@ -8,10 +8,10 @@ ETH_SOURCE_ADAPTER_VERIFIER_VK_HASH_VECTOR = (
     "2140903293411cad0f0eb217d8beb18d3a188edf7bba455098589a2409445e46"
 )
 ETH_SOURCE_VERIFIER_MATERIAL_HASH_VECTOR = (
-    "035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd"
+    "4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77"
 )
 ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR = (
-    "d08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d"
+    "feb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4"
 )
 
 
@@ -426,9 +426,15 @@ def test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding():
         in rendered
     )
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
-    assert "source_bridge_network_id" not in rendered
+    assert (
+        'source_bridge_network_id = "0x'
+        + module.eth_source_bridge_network_id().hex()
+        + '"'
+        in rendered
+    )
     assert "source_bridge_owner_address" not in rendered
-    assert "source_bridge_config_hash" not in rendered
+    assert 'source_bridge_config_hash = "0x' in rendered
+    assert "# sccp_eth_source_bridge_config_hash" in rendered
 
 
 def test_eth_source_evidence_rejects_boolean_receipt_block_number():
@@ -565,6 +571,46 @@ def test_eth_source_record_hashes_match_rust_vectors():
         module.eth_source_adapter_engine_deployment_record_hash(args).hex()
         == ETH_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH_VECTOR
     )
+
+
+def test_eth_source_bridge_config_hash_binds_mainnet_lane_and_code_hash():
+    module = load_evidence_module()
+    args = eth_args(module)
+    config_hash = module.eth_source_bridge_config_hash(
+        bridge_address=args.bridge_address,
+        source_bridge_code_hash=args.source_bridge_emitter_code_hash,
+        network_id=module.eth_source_bridge_network_id(),
+        source_domain=1,
+        target_domain=0,
+    )
+
+    assert any(config_hash)
+    assert config_hash != module.eth_source_bridge_config_hash(
+        bridge_address=args.bridge_address,
+        source_bridge_code_hash=bytes.fromhex("78" * 32),
+        network_id=module.eth_source_bridge_network_id(),
+        source_domain=1,
+        target_domain=0,
+    )
+    for kwargs, expected in (
+        ({"network_id": (56).to_bytes(32, "big")}, "source_bridge_network_id"),
+        ({"source_domain": 2}, "source_domain must be ETH"),
+        ({"target_domain": 1}, "target_domain must be SORA"),
+    ):
+        params = {
+            "bridge_address": args.bridge_address,
+            "source_bridge_code_hash": args.source_bridge_emitter_code_hash,
+            "network_id": module.eth_source_bridge_network_id(),
+            "source_domain": 1,
+            "target_domain": 0,
+        }
+        params.update(kwargs)
+        try:
+            module.eth_source_bridge_config_hash(**params)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("invalid ETH source bridge config hash input was accepted")
 
 
 def test_eth_direct_record_hashes_reject_zero_production_inputs():

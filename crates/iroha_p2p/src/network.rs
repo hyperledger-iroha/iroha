@@ -184,17 +184,25 @@ fn runtime_from_handshake(
         signed_ticket_public_key,
     } = pow;
 
-    let pow_params = PowParameters::new(difficulty, max_future_skew, min_ticket_ttl);
-    let puzzle_params = puzzle.map(|cfg| {
-        puzzle::Parameters::new(
-            cfg.memory_kib,
-            cfg.time_cost,
-            cfg.lanes,
-            difficulty,
-            max_future_skew,
-            min_ticket_ttl,
-        )
-    });
+    let pow_params =
+        PowParameters::try_new(difficulty, max_future_skew, min_ticket_ttl).map_err(|err| {
+            Error::HandshakeSoranet(format!("invalid soranet PoW configuration: {err}"))
+        })?;
+    let puzzle_params = puzzle
+        .map(|cfg| {
+            puzzle::Parameters::try_new(
+                cfg.memory_kib,
+                cfg.time_cost,
+                cfg.lanes,
+                difficulty,
+                max_future_skew,
+                min_ticket_ttl,
+            )
+            .map_err(|err| {
+                Error::HandshakeSoranet(format!("invalid soranet puzzle configuration: {err}"))
+            })
+        })
+        .transpose()?;
 
     let signed_ticket_public_key = signed_ticket_public_key
         .map(|key| {
@@ -316,6 +324,27 @@ mod runtime_tests {
         assert_eq!(puzzle.memory_kib().get(), 64 * 1024);
         assert_eq!(puzzle.time_cost().get(), 3);
         assert_eq!(puzzle.lanes().get(), 2);
+    }
+
+    #[test]
+    fn runtime_from_handshake_rejects_invalid_pow_bounds() {
+        let mut handshake = ActualSoranetHandshake::default();
+        handshake.pow.required = true;
+        handshake.pow.max_future_skew = Duration::from_secs(30);
+        handshake.pow.min_ticket_ttl = Duration::from_secs(60);
+
+        let err = runtime_from_handshake(handshake).expect_err("invalid PoW bounds must fail");
+        match err {
+            Error::HandshakeSoranet(message) => {
+                assert!(
+                    message.contains("PoW")
+                        && message.contains("max_future_skew")
+                        && message.contains("min_ttl"),
+                    "expected PoW bounds validation failure, got {message}"
+                );
+            }
+            other => panic!("unexpected error type: {other:?}"),
+        }
     }
 
     #[test]

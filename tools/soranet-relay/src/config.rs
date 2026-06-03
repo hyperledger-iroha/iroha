@@ -1526,12 +1526,17 @@ impl TokenConfig {
             Arc::new(Mutex::new(InMemoryTokenStore::new(store_limits)))
         };
 
-        let verifier = AdmissionTokenVerifier::new(
+        let verifier = AdmissionTokenVerifier::try_new(
             MlDsaSuite::MlDsa44,
             public_key,
             Duration::from_secs(self.max_ttl_secs),
             Duration::from_secs(self.clock_skew_secs),
         )
+        .map_err(|err| {
+            ConfigError::Token(format!(
+                "invalid pow.token.issuer_public_key_hex verifier key: {err}"
+            ))
+        })?
         .with_replay_store(store);
 
         let mut revocations = Vec::with_capacity(self.revocation_list_hex.len());
@@ -3981,6 +3986,25 @@ mod tests {
         assert_eq!(policy.revocations.len(), 3);
         let expected_fp = compute_issuer_fingerprint(keypair.public_key());
         assert_eq!(policy.verifier.issuer_fingerprint(), &expected_fp);
+    }
+
+    #[test]
+    fn token_config_rejects_invalid_issuer_key_without_panic() {
+        let mut cfg = TokenConfig {
+            enabled: true,
+            issuer_public_key_hex: Some(hex::encode([0x42; 32])),
+            ..TokenConfig::default()
+        };
+
+        cfg.apply_defaults();
+        cfg.validate().expect("token config validates");
+        match cfg.build_policy() {
+            Err(ConfigError::Token(message)) => assert!(
+                message.contains("invalid pow.token.issuer_public_key_hex verifier key"),
+                "unexpected token config error: {message}"
+            ),
+            other => panic!("expected token config error, got {other:?}"),
+        }
     }
 
     #[test]

@@ -26,6 +26,9 @@ class ConnectJournalRecord @Throws(ConnectJournalException::class) constructor(
     private val _ciphertext: ByteArray = ciphertext.copyOf()
 
     init {
+        if (sequence < 0L) {
+            throw ConnectJournalException("sequence must be non-negative")
+        }
         if (_ciphertext.size.toLong() > 0xFFFF_FFFFL) {
             throw ConnectJournalException("ciphertext too large for journal entry")
         }

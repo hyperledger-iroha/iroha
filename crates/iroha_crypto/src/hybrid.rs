@@ -613,6 +613,11 @@ mod tests {
 
     use super::*;
 
+    fn set_first_mlkem_12_bit_coefficient_noncanonical(bytes: &mut [u8]) {
+        bytes[0] = 0xFF;
+        bytes[1] = (bytes[1] & 0xF0) | 0x0F;
+    }
+
     #[test]
     fn generated_keys_roundtrip() {
         let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
@@ -676,6 +681,30 @@ mod tests {
         let err = HybridPublicKey::from_bytes([0u8; 32], pair.public().kyber_bytes())
             .expect_err("low-order public key must be rejected while decoding");
         assert_eq!(err, HybridError::InvalidX25519PublicKey);
+    }
+
+    #[test]
+    fn public_key_decode_rejects_noncanonical_kyber_public_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7A; 32]);
+        let pair = HybridKeyPair::generate(&mut rng);
+        let mut kyber_public = pair.public().kyber_bytes().to_vec();
+        set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_public);
+
+        let err = HybridPublicKey::from_bytes(pair.public().x25519_bytes(), kyber_public)
+            .expect_err("noncanonical Kyber public key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidKyberPublicKey);
+    }
+
+    #[test]
+    fn secret_key_decode_rejects_noncanonical_kyber_secret_key() {
+        let mut rng = ChaCha20Rng::from_seed([0x7B; 32]);
+        let pair = HybridKeyPair::generate(&mut rng);
+        let (x25519, mut kyber_secret) = pair.secret().to_bytes();
+        set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_secret);
+
+        let err = HybridSecretKey::from_bytes(x25519, kyber_secret)
+            .expect_err("noncanonical Kyber secret key must be rejected while decoding");
+        assert_eq!(err, HybridError::InvalidKyberSecretKey);
     }
 
     #[test]

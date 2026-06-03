@@ -705,6 +705,7 @@ const SCCP_TRON_RECEIPT_ROOT_VALUE_MARKER_V1: &[u8] = b"sccp:tron:receipt-root-v
 const SCCP_TRON_TRIGGER_SMART_CONTRACT_TYPE_URL_V1: &[u8] =
     b"type.googleapis.com/protocol.TriggerSmartContract";
 const SCCP_TRON_SOURCE_MESSAGE_CALL_ABI_V1: &[u8] = b"submitSccpSourceEvent(uint32,uint32,bytes32)";
+const SCCP_ETH_SOURCE_BRIDGE_CONFIG_PREFIX_V1: &[u8] = b"iroha:sccp:eth-source-bridge-config:v1";
 const SCCP_TRON_SOURCE_BRIDGE_CONFIG_PREFIX_V1: &[u8] = b"iroha:sccp:tron-source-bridge-config:v1";
 const SCCP_TRANSPARENT_FASTPQ_STATEMENT_KEY_V1: &[u8] = b"sccp:transparent:v1:statement";
 const SCCP_TRANSPARENT_FASTPQ_CONTEXT_KEY_V1: &[u8] = b"sccp:transparent:v1:context";
@@ -3431,8 +3432,8 @@ pub enum SccpAnchorGovernanceV1 {
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub enum SccpLaunchModeV1 {
     AllLanesAtOnce,
-    EthereumMainnetLane,
     #[default]
+    EthereumMainnetLane,
     BscMainnetLane,
 }
 
@@ -3568,7 +3569,7 @@ impl Default for SccpProductionPolicyV1 {
     fn default() -> Self {
         Self {
             version: 1,
-            launch_mode: SccpLaunchModeV1::BscMainnetLane,
+            launch_mode: SccpLaunchModeV1::EthereumMainnetLane,
             proof_submitter_policy: SccpProofSubmitterPolicyV1::Permissionless,
             route_activation_policy: SccpRouteActivationPolicyV1::GovernanceAllowlist,
             per_message_human_approval_required: false,
@@ -11309,6 +11310,24 @@ pub fn sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_
     }
     material.source_bridge_emitter_address = source_bridge_emitter_address.to_vec();
     material.source_bridge_emitter_code_hash = source_bridge_emitter_code_hash;
+    if source_domain == SCCP_DOMAIN_ETH {
+        let source_bridge_network_id = sccp_eth_mainnet_network_id_word_v1();
+        let source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
+            source_bridge_network_id,
+            source_domain,
+            SCCP_DOMAIN_SORA,
+            source_bridge_emitter_address,
+            source_bridge_emitter_code_hash,
+        )?;
+        material.source_bridge_network_id = source_bridge_network_id;
+        if !sccp_deployed_hash_is_distinct_from_material_roles(
+            &source_bridge_config_hash,
+            &material,
+        ) {
+            return None;
+        }
+        material.source_bridge_config_hash = source_bridge_config_hash;
+    }
     Some(material)
 }
 
@@ -12084,21 +12103,29 @@ fn sccp_source_bridge_emitter_code_hash_is_nonzero(code_hash: &H256) -> bool {
 }
 
 fn sccp_source_bridge_config_hash_required(source_domain: u32) -> bool {
-    source_domain == SCCP_DOMAIN_TRON
+    matches!(source_domain, SCCP_DOMAIN_ETH | SCCP_DOMAIN_TRON)
 }
 
 fn sccp_source_bridge_config_hash_matches_profile(
     material: &SccpSourceVerifierMaterialV1,
     template: &SccpSourceVerifierMaterialV1,
 ) -> bool {
-    if sccp_source_bridge_config_hash_required(material.source_domain) {
-        material.source_bridge_network_id != template.source_bridge_network_id
-            && material.source_bridge_owner_address != template.source_bridge_owner_address
-            && material.source_bridge_config_hash != template.source_bridge_config_hash
-    } else {
-        material.source_bridge_network_id == template.source_bridge_network_id
-            && material.source_bridge_owner_address == template.source_bridge_owner_address
-            && material.source_bridge_config_hash == template.source_bridge_config_hash
+    match material.source_domain {
+        SCCP_DOMAIN_ETH => {
+            material.source_bridge_network_id != template.source_bridge_network_id
+                && material.source_bridge_owner_address == template.source_bridge_owner_address
+                && material.source_bridge_config_hash != template.source_bridge_config_hash
+        }
+        SCCP_DOMAIN_TRON => {
+            material.source_bridge_network_id != template.source_bridge_network_id
+                && material.source_bridge_owner_address != template.source_bridge_owner_address
+                && material.source_bridge_config_hash != template.source_bridge_config_hash
+        }
+        _ => {
+            material.source_bridge_network_id == template.source_bridge_network_id
+                && material.source_bridge_owner_address == template.source_bridge_owner_address
+                && material.source_bridge_config_hash == template.source_bridge_config_hash
+        }
     }
 }
 
@@ -12115,40 +12142,61 @@ fn sccp_source_bridge_config_hash_fields_are_empty(
 fn sccp_source_bridge_config_hash_fields_are_consistent(
     source_domain: u32,
     source_bridge_emitter_address: &[u8],
+    source_bridge_emitter_code_hash: H256,
     source_bridge_network_id: H256,
     source_bridge_owner_address: &[u8],
     source_bridge_config_hash: H256,
 ) -> bool {
-    if sccp_source_bridge_config_hash_required(source_domain) {
-        let Some(source_bridge_address) =
-            sccp_source_bridge_emitter_address_as_array(source_bridge_emitter_address)
-        else {
-            return false;
-        };
-        if !address20_is_nonzero(&source_bridge_address) {
-            return false;
+    match source_domain {
+        SCCP_DOMAIN_ETH => {
+            let Some(source_bridge_address) =
+                sccp_source_bridge_emitter_address_as_array(source_bridge_emitter_address)
+            else {
+                return false;
+            };
+            address20_is_nonzero(&source_bridge_address)
+                && source_bridge_owner_address.is_empty()
+                && h256_is_nonzero(&source_bridge_emitter_code_hash)
+                && source_bridge_network_id == sccp_eth_mainnet_network_id_word_v1()
+                && h256_is_nonzero(&source_bridge_config_hash)
+                && sccp_eth_source_bridge_config_hash_v1(
+                    source_bridge_network_id,
+                    source_domain,
+                    SCCP_DOMAIN_SORA,
+                    source_bridge_address,
+                    source_bridge_emitter_code_hash,
+                ) == Some(source_bridge_config_hash)
         }
-        let Some(source_bridge_owner_address) =
-            sccp_source_bridge_emitter_address_as_array(source_bridge_owner_address)
-        else {
-            return false;
-        };
-        address20_is_nonzero(&source_bridge_owner_address)
-            && h256_is_nonzero(&source_bridge_network_id)
-            && h256_is_nonzero(&source_bridge_config_hash)
-            && sccp_tron_source_bridge_config_hash_v1(
-                source_bridge_network_id,
-                source_domain,
-                SCCP_DOMAIN_SORA,
-                source_bridge_address,
-                source_bridge_owner_address,
-            ) == Some(source_bridge_config_hash)
-    } else {
-        sccp_source_bridge_config_hash_fields_are_empty(
+        SCCP_DOMAIN_TRON => {
+            let Some(source_bridge_address) =
+                sccp_source_bridge_emitter_address_as_array(source_bridge_emitter_address)
+            else {
+                return false;
+            };
+            if !address20_is_nonzero(&source_bridge_address) {
+                return false;
+            }
+            let Some(source_bridge_owner_address) =
+                sccp_source_bridge_emitter_address_as_array(source_bridge_owner_address)
+            else {
+                return false;
+            };
+            address20_is_nonzero(&source_bridge_owner_address)
+                && h256_is_nonzero(&source_bridge_network_id)
+                && h256_is_nonzero(&source_bridge_config_hash)
+                && sccp_tron_source_bridge_config_hash_v1(
+                    source_bridge_network_id,
+                    source_domain,
+                    SCCP_DOMAIN_SORA,
+                    source_bridge_address,
+                    source_bridge_owner_address,
+                ) == Some(source_bridge_config_hash)
+        }
+        _ => sccp_source_bridge_config_hash_fields_are_empty(
             &source_bridge_network_id,
             source_bridge_owner_address,
             &source_bridge_config_hash,
-        )
+        ),
     }
 }
 
@@ -12158,6 +12206,7 @@ fn sccp_source_bridge_config_hash_is_production_ready(
     sccp_source_bridge_config_hash_fields_are_consistent(
         material.source_domain,
         &material.source_bridge_emitter_address,
+        material.source_bridge_emitter_code_hash,
         material.source_bridge_network_id,
         &material.source_bridge_owner_address,
         material.source_bridge_config_hash,
@@ -12616,6 +12665,7 @@ fn source_verifier_evidence_has_common_valid_shape(
                 || sccp_source_bridge_config_hash_fields_are_consistent(
                     evidence.source_domain,
                     &evidence.source_bridge_emitter_address,
+                    evidence.source_bridge_emitter_code_hash,
                     evidence.source_bridge_network_id,
                     &evidence.source_bridge_owner_address,
                     evidence.source_bridge_config_hash,
@@ -12624,6 +12674,7 @@ fn source_verifier_evidence_has_common_valid_shape(
             sccp_source_bridge_config_hash_fields_are_consistent(
                 evidence.source_domain,
                 &evidence.source_bridge_emitter_address,
+                evidence.source_bridge_emitter_code_hash,
                 evidence.source_bridge_network_id,
                 &evidence.source_bridge_owner_address,
                 evidence.source_bridge_config_hash,
@@ -16951,6 +17002,33 @@ fn sccp_tron_destination_binding_matches_request_deployment_material(
             verifier_key_hash,
         )
         .is_some_and(|expected| &expected == binding)
+}
+
+/// Return the config hash exposed by the governed Ethereum mainnet SCCP source bridge.
+pub fn sccp_eth_source_bridge_config_hash_v1(
+    network_id: H256,
+    source_domain: u32,
+    target_domain: u32,
+    source_bridge_address: [u8; 20],
+    source_bridge_code_hash: H256,
+) -> Option<H256> {
+    if network_id != sccp_eth_mainnet_network_id_word_v1()
+        || source_domain != SCCP_DOMAIN_ETH
+        || target_domain != SCCP_DOMAIN_SORA
+        || !address20_is_nonzero(&source_bridge_address)
+        || !h256_is_nonzero(&source_bridge_code_hash)
+    {
+        return None;
+    }
+
+    let mut payload = Vec::with_capacity(32 * 6);
+    payload.extend_from_slice(&keccak256_bytes(SCCP_ETH_SOURCE_BRIDGE_CONFIG_PREFIX_V1));
+    payload.extend_from_slice(&abi_word_bytes20(&source_bridge_address));
+    payload.extend_from_slice(&network_id);
+    payload.extend_from_slice(&abi_word_u32(source_domain));
+    payload.extend_from_slice(&abi_word_u32(target_domain));
+    payload.extend_from_slice(&source_bridge_code_hash);
+    Some(keccak256_bytes(&payload))
 }
 
 /// Return the config hash exposed by `SccpTronSourceBridge.sourceBridgeConfigHash()`.
@@ -21829,6 +21907,16 @@ fn sccp_evm_source_event_topic_v1() -> H256 {
     keccak256_bytes(SCCP_EVM_SOURCE_EVENT_ABI_V1)
 }
 
+fn sccp_evm_receipt_payload_for_admitted_type(value: &[u8]) -> Option<&[u8]> {
+    match value.first()? {
+        // EIP-2718 makes typed receipt payloads type-specific. Admit only
+        // mainnet types whose current specs use the canonical receipt tuple.
+        0x01..=0x04 => Some(&value[1..]),
+        0x00..=0x7f => None,
+        _ => Some(value),
+    }
+}
+
 fn sccp_evm_receipt_value_contains_source_event_digest(
     value: &[u8],
     source_event_digest: H256,
@@ -21845,13 +21933,8 @@ fn sccp_evm_receipt_value_contains_source_event(
         return false;
     }
 
-    let receipt = if value
-        .first()
-        .is_some_and(|first| (1..=0x7f).contains(first))
-    {
-        &value[1..]
-    } else {
-        value
+    let Some(receipt) = sccp_evm_receipt_payload_for_admitted_type(value) else {
+        return false;
     };
     let Some(items) = rlp_list_items(receipt) else {
         return false;
@@ -37755,6 +37838,17 @@ mod tests {
             };
             material.source_bridge_emitter_address = address.to_vec();
             material.source_bridge_emitter_code_hash = code_hash;
+            if source_domain == SCCP_DOMAIN_ETH {
+                material.source_bridge_network_id = sccp_eth_mainnet_network_id_word_v1();
+                material.source_bridge_config_hash = sccp_eth_source_bridge_config_hash_v1(
+                    material.source_bridge_network_id,
+                    SCCP_DOMAIN_ETH,
+                    SCCP_DOMAIN_SORA,
+                    address,
+                    code_hash,
+                )
+                .expect("sample ETH source bridge config hash");
+            }
             if source_domain == SCCP_DOMAIN_TRON {
                 material.source_bridge_network_id = sample_tron_source_bridge_network_id();
                 material.source_bridge_owner_address =
@@ -49655,6 +49749,30 @@ mod tests {
             &typed_receipt_value,
             source_event_digest,
         ));
+        for receipt_type in [0x01, 0x02, 0x03, 0x04] {
+            let mut typed_receipt_value = Vec::with_capacity(receipt_value.len() + 1);
+            typed_receipt_value.push(receipt_type);
+            typed_receipt_value.extend_from_slice(&receipt_value);
+            assert!(
+                sccp_evm_receipt_value_contains_source_event_digest(
+                    &typed_receipt_value,
+                    source_event_digest,
+                ),
+                "EVM source receipts must admit known mainnet typed receipt 0x{receipt_type:02x}"
+            );
+        }
+        for receipt_type in [0x00, 0x05, 0x7f] {
+            let mut unknown_typed_receipt_value = Vec::with_capacity(receipt_value.len() + 1);
+            unknown_typed_receipt_value.push(receipt_type);
+            unknown_typed_receipt_value.extend_from_slice(&receipt_value);
+            assert!(
+                !sccp_evm_receipt_value_contains_source_event_digest(
+                    &unknown_typed_receipt_value,
+                    source_event_digest,
+                ),
+                "EVM source receipts must reject unsupported typed receipt 0x{receipt_type:02x}"
+            );
+        }
         let receipt_with_unrelated_log0 = sample_eth_rlp_list(&[
             sample_eth_rlp_string(&[1]),
             sample_eth_rlp_u64(21_000),
@@ -54713,13 +54831,13 @@ mod tests {
     }
 
     #[test]
-    fn production_policy_uses_bsc_mainnet_lane_launch() {
+    fn production_policy_uses_ethereum_mainnet_lane_launch() {
         assert_eq!(
             SccpLaunchModeV1::default(),
-            SccpLaunchModeV1::BscMainnetLane
+            SccpLaunchModeV1::EthereumMainnetLane
         );
         let policy = sccp_production_policy_v1();
-        assert_eq!(policy.launch_mode, SccpLaunchModeV1::BscMainnetLane);
+        assert_eq!(policy.launch_mode, SccpLaunchModeV1::EthereumMainnetLane);
         assert_eq!(
             policy.proof_submitter_policy,
             SccpProofSubmitterPolicyV1::Permissionless
@@ -57217,8 +57335,8 @@ mod tests {
         let vectors = [
             (
                 SCCP_DOMAIN_ETH,
-                "035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
-                "d08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+                "4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
+                "feb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
             ),
             (
                 SCCP_DOMAIN_BSC,
@@ -59284,6 +59402,40 @@ mod tests {
             material.source_bridge_emitter_code_hash,
             sample_evm_source_bridge_code_hash(source_domain)
         );
+        if source_domain == SCCP_DOMAIN_ETH {
+            let expected_config_hash = sccp_eth_source_bridge_config_hash_v1(
+                sccp_eth_mainnet_network_id_word_v1(),
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                sample_evm_message_emitter_address(source_domain),
+                sample_evm_source_bridge_code_hash(source_domain),
+            )
+            .expect("ETH source bridge config hash");
+            assert_eq!(
+                material.source_bridge_network_id,
+                sccp_eth_mainnet_network_id_word_v1()
+            );
+            assert!(material.source_bridge_owner_address.is_empty());
+            assert_eq!(material.source_bridge_config_hash, expected_config_hash);
+
+            let mut wrong_network = material.clone();
+            wrong_network.source_bridge_network_id = sccp_bsc_mainnet_network_id_word_v1();
+            assert!(
+                !sccp_source_verifier_material_is_production_ready(&wrong_network),
+                "ETH source material must bind the Ethereum mainnet chain id"
+            );
+
+            let mut wrong_config_hash = material.clone();
+            wrong_config_hash.source_bridge_config_hash[0] ^= 0x01;
+            assert!(
+                !sccp_source_verifier_material_is_production_ready(&wrong_config_hash),
+                "ETH source material must bind the source bridge config hash"
+            );
+        } else {
+            assert_eq!(material.source_bridge_network_id, [0u8; 32]);
+            assert!(material.source_bridge_owner_address.is_empty());
+            assert_eq!(material.source_bridge_config_hash, [0u8; 32]);
+        }
 
         let bundle = sample_transfer_bundle_with_source_material(
             source_domain,
@@ -62040,6 +62192,87 @@ mod tests {
         assert!(!sccp_source_verifier_material_is_production_ready(
             &template_policy_hash
         ));
+    }
+
+    #[test]
+    fn eth_source_bridge_config_hash_binds_mainnet_lane_and_code_hash() {
+        let network_id = sccp_eth_mainnet_network_id_word_v1();
+        let source_bridge_address = sample_evm_message_emitter_address(SCCP_DOMAIN_ETH);
+        let source_bridge_code_hash = sample_evm_source_bridge_code_hash(SCCP_DOMAIN_ETH);
+        let config_hash = sccp_eth_source_bridge_config_hash_v1(
+            network_id,
+            SCCP_DOMAIN_ETH,
+            SCCP_DOMAIN_SORA,
+            source_bridge_address,
+            source_bridge_code_hash,
+        )
+        .expect("ETH source bridge config hash");
+        assert!(h256_is_nonzero(&config_hash));
+
+        let mut other_code_hash = source_bridge_code_hash;
+        other_code_hash[31] ^= 0x01;
+        assert_ne!(
+            config_hash,
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                source_bridge_address,
+                other_code_hash,
+            )
+            .expect("code-hash-retargeted ETH source bridge config hash"),
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                sccp_bsc_mainnet_network_id_word_v1(),
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                source_bridge_address,
+                source_bridge_code_hash,
+            )
+            .is_none(),
+            "ETH source bridge config hash must bind EIP-155 mainnet chain id 1"
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_BSC,
+                SCCP_DOMAIN_SORA,
+                source_bridge_address,
+                source_bridge_code_hash,
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_ETH,
+                source_bridge_address,
+                source_bridge_code_hash,
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                [0u8; 20],
+                source_bridge_code_hash,
+            )
+            .is_none()
+        );
+        assert!(
+            sccp_eth_source_bridge_config_hash_v1(
+                network_id,
+                SCCP_DOMAIN_ETH,
+                SCCP_DOMAIN_SORA,
+                source_bridge_address,
+                [0u8; 32],
+            )
+            .is_none()
+        );
     }
 
     #[test]

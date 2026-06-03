@@ -9,7 +9,7 @@ import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
-import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -798,7 +798,7 @@ object OfflineNoteV2 {
         if (single != null) {
             val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
             encoder.writeUInt(0, 32)
-            writeField(encoder) { writeString(it, encodePublicKeyMultihash(single.curveId, single.publicKey)) }
+            writeField(encoder) { writePublicKey(it, single.curveId, single.publicKey) }
             return encoder.toByteArray()
         }
         val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
@@ -828,12 +828,14 @@ object OfflineNoteV2 {
         encoder.writeUInt(sorted.size.toLong(), 64)
         for (member in sorted) {
             writeField(encoder) { memberEncoder ->
-                writeField(memberEncoder) {
-                    writeString(it, encodePublicKeyMultihash(member.curveId, member.publicKey))
-                }
+                writeField(memberEncoder) { writePublicKey(it, member.curveId, member.publicKey) }
                 writeField(memberEncoder) { it.writeUInt(member.weight.toLong(), 16) }
             }
         }
+    }
+
+    private fun writePublicKey(encoder: NoritoEncoder, curveId: Int, publicKey: ByteArray) {
+        writeConstVec(encoder, compactPublicKeyPayload(curveId, publicKey))
     }
 
     private fun writeAssetId(encoder: NoritoEncoder, assetId: String) {

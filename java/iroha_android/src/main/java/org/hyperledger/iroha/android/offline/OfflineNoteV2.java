@@ -1447,13 +1447,7 @@ public final class OfflineNoteV2 {
         final SingleKeyPayload payload = single.get();
         final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
         encoder.writeUInt(0, 32);
-        writeField(
-            encoder,
-            child ->
-                writeString(
-                    child,
-                    PublicKeyCodec.encodePublicKeyMultihash(
-                        payload.curveId(), payload.publicKey())));
+        writeField(encoder, child -> writePublicKey(child, payload.curveId(), payload.publicKey()));
         return encoder.toByteArray();
       }
       final Optional<MultisigPolicyPayload> multisig =
@@ -1502,14 +1496,15 @@ public final class OfflineNoteV2 {
           memberEncoder -> {
             writeField(
                 memberEncoder,
-                child ->
-                    writeString(
-                        child,
-                        PublicKeyCodec.encodePublicKeyMultihash(
-                            member.curveId(), member.publicKey())));
+                child -> writePublicKey(child, member.curveId(), member.publicKey()));
             writeField(memberEncoder, child -> child.writeUInt(member.weight(), 16));
           });
     }
+  }
+
+  private static void writePublicKey(
+      final NoritoEncoder encoder, final int curveId, final byte[] publicKey) {
+    writeConstVec(encoder, PublicKeyCodec.compactPublicKeyPayload(curveId, publicKey));
   }
 
   private static void writeAssetId(final NoritoEncoder encoder, final String assetId) {

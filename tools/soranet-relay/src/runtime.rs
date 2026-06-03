@@ -4530,7 +4530,9 @@ fn pow_failure_reason(error: &pow::Error) -> SoranetPowFailureReasonV1 {
         }
         pow::Error::PostQuantum(_) => SoranetPowFailureReasonV1::PostQuantumError,
         pow::Error::Clock(_) => SoranetPowFailureReasonV1::ClockError,
-        pow::Error::Malformed(_) => SoranetPowFailureReasonV1::UnsupportedVersion,
+        pow::Error::Malformed(_) | pow::Error::MalformedBinding(_) => {
+            SoranetPowFailureReasonV1::UnsupportedVersion
+        }
     }
 }
 

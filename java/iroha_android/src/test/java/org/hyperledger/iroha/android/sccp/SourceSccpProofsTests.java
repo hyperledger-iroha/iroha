@@ -213,7 +213,7 @@ public final class SourceSccpProofsTests {
       SourceSccpProofs.DOMAIN_SORA2
     };
     final String[] materialHashes = {
-      "0x035c5a35f6412d45ed10389741016d067bd6d0b874a38cd744922c599e0a2fdd",
+      "0x4d1e9d15bc59c0a2157aa967eb033f5778c805aea4707785a31ef6b60f694d77",
       "0x1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a",
       "0x499a7363142d5fcfe3a79b11a29ae2ad897e853649e80e39a162b8942f908331",
       "0x08b11177113ac2d9f612abdf767a017de560d805e965b3dc32e28c8748ea2ebc",
@@ -223,7 +223,7 @@ public final class SourceSccpProofsTests {
       "0x6fc968441106993502dd05ebeadea1dbfee0f7814680f1ad006d4584c99a8a2d"
     };
     final String[] deploymentHashes = {
-      "0xd08e3344760aabfb4ba891990c852846d04a5735647174ce6e3ab0f2cad57f4d",
+      "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4",
       "0x7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
       "0xcdb2a81cb31e58d9bc1f4292d33c3f4990b2d2008dda1b9b1275aaac087461cc",
       "0x5c4e226c1f4619311762a9c889f8e3b99ea6f020317c2e8a0c76a08d7a70f887",
@@ -281,25 +281,51 @@ public final class SourceSccpProofsTests {
     assert unusedSourceBridgeThrew
         : "source material helper must reject inapplicable source-bridge address";
 
-    boolean unusedSourceConfigThrew = false;
-    try {
-      SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
-          SourceSccpProofs.DOMAIN_ETH,
-          "0x" + repeat("44", 32),
-          "0x" + repeat("55", 32),
-          "0x" + repeat("66", 32),
-          "0x" + repeat("88", 32),
-          null,
-          "0x" + repeat("11", 20),
-          "0x" + repeat("77", 32),
-          "0x" + repeat("33", 32),
-          null,
-          null);
-    } catch (final IllegalArgumentException exception) {
-      unusedSourceConfigThrew = exception.getMessage().contains("sourceBridgeNetworkId");
-    }
-    assert unusedSourceConfigThrew
-        : "source material helper must reject inapplicable source-bridge config";
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+                SourceSccpProofs.DOMAIN_ETH,
+                "0x" + repeat("44", 32),
+                "0x" + repeat("55", 32),
+                "0x" + repeat("66", 32),
+                "0x" + repeat("88", 32),
+                null,
+                "0x" + repeat("11", 20),
+                "0x" + repeat("77", 32),
+                "0x" + repeat("33", 32),
+                null,
+                "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"),
+        "sourceBridgeNetworkId");
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+                SourceSccpProofs.DOMAIN_ETH,
+                "0x" + repeat("44", 32),
+                "0x" + repeat("55", 32),
+                "0x" + repeat("66", 32),
+                "0x" + repeat("88", 32),
+                null,
+                "0x" + repeat("11", 20),
+                "0x" + repeat("77", 32),
+                SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
+                "0x" + repeat("22", 20),
+                "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b"),
+        "sourceBridgeOwnerAddress");
+    expectThrowsMessage(
+        () ->
+            SourceSccpProofs.canonicalSourceVerifierMaterialBytes(
+                SourceSccpProofs.DOMAIN_ETH,
+                "0x" + repeat("44", 32),
+                "0x" + repeat("55", 32),
+                "0x" + repeat("66", 32),
+                "0x" + repeat("88", 32),
+                null,
+                "0x" + repeat("11", 20),
+                "0x" + repeat("77", 32),
+                SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
+                null,
+                "0x" + repeat("99", 32)),
+        "sourceBridgeConfigHash");
     final String[][] tonTemplateComponentHashes = {
       {
         "sourceTrustAnchorHash",
@@ -474,9 +500,9 @@ public final class SourceSccpProofsTests {
           null,
           "0x" + repeat("11", 20),
           "0x" + repeat("77", 32),
+          SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
           null,
-          null,
-          null);
+          "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b");
     } catch (final IllegalArgumentException exception) {
       reusedSourceMaterialRoleThrew = exception.getMessage().contains("role-separated");
     }
@@ -497,9 +523,9 @@ public final class SourceSccpProofsTests {
           null,
           "0x" + repeat("11", 20),
           "0x" + repeat("77", 32),
+          SourceSccpProofs.ETH_MAINNET_NETWORK_ID,
           null,
-          null,
-          null);
+          "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b");
     } catch (final IllegalArgumentException exception) {
       reusedDeploymentRoleThrew = exception.getMessage().contains("role-separated");
     }
@@ -3418,6 +3444,9 @@ public final class SourceSccpProofsTests {
   }
 
   private static String networkId(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return SourceSccpProofs.ETH_MAINNET_NETWORK_ID;
+    }
     return domain == SourceSccpProofs.DOMAIN_TRON ? "0x" + repeat("33", 32) : null;
   }
 
@@ -3426,6 +3455,9 @@ public final class SourceSccpProofsTests {
   }
 
   private static String configHash(final int domain) {
+    if (domain == SourceSccpProofs.DOMAIN_ETH) {
+      return "0x871a910500648c68576f7d8fb044de1c494ae24c74f435c87dd451e6ae169c6b";
+    }
     if (domain == SourceSccpProofs.DOMAIN_TRON) {
       return "0xe986dd67bfa2307b4e00cf46bde41a88003a55c5b7fea311fa106614b2252f9d";
     }

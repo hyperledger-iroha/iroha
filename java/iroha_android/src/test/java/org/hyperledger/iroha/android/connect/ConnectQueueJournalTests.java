@@ -14,6 +14,7 @@ public final class ConnectQueueJournalTests {
     popOldestRemovesEntries();
     enforceSizeLimits();
     decodeAcceptsPadding();
+    rejectNegativeSequence();
     System.out.println("[IrohaAndroid] Connect queue journal tests passed.");
   }
 
@@ -109,5 +110,19 @@ public final class ConnectQueueJournalTests {
     final ConnectJournalRecord.DecodeResult result = ConnectJournalRecord.decode(padded, 0);
     assert result.bytesConsumed() == padded.length : "padding should count toward bytes consumed";
     assert result.record().sequence() == record.sequence() : "record mismatch after padding";
+  }
+
+  private static void rejectNegativeSequence() throws Exception {
+    final Path root = Files.createTempDirectory("connect-journal-negative-sequence");
+    final ConnectQueueJournal journal =
+        new ConnectQueueJournal(
+            "session-negative".getBytes(),
+            new ConnectQueueJournal.Configuration(root, 8, 1 << 20, 60_000L));
+    try {
+      journal.append(ConnectDirection.APP_TO_WALLET, -1L, new byte[] {0x01}, 100L, 1_000L);
+      throw new AssertionError("negative journal sequence should be rejected");
+    } catch (final ConnectJournalException err) {
+      assert err.getMessage().contains("sequence") : "unexpected error: " + err.getMessage();
+    }
   }
 }

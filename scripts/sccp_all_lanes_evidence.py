@@ -71,6 +71,7 @@ class LaneProfile:
     source_state_verifier_id: str = ""
     source_bridge_emitter_id: str = ""
     destination_verifier_key_hash_required: bool = False
+    eth_source_bridge_config_required: bool = False
     tron_source_bridge_config_required: bool = False
     solana_full_light_client_audit_required: bool = False
     ton_full_light_client_audit_required: bool = False
@@ -103,6 +104,7 @@ LANE_PROFILES: dict[int, LaneProfile] = {
         route_allowlist_id="sccp:eth:route-allowlist:ethereum-mainnet:v1",
         source_bridge_emitter_id="sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
         destination_verifier_key_hash_required=True,
+        eth_source_bridge_config_required=True,
     ),
     SCCP_DOMAIN_BSC: LaneProfile(
         domain=SCCP_DOMAIN_BSC,
@@ -272,6 +274,8 @@ EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_bridge_address",
     "_comment_evm_source_bridge_code_hash",
     "_comment_evm_source_bridge_runtime_bytecode_hex",
+    "_comment_eth_source_bridge_network_id",
+    "_comment_eth_source_bridge_config_hash",
     "_comment_evm_source_deployment_transaction_hash",
     "_comment_evm_source_deployment_transaction_block_hash",
     "_comment_evm_source_deployment_transaction_block_number",
@@ -429,6 +433,8 @@ SOURCE_MATERIAL_FIELDS = frozenset(
         "_comment_evm_source_bridge_address",
         "_comment_evm_source_bridge_code_hash",
         "_comment_evm_source_bridge_runtime_bytecode_hex",
+        "_comment_eth_source_bridge_network_id",
+        "_comment_eth_source_bridge_config_hash",
         "_comment_evm_source_deployment_transaction_hash",
         "_comment_evm_source_deployment_transaction_block_hash",
         "_comment_evm_source_deployment_transaction_block_number",
@@ -764,6 +770,8 @@ SOURCE_RECORD_COMMENT_KEYS = {
     "sccp_evm_source_bridge_runtime_bytecode_hex": (
         "_comment_evm_source_bridge_runtime_bytecode_hex"
     ),
+    "sccp_eth_source_bridge_network_id": "_comment_eth_source_bridge_network_id",
+    "sccp_eth_source_bridge_config_hash": "_comment_eth_source_bridge_config_hash",
     "sccp_evm_source_deployment_transaction_hash": (
         "_comment_evm_source_deployment_transaction_hash"
     ),
@@ -1575,7 +1583,17 @@ def _check_source_material(profile: LaneProfile, record: dict[str, Any]) -> list
         )
         _expect_empty_hex_or_absent(errors, record, "source_bridge_emitter_code_hash")
 
-    if profile.tron_source_bridge_config_required:
+    if profile.eth_source_bridge_config_required:
+        _expect_nonzero_hex(errors, record, "source_bridge_network_id")
+        _expect_empty_hex_or_absent(
+            errors,
+            record,
+            "source_bridge_owner_address",
+            byte_length=20,
+        )
+        _expect_nonzero_hex(errors, record, "source_bridge_config_hash")
+        errors.extend(_check_eth_source_bridge_config_hash(material=record))
+    elif profile.tron_source_bridge_config_required:
         _expect_nonzero_hex(errors, record, "source_bridge_network_id")
         _expect_nonzero_hex(
             errors,
@@ -1952,7 +1970,9 @@ def _check_deployment(
         for field in TON_FULL_LIGHT_CLIENT_AUDIT_FIELDS:
             _expect_empty_hex_or_absent(errors, record, field)
 
-    if profile.tron_source_bridge_config_required:
+    if profile.eth_source_bridge_config_required:
+        errors.extend(_check_eth_source_bridge_config_hash(material))
+    elif profile.tron_source_bridge_config_required:
         errors.extend(_check_tron_source_bridge_config_hash(material))
         for field in TRON_DPOS_SOURCE_GATE_FIELDS:
             _expect_nonzero_hex(errors, record, field)
@@ -2748,6 +2768,43 @@ def _check_tron_source_bridge_config_hash(material: dict[str, Any]) -> list[str]
         return [f"TRON source bridge config hash cannot be recomputed: {exc}"]
     if expected != configured:
         return ["source_bridge_config_hash does not match TRON bridge address, network id, and owner"]
+    return []
+
+
+def _check_eth_source_bridge_config_hash(material: dict[str, Any]) -> list[str]:
+    try:
+        module = _load_sibling_module("sccp_eth_source_bridge_evidence.py")
+        expected = module.eth_source_bridge_config_hash(
+            bridge_address=_required_exact_hex_bytes(
+                material,
+                "source_bridge_emitter_address",
+                byte_length=20,
+            ),
+            source_bridge_code_hash=_required_exact_hex_bytes(
+                material,
+                "source_bridge_emitter_code_hash",
+                byte_length=32,
+            ),
+            network_id=_required_exact_hex_bytes(
+                material,
+                "source_bridge_network_id",
+                byte_length=32,
+            ),
+            source_domain=material["source_domain"],
+            target_domain=SCCP_DOMAIN_SORA,
+        )
+        configured = _required_exact_hex_bytes(
+            material,
+            "source_bridge_config_hash",
+            byte_length=32,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return [f"ETH source bridge config hash cannot be recomputed: {exc}"]
+    if expected != configured:
+        return [
+            "source_bridge_config_hash does not match ETH bridge address, "
+            "network id, and runtime code hash"
+        ]
     return []
 
 

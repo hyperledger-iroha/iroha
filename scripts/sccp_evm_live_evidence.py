@@ -181,6 +181,12 @@ def _default_rpc_chain_id_for_domain(domain: int) -> int:
         raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id") from exc
 
 
+def default_block_tag_for_domain(domain: int) -> str:
+    """Return the default live-read block tag for an EVM-family destination lane."""
+
+    return "finalized" if domain == evidence.SCCP_DOMAIN_ETH else "latest"
+
+
 def _default_network_id_for_domain(domain: int) -> bytes:
     try:
         return evidence.evm_mainnet_network_id_for_domain(domain)
@@ -634,7 +640,10 @@ def _route_canary_message_proof_event_summary(
         method="route-canary logIndex",
     )
     if log_index != expected_log_index:
-        return None
+        raise RuntimeError(
+            "route-canary transaction receipt contained a MessageProofAccepted "
+            "event at an unexpected log index"
+        )
     log_transaction_hash = _parse_exact_hex32_blob(
         log.get("transactionHash"),
         label="route-canary log transactionHash",
@@ -1518,6 +1527,11 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     destination = summary.get("destination_bridge")
     if not isinstance(destination, dict):
         return ["destination bridge evidence"]
+    if (
+        destination.get("domain") == evidence.SCCP_DOMAIN_ETH
+        and summary.get("block_tag") != "finalized"
+    ):
+        missing.append("--block-tag finalized")
     if destination.get("expected_rpc_chain_id_matches") is not True:
         missing.append("--expected-rpc-chain-id")
     if destination.get("expected_network_id_matches") is not True:
@@ -1652,7 +1666,11 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect all requested evidence and return a JSON-serializable summary."""
 
-    block_tag = parse_block_tag(args.block_tag)
+    block_tag = parse_block_tag(
+        args.block_tag
+        if getattr(args, "block_tag", None) is not None
+        else default_block_tag_for_domain(args.domain)
+    )
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
@@ -2023,12 +2041,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--block-tag",
-        default="latest",
+        default=None,
         type=parse_block_tag,
         help=(
             "JSON-RPC block tag for eth_call/eth_getCode. Must be latest, "
             "safe, finalized, or a positive canonical lowercase 0x block "
-            "number. Defaults to latest."
+            "number. Defaults to finalized for Ethereum mainnet and latest "
+            "for BSC."
         ),
     )
     parser.add_argument(

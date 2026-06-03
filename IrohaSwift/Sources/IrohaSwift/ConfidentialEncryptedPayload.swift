@@ -1,9 +1,12 @@
 import Foundation
+import CryptoKit
 
 public enum ConfidentialEncryptedPayloadError: Error, Sendable, Equatable {
     case unsupportedVersion(UInt8)
     case invalidEphemeralKeyLength(Int)
+    case invalidEphemeralPublicKey
     case invalidNonceLength(Int)
+    case emptyCiphertext
     case ciphertextTooLarge
     case bridgeUnavailable
     case truncatedPayload
@@ -18,8 +21,12 @@ extension ConfidentialEncryptedPayloadError: LocalizedError {
             return "Unsupported encrypted payload version: \(version)."
         case let .invalidEphemeralKeyLength(length):
             return "Ephemeral public key must be 32 bytes; got \(length)."
+        case .invalidEphemeralPublicKey:
+            return "Ephemeral public key must be a valid non-low-order X25519 public key."
         case let .invalidNonceLength(length):
             return "Nonce must be 24 bytes; got \(length)."
+        case .emptyCiphertext:
+            return "Ciphertext must not be empty."
         case .ciphertextTooLarge:
             return "Ciphertext length exceeds supported range."
         case .bridgeUnavailable:
@@ -39,6 +46,7 @@ extension ConfidentialEncryptedPayloadError: LocalizedError {
 public struct ConfidentialEncryptedPayload: Equatable, Sendable {
     public static let v1: UInt8 = 1
     private static let typeName = "iroha_data_model::confidential::ConfidentialEncryptedPayload"
+    private static let lowOrderProbePrivateKey = Data(repeating: 0x01, count: 32)
 
     public let version: UInt8
     public let ephemeralPublicKey: Data
@@ -57,6 +65,12 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
         }
         guard version == ConfidentialEncryptedPayload.v1 else {
             throw ConfidentialEncryptedPayloadError.unsupportedVersion(version)
+        }
+        guard !ciphertext.isEmpty else {
+            throw ConfidentialEncryptedPayloadError.emptyCiphertext
+        }
+        guard !Self.isLowOrderX25519PublicKey(ephemeralPublicKey) else {
+            throw ConfidentialEncryptedPayloadError.invalidEphemeralPublicKey
         }
         self.version = version
         self.ephemeralPublicKey = ephemeralPublicKey
@@ -124,6 +138,19 @@ public struct ConfidentialEncryptedPayload: Equatable, Sendable {
             remaining >>= 7
         }
         buffer.append(UInt8(remaining))
+    }
+
+    private static func isLowOrderX25519PublicKey(_ publicKey: Data) -> Bool {
+        do {
+            let probe = try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: lowOrderProbePrivateKey)
+            let peer = try Curve25519.KeyAgreement.PublicKey(rawRepresentation: publicKey)
+            let sharedSecret = try probe.sharedSecretFromKeyAgreement(with: peer)
+            return sharedSecret.withUnsafeBytes { bytes in
+                bytes.allSatisfy { $0 == 0 }
+            }
+        } catch {
+            return true
+        }
     }
 }
 

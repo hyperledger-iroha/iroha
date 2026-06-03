@@ -484,6 +484,7 @@ public final class ConnectEnvelopeCodec {
         @Override
         public EnvelopeValue decode(final NoritoDecoder decoder) {
           final long sequence = decodeField(decoder, UINT64, "envelope.seq");
+          requireNonNegativeSequence(sequence);
           final EnvelopePayload payload = decodeField(decoder, PAYLOAD_ADAPTER, "envelope.payload");
           return new EnvelopeValue(sequence, payload);
         }
@@ -545,6 +546,7 @@ public final class ConnectEnvelopeCodec {
 
   private static byte[] encodeEnvelope(final EnvelopeValue value) throws ConnectProtocolException {
     try {
+      requireNonNegativeSequence(value.sequence);
       final byte[] encoded = NoritoCodec.encode(
           value,
           ENVELOPE_SCHEMA_PATH,
@@ -553,6 +555,12 @@ public final class ConnectEnvelopeCodec {
       return encoded;
     } catch (final RuntimeException ex) {
       throw new ConnectProtocolException("Failed to encode Connect envelope", ex);
+    }
+  }
+
+  private static void requireNonNegativeSequence(final long sequence) {
+    if (sequence < 0L) {
+      throw new IllegalArgumentException("sequence must be non-negative");
     }
   }
 

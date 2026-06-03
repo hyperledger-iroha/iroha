@@ -433,11 +433,30 @@ pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash)
 
 /// Wrap BFV identifier-encryption parameters into the programmed RAM-FHE public bundle.
 #[must_use]
+///
+/// # Panics
+/// Panics when the supplied encryption parameters or evaluation keys are not
+/// valid programmed RAM-FHE material. New callers that handle untrusted input
+/// should use [`try_bfv_programmed_public_parameters`].
 pub fn bfv_programmed_public_parameters(
     encryption: BfvIdentifierPublicParameters,
     evaluation_keys: BfvEvaluationKeyBundle,
 ) -> BfvProgrammedPublicParameters {
-    bfv_programmed_public_parameters_with_program(
+    try_bfv_programmed_public_parameters(encryption, evaluation_keys)
+        .expect("programmed BFV public parameters must be valid")
+}
+
+/// Fallibly wrap BFV identifier-encryption parameters into the programmed
+/// RAM-FHE public bundle.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the encryption parameters are not registered
+/// production BFV parameters or the evaluation-key metadata is invalid.
+pub fn try_bfv_programmed_public_parameters(
+    encryption: BfvIdentifierPublicParameters,
+    evaluation_keys: BfvEvaluationKeyBundle,
+) -> Result<BfvProgrammedPublicParameters, RamLfeError> {
+    try_bfv_programmed_public_parameters_with_program(
         encryption,
         evaluation_keys,
         &default_bfv_programmed_hidden_program(),
@@ -448,6 +467,12 @@ pub fn bfv_programmed_public_parameters(
 
 /// Wrap BFV identifier-encryption parameters and explicit hidden-program metadata.
 #[must_use]
+///
+/// # Panics
+/// Panics when the supplied encryption parameters, evaluation keys, hidden
+/// program, or proof-verifier metadata are not valid programmed RAM-FHE
+/// material. New callers that handle untrusted input should use
+/// [`try_bfv_programmed_public_parameters_with_program`].
 pub fn bfv_programmed_public_parameters_with_program(
     encryption: BfvIdentifierPublicParameters,
     evaluation_keys: BfvEvaluationKeyBundle,
@@ -455,25 +480,51 @@ pub fn bfv_programmed_public_parameters_with_program(
     verification_mode: RamLfeVerificationMode,
     proof_verifier: Option<RamLfeProofVerifierMetadata>,
 ) -> BfvProgrammedPublicParameters {
-    validate_programmed_evaluation_keys(&evaluation_keys)
-        .expect("programmed BFV evaluation keys must be relinearization-only");
-    let parameter_digest =
-        registered_bfv_parameter_digest(&encryption.parameters).expect("registered BFV params");
+    try_bfv_programmed_public_parameters_with_program(
+        encryption,
+        evaluation_keys,
+        program,
+        verification_mode,
+        proof_verifier,
+    )
+    .expect("programmed BFV public parameters must be valid")
+}
+
+/// Fallibly wrap BFV identifier-encryption parameters and explicit
+/// hidden-program metadata.
+///
+/// # Errors
+/// Returns [`RamLfeError`] when the encryption parameters are not registered
+/// production BFV parameters, the evaluation keys are not valid for the
+/// programmed backend, or the hidden-program/proof metadata fails admission.
+pub fn try_bfv_programmed_public_parameters_with_program(
+    encryption: BfvIdentifierPublicParameters,
+    evaluation_keys: BfvEvaluationKeyBundle,
+    program: &HiddenRamFheProgram,
+    verification_mode: RamLfeVerificationMode,
+    proof_verifier: Option<RamLfeProofVerifierMetadata>,
+) -> Result<BfvProgrammedPublicParameters, RamLfeError> {
+    encryption.validate().map_err(|err| map_bfv_error(&err))?;
+    validate_programmed_evaluation_keys(&evaluation_keys)?;
+    validate_hidden_ram_fhe_program(program)?;
+    validate_proof_verifier_metadata(verification_mode, proof_verifier.as_ref())?;
+    let parameter_digest = registered_bfv_parameter_digest(&encryption.parameters)
+        .map_err(|err| map_bfv_error(&err))?;
     let evaluation_key_digest = evaluation_keys
         .digest(&encryption.parameters)
-        .expect("valid BFV evaluation keys");
-    BfvProgrammedPublicParameters {
+        .map_err(|err| map_bfv_error(&err))?;
+    Ok(BfvProgrammedPublicParameters {
         encryption,
         evaluation_keys,
         hidden_program_digest: program
             .digest()
-            .expect("canonical hidden program digest must encode"),
+            .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?,
         parameter_digest,
         evaluation_key_digest,
         ram_fhe_profile: bfv_program_profile(),
         verification_mode,
         proof_verifier,
-    }
+    })
 }
 
 /// Decode programmed BFV public parameters, upgrading legacy raw BFV payloads.
@@ -1529,9 +1580,10 @@ fn validate_request(request: &ClientRequest) -> Result<(), RamLfeError> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvParameters, bootstrap_key_from_seed,
-        decrypt, derive_identifier_key_material_from_seed, encrypt_identifier_from_seed,
-        ram_lfe_bfv_parameters_v1, rotation_key_from_seed,
+        BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
+        BfvParameters, bootstrap_key_from_seed, decrypt, derive_identifier_key_material_from_seed,
+        encrypt_identifier_from_seed, keygen_from_seed, ram_lfe_bfv_parameters_v1,
+        rotation_key_from_seed,
     };
 
     use super::*;
@@ -1567,12 +1619,7 @@ mod tests {
     #[test]
     fn bfv_affine_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
-        let params = BfvParameters {
-            polynomial_degree: 64,
-            ciphertext_modulus: 1_u64 << 40,
-            plaintext_modulus: 256,
-            decomposition_base_log: 12,
-        };
+        let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"phone#retail";
         let (public_parameters, _, _) =
             derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
@@ -1636,6 +1683,36 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.backend, RamLfeBackend::BfvProgrammedSha3_256V1);
         assert_ne!(first.opaque_id, Hash::prehashed([0; Hash::LENGTH]));
+    }
+
+    #[test]
+    fn try_bfv_programmed_public_parameters_rejects_unregistered_profile() {
+        let params = BfvParameters {
+            polynomial_degree: 64,
+            ciphertext_modulus: 1_u64 << 40,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        };
+        params
+            .validate()
+            .expect("sample BFV profile is structurally valid");
+        assert_ne!(params, ram_lfe_bfv_parameters_v1());
+        let (_, public_key, relinearization_key) =
+            keygen_from_seed(&params, b"ram-lfe-unregistered-bfv-keygen").expect("keygen");
+        let public_parameters = BfvIdentifierPublicParameters {
+            parameters: params,
+            public_key,
+            max_input_bytes: 63,
+        };
+        let evaluation_keys = BfvEvaluationKeyBundle {
+            relinearization_key,
+            rotation_keys: Vec::new(),
+            bootstrap_key: None,
+        };
+
+        let err = try_bfv_programmed_public_parameters(public_parameters, evaluation_keys)
+            .expect_err("programmed BFV constructor must reject unregistered profiles");
+        assert!(err.to_string().contains("not registered"));
     }
 
     #[test]
@@ -2185,22 +2262,29 @@ mod tests {
             rotation_keys: Vec::new(),
             bootstrap_key: None,
         };
-        let programmed = bfv_programmed_public_parameters_with_program(
-            public_parameters,
-            evaluation_keys,
+        let debug_verifier = RamLfeProofVerifierMetadata {
+            proof_backend: "debug/ok".to_owned(),
+            circuit_id: "ram-lfe-test".to_owned(),
+            public_inputs_schema_hash: Hash::new(b"schema"),
+            verifying_key_bytes: vec![0xAA],
+        };
+        let err = try_bfv_programmed_public_parameters_with_program(
+            public_parameters.clone(),
+            evaluation_keys.clone(),
             &default_bfv_programmed_hidden_program(),
             RamLfeVerificationMode::Proof,
-            Some(RamLfeProofVerifierMetadata {
-                proof_backend: "debug/ok".to_owned(),
-                circuit_id: "ram-lfe-test".to_owned(),
-                public_inputs_schema_hash: Hash::new(b"schema"),
-                verifying_key_bytes: vec![0xAA],
-            }),
-        );
+            Some(debug_verifier.clone()),
+        )
+        .expect_err("debug proof backend must be rejected");
+        assert!(err.to_string().contains("debug proof backends"));
+
+        let mut programmed = bfv_programmed_public_parameters(public_parameters, evaluation_keys);
+        programmed.verification_mode = RamLfeVerificationMode::Proof;
+        programmed.proof_verifier = Some(debug_verifier);
         let encoded = norito::to_bytes(&programmed).expect("encode programmed params");
 
         let err = decode_bfv_programmed_public_parameters(&encoded)
-            .expect_err("debug proof backend must be rejected");
+            .expect_err("debug proof backend must be rejected while decoding");
         assert!(err.to_string().contains("debug proof backends"));
     }
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
+CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 ALL_LANES_TESTS = ROOT / "pytests" / "scripts" / "sccp_all_lanes_evidence_test.py"
 PHASES = (
     "rust-sccp",
@@ -29,6 +30,14 @@ SDK_PHASES = ("js-sdk", "python-sdk", "swift-sdk", "kotlin-sdk", "java-android")
 EVM_SDK_PHASES = (*SDK_PHASES, "dotnet-sdk")
 JS_CALLBACK_HOOK_SYMBOLS = ("witnessProvider", "proveFn", "consensusProvider")
 PYTHON_CALLBACK_HOOK_SYMBOLS = ("witness_provider", "prove", "consensus_provider")
+EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
+    "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+    "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+    "pytests/scripts/sccp_evm_destination_evidence_test.py",
+    "pytests/scripts/sccp_evm_live_evidence_test.py",
+    "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+    "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+)
 BSC_MAINNET_SDK_SOURCE_PATHS = {
     "js-sdk": ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
     "python-sdk": ROOT / "python" / "iroha_torii_client" / "sccp.py",
@@ -262,6 +271,29 @@ def phase_command_lines(fragments) -> list[str]:
     return [f"+ {fragment}" for fragment in fragments]
 
 
+def corridor_evidence_script_tests() -> tuple[str, ...]:
+    """Return pytest files listed by the production corridor evidence phase."""
+
+    script = CORRIDOR_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"phase_evidence_scripts\(\) \{\n"
+        r"\s+local tests=\(\n"
+        r"(?P<body>.*?)"
+        r"\n\s+\)\n"
+        r"\s+run_cmd python3 -m pytest -q \"\$\{tests\[@\]\}\"",
+        script,
+        re.DOTALL,
+    )
+    assert match is not None, "phase_evidence_scripts test inventory not found"
+    tests = []
+    for raw_line in match.group("body").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tests.append(line)
+    return tuple(tests)
+
+
 def complete_corridor_log(phases: tuple[str, ...] = PHASES) -> str:
     """Return a synthetic successful SCCP production-corridor transcript."""
 
@@ -360,15 +392,98 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, evidence_payload
 
 
-def test_release_readiness_active_launch_policy_is_bsc_mainnet() -> None:
-    """The release-readiness script must advertise the BSC launch lane."""
+def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
+    """The release-readiness script must advertise the Ethereum launch lane."""
 
     report = load_report_module()
 
-    assert report.ACTIVE_LAUNCH_DOMAIN == 2
-    assert report.ACTIVE_LAUNCH_CHAIN == "bsc"
-    assert report.ACTIVE_LAUNCH_POLICY == "BscMainnetLane"
-    assert report.ACTIVE_LAUNCH_DISPLAY == "BSC mainnet"
+    assert report.ACTIVE_LAUNCH_DOMAIN == 1
+    assert report.ACTIVE_LAUNCH_CHAIN == "eth"
+    assert report.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
+    assert report.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+
+
+def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
+    """The evidence phase transcript must prove the EVM evidence suites ran."""
+
+    report = load_report_module()
+    required_fragments = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+    for fragment in EVM_EVIDENCE_SCRIPT_FRAGMENTS:
+        assert fragment in required_fragments
+
+
+def test_release_readiness_evidence_phase_inventory_matches_corridor_runner() -> None:
+    """The evidence transcript gate must track the runner's pytest inventory."""
+
+    report = load_report_module()
+    required_fragments = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+    for test_path in corridor_evidence_script_tests():
+        assert any(test_path in fragment for fragment in required_fragments)
+
+
+def test_release_readiness_report_requires_evm_evidence_script_transcript(
+    tmp_path: Path,
+) -> None:
+    """The report must reject evidence phase logs missing EVM evidence tests."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_evm_live_evidence_test.py"
+    assert omitted_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "evidence-scripts-without-evm-live.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "evidence-scripts=passed",
+            "--phase-evidence",
+            f"evidence-scripts={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase evidence-scripts evidence artifact is "
+        f"missing expected phase-block command: {omitted_fragment}"
+    ) in completed.stdout
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
@@ -579,6 +694,280 @@ def test_release_readiness_ethereum_data_collection_has_no_proxy_fallback() -> N
                 violations.append(
                     f"{sdk} {path.relative_to(ROOT)} collection path contains forbidden {label}"
                 )
+
+    assert violations == []
+
+
+def test_release_readiness_ethereum_js_dist_keeps_receipt_admission_guards() -> None:
+    """Published JS must keep source receipt-proof admission checks in dist."""
+
+    required_markers = (
+        "eth_getBlockReceipts target receipt must match transactionHash",
+        "eth_getBlockReceipts target receipt blockHash must match receipt",
+        "eth_getBlockReceipts target receipt blockNumber must match receipt",
+        "eth_getBlockReceipts target receipt RLP must match receipt",
+        "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+    )
+    checked_paths = (
+        ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
+        ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js",
+    )
+    violations: list[str] = []
+    for path in checked_paths:
+        source = path.read_text(encoding="utf-8")
+        for marker in required_markers:
+            if marker not in source:
+                violations.append(f"{path.relative_to(ROOT)} missing `{marker}`")
+
+    assert violations == []
+
+
+def test_release_readiness_ethereum_sdks_keep_receipt_metadata_guards() -> None:
+    """Ethereum SDK receipt-proof builders must reject block-receipt metadata drift."""
+
+    sdk_markers = {
+        "js-src": ((
+            ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
+            (
+                "eth_getBlockReceipts target receipt must match transactionHash",
+                "eth_getBlockReceipts target receipt blockHash must match receipt",
+                "eth_getBlockReceipts target receipt blockNumber must match receipt",
+                "eth_getBlockReceipts target receipt RLP must match receipt",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+        ),),
+        "js-dist": ((
+            ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js",
+            (
+                "eth_getBlockReceipts target receipt must match transactionHash",
+                "eth_getBlockReceipts target receipt blockHash must match receipt",
+                "eth_getBlockReceipts target receipt blockNumber must match receipt",
+                "eth_getBlockReceipts target receipt RLP must match receipt",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+            ),
+        ),),
+        "swift-sdk": (
+            (
+                ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SccpEvmProver.swift",
+                (
+                    '"blockReceipts.transactionHash"',
+                    '"blockReceipts.blockHash"',
+                    '"blockReceipts.blockNumber"',
+                    '"blockReceipts.receiptRlp"',
+                    "canonicalEvmReceiptRlp(currentReceipt)",
+                ),
+            ),
+            (
+                ROOT
+                / "IrohaSwift"
+                / "Sources"
+                / "IrohaSwift"
+                / "SccpSourceProofHashes.swift",
+                (
+                    "receiptType <= 0x7f",
+                    "let admittedType = UInt8(receiptType)",
+                    "(0x01...0x04).contains(admittedType)",
+                ),
+            ),
+        ),
+        "kotlin-sdk": (
+            (
+                ROOT
+                / "kotlin"
+                / "core-jvm"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "sdk"
+                / "sccp"
+                / "EvmSccpProver.kt",
+                (
+                    "eth_getBlockReceipts target receipt must match transactionHash",
+                    "eth_getBlockReceipts target receipt blockHash must match receipt",
+                    "eth_getBlockReceipts target receipt blockNumber must match receipt",
+                    "eth_getBlockReceipts target receipt RLP must match receipt",
+                    "SccpSourceProofs.canonicalEvmReceiptRlp(receipt)",
+                ),
+            ),
+            (
+                ROOT
+                / "kotlin"
+                / "core-jvm"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "sdk"
+                / "sccp"
+                / "SourceSccpProofHashes.kt",
+                (
+                    "typed receipt type must fit one byte below 0x80",
+                    "val admittedType = receiptType.toInt()",
+                    "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+                ),
+            ),
+        ),
+        "java-android": (
+            (
+                ROOT
+                / "java"
+                / "iroha_android"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "android"
+                / "sccp"
+                / "EthereumMainnetSccp.java",
+                (
+                    "eth_getBlockReceipts target receipt must match transactionHash",
+                    "eth_getBlockReceipts target receipt blockHash must match receipt",
+                    "eth_getBlockReceipts target receipt blockNumber must match receipt",
+                    "eth_getBlockReceipts target receipt RLP must match receipt",
+                    "SourceSccpProofs.canonicalEvmReceiptRlp(receipt)",
+                ),
+            ),
+            (
+                ROOT
+                / "java"
+                / "iroha_android"
+                / "src"
+                / "main"
+                / "java"
+                / "org"
+                / "hyperledger"
+                / "iroha"
+                / "android"
+                / "sccp"
+                / "SourceSccpProofs.java",
+                (
+                    "typed receipt type must fit one byte below 0x80",
+                    "final int admittedType = receiptType.intValue()",
+                    "typed receipt type is not supported for Ethereum mainnet receipt proofs",
+                ),
+            ),
+        ),
+        "dotnet-sdk": ((
+            ROOT
+            / "csharp"
+            / "src"
+            / "Hyperledger.Iroha.Sdk"
+            / "Sccp"
+            / "EthereumMainnetSccp.cs",
+            (
+                "blockReceipts.transactionHash must match transactionHash.",
+                "blockReceipts.blockHash must match receipt.",
+                "blockReceipts.blockNumber must match receipt.",
+                "blockReceipts.receiptRlp must match receipt.",
+                "typed receipt type is not supported for Ethereum mainnet receipt proofs.",
+            ),
+        ),),
+    }
+
+    violations: list[str] = []
+    for sdk, guarded_files in sdk_markers.items():
+        for path, markers in guarded_files:
+            source = path.read_text(encoding="utf-8")
+            for marker in markers:
+                if marker not in source:
+                    violations.append(f"{sdk} {path.relative_to(ROOT)} missing `{marker}`")
+
+    assert violations == []
+
+
+def test_release_readiness_ethereum_sdks_validate_provider_before_outbound_submitter() -> None:
+    """Ethereum outbound submitter paths must honor configured mainnet providers."""
+
+    sdk_markers = {
+        "js-src": (
+            ROOT / "javascript" / "iroha_js" / "src" / "sccp.js",
+            (
+                "let providerValidated = false;",
+                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+                "if (typeof submit === \"function\")",
+            ),
+        ),
+        "js-dist": (
+            ROOT / "javascript" / "iroha_js" / "dist" / "sccp.js",
+            (
+                "let providerValidated = false;",
+                "await this.validateExecutionProviderMainnet({ executionProvider: provider });",
+                "if (typeof submit === \"function\")",
+            ),
+        ),
+        "swift-sdk": (
+            ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SccpEvmProver.swift",
+            (
+                "if let executionProvider {",
+                "_ = try await validateExecutionProviderMainnet(executionProvider)",
+                "return try await outboundSubmitFunction(submission)",
+            ),
+        ),
+        "kotlin-sdk": (
+            ROOT
+            / "kotlin"
+            / "core-jvm"
+            / "src"
+            / "main"
+            / "java"
+            / "org"
+            / "hyperledger"
+            / "iroha"
+            / "sdk"
+            / "sccp"
+            / "EvmSccpProver.kt",
+            (
+                "executionProvider?.let { validateExecutionProviderMainnet(it) }",
+                "return submitter.submit(buildEthereumCalldata(input))",
+            ),
+        ),
+        "java-android": (
+            ROOT
+            / "java"
+            / "iroha_android"
+            / "src"
+            / "main"
+            / "java"
+            / "org"
+            / "hyperledger"
+            / "iroha"
+            / "android"
+            / "sccp"
+            / "EthereumMainnetSccp.java",
+            (
+                "if (executionProvider != null) {",
+                "validateExecutionProviderMainnet(executionProvider);",
+                "return outboundSubmitter.submit(buildEthereumCalldata(input));",
+            ),
+        ),
+        "dotnet-sdk": (
+            ROOT
+            / "csharp"
+            / "src"
+            / "Hyperledger.Iroha.Sdk"
+            / "Sccp"
+            / "EthereumMainnetSccp.cs",
+            (
+                "IEthereumMainnetExecutionProvider? executionProvider",
+                "ValidateExecutionProviderMainnetAsync(",
+                "return await outboundSubmitter.SubmitAsync(submission, cancellationToken)",
+            ),
+        ),
+    }
+
+    violations: list[str] = []
+    for sdk, (path, markers) in sdk_markers.items():
+        source = path.read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in source:
+                violations.append(f"{sdk} {path.relative_to(ROOT)} missing `{marker}`")
 
     assert violations == []
 

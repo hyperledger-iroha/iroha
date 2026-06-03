@@ -875,6 +875,9 @@ pub mod domain {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 asset_definition_matches_domain(permission.asset.definition())
             }
+            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
+                asset_definition_matches_domain(&permission.asset)
+            }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
@@ -1156,6 +1159,9 @@ pub mod account {
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.account() == account_id
             }
+            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
+                permission.account == *account_id
+            }
             AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
             AnyPermission::CanRegisterTrigger(permission) => permission.authority == *account_id,
             AnyPermission::CanUnregisterTrigger(_)
@@ -1393,6 +1399,9 @@ pub mod asset_definition {
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition() == asset_definition_id
+            }
+            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
+                &permission.asset == asset_definition_id
             }
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
@@ -2594,6 +2603,7 @@ pub mod trigger {
             | AnyPermission::CanBurnAsset(_)
             | AnyPermission::CanModifyAssetMetadata(_)
             | AnyPermission::CanTransferAsset(_)
+            | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)

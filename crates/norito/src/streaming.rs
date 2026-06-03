@@ -1529,6 +1529,10 @@ pub mod crypto {
     const CEK_LABEL: &[u8] = b"nsc-cek";
     const NONCE_LABEL: &[u8] = b"nsc-nonce";
     const GCK_AAD_LABEL: &[u8] = b"nsc-gck";
+    const STS_SHARED_SECRET_LEN: usize = 32;
+    const GROUP_CONTENT_KEY_LEN: usize = 32;
+    const X25519_EPHEMERAL_PUBLIC_LEN: usize = 32;
+    const KYBER768_CIPHERTEXT_LEN: usize = 1088;
 
     /// Errors emitted by NSC crypto helpers.
     #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
@@ -1539,12 +1543,20 @@ pub mod crypto {
         HkdfExpand,
         #[error("invalid ephemeral public key length (expected {expected}, found {found})")]
         InvalidEphemeralPublicKey { expected: usize, found: usize },
+        #[error("invalid shared secret length (expected {expected}, found {found})")]
+        InvalidSharedSecretLength { expected: usize, found: usize },
         #[error("nonce length mismatch: expected {expected}, found {found}")]
         InvalidNonceLength { expected: usize, found: usize },
+        #[error("invalid group content key length (expected {expected}, found {found})")]
+        InvalidGroupContentKeyLength { expected: usize, found: usize },
         #[error("aead operation failed")]
         AeadFailure,
         #[error("key counter must be strictly increasing (previous {previous}, found {found})")]
         NonMonotonicKeyCounter { previous: u64, found: u64 },
+        #[error("key counter must be nonzero (found {found})")]
+        InvalidKeyCounter { found: u64 },
+        #[error("protocol version must be nonzero (found {found})")]
+        InvalidProtocolVersion { found: u16 },
         #[error("encryption suite changed from {expected:?} to {found:?}")]
         SuiteChanged {
             expected: EncryptionSuite,
@@ -1556,6 +1568,8 @@ pub mod crypto {
         InvalidWrappedKey,
         #[error("content key valid_from must advance (previous {previous}, found {found})")]
         InvalidValidFrom { previous: u64, found: u64 },
+        #[error("invalid content key state: {0}")]
+        InvalidContentKeyState(&'static str),
     }
 
     /// Session transport keys derived for a given endpoint role.
@@ -1572,6 +1586,42 @@ pub mod crypto {
             .copy_from_slice(&content_key_id.to_le_bytes());
         ad[GCK_AAD_LABEL.len() + 8..].copy_from_slice(&valid_from_segment.to_le_bytes());
         ad
+    }
+
+    fn validate_group_content_key(gck: &[u8]) -> Result<(), CryptoError> {
+        if gck.len() != GROUP_CONTENT_KEY_LEN {
+            return Err(CryptoError::InvalidGroupContentKeyLength {
+                expected: GROUP_CONTENT_KEY_LEN,
+                found: gck.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_shared_secret(shared_secret: &[u8]) -> Result<(), CryptoError> {
+        if shared_secret.len() != STS_SHARED_SECRET_LEN {
+            return Err(CryptoError::InvalidSharedSecretLength {
+                expected: STS_SHARED_SECRET_LEN,
+                found: shared_secret.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn key_update_ephemeral_len_for_suite(suite: &EncryptionSuite) -> usize {
+        match suite {
+            EncryptionSuite::X25519ChaCha20Poly1305(_) => X25519_EPHEMERAL_PUBLIC_LEN,
+            EncryptionSuite::Kyber768XChaCha20Poly1305(_) => KYBER768_CIPHERTEXT_LEN,
+        }
+    }
+
+    fn validate_key_update_ephemeral(frame: &KeyUpdate) -> Result<(), CryptoError> {
+        let expected = key_update_ephemeral_len_for_suite(&frame.suite);
+        let found = frame.pub_ephemeral.len();
+        if found != expected {
+            return Err(CryptoError::InvalidEphemeralPublicKey { expected, found });
+        }
+        Ok(())
     }
 
     /// Track monotonic key update counters and negotiated suite.
@@ -1592,6 +1642,16 @@ pub mod crypto {
 
     impl KeyUpdateState {
         pub fn record(&mut self, frame: &KeyUpdate) -> Result<(), CryptoError> {
+            if frame.protocol_version == 0 {
+                return Err(CryptoError::InvalidProtocolVersion {
+                    found: frame.protocol_version,
+                });
+            }
+            if frame.key_counter == 0 {
+                return Err(CryptoError::InvalidKeyCounter {
+                    found: frame.key_counter,
+                });
+            }
             if let Some(prev) = self.last_counter
                 && frame.key_counter <= prev
             {
@@ -1600,14 +1660,16 @@ pub mod crypto {
                     found: frame.key_counter,
                 });
             }
-            if let Some(suite) = self.suite {
-                if suite != frame.suite {
-                    return Err(CryptoError::SuiteChanged {
-                        expected: suite,
-                        found: frame.suite,
-                    });
-                }
-            } else {
+            if let Some(suite) = self.suite
+                && suite != frame.suite
+            {
+                return Err(CryptoError::SuiteChanged {
+                    expected: suite,
+                    found: frame.suite,
+                });
+            }
+            validate_key_update_ephemeral(frame)?;
+            if self.suite.is_none() {
                 self.suite = Some(frame.suite);
             }
             self.last_counter = Some(frame.key_counter);
@@ -1622,9 +1684,17 @@ pub mod crypto {
             self.last_counter
         }
 
-        pub fn restore(&mut self, last_counter: Option<u64>, suite: Option<EncryptionSuite>) {
+        pub fn restore(
+            &mut self,
+            last_counter: Option<u64>,
+            suite: Option<EncryptionSuite>,
+        ) -> Result<(), CryptoError> {
+            if matches!(last_counter, Some(0)) {
+                return Err(CryptoError::InvalidKeyCounter { found: 0 });
+            }
             self.last_counter = last_counter;
             self.suite = suite;
+            Ok(())
         }
 
         /// Produce a snapshot capturing the negotiated suite and last accepted counter.
@@ -1639,11 +1709,10 @@ pub mod crypto {
         }
 
         /// Rehydrate a [`KeyUpdateState`] from a snapshot.
-        #[must_use]
-        pub fn from_snapshot(snapshot: KeyUpdateSnapshot) -> Self {
+        pub fn from_snapshot(snapshot: KeyUpdateSnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
-            state.restore(Some(snapshot.last_counter), Some(snapshot.suite));
-            state
+            state.restore(Some(snapshot.last_counter), Some(snapshot.suite))?;
+            Ok(state)
         }
     }
 
@@ -1697,9 +1766,19 @@ pub mod crypto {
             self.last_valid_from
         }
 
-        pub fn restore(&mut self, last_id: Option<u64>, last_valid_from: Option<u64>) {
+        pub fn restore(
+            &mut self,
+            last_id: Option<u64>,
+            last_valid_from: Option<u64>,
+        ) -> Result<(), CryptoError> {
+            if last_id.is_some() != last_valid_from.is_some() {
+                return Err(CryptoError::InvalidContentKeyState(
+                    "content key id and valid-from must be restored together",
+                ));
+            }
             self.last_id = last_id;
             self.last_valid_from = last_valid_from;
+            Ok(())
         }
 
         /// Produce a snapshot capturing the last accepted identifiers.
@@ -1714,11 +1793,10 @@ pub mod crypto {
         }
 
         /// Rehydrate a [`ContentKeyState`] from a snapshot.
-        #[must_use]
-        pub fn from_snapshot(snapshot: ContentKeySnapshot) -> Self {
+        pub fn from_snapshot(snapshot: ContentKeySnapshot) -> Result<Self, CryptoError> {
             let mut state = Self::default();
-            state.restore(Some(snapshot.last_id), Some(snapshot.last_valid_from));
-            state
+            state.restore(Some(snapshot.last_id), Some(snapshot.last_valid_from))?;
+            Ok(state)
         }
     }
 
@@ -1773,8 +1851,10 @@ pub mod crypto {
         ad
     }
 
-    /// Derive the session transport secret root from the shared secret output of the handshake.
+    /// Derive the session transport secret root from the 32-byte shared secret output of the
+    /// handshake.
     pub fn derive_sts_root(shared_secret: &[u8]) -> Result<[u8; 32], CryptoError> {
+        validate_shared_secret(shared_secret)?;
         let hk = Hkdf::<Sha3_256>::new(Some(STS_SALT), shared_secret);
         let mut root = [0u8; 32];
         hk.expand(STS_ROOT_LABEL, &mut root)
@@ -1949,7 +2029,8 @@ pub mod crypto {
         }
     }
 
-    /// Wrap a Group Content Key (GCK) using the negotiated transport send key and explicit nonce.
+    /// Wrap a 32-byte Group Content Key (GCK) using the negotiated transport send key and explicit
+    /// nonce.
     ///
     /// The returned vector concatenates `nonce || ciphertext`, matching the payload layout used in
     /// [`ContentKeyUpdate::gck_wrapped`].
@@ -1961,6 +2042,7 @@ pub mod crypto {
         content_key_id: u64,
         valid_from_segment: u64,
     ) -> Result<Vec<u8>, CryptoError> {
+        validate_group_content_key(gck_plaintext)?;
         let aad = gck_associated_data(content_key_id, valid_from_segment);
         let ciphertext = match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => {
@@ -1998,7 +2080,7 @@ pub mod crypto {
         Ok(out)
     }
 
-    /// Unwrap a Group Content Key (GCK) using the transport receive key and inline nonce.
+    /// Unwrap a 32-byte Group Content Key (GCK) using the transport receive key and inline nonce.
     pub fn unwrap_gck(
         suite: &EncryptionSuite,
         transport_recv_key: &[u8; 32],
@@ -2008,7 +2090,7 @@ pub mod crypto {
         valid_from_segment: u64,
     ) -> Result<Vec<u8>, CryptoError> {
         let aad = gck_associated_data(content_key_id, valid_from_segment);
-        match suite {
+        let plaintext = match suite {
             EncryptionSuite::X25519ChaCha20Poly1305(_) => {
                 let key = chacha_key_from_bytes(transport_recv_key);
                 let nonce = chacha_nonce_from_slice(nonce)?;
@@ -2037,7 +2119,9 @@ pub mod crypto {
                     )
                     .map_err(|_| CryptoError::AeadFailure)
             }
-        }
+        }?;
+        validate_group_content_key(plaintext.as_slice())?;
+        Ok(plaintext)
     }
 
     /// Build the associated data commitments for a ciphertext batch.
@@ -2080,17 +2164,81 @@ pub mod crypto {
             sig
         }
 
+        fn encrypt_gck_without_length_check(
+            suite: &EncryptionSuite,
+            transport_key: &[u8; 32],
+            nonce: &[u8],
+            gck_plaintext: &[u8],
+            content_key_id: u64,
+            valid_from_segment: u64,
+        ) -> Vec<u8> {
+            let aad = gck_associated_data(content_key_id, valid_from_segment);
+            match suite {
+                EncryptionSuite::X25519ChaCha20Poly1305(_) => {
+                    let key = chacha_key_from_bytes(transport_key);
+                    let nonce = chacha_nonce_from_slice(nonce).expect("valid chacha nonce");
+                    let cipher = ChaCha20Poly1305::new(&key);
+                    cipher
+                        .encrypt(
+                            &nonce,
+                            Payload {
+                                msg: gck_plaintext,
+                                aad: &aad,
+                            },
+                        )
+                        .expect("manual gck encrypt")
+                }
+                EncryptionSuite::Kyber768XChaCha20Poly1305(_) => {
+                    let key = chacha_key_from_bytes(transport_key);
+                    let nonce = xchacha_nonce_from_slice(nonce).expect("valid xchacha nonce");
+                    let cipher = XChaCha20Poly1305::new(&key);
+                    cipher
+                        .encrypt(
+                            &nonce,
+                            Payload {
+                                msg: gck_plaintext,
+                                aad: &aad,
+                            },
+                        )
+                        .expect("manual gck encrypt")
+                }
+            }
+        }
+
         #[test]
         fn transport_keys_deterministic() {
-            let secret = b"shared secret demo";
+            let secret = sample_hash(0x13);
             let publisher_keys =
-                derive_transport_keys_for_role(secret, CapabilityRole::Publisher).unwrap();
+                derive_transport_keys_for_role(&secret, CapabilityRole::Publisher).unwrap();
             let viewer_keys =
-                derive_transport_keys_for_role(secret, CapabilityRole::Viewer).unwrap();
+                derive_transport_keys_for_role(&secret, CapabilityRole::Viewer).unwrap();
             assert_eq!(publisher_keys.send, viewer_keys.recv);
             assert_eq!(publisher_keys.recv, viewer_keys.send);
             assert_ne!(publisher_keys.send, publisher_keys.recv);
             assert_ne!(viewer_keys.send, viewer_keys.recv);
+        }
+
+        #[test]
+        fn transport_secret_derivation_rejects_invalid_shared_secret_length() {
+            let short_secret = [0x14u8; 31];
+            let err = derive_sts_root(&short_secret).expect_err("short STS secret rejected");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidSharedSecretLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
+
+            let err = derive_transport_keys_for_role(&short_secret, CapabilityRole::Publisher)
+                .expect_err("short transport secret rejected");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidSharedSecretLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
         }
 
         #[test]
@@ -2183,6 +2331,154 @@ pub mod crypto {
         }
 
         #[test]
+        fn key_update_state_rejects_zero_counter_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(13),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 0,
+                signature: sample_signature(14),
+            };
+
+            let err = state.record(&frame).expect_err("zero counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.key_counter = 1;
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
+        fn key_update_state_restore_rejects_zero_counter_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let frame = KeyUpdate {
+                session_id: sample_hash(17),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(18),
+            };
+            state.record(&frame).unwrap();
+
+            let err = state
+                .restore(Some(0), Some(suite))
+                .expect_err("zero restore counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+
+            let snapshot = KeyUpdateSnapshot {
+                suite,
+                last_counter: 0,
+            };
+            let err = KeyUpdateState::from_snapshot(snapshot)
+                .expect_err("zero snapshot counter rejected");
+            assert_eq!(err, CryptoError::InvalidKeyCounter { found: 0 });
+        }
+
+        #[test]
+        fn key_update_state_rejects_zero_protocol_version_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(15),
+                suite,
+                protocol_version: 0,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(16),
+            };
+
+            let err = state
+                .record(&frame)
+                .expect_err("zero protocol version rejected");
+            assert_eq!(err, CryptoError::InvalidProtocolVersion { found: 0 });
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.protocol_version = 1;
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
+        fn key_update_state_rejects_invalid_x25519_ephemeral_without_state_change() {
+            let suite = sample_suite();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(11),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(12),
+            };
+            state.record(&frame).unwrap();
+
+            frame.key_counter = 2;
+            frame
+                .pub_ephemeral
+                .truncate(X25519_EPHEMERAL_PUBLIC_LEN - 1);
+            let err = state
+                .record(&frame)
+                .expect_err("short x25519 ephemeral rejected");
+            assert_eq!(
+                err,
+                CryptoError::InvalidEphemeralPublicKey {
+                    expected: X25519_EPHEMERAL_PUBLIC_LEN,
+                    found: X25519_EPHEMERAL_PUBLIC_LEN - 1
+                }
+            );
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+
+            frame.pub_ephemeral.resize(X25519_EPHEMERAL_PUBLIC_LEN, 0);
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(2));
+        }
+
+        #[test]
+        fn key_update_state_rejects_invalid_kyber_ephemeral_without_state_change() {
+            let suite = sample_suite_xchacha();
+            let mut state = KeyUpdateState::default();
+            let mut frame = KeyUpdate {
+                session_id: sample_hash(21),
+                suite,
+                protocol_version: 1,
+                pub_ephemeral: vec![0; X25519_EPHEMERAL_PUBLIC_LEN],
+                key_counter: 1,
+                signature: sample_signature(22),
+            };
+
+            let err = state
+                .record(&frame)
+                .expect_err("short kyber ciphertext rejected");
+            assert_eq!(
+                err,
+                CryptoError::InvalidEphemeralPublicKey {
+                    expected: KYBER768_CIPHERTEXT_LEN,
+                    found: X25519_EPHEMERAL_PUBLIC_LEN
+                }
+            );
+            assert_eq!(state.last_counter(), None);
+            assert_eq!(state.suite(), None);
+
+            frame.pub_ephemeral.resize(KYBER768_CIPHERTEXT_LEN, 0);
+            state.record(&frame).unwrap();
+            assert_eq!(state.last_counter(), Some(1));
+            assert_eq!(state.suite(), Some(&suite));
+        }
+
+        #[test]
         fn content_key_state_enforces_rotation_rules() {
             let mut state = ContentKeyState::default();
             let mut update = ContentKeyUpdate {
@@ -2224,6 +2520,45 @@ pub mod crypto {
         }
 
         #[test]
+        fn content_key_state_restore_rejects_partial_state_without_state_change() {
+            let mut state = ContentKeyState::default();
+            state
+                .record(&ContentKeyUpdate {
+                    content_key_id: 5,
+                    gck_wrapped: vec![1, 2, 3],
+                    valid_from_segment: 20,
+                })
+                .unwrap();
+
+            for (last_id, last_valid_from) in [(Some(6), None), (None, Some(30))] {
+                let err = state
+                    .restore(last_id, last_valid_from)
+                    .expect_err("partial content-key restore rejected");
+                assert_eq!(
+                    err,
+                    CryptoError::InvalidContentKeyState(
+                        "content key id and valid-from must be restored together"
+                    )
+                );
+                assert_eq!(state.last_id(), Some(5));
+                assert_eq!(state.last_valid_from(), Some(20));
+            }
+
+            state.restore(Some(6), Some(30)).unwrap();
+            assert_eq!(state.last_id(), Some(6));
+            assert_eq!(state.last_valid_from(), Some(30));
+
+            let snapshot = ContentKeySnapshot {
+                last_id: 7,
+                last_valid_from: 40,
+            };
+            let restored =
+                ContentKeyState::from_snapshot(snapshot).expect("complete snapshot restores");
+            assert_eq!(restored.last_id(), Some(7));
+            assert_eq!(restored.last_valid_from(), Some(40));
+        }
+
+        #[test]
         fn gck_wrap_unwrap_roundtrip() {
             let suite = sample_suite();
             let transport_key = sample_hash(33);
@@ -2240,6 +2575,49 @@ pub mod crypto {
             let unwrapped = unwrap_gck(&suite, &transport_key, nonce_part, ciphertext_part, 9, 128)
                 .expect("unwrap");
             assert_eq!(unwrapped, gck);
+        }
+
+        #[test]
+        fn gck_wrap_rejects_invalid_plaintext_length() {
+            let suite = sample_suite();
+            let transport_key = sample_hash(45);
+            let nonce = vec![0x11; nonce_len_for_suite(&suite)];
+            let short_gck = [0x22u8; 31];
+            let err = wrap_gck(&suite, &transport_key, &nonce, &short_gck, 10, 129)
+                .expect_err("short gck rejected before wrapping");
+            assert!(matches!(
+                err,
+                CryptoError::InvalidGroupContentKeyLength {
+                    expected: 32,
+                    found: 31
+                }
+            ));
+        }
+
+        #[test]
+        fn gck_unwrap_rejects_invalid_plaintext_length() {
+            let transport_key = sample_hash(46);
+            let short_gck = [0x33u8; 31];
+            for suite in [sample_suite(), sample_suite_xchacha()] {
+                let nonce = vec![0x44; nonce_len_for_suite(&suite)];
+                let ciphertext = encrypt_gck_without_length_check(
+                    &suite,
+                    &transport_key,
+                    &nonce,
+                    &short_gck,
+                    11,
+                    130,
+                );
+                let err = unwrap_gck(&suite, &transport_key, &nonce, &ciphertext, 11, 130)
+                    .expect_err("short decrypted gck rejected");
+                assert!(matches!(
+                    err,
+                    CryptoError::InvalidGroupContentKeyLength {
+                        expected: 32,
+                        found: 31
+                    }
+                ));
+            }
         }
     }
 }

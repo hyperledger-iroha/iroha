@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "sccp_release_bundle.py"
 VERIFY_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
 REPORT_SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
+CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 ALL_LANES_TESTS = ROOT / "pytests" / "scripts" / "sccp_all_lanes_evidence_test.py"
 PHASES = (
     "rust-sccp",
@@ -27,12 +29,43 @@ PHASES = (
     "contract-smoke",
     "core-admission",
 )
+EVM_EVIDENCE_SCRIPT_FRAGMENTS = (
+    "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
+    "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
+    "pytests/scripts/sccp_evm_destination_evidence_test.py",
+    "pytests/scripts/sccp_evm_live_evidence_test.py",
+    "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+    "pytests/scripts/sccp_evm_source_live_evidence_test.py",
+)
 
 
 def phase_command_lines(fragments) -> list[str]:
     """Render required fragments as production-corridor traced commands."""
 
     return [f"+ {fragment}" for fragment in fragments]
+
+
+def corridor_evidence_script_tests() -> tuple[str, ...]:
+    """Return pytest files listed by the production corridor evidence phase."""
+
+    script = CORRIDOR_SCRIPT.read_text(encoding="utf-8")
+    match = re.search(
+        r"phase_evidence_scripts\(\) \{\n"
+        r"\s+local tests=\(\n"
+        r"(?P<body>.*?)"
+        r"\n\s+\)\n"
+        r"\s+run_cmd python3 -m pytest -q \"\$\{tests\[@\]\}\"",
+        script,
+        re.DOTALL,
+    )
+    assert match is not None, "phase_evidence_scripts test inventory not found"
+    tests = []
+    for raw_line in match.group("body").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tests.append(line)
+    return tuple(tests)
 
 
 def load_all_lanes_helpers():
@@ -102,17 +135,45 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, payload
 
 
-def test_release_bundle_active_launch_policy_is_bsc_mainnet() -> None:
-    """Readiness and verifier constants must pin the BSC launch lane."""
+def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
+    """Readiness and verifier constants must pin the Ethereum launch lane."""
 
     report = load_report_module()
     verifier = load_verify_helpers()
 
     for module in (report, verifier):
-        assert module.ACTIVE_LAUNCH_DOMAIN == 2
-        assert module.ACTIVE_LAUNCH_CHAIN == "bsc"
-        assert module.ACTIVE_LAUNCH_POLICY == "BscMainnetLane"
-        assert module.ACTIVE_LAUNCH_DISPLAY == "BSC mainnet"
+        assert module.ACTIVE_LAUNCH_DOMAIN == 1
+        assert module.ACTIVE_LAUNCH_CHAIN == "eth"
+        assert module.ACTIVE_LAUNCH_POLICY == "EthereumMainnetLane"
+        assert module.ACTIVE_LAUNCH_DISPLAY == "ETH mainnet"
+
+
+def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
+    """Report and verifier transcript inventories must include EVM evidence tests."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (report, verifier):
+        required_fragments = module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        for fragment in EVM_EVIDENCE_SCRIPT_FRAGMENTS:
+            assert fragment in required_fragments
+
+
+def test_release_bundle_evidence_phase_inventory_matches_corridor_runner() -> None:
+    """Report and verifier gates must track the runner's evidence pytest inventory."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+
+    for module in (report, verifier):
+        required_fragments = module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        for test_path in corridor_evidence_script_tests():
+            assert any(test_path in fragment for fragment in required_fragments)
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
@@ -6922,6 +6983,55 @@ def test_release_bundle_verifier_phase_transcript_inventory_is_independent(
         "readiness report phase js-sdk evidence artifact is missing "
         f"expected phase-block command: {required_export_test}"
     ) in errors
+
+
+def test_release_bundle_verifier_requires_evm_evidence_script_transcript(
+    tmp_path: Path,
+) -> None:
+    """Published evidence phase logs must prove the EVM evidence suites ran."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_evm_live_evidence_test.py"
+    assert (
+        omitted_fragment
+        in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+    )
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_requires_js_package_export_transcript(

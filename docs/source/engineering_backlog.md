@@ -81,6 +81,12 @@ track detailed unfinished engineering work.
   RAM-LFE proof-verifier metadata now rejects noncanonical backend/circuit
   identifiers, zero schema hashes, empty/all-zero verifier keys, and oversized
   verifier keys before proof-carrying programmed policies are admitted;
+  crypto identifier-envelope public-parameter validation now rejects
+  structurally valid but unregistered BFV profiles before identifier
+  encryption, decryption, or downstream Torii/core admission;
+  programmed RAM-LFE BFV bundle construction now exposes fallible constructors
+  that reject unregistered identifier profiles and invalid proof metadata before
+  public-parameter digests are emitted;
   programmed BFV public-parameter admission now rejects zero hidden-program
   digests and relinearization-only violations where unused rotation/bootstrap
   refresh keys are smuggled into identifier-program metadata;
@@ -106,6 +112,9 @@ track detailed unfinished engineering work.
   public/private key formatting, and ML-DSA import plus `Signature::try_new`
   reject secrets whose recomputed public material or embedded `tr = H(pk)`
   public hash is inconsistent before signing;
+  SoraNet PQ ML-DSA helpers now apply the same secret-key consistency check to
+  direct validation and direct/OS-backed signing, and expose fallible public-key
+  reconstruction from secret material;
   BLS same-message aggregate and preaggregated verification now reject
   duplicate public keys and public-key aggregates that cancel to the identity
   before verification, and the public PoP-gated same-message wrappers reject
@@ -118,23 +127,92 @@ track detailed unfinished engineering work.
   backend choice does not change accepted signatures;
   X25519 public-key decoders for hybrid KEM keys, hybrid ephemeral ciphertext
   keys, and the standalone key-exchange surface now reject low-order encodings
-  before ECDH while retaining all-zero shared-secret fallback checks;
+  before ECDH while retaining all-zero shared-secret fallback checks, and
+  Kotlin/Java Connect X25519 direction-key derivation now maps provider
+  low-order agreement failures into `ConnectProtocolException`, while the native
+  Connect bridge FFI rejects the same low-order peer key without touching output
+  buffers;
+  Kotlin/Java Connect nonce, frame/envelope codec, and queue journal paths now
+  reject negative signed sequence values before nonce/AAD construction,
+  encoding, decode handoff, or journal persistence, high-bit `uint64` frame
+  and envelope sequences fail closed, and ciphertext-frame encoding requests the
+  canonical zero-flag Connect Norito field layout explicitly;
+  Kotlin Connect approval preimages now canonicalize `accountId` through the
+  shared I105 account-literal helper before binding it into wallet
+  authorization bytes, matching Java Android and rejecting domain-qualified
+  aliases;
   Soracloud uploaded-model `X25519HkdfSha256` admission now requires exact
   32-byte recipient and ephemeral public keys and routes both through the same
   low-order decoder before bundle registration;
-  Norito streaming X25519 key updates now reject low-order remote ephemeral
-  public keys before key-counter recording or transport-key derivation, signed
-  remote key updates stage key-counter and transport-key derivation before
-  resetting or committing session state, outbound key-update construction
+  confidential encrypted shield payloads now require supported versions,
+  non-empty ciphertext, and low-order-free X25519 ephemeral keys before
+  `Shield` execution burns public balance or records note commitments, and the
+  CLI plus Connect/Norito bridge shield payload builders now run that same
+  preflight before instruction construction, raw payload emission, or signing,
+  with Swift fallback serialization enforcing matching empty-ciphertext and
+  X25519 low-order admission;
+  standalone ML-KEM public-key validation, secret-key validation,
+  encapsulation, and decapsulation now reject noncanonical 12-bit public-key
+  coefficients plus noncanonical secret-key private coefficients, and
+  secret-key validation plus decapsulation reject corrupted embedded `H(ek)`
+  public-key hashes before implicit rejection can derive divergent transport
+  keys;
+  changing the streaming ML-KEM profile on key material or live sessions now
+  clears configured Kyber public keys, fingerprints, and local decapsulation
+  secrets before any later HPKE use, and direct local ephemeral-payload
+  precomputation no longer commits Kyber transport keys, negotiated-suite, STS,
+  or snapshot state before a signed key update is built or accepted;
+  Norito streaming X25519 key updates now require prepared local ephemeral
+  material and reject low-order remote ephemeral public keys before
+  transport-key derivation or committing session state, signed
+  remote key updates verify signatures and stage key-counter, suite, and
+  ephemeral-shape admission on a local copy before X25519 shared-secret
+  derivation, ML-KEM decapsulation, transport-key derivation, resetting, or
+  committing session state, successful remote key updates now return the
+  inserted transport keys directly instead of relying on a panic-only option
+  readback, outbound key-update construction
   stages ephemeral generation, transcript signing, and Kyber transport
-  derivation before committing session state and rejects same-session
-  non-increasing counters before ephemeral generation, and
+  derivation before committing session state and rejects zero or same-session
+  non-increasing counters before ephemeral generation, direct Norito
+  key-update state admission now rejects zero counters and suite/payload length
+  mismatches before accepting counters by requiring 32-byte X25519 public keys or
+  1088-byte Kyber768 ciphertexts, streaming snapshot restore also rejects zero
+  key counters before replacing live session state, direct Norito key-update
+  state restore/from-snapshot paths reject zero counters before replacing replay
+  state, KeyUpdate and capability
+  negotiation admission now rejects zero protocol versions before committing
+  suite, counter, transport-key, or ACK state, capability reports must carry the
+  viewer endpoint role before p2p or core ACK construction records negotiation
+  state, viewer-side capability ACKs must echo the report stream id, protocol
+  version, negotiated DATAGRAM size, and DPLPMTUD flag before transport state or
+  callbacks are updated, direct Norito STS derivation now rejects non-32-byte
+  handshake shared secrets before HKDF, and
   Norito streaming content-key updates now authenticate and unwrap the GCK
   before recording accepted rotation state so malformed wrapped keys cannot
   poison replay windows, while outbound content-key construction rejects
-  regressed rotations before nonce generation or AEAD wrapping, and streaming
-  snapshot restore stages KEM-suite id validation and transport-key derivation
-  before replacing live session state and rejects partial content-key metadata;
+  regressed rotations before nonce generation or AEAD wrapping, inbound,
+  outbound, and restored snapshot GCKs must now be exactly 32 bytes, including
+  direct Norito GCK wrap/unwrap helpers, direct Norito content-key
+  state restore/from-snapshot paths reject partial id/valid-from metadata before
+  replacing replay state, and streaming snapshot restore stages
+  KEM-suite id validation, transport-key derivation, and Kyber
+  public-key/fingerprint validation before replacing live session state,
+  rejects partial content-key or Kyber metadata, and binds Kyber768 suites to
+  ML-KEM-768 snapshot metadata plus either the validated remote fingerprint for
+  inbound state or the validated local fingerprint for outbound state, with
+  local Kyber metadata requiring an installed decapsulation secret whose embedded
+  public key and `H(ek)` public-key hash match before restore can replace state;
+  transport
+  capability recording and snapshot restore now reject
+  DATAGRAM/fallback shape drift before updating live session state or
+  capability hashes; streaming
+  feedback admission now clamps inbound
+  `parity_chunks`, receiver `parity_applied`, and `fec_budget` to the 6-chunk
+  FEC ceiling, and caps inbound loss samples at Q16.16 100% before updating
+  snapshot or outbound hint state; the first accepted feedback hint or receiver
+  report now binds the feedback state to that stream id, and later feedback
+  frames with a different stream id are rejected before counters, EWMA loss,
+  parity, or snapshot-visible fields change;
   SoraNet NK2/NK3 handshake parsers now reject low-order Noise static and
   ephemeral public keys in decoded client and relay frames, reject malformed
   Dilithium3/Ed25519 handshake signature field lengths, require 1024-byte
@@ -157,23 +235,38 @@ track detailed unfinished engineering work.
   ML-KEM key generation, or encapsulation; runtime handshake descriptor
   commitments and resume hashes must now be 32-byte transcript-binding fields
   before client RNG, relay RNG, transcript hashing, KEM key generation, or
-  encapsulation; PoW ticket verification,
+  encapsulation, client/relay capability vectors must now fit the
+  length-prefixed handshake field before client RNG or frame construction,
+  transcript hashing now rejects capability vectors that cannot fit its fixed
+  `u32` length field before hashing, and suite-list capability TLV re-encoding
+  now rejects oversized values through `update_suite_list` before encoded
+  capabilities are emitted; PoW
+  ticket verification,
   signed-ticket verification, ticket
   minting, and Argon2 puzzle verification/minting now reject malformed
   descriptor, relay-id, or transcript binding field lengths before challenge
   derivation, solution search, Argon2 work, or public-key validation;
   PoW and Argon2 puzzle policy parameters now expose fallible constructors for
   runtime config loaders so zero minimum TTLs and inverted future-skew bounds
-  fail closed without panicking; SoraNet CID blinding key derivation now rejects
+  fail closed without panicking, and p2p SoraNet runtime construction now uses
+  those fallible constructors for config-derived PoW/puzzle bounds; P2P
+  QUIC/TCP happy-eyeballs dialing now records the first branch failure and
+  returns the second branch failure directly when both dials fail, avoiding
+  panic-only option readbacks in the fallback path; SoraNet CID
+  blinding key derivation now rejects
   all-zero epoch salts or all-zero circuit secrets before HKDF; SoraNet
   revocation-store reload now rejects duplicate persisted fingerprints, rejects
   overflowing expiry timestamps, and bounds loaded active records to the
   configured capacity;
   SoraNet guard-directory snapshot decode now rejects duplicate or
   key-mismatched issuer fingerprints and enforces ML-DSA-65 issuer public-key
-  length/phase requirements before snapshots are admitted, and rejects empty
-  issuer or relay sets before trust-map construction or relay certificate
-  verification;
+  length/phase requirements before snapshots are admitted, with issuer key
+  shape and the fingerprint `u32` key-length field now checked before
+  fingerprint derivation, and rejects empty issuer or relay sets before
+  trust-map construction or relay certificate verification;
+  SoraNet admission-token decode now reads fixed-width body fields through
+  checked cursor helpers so malformed token prefixes return decode errors
+  instead of relying on manual slice invariants;
   SoraNet admission-token replay-store reload now rejects duplicate persisted
   token IDs and overflowing expiry timestamps, and admission-token verification
   rejects zero-length or inverted validity windows and preflights ML-DSA issuer

@@ -966,6 +966,30 @@ def source_material(module, profile, seed):
             record["_comment_evm_source_deployment_block_receipts_root"] = hex32(
                 seed + 29
             )
+            if profile.chain == "eth":
+                record["source_bridge_network_id"] = (
+                    "0x" + evm_source_module.eth_source_bridge_network_id().hex()
+                )
+                record["source_bridge_config_hash"] = (
+                    "0x"
+                    + evm_source_module.eth_source_bridge_config_hash(
+                        bridge_address=raw_hex(
+                            record["source_bridge_emitter_address"]
+                        ),
+                        source_bridge_code_hash=raw_hex(
+                            record["source_bridge_emitter_code_hash"]
+                        ),
+                        network_id=raw_hex(record["source_bridge_network_id"]),
+                        source_domain=profile.domain,
+                        target_domain=module.SCCP_DOMAIN_SORA,
+                    ).hex()
+                )
+                record["_comment_eth_source_bridge_network_id"] = record[
+                    "source_bridge_network_id"
+                ]
+                record["_comment_eth_source_bridge_config_hash"] = record[
+                    "source_bridge_config_hash"
+                ]
     if profile.tron_source_bridge_config_required:
         tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
         runtime = bytes([0x60, 0x80, 0x60, seed & 0xFF, 0x55])

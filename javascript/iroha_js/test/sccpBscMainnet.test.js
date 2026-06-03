@@ -421,6 +421,51 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
   );
 });
 
+test("BscMainnetSccp binds custom outbound proof results to the requested proof", async () => {
+  const input = sampleOutboundInput();
+  const referenceSdk = new BscMainnetSccp();
+  const expectedRequest = referenceSdk.buildOutboundProofRequest(input);
+  const wrongRequest = referenceSdk.buildOutboundProofRequest({
+    ...sampleOutboundInput(),
+    bundleBytes: [9, 8, 7],
+  });
+  const wrongProofResult = wrapBscMainnetSccpDestinationProofResult(
+    GROTH16_PROOF_BYTES,
+    wrongRequest,
+  );
+  let seenRequest;
+  const rejectingSdk = new BscMainnetSccp({
+    outboundProver: {
+      async prove(request) {
+        seenRequest = request;
+        return wrongProofResult;
+      },
+    },
+  });
+
+  assert.notEqual(wrongRequest.requestHash, expectedRequest.requestHash);
+  await assert.rejects(
+    () => rejectingSdk.proveOutboundToBsc(input),
+    /requestHash must match request/u,
+  );
+  assert.equal(seenRequest.requestHash, expectedRequest.requestHash);
+  assert.equal(seenRequest.targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(Object.isFrozen(seenRequest), true);
+
+  let acceptedRequest;
+  const acceptingSdk = new BscMainnetSccp({
+    outboundProver: {
+      async prove(request) {
+        acceptedRequest = request;
+        return wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
+      },
+    },
+  });
+  const proofResult = await acceptingSdk.proveOutboundToBsc(input);
+  assert.equal(acceptedRequest.requestHash, expectedRequest.requestHash);
+  assert.equal(proofResult.requestHash, expectedRequest.requestHash);
+});
+
 test("BscMainnetSccp outbound provider path derives target from wrapped proof result", async () => {
   const submittedTxs = [];
   const provider = {

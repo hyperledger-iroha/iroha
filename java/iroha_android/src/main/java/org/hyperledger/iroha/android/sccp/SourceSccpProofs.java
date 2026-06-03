@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.bouncycastle.asn1.x9.X9ECParameters;
@@ -75,6 +76,7 @@ public final class SourceSccpProofs {
   private static final long SOURCE_ADAPTER_FASTPQ_LDE_ROOT_V1 = 0x6026_3388_DBBF_9B2AL;
   private static final long SOURCE_ADAPTER_FASTPQ_OMEGA_COSET_V1 = 0x6AF3_25E8_25AD_5C18L;
   private static final int EVM_MAX_RECEIPT_VALUE_BYTES = 16 * 1024;
+  private static final int EVM_MAX_BLOCK_RECEIPTS = 4096;
   private static final int ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX = 9;
   private static final int ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH = 4;
   private static final int ETH_MAX_SYNC_COMMITTEE_AUTHORITIES = 512;
@@ -118,6 +120,8 @@ public final class SourceSccpProofs {
       "submitSccpSourceEvent(uint32,uint32,bytes32)".getBytes(StandardCharsets.UTF_8);
   private static final byte[] TRON_TRIGGER_SMART_CONTRACT_TYPE_URL =
       "type.googleapis.com/protocol.TriggerSmartContract".getBytes(StandardCharsets.UTF_8);
+  private static final byte[] ETH_SOURCE_BRIDGE_CONFIG_LABEL =
+      "iroha:sccp:eth-source-bridge-config:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] TRON_SOURCE_BRIDGE_CONFIG_LABEL =
       "iroha:sccp:tron-source-bridge-config:v1".getBytes(StandardCharsets.UTF_8);
   private static final byte[] SUBSTRATE_SYSTEM_EVENTS_STORAGE_KEY =
@@ -349,6 +353,30 @@ public final class SourceSccpProofs {
       this.proofFamily = proofFamily;
       this.key = key;
       this.hash = hash;
+    }
+  }
+
+  /** Ethereum receipt-trie proof material derived from an execution block's full receipt list. */
+  public static final class EvmReceiptTrieProof {
+    public final String receiptsRoot;
+    public final String receiptRlp;
+    public final String receiptTrieKey;
+    private final List<byte[]> receiptTrieProofNodes;
+
+    private EvmReceiptTrieProof(
+        final String receiptsRoot,
+        final String receiptRlp,
+        final String receiptTrieKey,
+        final List<byte[]> receiptTrieProofNodes) {
+      this.receiptsRoot = receiptsRoot;
+      this.receiptRlp = receiptRlp;
+      this.receiptTrieKey = receiptTrieKey;
+      this.receiptTrieProofNodes =
+          Collections.unmodifiableList(copyByteArrayList(receiptTrieProofNodes));
+    }
+
+    public List<byte[]> receiptTrieProofNodes() {
+      return copyByteArrayList(receiptTrieProofNodes);
     }
   }
 
@@ -5143,7 +5171,7 @@ public final class SourceSccpProofs {
             "",
             "sccp:eth:source-bridge-emitter:ethereum-mainnet:v1",
             true,
-            false);
+            true);
       case DOMAIN_BSC:
         return new SourceRecordProfile(
             adapterProfile.chain,
@@ -5424,6 +5452,21 @@ public final class SourceSccpProofs {
     return keccak256(out.toByteArray());
   }
 
+  private static byte[] ethSourceBridgeConfigHash(
+      final int sourceDomain,
+      final byte[] bridgeAddress,
+      final byte[] networkId,
+      final byte[] codeHash) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    write(out, keccak256(ETH_SOURCE_BRIDGE_CONFIG_LABEL));
+    write(out, abiWordAddress20(bridgeAddress, "sourceBridgeEmitterAddress"));
+    write(out, networkId);
+    write(out, abiWordU32(sourceDomain, "sourceDomain"));
+    write(out, abiWordU32(DOMAIN_SORA, "targetDomain"));
+    write(out, codeHash);
+    return keccak256(out.toByteArray());
+  }
+
   private static NormalizedSourceMaterial normalizeSourceMaterial(
       final int sourceDomain,
       final String sourceTrustAnchorHash,
@@ -5503,22 +5546,48 @@ public final class SourceSccpProofs {
             : requireUnusedBytes(
                 sourceBridgeEmitterCodeHash, "sourceBridgeEmitterCodeHash", 32);
     final byte[] normalizedSourceBridgeNetworkId =
-        profile.requiresSourceBridgeConfig
+        normalizedSourceDomain == DOMAIN_ETH
+            ? nonZeroHex32Bytes(
+                Objects.requireNonNull(networkId, "networkId is required"), "networkId")
+            : profile.requiresSourceBridgeConfig
             ? nonZeroHex32Bytes(
                 Objects.requireNonNull(networkId, "networkId is required"), "networkId")
             : requireUnusedBytes(networkId, "sourceBridgeNetworkId", 32);
     final byte[] normalizedSourceBridgeOwnerAddress =
-        profile.requiresSourceBridgeConfig
+        normalizedSourceDomain == DOMAIN_ETH
+            ? requireUnusedBytes(ownerAddress, "sourceBridgeOwnerAddress", 0)
+            : profile.requiresSourceBridgeConfig
             ? nonZeroHexBytes(
                 Objects.requireNonNull(ownerAddress, "ownerAddress is required"),
                 "ownerAddress",
                 20)
             : requireUnusedBytes(ownerAddress, "sourceBridgeOwnerAddress", 0);
     final byte[] normalizedSourceBridgeConfigHash =
-        profile.requiresSourceBridgeConfig
+        normalizedSourceDomain == DOMAIN_ETH
+            ? nonZeroHex32Bytes(
+                Objects.requireNonNull(configHash, "configHash is required"), "configHash")
+            : profile.requiresSourceBridgeConfig
             ? nonZeroHex32Bytes(
                 Objects.requireNonNull(configHash, "configHash is required"), "configHash")
             : requireUnusedBytes(configHash, "sourceBridgeConfigHash", 32);
+    if (normalizedSourceDomain == DOMAIN_ETH) {
+      final byte[] ethMainnetNetworkId =
+          hexBytes(ETH_MAINNET_NETWORK_ID, "sourceBridgeNetworkId", 32);
+      if (!Arrays.equals(normalizedSourceBridgeNetworkId, ethMainnetNetworkId)) {
+        throw new IllegalArgumentException(
+            "sourceBridgeNetworkId must be Ethereum mainnet chain id");
+      }
+      if (!Arrays.equals(
+          normalizedSourceBridgeConfigHash,
+          ethSourceBridgeConfigHash(
+              normalizedSourceDomain,
+              normalizedSourceBridgeEmitterAddress,
+              normalizedSourceBridgeNetworkId,
+              normalizedSourceBridgeEmitterCodeHash))) {
+        throw new IllegalArgumentException(
+            "sourceBridgeConfigHash must match ETH source bridge config fields");
+      }
+    }
     if (normalizedSourceDomain == DOMAIN_TRON
         && !Arrays.equals(
             normalizedSourceBridgeConfigHash,
@@ -5955,6 +6024,512 @@ public final class SourceSccpProofs {
       writeVector(out, signature);
     }
     return out.toByteArray();
+  }
+
+  /** Canonical legacy or EIP-2718 typed Ethereum receipt RLP bytes. */
+  public static byte[] canonicalEvmReceiptRlp(final Map<String, Object> receipt) {
+    Objects.requireNonNull(receipt, "receipt");
+    final BigInteger status = requireEthereumRpcQuantity(receipt.get("status"), "receipt.status");
+    if (!BigInteger.ZERO.equals(status) && !BigInteger.ONE.equals(status)) {
+      throw new IllegalArgumentException("receipt.status must be 0x0 or 0x1");
+    }
+    final List<byte[]> fields = new ArrayList<byte[]>();
+    fields.add(rlpBytes(minimalBigEndianBytes(status, "receipt.status")));
+    fields.add(
+        rlpBytes(
+            minimalBigEndianBytes(
+                requireEthereumRpcQuantity(
+                    firstPresent(receipt, "cumulativeGasUsed", "cumulative_gas_used"),
+                    "receipt.cumulativeGasUsed"),
+                "receipt.cumulativeGasUsed")));
+    fields.add(
+        rlpBytes(
+            ethereumRpcHexBytes(
+                firstPresent(receipt, "logsBloom", "logs_bloom"),
+                "receipt.logsBloom",
+                Integer.valueOf(256),
+                false,
+                false)));
+    fields.add(rlpList(evmReceiptLogsForRlp(receipt)));
+    final byte[] payload = rlpList(fields);
+    final Integer receiptType = evmReceiptType(receipt);
+    if (receiptType == null) {
+      return payload;
+    }
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(receiptType.intValue());
+    write(out, payload);
+    return out.toByteArray();
+  }
+
+  /** Raw Ethereum receipt-trie key: RLP(transactionIndex), not a hashed secure-trie key. */
+  public static String evmReceiptTrieKey(final Object transactionIndex) {
+    final BigInteger index =
+        normalizeUnsignedBigIntegerMax(transactionIndex, "transactionIndex", MAX_U64, "u64");
+    return "0x" + hexLower(rlpBytes(minimalBigEndianBytes(index, "transactionIndex")));
+  }
+
+  /** Build a receipt-trie proof from an ordered {@code eth_getBlockReceipts} response. */
+  public static EvmReceiptTrieProof buildEvmReceiptTrieProofFromReceipts(
+      final List<Map<String, Object>> receipts, final Object transactionIndex) {
+    Objects.requireNonNull(receipts, "blockReceipts");
+    if (receipts.isEmpty()) {
+      throw new IllegalArgumentException("blockReceipts must be a non-empty array");
+    }
+    if (receipts.size() > EVM_MAX_BLOCK_RECEIPTS) {
+      throw new IllegalArgumentException(
+          "blockReceipts must contain at most " + EVM_MAX_BLOCK_RECEIPTS + " entries");
+    }
+    final BigInteger targetIndex =
+        normalizeUnsignedBigIntegerMax(
+            transactionIndex,
+            "transactionIndex",
+            BigInteger.valueOf((long) receipts.size() - 1L),
+            "block receipt index");
+    final List<EvmTrieItem> items = new ArrayList<EvmTrieItem>(receipts.size());
+    byte[] targetReceiptRlp = null;
+    for (int index = 0; index < receipts.size(); index++) {
+      final Map<String, Object> receipt =
+          Objects.requireNonNull(receipts.get(index), "blockReceipts[" + index + "]");
+      final BigInteger receiptIndex =
+          requireEthereumRpcQuantity(
+              firstPresent(receipt, "transactionIndex", "transaction_index"),
+              "blockReceipts[" + index + "].transactionIndex");
+      if (!receiptIndex.equals(BigInteger.valueOf(index))) {
+        throw new IllegalArgumentException("block receipt transactionIndex must match receipt order");
+      }
+      final byte[] encodedReceipt = canonicalEvmReceiptRlp(receipt);
+      if (receiptIndex.equals(targetIndex)) {
+        targetReceiptRlp = encodedReceipt;
+      }
+      final byte[] key =
+          rlpBytes(minimalBigEndianBytes(BigInteger.valueOf(index), "transactionIndex"));
+      items.add(new EvmTrieItem(bytesToNibbles(key), encodedReceipt));
+    }
+    final EvmTrieNode root = buildEvmTrieNode(items);
+    final String receiptsRoot = "0x" + hexLower(keccak256(encodeEvmTrieNode(root)));
+    final byte[] receiptTrieKey = rlpBytes(minimalBigEndianBytes(targetIndex, "transactionIndex"));
+    final List<byte[]> proofNodes = collectEvmTrieProofNodes(root, bytesToNibbles(receiptTrieKey));
+    validateMptProofNodes(proofNodes, "receiptTrieProofNodes");
+    if (targetReceiptRlp == null) {
+      throw new IllegalArgumentException("transactionIndex must select a block receipt");
+    }
+    return new EvmReceiptTrieProof(
+        receiptsRoot,
+        "0x" + hexLower(targetReceiptRlp),
+        "0x" + hexLower(receiptTrieKey),
+        proofNodes);
+  }
+
+  private static Integer evmReceiptType(final Map<String, Object> receipt) {
+    if (!receipt.containsKey("type") || receipt.get("type") == null) {
+      return null;
+    }
+    final BigInteger receiptType = requireEthereumRpcQuantity(receipt.get("type"), "receipt.type");
+    if (BigInteger.ZERO.equals(receiptType)) {
+      return null;
+    }
+    if (receiptType.compareTo(BigInteger.valueOf(0x7fL)) > 0) {
+      throw new IllegalArgumentException("typed receipt type must fit one byte below 0x80");
+    }
+    final int admittedType = receiptType.intValue();
+    if (admittedType < 1 || admittedType > 4) {
+      throw new IllegalArgumentException(
+          "typed receipt type is not supported for Ethereum mainnet receipt proofs");
+    }
+    return Integer.valueOf(admittedType);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<byte[]> evmReceiptLogsForRlp(final Map<String, Object> receipt) {
+    if (!(receipt.get("logs") instanceof List)) {
+      throw new IllegalArgumentException("receipt.logs must be an array");
+    }
+    final List<Object> logs = (List<Object>) receipt.get("logs");
+    final List<byte[]> encodedLogs = new ArrayList<byte[]>(logs.size());
+    for (int index = 0; index < logs.size(); index++) {
+      final Object logInput = logs.get(index);
+      if (!(logInput instanceof Map)) {
+        throw new IllegalArgumentException("receipt.logs[" + index + "] must be an object");
+      }
+      final Map<String, Object> log = (Map<String, Object>) logInput;
+      if (Boolean.TRUE.equals(log.get("removed"))) {
+        throw new IllegalArgumentException("receipt.logs[" + index + "] must not be removed");
+      }
+      if (!(log.get("topics") instanceof List)) {
+        throw new IllegalArgumentException("receipt.logs[" + index + "].topics must be an array");
+      }
+      final List<Object> topics = (List<Object>) log.get("topics");
+      if (topics.size() > 4) {
+        throw new IllegalArgumentException(
+            "receipt.logs[" + index + "].topics must contain at most 4 entries");
+      }
+      final List<byte[]> topicFields = new ArrayList<byte[]>(topics.size());
+      for (int topicIndex = 0; topicIndex < topics.size(); topicIndex++) {
+        topicFields.add(
+            rlpBytes(
+                ethereumRpcHexBytes(
+                    topics.get(topicIndex),
+                    "receipt.logs[" + index + "].topics[" + topicIndex + "]",
+                    Integer.valueOf(32),
+                    true,
+                    false)));
+      }
+      encodedLogs.add(
+          rlpList(
+              Arrays.asList(
+                  rlpBytes(
+                      ethereumRpcHexBytes(
+                          log.get("address"),
+                          "receipt.logs[" + index + "].address",
+                          Integer.valueOf(20),
+                          true,
+                          false)),
+                  rlpList(topicFields),
+                  rlpBytes(
+                      ethereumRpcHexBytes(
+                          log.get("data"),
+                          "receipt.logs[" + index + "].data",
+                          null,
+                          false,
+                          true)))));
+    }
+    return encodedLogs;
+  }
+
+  private static final class EvmTrieItem {
+    final List<Integer> path;
+    final byte[] value;
+
+    EvmTrieItem(final List<Integer> path, final byte[] value) {
+      this.path = path;
+      this.value = value;
+    }
+  }
+
+  private abstract static class EvmTrieNode {
+    byte[] rlp;
+  }
+
+  private static final class EvmTrieLeaf extends EvmTrieNode {
+    final List<Integer> path;
+    final byte[] value;
+
+    EvmTrieLeaf(final List<Integer> path, final byte[] value) {
+      this.path = path;
+      this.value = value;
+    }
+  }
+
+  private static final class EvmTrieExtension extends EvmTrieNode {
+    final List<Integer> path;
+    final EvmTrieNode child;
+
+    EvmTrieExtension(final List<Integer> path, final EvmTrieNode child) {
+      this.path = path;
+      this.child = child;
+    }
+  }
+
+  private static final class EvmTrieBranch extends EvmTrieNode {
+    final List<EvmTrieNode> children;
+    final byte[] value;
+
+    EvmTrieBranch(final List<EvmTrieNode> children, final byte[] value) {
+      this.children = children;
+      this.value = value;
+    }
+  }
+
+  private static EvmTrieNode buildEvmTrieNode(final List<EvmTrieItem> items) {
+    if (items.isEmpty()) {
+      throw new IllegalArgumentException("cannot build an empty trie node");
+    }
+    if (items.size() == 1) {
+      return new EvmTrieLeaf(items.get(0).path, items.get(0).value);
+    }
+    final List<Integer> prefix = longestCommonNibblePrefix(pathsFromTrieItems(items));
+    if (!prefix.isEmpty()) {
+      final List<EvmTrieItem> stripped = new ArrayList<EvmTrieItem>(items.size());
+      for (final EvmTrieItem item : items) {
+        stripped.add(new EvmTrieItem(new ArrayList<Integer>(item.path.subList(prefix.size(), item.path.size())), item.value));
+      }
+      return new EvmTrieExtension(prefix, buildEvmTrieNode(stripped));
+    }
+    final List<List<EvmTrieItem>> grouped = new ArrayList<List<EvmTrieItem>>(16);
+    for (int i = 0; i < 16; i++) {
+      grouped.add(new ArrayList<EvmTrieItem>());
+    }
+    byte[] branchValue = new byte[0];
+    for (final EvmTrieItem item : items) {
+      if (item.path.isEmpty()) {
+        branchValue = item.value;
+      } else {
+        grouped
+            .get(item.path.get(0).intValue())
+            .add(new EvmTrieItem(new ArrayList<Integer>(item.path.subList(1, item.path.size())), item.value));
+      }
+    }
+    final List<EvmTrieNode> children = new ArrayList<EvmTrieNode>(16);
+    for (final List<EvmTrieItem> group : grouped) {
+      children.add(group.isEmpty() ? null : buildEvmTrieNode(group));
+    }
+    return new EvmTrieBranch(children, branchValue);
+  }
+
+  private static byte[] encodeEvmTrieNode(final EvmTrieNode node) {
+    if (node.rlp != null) {
+      return node.rlp;
+    }
+    final byte[] encoded;
+    if (node instanceof EvmTrieLeaf) {
+      final EvmTrieLeaf leaf = (EvmTrieLeaf) node;
+      encoded =
+          rlpList(
+              Arrays.asList(
+                  rlpBytes(encodeEvmTrieCompactPath(leaf.path, true)),
+                  rlpBytes(leaf.value)));
+    } else if (node instanceof EvmTrieExtension) {
+      final EvmTrieExtension extension = (EvmTrieExtension) node;
+      encoded =
+          rlpList(
+              Arrays.asList(
+                  rlpBytes(encodeEvmTrieCompactPath(extension.path, false)),
+                  rlpBytes(evmTrieNodeReference(extension.child))));
+    } else if (node instanceof EvmTrieBranch) {
+      final EvmTrieBranch branch = (EvmTrieBranch) node;
+      final List<byte[]> fields = new ArrayList<byte[]>(17);
+      for (final EvmTrieNode child : branch.children) {
+        fields.add(rlpBytes(child == null ? new byte[0] : evmTrieNodeReference(child)));
+      }
+      fields.add(rlpBytes(branch.value));
+      encoded = rlpList(fields);
+    } else {
+      throw new IllegalArgumentException("unknown trie node kind");
+    }
+    node.rlp = encoded;
+    return encoded;
+  }
+
+  private static byte[] evmTrieNodeReference(final EvmTrieNode node) {
+    final byte[] rlp = encodeEvmTrieNode(node);
+    return rlp.length < 32 ? rlp : keccak256(rlp);
+  }
+
+  private static List<byte[]> collectEvmTrieProofNodes(
+      final EvmTrieNode node, final List<Integer> path) {
+    final List<byte[]> proof = new ArrayList<byte[]>();
+    proof.add(encodeEvmTrieNode(node));
+    if (node instanceof EvmTrieLeaf) {
+      final EvmTrieLeaf leaf = (EvmTrieLeaf) node;
+      if (!leaf.path.equals(path)) {
+        throw new IllegalArgumentException(
+            "receipt trie proof path does not end at requested receipt");
+      }
+    } else if (node instanceof EvmTrieExtension) {
+      final EvmTrieExtension extension = (EvmTrieExtension) node;
+      if (path.size() < extension.path.size()
+          || !path.subList(0, extension.path.size()).equals(extension.path)) {
+        throw new IllegalArgumentException("receipt trie proof path does not match extension");
+      }
+      proof.addAll(
+          collectEvmTrieProofNodes(
+              extension.child,
+              new ArrayList<Integer>(path.subList(extension.path.size(), path.size()))));
+    } else if (node instanceof EvmTrieBranch) {
+      final EvmTrieBranch branch = (EvmTrieBranch) node;
+      if (path.isEmpty()) {
+        if (branch.value.length == 0) {
+          throw new IllegalArgumentException(
+              "receipt trie branch has no value for requested receipt");
+        }
+      } else {
+        final EvmTrieNode child = branch.children.get(path.get(0).intValue());
+        if (child == null) {
+          throw new IllegalArgumentException("receipt trie proof path is missing child");
+        }
+        proof.addAll(
+            collectEvmTrieProofNodes(child, new ArrayList<Integer>(path.subList(1, path.size()))));
+      }
+    } else {
+      throw new IllegalArgumentException("unknown trie node kind");
+    }
+    return proof;
+  }
+
+  private static byte[] encodeEvmTrieCompactPath(final List<Integer> nibbles, final boolean leaf) {
+    for (final Integer nibble : nibbles) {
+      if (nibble == null || nibble.intValue() < 0 || nibble.intValue() > 15) {
+        throw new IllegalArgumentException("trie path nibble out of range");
+      }
+    }
+    final int flags = leaf ? 2 : 0;
+    final ArrayList<Byte> out = new ArrayList<Byte>();
+    int start = 0;
+    if (nibbles.size() % 2 == 1) {
+      out.add((byte) (((flags + 1) << 4) | nibbles.get(0).intValue()));
+      start = 1;
+    } else {
+      out.add((byte) (flags << 4));
+    }
+    for (int index = start; index < nibbles.size(); index += 2) {
+      out.add((byte) ((nibbles.get(index).intValue() << 4) | nibbles.get(index + 1).intValue()));
+    }
+    final byte[] bytes = new byte[out.size()];
+    for (int index = 0; index < out.size(); index++) {
+      bytes[index] = out.get(index).byteValue();
+    }
+    return bytes;
+  }
+
+  private static List<Integer> bytesToNibbles(final byte[] bytes) {
+    final List<Integer> nibbles = new ArrayList<Integer>(bytes.length * 2);
+    for (final byte value : bytes) {
+      nibbles.add(Integer.valueOf((value >>> 4) & 0x0f));
+      nibbles.add(Integer.valueOf(value & 0x0f));
+    }
+    return nibbles;
+  }
+
+  private static List<List<Integer>> pathsFromTrieItems(final List<EvmTrieItem> items) {
+    final List<List<Integer>> paths = new ArrayList<List<Integer>>(items.size());
+    for (final EvmTrieItem item : items) {
+      paths.add(item.path);
+    }
+    return paths;
+  }
+
+  private static List<Integer> longestCommonNibblePrefix(final List<List<Integer>> paths) {
+    if (paths.isEmpty()) {
+      return Collections.emptyList();
+    }
+    final List<Integer> prefix = new ArrayList<Integer>(paths.get(0));
+    for (int pathIndex = 1; pathIndex < paths.size(); pathIndex++) {
+      final List<Integer> path = paths.get(pathIndex);
+      int index = 0;
+      final int limit = Math.min(prefix.size(), path.size());
+      while (index < limit && prefix.get(index).equals(path.get(index))) {
+        index += 1;
+      }
+      while (prefix.size() > index) {
+        prefix.remove(prefix.size() - 1);
+      }
+      if (prefix.isEmpty()) {
+        break;
+      }
+    }
+    return prefix;
+  }
+
+  private static Object firstPresent(final Map<String, Object> input, final String... keys) {
+    for (final String key : keys) {
+      if (input.containsKey(key)) {
+        return input.get(key);
+      }
+    }
+    return null;
+  }
+
+  private static BigInteger requireEthereumRpcQuantity(final Object value, final String label) {
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(label + " must be a canonical JSON-RPC quantity");
+    }
+    final String text = (String) value;
+    if (!text.trim().equals(text) || !text.startsWith("0x")) {
+      throw new IllegalArgumentException(label + " must be a canonical JSON-RPC quantity");
+    }
+    final String hex = text.substring(2);
+    if (hex.isEmpty() || !hex.matches("[0-9a-f]+") || (hex.length() > 1 && hex.charAt(0) == '0')) {
+      throw new IllegalArgumentException(label + " must be a canonical JSON-RPC quantity");
+    }
+    return new BigInteger(hex, 16);
+  }
+
+  private static BigInteger normalizeUnsignedBigIntegerMax(
+      final Object value, final String label, final BigInteger max, final String maxLabel) {
+    final BigInteger numeric;
+    if (value instanceof BigInteger) {
+      numeric = (BigInteger) value;
+    } else if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      numeric = BigInteger.valueOf(((Number) value).longValue());
+    } else if (value instanceof String) {
+      final String text = (String) value;
+      if (!text.trim().equals(text)) {
+        throw new IllegalArgumentException(label + " must be canonical");
+      }
+      if (text.startsWith("0x")) {
+        final String hex = text.substring(2);
+        if (hex.isEmpty()
+            || !hex.matches("[0-9a-f]+")
+            || (hex.length() > 1 && hex.charAt(0) == '0')) {
+          throw new IllegalArgumentException(label + " must be a canonical JSON-RPC quantity");
+        }
+        numeric = new BigInteger(hex, 16);
+      } else {
+        if (!isCanonicalDecimalText(text)) {
+          throw new IllegalArgumentException(label + " must be an unsigned integer");
+        }
+        numeric = new BigInteger(text, 10);
+      }
+    } else {
+      throw new IllegalArgumentException(label + " must be an unsigned integer");
+    }
+    if (numeric.signum() < 0) {
+      throw new IllegalArgumentException(label + " must be non-negative");
+    }
+    if (numeric.compareTo(max) > 0) {
+      throw new IllegalArgumentException(label + " must fit " + maxLabel);
+    }
+    return numeric;
+  }
+
+  private static byte[] ethereumRpcHexBytes(
+      final Object value,
+      final String label,
+      final Integer byteLength,
+      final boolean nonzero,
+      final boolean allowEmpty) {
+    if (!(value instanceof String)) {
+      throw new IllegalArgumentException(label + " must be canonical lowercase 0x hex");
+    }
+    final String text = (String) value;
+    if (!text.trim().equals(text) || !text.startsWith("0x")) {
+      throw new IllegalArgumentException(label + " must be canonical lowercase 0x hex");
+    }
+    final String hex = text.substring(2);
+    if ((!allowEmpty && hex.isEmpty()) || hex.length() % 2 != 0 || !hex.matches("[0-9a-f]*")) {
+      throw new IllegalArgumentException(label + " must be canonical lowercase 0x hex");
+    }
+    if (byteLength != null && hex.length() != byteLength.intValue() * 2) {
+      throw new IllegalArgumentException(label + " must be " + byteLength + " bytes");
+    }
+    final byte[] out = new byte[hex.length() / 2];
+    for (int index = 0; index < out.length; index++) {
+      final int hi = Character.digit(hex.charAt(index * 2), 16);
+      final int lo = Character.digit(hex.charAt(index * 2 + 1), 16);
+      if (hi < 0 || lo < 0) {
+        throw new IllegalArgumentException(label + " must be canonical lowercase 0x hex");
+      }
+      out[index] = (byte) ((hi << 4) | lo);
+    }
+    if (nonzero && isZero(out)) {
+      throw new IllegalArgumentException(label + " must not be zero");
+    }
+    return out;
+  }
+
+  private static byte[] minimalBigEndianBytes(final BigInteger value, final String field) {
+    if (value.signum() < 0) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    if (BigInteger.ZERO.equals(value)) {
+      return new byte[0];
+    }
+    final byte[] raw = value.toByteArray();
+    return raw[0] == 0 ? Arrays.copyOfRange(raw, 1, raw.length) : raw;
   }
 
   private static byte[] rlpLengthPrefix(

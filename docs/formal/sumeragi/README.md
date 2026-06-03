@@ -7741,6 +7741,9 @@ Invariants:
 - `TypeInvariant`
 - `CommitImpliesQuorum`
 - `CommitImpliesStakeQuorum`
+- `CommitCertificateMatchesFinality`
+- `LiveCommitGateMatchesFinality`
+- `LiveCommitGateRbcEvidenceMatches`
 - `CommitImpliesLiveVoteQuorum`
 - `CommitImpliesLiveStakeQuorum`
 - `CommitImpliesHonestSupport`
@@ -8650,6 +8653,16 @@ Temporal properties:
   does not support `WF_` fairness operators inside checked temporal properties.
 - `CommitNeverRevoked` (`[] (committed => [] committed)`) proves the abstract
   finality latch cannot be cleared by later view-change or RBC steps.
+- `CommittedPhaseAlwaysMatchesFinality` proves that the terminal `Committed`
+  phase and the abstract finality latch are equivalent in every reachable state.
+- `CommitCertificateAlwaysMatchesFinality` proves that quorum-weighted commit
+  certificate evidence exists exactly when the abstract finality latch is set.
+- `LiveCommitGateAlwaysMatchesFinality` proves that the abstract finality latch
+  is equivalent to the live commit gate: commit votes, signed stake, and RBC
+  delivery evidence all satisfy `CanCommit(...)`.
+- `LiveCommitGateRbcEvidenceAlwaysMatches` proves that the live commit gate is
+  equivalent to vote quorum, stake quorum, delivered RBC state, READY quorum,
+  chunk coverage, header evidence, and digest evidence.
 - `CommittedPhaseNeverLeaves` proves the single-height abstraction cannot leave
   the terminal committed phase after finality.
 - `CommitViewNeverChanges` proves that the latched commit-view witness remains
@@ -8670,6 +8683,8 @@ Temporal properties:
 - `PrePrepareVotesNeverCarryAcrossViews` proves that `NewView` and proposal
   phases cannot carry stale prepare-vote counters from an earlier view into the
   next prepare or commit path.
+- `CommitPhasesNeverBypassPrepareQuorum` proves that execution never reaches
+  commit-vote or committed phases without prepare-quorum evidence.
 - `PreFinalityCommitArtifactsNeverAppear` proves that commit-certificate
   votes/stake and the commit-view witness stay absent until finality is reached.
 - `FinalityCertificateStackNeverIncomplete` proves that every finalized state
@@ -8695,6 +8710,12 @@ Temporal properties:
   stake after finality.
 - `StakeAccountingNeverDiverges` proves that the live signed-stake accumulator
   always equals the weighted honest and Byzantine commit-vote counters.
+- `CommitEvidenceNeverExceedsRosterBudget` proves that latched commit
+  certificate vote/stake evidence stays within the configured validator and
+  weighted-stake budgets in every reachable state.
+- `VoteCountersNeverExceedRosterBudgets` proves that prepare, honest commit,
+  Byzantine commit, NewView, and view-evidence counters stay within their
+  honest/fault roster budgets in every reachable state.
 - `CommitEvidenceNeverLost` proves a committed execution keeps quorum and stake
   certificate evidence above threshold for all later states.
 - `RbcDeliveryNeverLost` proves that once RBC reaches the delivered state, later

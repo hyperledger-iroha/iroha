@@ -622,6 +622,26 @@ CommitImpliesQuorum ==
 CommitImpliesStakeQuorum ==
   committed => commitEvidenceStake >= StakeQuorum
 
+CommitCertificateMatchesFinality ==
+  committed <=> (
+    /\ commitEvidenceVotes >= CommitQuorum
+    /\ commitEvidenceStake >= StakeQuorum
+  )
+
+LiveCommitGateMatchesFinality ==
+  committed <=>
+    CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState)
+
+LiveCommitGateRbcEvidenceMatches ==
+  CanCommit(commitVotesHonest, commitVotesByz, stakeSigned, rbcState) <=>
+    /\ commitVotesHonest + commitVotesByz >= CommitQuorum
+    /\ stakeSigned >= StakeQuorum
+    /\ rbcState = "Delivered"
+    /\ readyVotes >= CommitQuorum
+    /\ chunkCount >= MaxChunks
+    /\ headerSeen
+    /\ digestValid
+
 CommitImpliesLiveVoteQuorum ==
   committed => commitVotesHonest + commitVotesByz >= CommitQuorum
 
@@ -764,6 +784,18 @@ EventuallyCommit ==
 CommitNeverRevoked ==
   [] (committed => [] committed)
 
+CommittedPhaseAlwaysMatchesFinality ==
+  [] CommittedPhaseMatchesFinality
+
+CommitCertificateAlwaysMatchesFinality ==
+  [] CommitCertificateMatchesFinality
+
+LiveCommitGateAlwaysMatchesFinality ==
+  [] LiveCommitGateMatchesFinality
+
+LiveCommitGateRbcEvidenceAlwaysMatches ==
+  [] LiveCommitGateRbcEvidenceMatches
+
 CommittedPhaseNeverLeaves ==
   [] (phase = "Committed" => [] (phase = "Committed"))
 
@@ -787,6 +819,9 @@ PreCommitVotesNeverCarryAcrossViews ==
 
 PrePrepareVotesNeverCarryAcrossViews ==
   [] PrePreparePhasesHaveNoPrepareVotes
+
+CommitPhasesNeverBypassPrepareQuorum ==
+  [] CommitVotePhaseRequiresPrepareQuorum
 
 PreFinalityCommitArtifactsNeverAppear ==
   [] (NoCommitEvidenceBeforeCommit /\ NoCommitViewBeforeCommit)
@@ -828,6 +863,12 @@ CommitEvidenceNeverDivergesFromVoteCounters ==
 
 StakeAccountingNeverDiverges ==
   [] StakeSignedMatchesVoteCounters
+
+CommitEvidenceNeverExceedsRosterBudget ==
+  [] CommitEvidenceIsBounded
+
+VoteCountersNeverExceedRosterBudgets ==
+  [] VoteCountersRespectRosterBudgets
 
 CommitEvidenceNeverLost ==
   [] (committed =>
