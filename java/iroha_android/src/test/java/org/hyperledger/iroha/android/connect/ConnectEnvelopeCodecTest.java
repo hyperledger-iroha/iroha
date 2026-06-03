@@ -9,6 +9,7 @@ public final class ConnectEnvelopeCodecTest {
   public static void main(final String[] args) throws Exception {
     decodeLiveSignRequestRawFixture();
     encodeAndDecodeSignResultOkEnvelope();
+    encodeSignResultOkRejectsConfusableAlgorithms();
     decodeSignRequestRawEnvelope();
     encryptedRoundTripForSignResultErr();
     System.out.println("[IrohaAndroid] ConnectEnvelopeCodecTest passed.");
@@ -50,6 +51,23 @@ public final class ConnectEnvelopeCodecTest {
         (ConnectEnvelopeCodec.SignResultOkPayload) decoded.payload();
     assert "ed25519".equals(payload.algorithm()) : "algorithm mismatch";
     assert Arrays.equals(signature, payload.signature()) : "signature mismatch";
+  }
+
+  private static void encodeSignResultOkRejectsConfusableAlgorithms() throws Exception {
+    final byte[] signature = new byte[64];
+    final String[] algorithms = {
+      "secp256k1",
+      "ed\t25519",
+      "ed\u200B25519",
+      "\u0435d25519",
+      "ed\uFF0D25519"
+    };
+
+    for (final String algorithm : algorithms) {
+      expectThrows(
+          ConnectProtocolException.class,
+          () -> ConnectEnvelopeCodec.encodeSignResultOkEnvelope(7L, signature, algorithm));
+    }
   }
 
   private static void decodeSignRequestRawEnvelope() throws Exception {
@@ -110,5 +128,24 @@ public final class ConnectEnvelopeCodecTest {
       out[i] = (byte) Integer.parseInt(hex.substring(index, index + 2), 16);
     }
     return out;
+  }
+
+  private interface ThrowingRunnable {
+    void run() throws Exception;
+  }
+
+  private static <T extends Throwable> void expectThrows(
+      final Class<T> type, final ThrowingRunnable runnable) throws Exception {
+    try {
+      runnable.run();
+    } catch (final Throwable throwable) {
+      if (type.isInstance(throwable)) {
+        return;
+      }
+      throw new AssertionError(
+          "expected " + type.getName() + ", got " + throwable.getClass().getName(),
+          throwable);
+    }
+    throw new AssertionError("expected " + type.getName());
   }
 }

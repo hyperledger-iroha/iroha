@@ -65,6 +65,24 @@ class AccountAddressTest {
     }
 
     @Test
+    fun fromAccountRejectsControlAndUnicodeConfusableCurveAlgorithmAliases() {
+        val key = ByteArray(32) { 0x11 }
+        for (algorithm in listOf(
+            "future-curve",
+            "ed\t25519",
+            "ed\u200B25519",
+            "\u0435d25519",
+            "ml\uFF0Ddsa",
+            "gost256\u0430",
+        )) {
+            val error = assertFailsWith<AccountAddressException> {
+                AccountAddress.fromAccount(key, algorithm)
+            }
+            assertEquals(AccountAddressErrorCode.UNSUPPORTED_ALGORITHM, error.code)
+        }
+    }
+
+    @Test
     fun longGostLabelsAreAcceptedWhenGostSupportIsEnabled() {
         val key = ByteArray(64) { 0x0A }
         try {

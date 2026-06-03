@@ -425,7 +425,7 @@ object ConnectFrameCodec {
         label: String,
     ): ByteArray {
         try {
-            val encoding = NoritoCodec.encodeWithHeaderFlags(value, adapter)
+            val encoding = NoritoCodec.encodeAdaptive(value, adapter, CONNECT_LAYOUT_FLAGS)
             if (encoding.flags != CONNECT_LAYOUT_FLAGS) {
                 throw ConnectProtocolException("Unsupported Norito flags in $label: ${encoding.flags}")
             }

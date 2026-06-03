@@ -9,7 +9,7 @@ import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
-import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
@@ -19,16 +19,16 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 /** Native JVM implementation of Iroha Offline Note V2 canonical Norito encodings. */
 object OfflineNoteV2 {
     const val KEY_CERTIFICATE_PAYLOAD_DOMAIN: String =
-        "iroha:offline-note-v2:key-certificate-payload:v1"
-    const val ISSUED_CLAIM_DOMAIN: String = "iroha:offline-note-v2:issued-claim:v1"
+        "iroha:offline-note:key-certificate-payload"
+    const val ISSUED_CLAIM_DOMAIN: String = "iroha:offline-note:issued-claim"
     const val REDEEM_PUBLIC_INPUTS_DOMAIN: String =
-        "iroha:offline-note-v2:redeem-public-inputs:v1"
+        "iroha:offline-note:redeem-public-inputs"
     const val AUDIT_PUBLIC_INPUTS_DOMAIN: String =
-        "iroha:offline-note-v2:audit-public-inputs:v1"
+        "iroha:offline-note:audit-public-inputs"
     const val RECURSIVE_BACKEND: String = "halo2/ipa"
     const val RECURSIVE_VERIFIER_NAME: String = "offline-note-v2-recursive-v1"
     const val RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1: String =
-        "{\"schema\":\"offline_note_v2_recursive_v1\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
+        "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}"
 
     private const val MULTISIG_POLICY_VERSION_V1 = 1
     private const val MAX_NUMERIC_SCALE = 28
@@ -41,21 +41,21 @@ object OfflineNoteV2 {
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
     private const val KEY_CERTIFICATE_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2"
+        "iroha_data_model::offline::model::OfflineNoteKeyCertificate"
     private const val KEY_CERTIFICATE_PAYLOAD_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayloadV2"
-    private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssueV2"
+        "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload"
+    private const val ISSUE_SCHEMA = "iroha_data_model::offline::model::OfflineNoteIssue"
     private const val ISSUED_CLAIM_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteIssuedClaimV2"
+        "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
     private const val AUDIT_OUTPUT_CLAIM_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditOutputClaimV2"
-    private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeemV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim"
+    private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeem"
     private const val REDEEM_PUBLIC_INPUTS_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputsV2"
+        "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
     private const val AUDIT_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditBundleV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditBundle"
     private const val AUDIT_PUBLIC_INPUTS_SCHEMA =
-        "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2"
+        "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs"
 
     @JvmStatic
     fun encodeCertificatePayload(value: KeyCertificatePayloadV2): ByteArray =
@@ -798,7 +798,7 @@ object OfflineNoteV2 {
         if (single != null) {
             val encoder = NoritoEncoder(NoritoHeader.COMPACT_LEN)
             encoder.writeUInt(0, 32)
-            writeField(encoder) { writeString(it, encodePublicKeyMultihash(single.curveId, single.publicKey)) }
+            writeField(encoder) { writeConstVec(it, compactPublicKeyPayload(single.curveId, single.publicKey)) }
             return encoder.toByteArray()
         }
         val multisig = address.multisigPolicyPayloadIgnoringCurveSupport()
@@ -829,7 +829,7 @@ object OfflineNoteV2 {
         for (member in sorted) {
             writeField(encoder) { memberEncoder ->
                 writeField(memberEncoder) {
-                    writeString(it, encodePublicKeyMultihash(member.curveId, member.publicKey))
+                    writeConstVec(it, compactPublicKeyPayload(member.curveId, member.publicKey))
                 }
                 writeField(memberEncoder) { it.writeUInt(member.weight.toLong(), 16) }
             }

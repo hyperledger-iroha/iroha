@@ -247,8 +247,8 @@ public static class EthereumMainnetSccp
         if (beaconFinality is null && consensusProvider is not null)
         {
             beaconFinality = await consensusProvider.CollectFinalityEvidenceAsync(
-                receipt,
-                block,
+                SnapshotDictionaryOrNull(receipt),
+                SnapshotDictionaryOrNull(block),
                 transactionHash,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -266,9 +266,9 @@ public static class EthereumMainnetSccp
             SourceDomain = DomainEthereum,
             TargetDomain = DomainSora,
             TransactionHash = transactionHash,
-            Receipt = receipt,
-            Block = block,
-            BeaconFinality = beaconFinality,
+            Receipt = SnapshotDictionaryOrNull(receipt),
+            Block = SnapshotDictionaryOrNull(block),
+            BeaconFinality = SnapshotDictionaryOrNull(beaconFinality),
             ReceiptProofHash = input.ReceiptProofHash is null
                 ? null
                 : NormalizeRpcHex(input.ReceiptProofHash, nameof(input.ReceiptProofHash), 32),
@@ -297,7 +297,7 @@ public static class EthereumMainnetSccp
         }
 
         var proofBytes = await inboundProver.ProveAsync(
-            evidence,
+            SnapshotInboundEvidence(evidence),
             cancellationToken).ConfigureAwait(false);
         return RequireNonZeroProofBytes(proofBytes, nameof(proofBytes));
     }
@@ -1237,6 +1237,93 @@ public static class EthereumMainnetSccp
         }
 
         return proofBytes.ToArray();
+    }
+
+    private static EthereumMainnetInboundEvidence SnapshotInboundEvidence(
+        EthereumMainnetInboundEvidence evidence)
+    {
+        return evidence with
+        {
+            Receipt = SnapshotDictionaryOrNull(evidence.Receipt),
+            Block = SnapshotDictionaryOrNull(evidence.Block),
+            BeaconFinality = SnapshotDictionaryOrNull(evidence.BeaconFinality),
+        };
+    }
+
+    private static IReadOnlyDictionary<string, object?>? SnapshotDictionaryOrNull(
+        IReadOnlyDictionary<string, object?>? dictionary)
+        => dictionary is null ? null : SnapshotDictionary(dictionary);
+
+    private static IReadOnlyDictionary<string, object?> SnapshotDictionary(
+        IReadOnlyDictionary<string, object?> dictionary)
+    {
+        var snapshot = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
+        foreach (var item in dictionary)
+        {
+            snapshot[item.Key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static object? SnapshotValue(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            string text => text,
+            byte[] bytes => bytes.ToArray(),
+            IReadOnlyDictionary<string, object?> dictionary => SnapshotDictionary(dictionary),
+            IReadOnlyList<object?> list => list.Select(SnapshotValue).ToArray(),
+            System.Collections.IDictionary dictionary => SnapshotDictionary(dictionary),
+            System.Collections.IEnumerable enumerable => SnapshotEnumerable(enumerable),
+            _ => value,
+        };
+    }
+
+    private static object SnapshotDictionary(System.Collections.IDictionary dictionary)
+    {
+        var snapshot = new Dictionary<string, object?>(dictionary.Count, StringComparer.Ordinal);
+        foreach (System.Collections.DictionaryEntry item in dictionary)
+        {
+            if (item.Key is not string key)
+            {
+                return SnapshotObjectDictionary(dictionary);
+            }
+
+            snapshot[key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static IReadOnlyDictionary<object, object?> SnapshotObjectDictionary(
+        System.Collections.IDictionary dictionary)
+    {
+        var snapshot = new Dictionary<object, object?>(dictionary.Count);
+        foreach (System.Collections.DictionaryEntry item in dictionary)
+        {
+            if (item.Key is null)
+            {
+                throw new ArgumentException(
+                    "SCCP callback evidence dictionaries must not contain null keys.");
+            }
+
+            snapshot[item.Key] = SnapshotValue(item.Value);
+        }
+
+        return snapshot;
+    }
+
+    private static object?[] SnapshotEnumerable(System.Collections.IEnumerable enumerable)
+    {
+        var snapshot = new List<object?>();
+        foreach (var item in enumerable)
+        {
+            snapshot.Add(SnapshotValue(item));
+        }
+
+        return snapshot.ToArray();
     }
 
     private static byte[] RequireGroth16ProofBytes(byte[] proofBytes, string parameterName)

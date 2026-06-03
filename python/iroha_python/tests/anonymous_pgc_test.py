@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from iroha_python import (
+    buildAnonymousPgcDevProofFixture,
+    buildAnonymousPgcReceiverSet,
+    build_anonymous_pgc_dev_proof_fixture,
+    build_anonymous_pgc_receiver_set,
+    decode_privacy_proof_envelope,
+    verifyAnonymousPgcDevProofLocally,
+    verify_anonymous_pgc_dev_proof_locally,
+)
+from iroha_python.verange import build_privacy_proof_envelope
+
+
+def _payload() -> bytes:
+    return b"anonymous-pgc:alice:bob:42"
+
+
+def _receiver_a() -> dict[str, object]:
+    return {
+        "accountCommitment": bytes([0x21]) * 32,
+        "ciphertextCommitment": bytes([0x31]) * 32,
+        "ciphertext": b"ciphertext-for-bob",
+    }
+
+
+def _receiver_b() -> dict[str, object]:
+    return {
+        "accountCommitment": bytes([0x22]) * 32,
+        "ciphertextCommitment": bytes([0x32]) * 32,
+        "ciphertext": b"ciphertext-for-carol",
+    }
+
+
+def _base_receiver_set() -> dict[str, object]:
+    return {
+        "threshold": 1,
+        "receivers": [_receiver_a(), _receiver_b()],
+    }
+
+
+def _base_fixture() -> dict[str, object]:
+    return {
+        "receiverSet": build_anonymous_pgc_receiver_set(_base_receiver_set()),
+        "anonymitySetRoot": bytes([0x41]) * 32,
+        "payload": _payload(),
+        "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
+        "linkTag": bytes([0x61]) * 32,
+        "rangeCommitments": [bytes([0x71]) * 32],
+        "chainId": "boi-localnet",
+        "domainSeparator": "boi:anonymous-pgc:v1",
+        "vkHash": bytes([0x55]) * 32,
+    }
+
+
+def test_anonymous_pgc_builders_normalize_receiver_sets_and_dev_fixture() -> None:
+    receiver_set = build_anonymous_pgc_receiver_set(_base_receiver_set())
+
+    assert receiver_set["version"] == 1
+    assert receiver_set["threshold"] == 1
+    assert receiver_set["receiver_count"] == 2
+    assert isinstance(receiver_set["receiver_set_commitment"], bytes)
+    assert len(receiver_set["receiver_set_commitment"]) == 32
+    assert len(receiver_set["receivers"][0]["ciphertext_digest"]) == 32
+    assert receiver_set == build_anonymous_pgc_receiver_set(_base_receiver_set())
+
+    fixture = build_anonymous_pgc_dev_proof_fixture(_base_fixture())
+
+    assert fixture["kind"] == "anonymous-pgc-dev-fixture-v1"
+    assert fixture["production"] is False
+    assert isinstance(fixture["envelope"], bytes)
+    assert isinstance(fixture["proof_bytes"], bytes)
+    assert fixture["proofBytes"] == fixture["proof_bytes"]
+    assert fixture["publicInputBytes"] == fixture["public_input_bytes"]
+
+    decoded = decode_privacy_proof_envelope(fixture["envelope"])
+    assert decoded["backend"] == "Stark"
+    assert decoded["circuit_id"] == (
+        "stark/fri/sha256-goldilocks:anonymous_pgc_k_out_of_n_v1"
+    )
+    public_inputs = json.loads(decoded["public_inputs"].decode("utf-8"))
+    assert public_inputs["receiver_threshold"] == 1
+    assert public_inputs["receiver_count"] == 2
+    assert public_inputs["receiver_ciphertext_commitments"] == [
+        bytes([0x31] * 32).hex(),
+        bytes([0x32] * 32).hex(),
+    ]
+    assert public_inputs["receiver_set_commitment"] == receiver_set[
+        "receiver_set_commitment"
+    ].hex()
+
+    verified = verify_anonymous_pgc_dev_proof_locally(
+        {
+            "envelope": fixture["envelope"],
+            "receiverSet": fixture["receiver_set"],
+            "payload": _payload(),
+            "anonymitySetRoot": bytes([0x41]) * 32,
+            "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
+            "linkTag": bytes([0x61]) * 32,
+            "rangeCommitments": [bytes([0x71]) * 32],
+            "chainId": "boi-localnet",
+            "domainSeparator": "boi:anonymous-pgc:v1",
+        }
+    )
+    assert verified["ok"] is True
+    assert verified["production"] is False
+    assert verified["receiver_count"] == 2
+    assert verified["receiver_threshold"] == 1
+    assert verified["public_inputs"] == fixture["public_inputs"]
+    assert verified["public_input_bytes"] == len(fixture["public_input_bytes"])
+    assert verified["proof_bytes"] == len(fixture["proof_bytes"])
+
+
+def test_anonymous_pgc_package_root_exports_catalog_entrypoint_aliases() -> None:
+    receiver_set = buildAnonymousPgcReceiverSet(_base_receiver_set())
+    fixture = buildAnonymousPgcDevProofFixture({**_base_fixture(), "receiverSet": receiver_set})
+    verified = verifyAnonymousPgcDevProofLocally(
+        {
+            "envelope": fixture["envelope"],
+            "receiverSet": receiver_set,
+            "payload": _payload(),
+            "anonymitySetRoot": bytes([0x41]) * 32,
+            "balanceCommitments": [bytes([0x51]) * 32, bytes([0x52]) * 32],
+            "linkTag": bytes([0x61]) * 32,
+            "rangeCommitments": [bytes([0x71]) * 32],
+            "chainId": "boi-localnet",
+            "domainSeparator": "boi:anonymous-pgc:v1",
+        }
+    )
+
+    assert verified["ok"] is True
+    assert verified["kind"] == "anonymous-pgc-dev-fixture-v1"
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"threshold": 0},
+        {"threshold": 3},
+        {"threshold": 1, "k": 1},
+        {"receivers": []},
+        {"receivers": [{**_receiver_a(), "accountCommitment": bytes(32)}, _receiver_b()]},
+        {
+            "receivers": [
+                _receiver_a(),
+                {**_receiver_b(), "accountCommitment": bytes([0x21]) * 32},
+            ],
+        },
+        {
+            "receivers": [
+                _receiver_a(),
+                {**_receiver_b(), "ciphertextCommitment": bytes([0x31]) * 32},
+            ],
+        },
+        {"receivers": [{"accountCommitment": bytes([0x23]) * 32}, _receiver_b()]},
+        {
+            "receivers": [
+                {
+                    **_receiver_a(),
+                    "ciphertext": b"ciphertext",
+                    "ciphertextDigest": bytes([0xEE]) * 32,
+                },
+                _receiver_b(),
+            ],
+        },
+        {"receivers": [{**_receiver_a(), "unexpected": "field"}, _receiver_b()]},
+    ],
+)
+def test_anonymous_pgc_receiver_set_rejects_malformed_inputs(
+    patch: dict[str, object],
+) -> None:
+    receiver_set = _base_receiver_set()
+    receiver_set.update(patch)
+
+    with pytest.raises((TypeError, ValueError), match="anonymousPgcReceiverSet"):
+        build_anonymous_pgc_receiver_set(receiver_set)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {
+            "receiverSet": {
+                **build_anonymous_pgc_receiver_set(_base_receiver_set()),
+                "receiver_set_commitment": bytes([0xAA]) * 32,
+            }
+        },
+        {"anonymitySetRoot": bytes(32)},
+        {"payload": b"payload", "txDigest": bytes([0xEE]) * 32},
+        {"balanceCommitments": [bytes([0x51]) * 32, bytes([0x51]) * 32]},
+        {"rangeCommitments": []},
+        {"linkTag": bytes(32)},
+        {"chainId": " "},
+        {"chain_id": "boi-localnet"},
+        {"vkHash": bytes(32)},
+        {"backend": "groth16"},
+        {"circuitId": "other_anonymous_pgc_v1"},
+        {"production": True},
+        {"productionReady": True},
+        {"production_ready": True},
+        {"productionGate": {"ready": True}},
+        {"production_gate": {"ready": True}},
+        {"maxProofBytes": 4},
+    ],
+)
+def test_anonymous_pgc_dev_fixture_rejects_unsafe_shapes(
+    patch: dict[str, object],
+) -> None:
+    fixture_input = _base_fixture()
+    fixture_input.update(patch)
+
+    with pytest.raises(
+        (TypeError, ValueError),
+        match="anonymousPgcDevProofFixture|privacyProofEnvelope",
+    ):
+        build_anonymous_pgc_dev_proof_fixture(fixture_input)
+
+
+def test_anonymous_pgc_local_verifier_rejects_tampered_dev_fixtures() -> None:
+    fixture_input = _base_fixture()
+    fixture = build_anonymous_pgc_dev_proof_fixture(fixture_input)
+    decoded = decode_privacy_proof_envelope(fixture["envelope"])
+    public_inputs = json.loads(decoded["public_inputs"].decode("utf-8"))
+    tampered_proof = bytearray(decoded["proof_bytes"])
+    tampered_proof[-1] ^= 0xFF
+    noncanonical_inputs = json.dumps(public_inputs, indent=2).encode("utf-8")
+    duplicate_receiver_inputs = json.dumps(
+        {
+            **public_inputs,
+            "receiver_ciphertext_commitments": [
+                public_inputs["receiver_ciphertext_commitments"][0],
+                public_inputs["receiver_ciphertext_commitments"][0],
+            ],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+    def rebuild(**patch: object) -> bytes:
+        return build_privacy_proof_envelope(
+            {
+                "backend": patch.get("backend", "stark/fri/sha256-goldilocks"),
+                "circuitId": patch.get("circuitId", decoded["circuit_id"]),
+                "vkHash": patch.get("vkHash", bytes([0x55]) * 32),
+                "publicInputs": patch.get("publicInputs", decoded["public_inputs"]),
+                "proofBytes": patch.get("proofBytes", decoded["proof_bytes"]),
+            }
+        )
+
+    swapped_receiver_set = build_anonymous_pgc_receiver_set(
+        {"threshold": 1, "receivers": [_receiver_b(), _receiver_a()]}
+    )
+    cases = [
+        {"envelope": rebuild(proofBytes=b"arbitrary"), "payload": _payload()},
+        {"envelope": rebuild(proofBytes=bytes(tampered_proof)), "payload": _payload()},
+        {"envelope": fixture["envelope"], "payload": b"substituted-payload"},
+        {"envelope": fixture["envelope"], "receiverSet": swapped_receiver_set},
+        {"envelope": fixture["envelope"], "chainId": "wrong-chain"},
+        {"envelope": rebuild(backend="groth16"), "payload": _payload()},
+        {"envelope": rebuild(circuitId="other_anonymous_pgc_v1"), "payload": _payload()},
+        {"envelope": rebuild(vkHash=bytes([0x56]) * 32), "payload": _payload()},
+        {"envelope": rebuild(publicInputs=noncanonical_inputs), "payload": _payload()},
+        {
+            "envelope": rebuild(publicInputs=duplicate_receiver_inputs),
+            "payload": _payload(),
+        },
+    ]
+
+    for case in cases:
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="anonymousPgcDevProofLocalVerification|privacyProofEnvelope",
+        ):
+            verify_anonymous_pgc_dev_proof_locally(case)

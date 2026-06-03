@@ -105,13 +105,37 @@ public final class NexusAppClientTest {
             new FakeToriiClient());
     final NexusTransferDraft draft = client.buildTransferDraft(sampleInput());
 
-    final NexusAppError error =
+    for (final String algorithm :
+        new String[] {
+          "secp256k1",
+          "ed\t25519",
+          "ed\u200B25519",
+          "\u0435d25519",
+          "ed\uFF0D25519",
+          " ED25519 ",
+        }) {
+      final NexusAppError error =
+          expectNexusError(
+              () ->
+                  client.finalizeAndSubmit(
+                      draft.signable(), new NexusWalletSignature(filled(0x07, 64), algorithm)));
+
+      assertEquals("unsupported_signature_algorithm", error.code());
+    }
+
+    final NexusAppError signableError =
         expectNexusError(
             () ->
                 client.finalizeAndSubmit(
-                    draft.signable(), new NexusWalletSignature(filled(0x07, 64), "secp256k1")));
+                    new NexusSignableTransaction(
+                        draft.signable().payloadBytes(),
+                        draft.signable().payloadHashHex(),
+                        draft.signable().authority(),
+                        draft.signable().signingPublicKey(),
+                        "ed\u200B25519"),
+                    new NexusWalletSignature(filled(0x07, 64))));
 
-    assertEquals("unsupported_signature_algorithm", error.code());
+    assertEquals("unsupported_signature_algorithm", signableError.code());
   }
 
   @Test

@@ -2708,14 +2708,59 @@ final class ToriiClientTests: XCTestCase {
     }
 
     func testSharedSoracloudBfvKeyBundleComponentVectorsAreComplete() throws {
-        let fixtureURL = repositoryRootURL()
-            .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")
-        let fixtureData = try Data(contentsOf: fixtureURL)
-        let fixture = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
-        )
+        let fixture = try loadSharedBfvFixture()
 
         try assertBfvOperationKeyComponentVectors(try object(fixture, "operation_vectors"))
+    }
+
+    func testSharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift() throws {
+        var missingComponent = try object(loadSharedBfvFixture(), "operation_vectors")
+        var missingEvaluationKey = try object(missingComponent, "evaluation_key_bundle")
+        var missingEntries = try objectArray(missingEvaluationKey, "relinearization_entries")
+        missingEntries[0].removeValue(forKey: "b_sha256")
+        missingEvaluationKey["relinearization_entries"] = missingEntries
+        missingComponent["evaluation_key_bundle"] = missingEvaluationKey
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(missingComponent))
+
+        var duplicateComponent = try object(loadSharedBfvFixture(), "operation_vectors")
+        var duplicateEvaluationKey = try object(duplicateComponent, "evaluation_key_bundle")
+        var duplicateEntries = try objectArray(duplicateEvaluationKey, "relinearization_entries")
+        duplicateEntries[1]["a_sha256"] = try string(duplicateEntries[0], "b_sha256")
+        duplicateEvaluationKey["relinearization_entries"] = duplicateEntries
+        duplicateComponent["evaluation_key_bundle"] = duplicateEvaluationKey
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(duplicateComponent))
+
+        var lowercaseComponent = try object(loadSharedBfvFixture(), "operation_vectors")
+        var lowercaseEvaluationKey = try object(lowercaseComponent, "evaluation_key_bundle")
+        var lowercaseEntries = try objectArray(lowercaseEvaluationKey, "relinearization_entries")
+        lowercaseEntries[0]["b_sha256"] = try string(lowercaseEntries[0], "b_sha256").lowercased()
+        lowercaseEvaluationKey["relinearization_entries"] = lowercaseEntries
+        lowercaseComponent["evaluation_key_bundle"] = lowercaseEvaluationKey
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(lowercaseComponent))
+
+        var zeroRefresh = try object(loadSharedBfvFixture(), "operation_vectors")
+        var rotationKeys = try objectArray(zeroRefresh, "rotation_keys")
+        var firstRotation = rotationKeys[0]
+        var refreshComponents = try object(firstRotation, "zero_refresh_components")
+        refreshComponents["c1_sha256"] = String(repeating: "0", count: 64)
+        firstRotation["zero_refresh_components"] = refreshComponents
+        rotationKeys[0] = firstRotation
+        zeroRefresh["rotation_keys"] = rotationKeys
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(zeroRefresh))
+
+        var countDrift = try object(loadSharedBfvFixture(), "operation_vectors")
+        var bootstrap = try object(countDrift, "bootstrap_key")
+        var bootstrapComponents = try object(bootstrap, "zero_refresh_components")
+        bootstrapComponents["coefficient_count"] = 63
+        bootstrap["zero_refresh_components"] = bootstrapComponents
+        countDrift["bootstrap_key"] = bootstrap
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(countDrift))
+
+        var rotationCountDrift = try object(loadSharedBfvFixture(), "operation_vectors")
+        var rotationEvaluationKey = try object(rotationCountDrift, "evaluation_key_bundle")
+        rotationEvaluationKey["rotation_key_count"] = 99
+        rotationCountDrift["evaluation_key_bundle"] = rotationEvaluationKey
+        XCTAssertThrowsError(try assertBfvOperationKeyComponentVectors(rotationCountDrift))
     }
 
     func testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector() throws {
@@ -2932,6 +2977,30 @@ final class ToriiClientTests: XCTestCase {
         SHA256.hash(data: data).map { String(format: "%02X", $0) }.joined()
     }
 
+    private func matchingVerifyingKeyCommitmentHex(backend: String, bytes: Data) -> String {
+        let backendBytes = Data(backend.utf8)
+        var preimage = Data("iroha:zk:v1:vk".utf8)
+        preimage.append(u64BigEndianData(UInt64(backendBytes.count)))
+        preimage.append(backendBytes)
+        preimage.append(u64BigEndianData(UInt64(bytes.count)))
+        preimage.append(bytes)
+        return Data(SHA256.hash(data: preimage)).hexEncodedString()
+    }
+
+    private func u64BigEndianData(_ value: UInt64) -> Data {
+        var bigEndian = value.bigEndian
+        return withUnsafeBytes(of: &bigEndian) { Data($0) }
+    }
+
+    private func loadSharedBfvFixture() throws -> [String: Any] {
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent("fixtures/soracloud/bfv_identifier_vectors_v1.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        return try XCTUnwrap(
+            JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        )
+    }
+
     private func identifierReceiptPolicy(
         fromFixture policy: [String: Any]
     ) throws -> ToriiIdentifierPolicySummary {
@@ -3024,43 +3093,67 @@ final class ToriiClientTests: XCTestCase {
     }
 
     private func assertBfvOperationKeyComponentVectors(_ operationVectors: [String: Any]) throws {
-        XCTAssertEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1")
+        try assertBfvEqual(try string(operationVectors, "vector_set"), "soracloud-bfv-operation-v1", "operation vector set")
         let publicParameters = try object(operationVectors, "public_parameters")
         let publicDegree = try int(publicParameters, "polynomial_degree")
         let evaluationKey = try object(operationVectors, "evaluation_key_bundle")
-        XCTAssertEqual(try int(evaluationKey, "decomposition_base_log"), try int(publicParameters, "decomposition_base_log"))
-        XCTAssertEqual(try int(evaluationKey, "decomposition_digit_count"), try int(evaluationKey, "relinearization_entry_count"))
+        try assertBfvEqual(
+            try int(evaluationKey, "decomposition_base_log"),
+            try int(publicParameters, "decomposition_base_log"),
+            "evaluation-key decomposition base log"
+        )
+        try assertBfvEqual(
+            try int(evaluationKey, "decomposition_digit_count"),
+            try int(evaluationKey, "relinearization_entry_count"),
+            "evaluation-key decomposition digit count"
+        )
         let entries = try objectArray(evaluationKey, "relinearization_entries")
-        XCTAssertEqual(entries.count, try int(evaluationKey, "relinearization_entry_count"))
+        try assertBfvEqual(entries.count, try int(evaluationKey, "relinearization_entry_count"), "relinearization entry count")
         var componentDigests = Set<String>()
         for (index, entry) in entries.enumerated() {
-            XCTAssertEqual(try int(entry, "index"), index)
-            XCTAssertEqual(try int(entry, "coefficient_count"), publicDegree)
-            assertBfvComponentDigest("relinearization entry \(index) b", try string(entry, "b_sha256"), seen: &componentDigests)
-            assertBfvComponentDigest("relinearization entry \(index) a", try string(entry, "a_sha256"), seen: &componentDigests)
+            try assertBfvEqual(try int(entry, "index"), index, "relinearization entry \(index) index")
+            try assertBfvEqual(try int(entry, "coefficient_count"), publicDegree, "relinearization entry \(index) coefficient count")
+            try assertBfvComponentDigest("relinearization entry \(index) b", try string(entry, "b_sha256"), seen: &componentDigests)
+            try assertBfvComponentDigest("relinearization entry \(index) a", try string(entry, "a_sha256"), seen: &componentDigests)
         }
         let rotationKeys = try objectArray(operationVectors, "rotation_keys")
-        XCTAssertEqual(rotationKeys.count, try int(evaluationKey, "rotation_key_count"))
+        try assertBfvEqual(rotationKeys.count, try int(evaluationKey, "rotation_key_count"), "rotation key count")
         for key in rotationKeys {
             let components = try object(key, "zero_refresh_components")
             let steps = try int(key, "rotation_steps")
-            XCTAssertEqual(try int(components, "coefficient_count"), publicDegree)
-            assertBfvComponentDigest("rotation key \(steps) c0", try string(components, "c0_sha256"), seen: &componentDigests)
-            assertBfvComponentDigest("rotation key \(steps) c1", try string(components, "c1_sha256"), seen: &componentDigests)
+            try assertBfvEqual(try int(components, "coefficient_count"), publicDegree, "rotation key \(steps) coefficient count")
+            try assertBfvComponentDigest("rotation key \(steps) c0", try string(components, "c0_sha256"), seen: &componentDigests)
+            try assertBfvComponentDigest("rotation key \(steps) c1", try string(components, "c1_sha256"), seen: &componentDigests)
         }
         let bootstrap = try object(operationVectors, "bootstrap_key")
-        XCTAssertEqual(try string(bootstrap, "key_id"), try string(evaluationKey, "bootstrap_key_id"))
+        try assertBfvEqual(try string(bootstrap, "key_id"), try string(evaluationKey, "bootstrap_key_id"), "bootstrap key id")
         let bootstrapComponents = try object(bootstrap, "zero_refresh_components")
-        XCTAssertEqual(try int(bootstrapComponents, "coefficient_count"), publicDegree)
-        assertBfvComponentDigest("bootstrap c0", try string(bootstrapComponents, "c0_sha256"), seen: &componentDigests)
-        assertBfvComponentDigest("bootstrap c1", try string(bootstrapComponents, "c1_sha256"), seen: &componentDigests)
+        try assertBfvEqual(try int(bootstrapComponents, "coefficient_count"), publicDegree, "bootstrap coefficient count")
+        try assertBfvComponentDigest("bootstrap c0", try string(bootstrapComponents, "c0_sha256"), seen: &componentDigests)
+        try assertBfvComponentDigest("bootstrap c1", try string(bootstrapComponents, "c1_sha256"), seen: &componentDigests)
     }
 
-    private func assertBfvComponentDigest(_ label: String, _ value: String, seen: inout Set<String>) {
-        XCTAssertEqual(value.count, 64, "\(label) must be 32-byte hex")
-        XCTAssertNil(value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789ABCDEF").inverted), "\(label) must be uppercase hex")
-        XCTAssertNotEqual(value, String(repeating: "0", count: 64), "\(label) must not be zero")
-        XCTAssertTrue(seen.insert(value).inserted, "\(label) must be unique")
+    private func assertBfvEqual<T: Equatable>(_ actual: T, _ expected: T, _ label: String) throws {
+        guard actual == expected else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) mismatch"])
+        }
+    }
+
+    private func assertBfvComponentDigest(_ label: String, _ value: String, seen: inout Set<String>) throws {
+        guard value.count == 64 else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must be 32-byte hex"])
+        }
+        let nonHex = value.rangeOfCharacter(from: CharacterSet(charactersIn: "0123456789ABCDEF").inverted)
+        guard nonHex == nil else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must be uppercase hex"])
+        }
+        guard value != String(repeating: "0", count: 64) else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must not be zero"])
+        }
+        let inserted = seen.insert(value).inserted
+        guard inserted else {
+            throw NSError(domain: "ToriiClientTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(label) must be unique"])
+        }
     }
 
     private func bool(_ root: [String: Any], _ key: String) throws -> Bool {
@@ -8395,9 +8488,151 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterVerifyingKeyRejectsRemovedServerSideSigningFlow() async {
+    func testVerifyingKeyReadPathsRejectUnsupportedProductionBackendsBeforeRequest() async {
+        var requests = 0
+        StubURLProtocol.handler = { request in
+            requests += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data("[]".utf8))
+        }
+
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "stark/fri/miden",
+            " stark/fri/sha256-goldilocks",
+            "stark/fri/sha256-goldilocks ",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "halo2/ipa\0",
+            "mock/dev"
+        ] {
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().getVerifyingKey(backend: backend, name: "vk_main")
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+            }
+            await XCTAssertThrowsErrorAsync(
+                try await makeClient().listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: backend))
+            ) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+            }
+            XCTAssertThrowsError(try ToriiVerifyingKeyListQuery(backend: backend).queryItems()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+            }
+        }
+        XCTAssertEqual(requests, 0)
+    }
+
+    func testVerifyingKeyListDecodingRejectsNonCanonicalResponseBackends() {
+        let record = """
+        {
+          "version": 1,
+          "circuit_id": "halo2/ipa::transfer_v1",
+          "backend": "halo2/ipa",
+          "curve": "pallas",
+          "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "vk_len": 32,
+          "max_proof_bytes": 4096,
+          "status": "Active"
+        }
+        """
+        let payloads = [
+            #"[{ "backend": " halo2/ipa", "name": "flat_vk" }]"#,
+            #"[{ "id": { "backend": "halo2/ipa ", "name": "object_vk" } }]"#,
+            #"[{ "backend": "halo2\uFF0Fipa", "name": "fullwidth_slash_vk" }]"#,
+            #"[{ "id": { "backend": "h\u0430lo2/ipa", "name": "cyrillic_a_vk" } }]"#,
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": "record_vk" },
+              "record": {
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "backend": "\\thalo2/ipa",
+                "curve": "pallas",
+                "public_inputs_schema_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "vk_len": 32,
+                "max_proof_bytes": 4096,
+                "status": "Active"
+              }
+            }]
+            """,
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": "inline_vk" },
+              "record": \(record.dropLast()) ,
+                "key": { "backend": "halo2/ipa\\n", "bytes_b64": "AQID" }
+              }
+            }]
+            """,
+            """
+            [{
+              "id": { "backend": "halo2/ipa", "name": "zero_width_vk" },
+              "record": \(record.dropLast()) ,
+                "key": { "backend": "halo2/\\u200Bipa", "bytes_b64": "AQID" }
+              }
+            }]
+            """
+        ]
+        for payload in payloads {
+            let data = payload.data(using: .utf8)!
+            XCTAssertThrowsError(try JSONDecoder().decode([ToriiVerifyingKeyListItem].self, from: data)) { error in
+                XCTAssertTrue(String(describing: error).contains("unsupported production verifier backend"))
+            }
+        }
+    }
+
+    func testVerifyingKeyDetailDecodingRejectsWithdrawHeightBeforeActivationHeight() {
+        let payload = """
+        {
+          "id": { "backend": "halo2/ipa", "name": "vk_main" },
+          "record": {
+            "version": 2,
+            "circuit_id": "halo2/ipa::transfer_v2",
+            "backend": "halo2/ipa",
+            "curve": "pallas",
+            "public_inputs_schema_hash": "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
+            "commitment": "20574662a58708e02e0000000000000000000000000000000000000000000000",
+            "vk_len": 96,
+            "max_proof_bytes": 8192,
+            "gas_schedule_id": "halo2_default",
+            "activation_height": 10,
+            "withdraw_height": 9,
+            "status": "Active"
+          }
+        }
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try JSONDecoder().decode(ToriiVerifyingKeyDetail.self, from: payload)) { error in
+            XCTAssertTrue(String(describing: error).contains("withdraw_height"))
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterVerifyingKeyPostsSignedPayload() async throws {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:register-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -8406,18 +8641,33 @@ final class ToriiClientHeaderTests: XCTestCase {
             gasScheduleId: "halo2_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
-        await XCTAssertThrowsErrorAsync(try await makeClient().registerVerifyingKey(requestBody)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/zk/vk/register"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
+        var didSendRequest = false
+        StubURLProtocol.handler = { request in
+            didSendRequest = true
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/zk/vk/register")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["authority"] as? String, requestBody.authority)
+            XCTAssertEqual(body["private_key"] as? String, "ed25519:register-private-key")
+            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(body["name"] as? String, "vk_main")
+            XCTAssertEqual(body["vk_bytes"] as? String, "AQID")
+            XCTAssertEqual(body["vk_len"] as? Int, 3)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, nil)
         }
+        try await makeClient().registerVerifyingKey(requestBody)
+        XCTAssertTrue(didSendRequest)
     }
 
     func testRegisterVerifyingKeyRejectsInvalidSchemaHash() {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -8435,6 +8685,7 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsVkLengthMismatch() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -8451,10 +8702,285 @@ final class ToriiClientHeaderTests: XCTestCase {
         }
     }
 
+    func testRegisterVerifyingKeyRejectsLengthOnlyVerifierMaterial() {
+        var requestBody = ToriiVerifyingKeyRegisterRequest(
+            authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default"
+        )
+        requestBody.verifyingKeyLength = 3
+        XCTAssertThrowsError(try JSONEncoder().encode(requestBody)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("commitment_hex"))
+        }
+    }
+
+    func testVerifyingKeyRequestsRejectMismatchedInlineCommitment() {
+        let bytes = Data([0x01, 0x02, 0x03])
+        var registerRequest = ToriiVerifyingKeyRegisterRequest(
+            authority: "alice",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: bytes
+        )
+        registerRequest.commitmentHex = String(repeating: "0", count: 64)
+        XCTAssertThrowsError(try JSONEncoder().encode(registerRequest)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("commitment_hex must match domain-separated SHA-256"))
+        }
+
+        var updateRequest = ToriiVerifyingKeyUpdateRequest(
+            authority: "alice",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 2,
+            circuitId: "halo2/ipa::transfer_v2",
+            publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+        )
+        updateRequest.verifyingKeyBytes = bytes
+        updateRequest.commitmentHex = matchingVerifyingKeyCommitmentHex(
+            backend: "halo2/ipa",
+            bytes: bytes
+        )
+        XCTAssertNoThrow(try JSONEncoder().encode(updateRequest))
+    }
+
+    func testVerifyingKeyRequestsRejectWithdrawHeightBeforeActivationHeight() {
+        let bytes = Data([0x01, 0x02, 0x03])
+        var registerRequest = ToriiVerifyingKeyRegisterRequest(
+            authority: "alice",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 1,
+            circuitId: "halo2/ipa::transfer_v1",
+            publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+            gasScheduleId: "halo2_default",
+            verifyingKeyBytes: bytes
+        )
+        registerRequest.activationHeight = 10
+        registerRequest.withdrawHeight = 9
+        XCTAssertThrowsError(try JSONEncoder().encode(registerRequest)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("withdraw_height"))
+        }
+
+        var updateRequest = ToriiVerifyingKeyUpdateRequest(
+            authority: "alice",
+            privateKey: "ed25519:private-key",
+            backend: "halo2/ipa",
+            name: "vk_main",
+            version: 2,
+            circuitId: "halo2/ipa::transfer_v2",
+            publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+        )
+        updateRequest.verifyingKeyBytes = bytes
+        updateRequest.activationHeight = 10
+        updateRequest.withdrawHeight = 9
+        XCTAssertThrowsError(try JSONEncoder().encode(updateRequest)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+            XCTAssertTrue(reason.contains("withdraw_height"))
+        }
+    }
+
+    func testVerifyingKeyRequestsRejectUnsupportedProductionBackendsBeforeEncoding() {
+        let unsupported = [
+            "halo2/unknown-native-v1",
+            "halo2/ipa:unknown-native-v1",
+            "stark/unknown-native-v1",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2\u{FF0F}ipa",
+            "halo2/\u{200B}ipa",
+            "h\u{0430}lo2/ipa",
+            "stark/fri/miden",
+            " stark/fri/sha256-goldilocks",
+            "stark/fri/sha256-goldilocks ",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "halo2/ipa\0",
+            "mock/dev"
+        ]
+
+        for backend in unsupported {
+            let registerRequest = ToriiVerifyingKeyRegisterRequest(
+                authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                privateKey: "ed25519:private-key",
+                backend: backend,
+                name: "vk_main",
+                version: 1,
+                circuitId: "halo2/ipa::transfer_v1",
+                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+                gasScheduleId: "halo2_default"
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(registerRequest), backend) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+            }
+
+            let updateRequest = ToriiVerifyingKeyUpdateRequest(
+                authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                privateKey: "ed25519:private-key",
+                backend: backend,
+                name: "vk_main",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(updateRequest), backend) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
+            }
+        }
+    }
+
+    func testVerifyingKeyRequestsRejectBlankNamesBeforeEncoding() {
+        let blankNames = ["", "   ", "\t", "\n"]
+
+        for name in blankNames {
+            let registerRequest = ToriiVerifyingKeyRegisterRequest(
+                authority: "alice",
+                privateKey: "ed25519:private-key",
+                backend: "halo2/ipa",
+                name: name,
+                version: 1,
+                circuitId: "halo2/ipa::transfer_v1",
+                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+                gasScheduleId: "halo2_default"
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(registerRequest),
+                                 "register must reject blank VK name \(String(reflecting: name))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("name must be a non-empty string"))
+            }
+
+            let updateRequest = ToriiVerifyingKeyUpdateRequest(
+                authority: "alice",
+                privateKey: "ed25519:private-key",
+                backend: "halo2/ipa",
+                name: name,
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(updateRequest),
+                                 "update must reject blank VK name \(String(reflecting: name))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("name must be a non-empty string"))
+            }
+        }
+    }
+
+    func testVerifyingKeyRequestsRejectBlankSigningFieldsBeforeEncoding() {
+        let blankValues = ["", "   ", "\t", "\n"]
+
+        for blank in blankValues {
+            let registerWithBlankAuthority = ToriiVerifyingKeyRegisterRequest(
+                authority: blank,
+                privateKey: "ed25519:private-key",
+                backend: "halo2/ipa",
+                name: "vk_main",
+                version: 1,
+                circuitId: "halo2/ipa::transfer_v1",
+                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+                gasScheduleId: "halo2_default"
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(registerWithBlankAuthority),
+                                 "register must reject blank authority \(String(reflecting: blank))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("authority must be a non-empty string"))
+            }
+
+            let registerWithBlankPrivateKey = ToriiVerifyingKeyRegisterRequest(
+                authority: "alice",
+                privateKey: blank,
+                backend: "halo2/ipa",
+                name: "vk_main",
+                version: 1,
+                circuitId: "halo2/ipa::transfer_v1",
+                publicInputsSchemaHashHex: String(repeating: "a", count: 64),
+                gasScheduleId: "halo2_default"
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(registerWithBlankPrivateKey),
+                                 "register must reject blank private_key \(String(reflecting: blank))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
+            }
+
+            let updateWithBlankAuthority = ToriiVerifyingKeyUpdateRequest(
+                authority: blank,
+                privateKey: "ed25519:private-key",
+                backend: "halo2/ipa",
+                name: "vk_main",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(updateWithBlankAuthority),
+                                 "update must reject blank authority \(String(reflecting: blank))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("authority must be a non-empty string"))
+            }
+
+            let updateWithBlankPrivateKey = ToriiVerifyingKeyUpdateRequest(
+                authority: "alice",
+                privateKey: blank,
+                backend: "halo2/ipa",
+                name: "vk_main",
+                version: 2,
+                circuitId: "halo2/ipa::transfer_v2",
+                publicInputsSchemaHashHex: String(repeating: "b", count: 64)
+            )
+            XCTAssertThrowsError(try JSONEncoder().encode(updateWithBlankPrivateKey),
+                                 "update must reject blank private_key \(String(reflecting: blank))") { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("private_key must be a non-empty string"))
+            }
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
-    func testUpdateVerifyingKeyRejectsRemovedServerSideSigningFlow() async {
+    func testUpdateVerifyingKeyPostsSignedPayload() async throws {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:update-private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -8462,19 +8988,38 @@ final class ToriiClientHeaderTests: XCTestCase {
             publicInputsSchemaHashHex: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
         )
         requestBody.verifyingKeyBytes = Data([0xAA])
-        requestBody.commitmentHex = "20574662a58708e02e0000000000000000000000000000000000000000000000"
-        await XCTAssertThrowsErrorAsync(try await makeClient().updateVerifyingKey(requestBody)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/zk/vk/update"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
+        requestBody.commitmentHex = matchingVerifyingKeyCommitmentHex(
+            backend: "halo2/ipa",
+            bytes: Data([0xAA])
+        )
+        var didSendRequest = false
+        StubURLProtocol.handler = { request in
+            didSendRequest = true
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/zk/vk/update")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = self.bodyJSON(from: request)
+            XCTAssertEqual(body["authority"] as? String, requestBody.authority)
+            XCTAssertEqual(body["private_key"] as? String, "ed25519:update-private-key")
+            XCTAssertEqual(body["backend"] as? String, "halo2/ipa")
+            XCTAssertEqual(body["name"] as? String, "vk_main")
+            XCTAssertEqual(body["commitment_hex"] as? String, requestBody.commitmentHex)
+            XCTAssertEqual(body["vk_bytes"] as? String, "qg==")
+            XCTAssertEqual(body["vk_len"] as? Int, 1)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 202,
+                                           httpVersion: nil,
+                                           headerFields: nil)!
+            return (response, nil)
         }
+        try await makeClient().updateVerifyingKey(requestBody)
+        XCTAssertTrue(didSendRequest)
     }
 
     func testUpdateVerifyingKeyRejectsInvalidCommitmentHex() {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            privateKey: "ed25519:private-key",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -9803,16 +10348,45 @@ data: {"authority":"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMN
     }
 
     func testVerifyingKeyEventFilterRejectsInvalidBackendOrName() {
-        XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: " ", name: "vk").queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "stark/fri/miden",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "halo2:ipa",
+            "mock/dev"
+        ] {
+            XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: backend, name: "vk").queryItems()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend")
+                              || reason.contains("must be a non-empty string"))
             }
         }
-        XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: "vk:main").queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
+
+        for name in ["", "   ", "\t", "\n", "vk:main"] {
+            XCTAssertThrowsError(try ToriiVerifyingKeyEventFilter(backend: "halo2/ipa", name: name).queryItems()) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
             }
         }
+    }
+
+    func testVerifyingKeyEventFilterCanonicalizesNameBeforeEncoding() throws {
+        let queryItems = try XCTUnwrap(ToriiVerifyingKeyEventFilter(backend: "halo2/ipa",
+                                                                    name: " vk_main ").queryItems())
+        let filterValue = try XCTUnwrap(queryItems.first { $0.name == "filter" }?.value)
+        let data = try XCTUnwrap(filterValue.data(using: .utf8))
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let verifyingKey = try XCTUnwrap(decoded["VerifyingKey"] as? [String: Any])
+        let matcher = try XCTUnwrap(verifyingKey["id_matcher"] as? [String: Any])
+        XCTAssertEqual(matcher["backend"] as? String, "halo2/ipa")
+        XCTAssertEqual(matcher["name"] as? String, "vk_main")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10244,23 +10818,58 @@ id: 88
     }
 
     func testProofEventFilterRejectsInvalidBackendOrHash() {
-        let invalidHash = String(repeating: "z", count: 64)
-        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2:ipa",
-                                                       proofHashHex: String(repeating: "a", count: 64),
-                                                       includeVerified: true,
-                                                       includeRejected: true).queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "stark/fri/miden",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "halo2:ipa",
+            "mock/dev"
+        ] {
+            XCTAssertThrowsError(try ToriiProofEventFilter(backend: backend,
+                                                           proofHashHex: String(repeating: "a", count: 64),
+                                                           includeVerified: true,
+                                                           includeRejected: true).queryItems()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
+                XCTAssertTrue(reason.contains("unsupported production verifier backend"))
             }
         }
-        XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
-                                                       proofHashHex: invalidHash,
-                                                       includeVerified: true,
-                                                       includeRejected: true).queryItems()) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
+
+        for proofHashHex in [
+            "",
+            "abc",
+            String(repeating: "z", count: 64),
+            String(repeating: "a", count: 63),
+            "0x" + String(repeating: "a", count: 63)
+        ] {
+            XCTAssertThrowsError(try ToriiProofEventFilter(backend: "halo2/ipa",
+                                                           proofHashHex: proofHashHex,
+                                                           includeVerified: true,
+                                                           includeRejected: true).queryItems()) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("Expected invalidPayload error")
+                }
             }
         }
+    }
+
+    func testProofEventFilterCanonicalizesHashBeforeEncoding() throws {
+        let queryItems = try XCTUnwrap(ToriiProofEventFilter(backend: "halo2/ipa",
+                                                             proofHashHex: "0x" + String(repeating: "A", count: 64),
+                                                             includeVerified: true,
+                                                             includeRejected: true).queryItems())
+        let filterValue = try XCTUnwrap(queryItems.first { $0.name == "filter" }?.value)
+        let data = try XCTUnwrap(filterValue.data(using: .utf8))
+        let decoded = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let proof = try XCTUnwrap(decoded["Proof"] as? [String: Any])
+        let matcher = try XCTUnwrap(proof["id_matcher"] as? [String: Any])
+        XCTAssertEqual(matcher["backend"] as? String, "halo2/ipa")
+        XCTAssertEqual(matcher["hash_hex"] as? String, String(repeating: "a", count: 64))
     }
 
 
@@ -12620,6 +13229,234 @@ id: 88
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    private func makeValidSoraFsPinRegisterRequest(
+        manifestDigestHex: String = String(repeating: "A", count: 64),
+        chunkDigestSha3_256Hex: String = "0x" + String(repeating: "b", count: 64),
+        successorOfHex: String? = String(repeating: "C", count: 64)
+    ) -> ToriiSoraFsPinRegisterRequest {
+        ToriiSoraFsPinRegisterRequest(
+            authority: " alice@boi ",
+            privateKey: " ed25519:deadbeef ",
+            chunker: ToriiSoraFsChunkerHandle(
+                profileId: 1,
+                namespace: " sorafs ",
+                name: " sf1 ",
+                semver: " 1.0.0 ",
+                multihashCode: nil
+            ),
+            pinPolicy: ToriiSoraFsPinPolicy(
+                minReplicas: 3,
+                storageClass: ToriiSoraFsStorageClass(type: "hot"),
+                retentionEpoch: 72
+            ),
+            manifestDigestHex: manifestDigestHex,
+            chunkDigestSha3_256Hex: chunkDigestSha3_256Hex,
+            contentLength: 4096,
+            submittedEpoch: 42,
+            alias: ToriiSoraFsPinAlias(
+                namespace: " docs ",
+                name: " main ",
+                proofBase64: Data("alias-proof".utf8).base64EncodedString()
+            ),
+            successorOfHex: successorOfHex
+        )
+    }
+
+    private func mutatedSoraFsPinRequest(
+        _ mutate: (inout ToriiSoraFsPinRegisterRequest) -> Void
+    ) -> ToriiSoraFsPinRegisterRequest {
+        var request = makeValidSoraFsPinRegisterRequest()
+        mutate(&request)
+        return request
+    }
+
+    private func mutatedSoraFsChunker(
+        _ mutate: (inout ToriiSoraFsChunkerHandle) -> Void
+    ) -> ToriiSoraFsPinRegisterRequest {
+        mutatedSoraFsPinRequest { request in
+            var chunker = request.chunker!
+            mutate(&chunker)
+            request.chunker = chunker
+        }
+    }
+
+    private func mutatedSoraFsPinPolicy(
+        _ mutate: (inout ToriiSoraFsPinPolicy) -> Void
+    ) -> ToriiSoraFsPinRegisterRequest {
+        mutatedSoraFsPinRequest { request in
+            var policy = request.pinPolicy!
+            mutate(&policy)
+            request.pinPolicy = policy
+        }
+    }
+
+    private func mutatedSoraFsAlias(
+        _ mutate: (inout ToriiSoraFsPinAlias) -> Void
+    ) -> ToriiSoraFsPinRegisterRequest {
+        mutatedSoraFsPinRequest { request in
+            var alias = request.alias!
+            mutate(&alias)
+            request.alias = alias
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterSoraFsPinManifestPostsNormalizedPayloadAndDecodesResponse() async throws {
+        let manifestHex = String(repeating: "a", count: 64)
+        let chunkHex = String(repeating: "b", count: 64)
+        let successorHex = String(repeating: "c", count: 64)
+        let aliasProof = Data("alias-proof".utf8).base64EncodedString()
+
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/sorafs/pin/register")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            let root = self.bodyJSON(from: request)
+            XCTAssertEqual(root["authority"] as? String, "alice@boi")
+            XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
+            let chunker = root["chunker"] as? [String: Any]
+            XCTAssertEqual(chunker?["profile_id"] as? Int, 1)
+            XCTAssertEqual(chunker?["namespace"] as? String, "sorafs")
+            XCTAssertEqual(chunker?["name"] as? String, "sf1")
+            XCTAssertEqual(chunker?["semver"] as? String, "1.0.0")
+            XCTAssertEqual(chunker?["multihash_code"] as? Int, 0)
+            let pinPolicy = root["pin_policy"] as? [String: Any]
+            XCTAssertEqual(pinPolicy?["min_replicas"] as? Int, 3)
+            let storageClass = pinPolicy?["storage_class"] as? [String: Any]
+            XCTAssertEqual(storageClass?["type"] as? String, "Hot")
+            XCTAssertEqual(pinPolicy?["retention_epoch"] as? Int, 72)
+            XCTAssertEqual(root["manifest_digest_hex"] as? String, manifestHex)
+            XCTAssertEqual(root["chunk_digest_sha3_256_hex"] as? String, chunkHex)
+            XCTAssertEqual(root["content_length"] as? Int, 4096)
+            XCTAssertEqual(root["submitted_epoch"] as? Int, 42)
+            let alias = root["alias"] as? [String: Any]
+            XCTAssertEqual(alias?["namespace"] as? String, "docs")
+            XCTAssertEqual(alias?["name"] as? String, "main")
+            XCTAssertEqual(alias?["proof_base64"] as? String, aliasProof)
+            XCTAssertEqual(root["successor_of_hex"] as? String, successorHex)
+
+            let responseObject: [String: Any] = [
+                "manifest_digest_hex": manifestHex.uppercased(),
+                "chunker_handle": "sorafs.sf1@1.0.0",
+                "submitted_epoch": 42,
+                "content_length": 4096,
+                "pin_fee_nano": 500_000_000,
+                "pin_fee_asset_id": "xor#universal",
+                "pin_fee_treasury_account_id": "treasury@boi",
+                "alias": [
+                    "namespace": "docs",
+                    "name": "main",
+                    "proof_base64": aliasProof,
+                ],
+                "successor_of_hex": "0x\(successorHex.uppercased())",
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
+            return (response, body)
+        }
+
+        let response = try await makeClient().registerSoraFsPinManifest(
+            makeValidSoraFsPinRegisterRequest()
+        )
+        XCTAssertEqual(response.manifestDigestHex, manifestHex)
+        XCTAssertEqual(response.chunkerHandle, "sorafs.sf1@1.0.0")
+        XCTAssertEqual(response.submittedEpoch, UInt64(42))
+        XCTAssertEqual(response.contentLength, UInt64(4096))
+        XCTAssertEqual(response.pinFeeNano, UInt64(500_000_000))
+        XCTAssertEqual(response.pinFeeAssetId, "xor#universal")
+        XCTAssertEqual(response.pinFeeTreasuryAccountId, "treasury@boi")
+        XCTAssertEqual(response.alias?.namespace, "docs")
+        XCTAssertEqual(response.alias?.name, "main")
+        XCTAssertEqual(response.alias?.proofBase64, aliasProof)
+        XCTAssertEqual(response.successorOfHex, successorHex)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest() async throws {
+        let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
+            mutatedSoraFsPinRequest { $0.manifestDigestHex = "abc123" },
+            mutatedSoraFsPinRequest { $0.chunkDigestSha3_256Hex = String(repeating: "z", count: 64) },
+            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
+            mutatedSoraFsPinRequest { $0.contentLength = nil },
+            mutatedSoraFsPinRequest { $0.submittedEpoch = nil },
+            mutatedSoraFsPinRequest { $0.chunker = nil },
+            mutatedSoraFsChunker { $0.profileId = nil },
+            mutatedSoraFsChunker { $0.profileId = 0 },
+            mutatedSoraFsChunker { $0.namespace = " " },
+            mutatedSoraFsChunker { $0.semver = "" },
+            mutatedSoraFsPinRequest { $0.pinPolicy = nil },
+            mutatedSoraFsPinPolicy { $0.minReplicas = nil },
+            mutatedSoraFsPinPolicy { $0.minReplicas = 0 },
+            mutatedSoraFsPinPolicy { $0.storageClass = nil },
+            mutatedSoraFsPinPolicy { $0.storageClass = ToriiSoraFsStorageClass(type: "lava") },
+            mutatedSoraFsAlias { $0.namespace = "" },
+            mutatedSoraFsAlias { $0.proofBase64 = nil },
+            mutatedSoraFsAlias { $0.proofBase64 = "not base64!" },
+            mutatedSoraFsAlias { $0.proofBase64 = Data().base64EncodedString() },
+            mutatedSoraFsAlias {
+                $0.proofBase64 = Data("alias-proof".utf8).base64EncodedString() + "\n"
+            },
+        ]
+
+        var didSendRequest = false
+        StubURLProtocol.handler = { request in
+            didSendRequest = true
+            XCTFail("invalid SoraFS pin request should not be sent")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            return (response, Data("{}".utf8))
+        }
+
+        for request in invalidRequests {
+            didSendRequest = false
+            await XCTAssertThrowsErrorAsync(try await makeClient().registerSoraFsPinManifest(request)) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("expected invalidPayload, got \(error)")
+                }
+            }
+            XCTAssertFalse(didSendRequest)
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterSoraFsPinManifestRejectsMalformedResponse() async throws {
+        var didSendRequest = false
+        StubURLProtocol.handler = { request in
+            didSendRequest = true
+            XCTAssertEqual(request.url?.path, "/v1/sorafs/pin/register")
+            let responseObject: [String: Any] = [
+                "manifest_digest_hex": "abc123",
+                "chunker_handle": "sorafs.sf1@1.0.0",
+                "submitted_epoch": 42,
+                "content_length": 4096,
+                "pin_fee_nano": 500_000_000,
+                "pin_fee_asset_id": "xor#universal",
+                "pin_fee_treasury_account_id": "treasury@boi",
+            ]
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
+            return (response, body)
+        }
+
+        await XCTAssertThrowsErrorAsync(
+            try await makeClient().registerSoraFsPinManifest(makeValidSoraFsPinRegisterRequest())
+        ) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+        }
+        XCTAssertTrue(didSendRequest)
     }
 }
 

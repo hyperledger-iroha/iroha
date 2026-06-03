@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -33,8 +33,9 @@ track detailed unfinished engineering work.
   rotation/bootstrap encrypted-zero refresh digests, and refresh `c0`/`c1`
   coefficient-vector digests. JavaScript, Swift, Kotlin/JVM, and Java Android
   now validate those component-vector fields from the shared fixture, and the
-  JavaScript lane also carries adversarial fixture mutations for missing,
-  duplicate, zeroed, and count-drifted component metadata. A shared
+  JavaScript, Swift, Kotlin/JVM, and Java Android lanes also carry adversarial
+  fixture mutations for missing, noncanonical-case, duplicate, zeroed,
+  coefficient-count-drifted, and key-count-drifted component metadata. A shared
   signed/proof-attestation identifier receipt fixture now pins canonical payload
   bytes, Iroha prehash, resolver signature, signed/proof attestation bytes, and
   adversarial receipt/policy mutations across the Rust data model, JavaScript,
@@ -74,8 +75,25 @@ track detailed unfinished engineering work.
   chain id, receiver, amount, or policy hash across the Rust data-model, JS,
   Swift, Kotlin/JVM, Java Android, and Torii runtime fixture corridor, plus
   core ZK-ACE rotated/revoked identity state, unsupported action classes,
-  transaction digest/account substitution, and mutated ZK-ACE/STARK public
-  inputs;
+  transaction digest/account substitution, mutated ZK-ACE/STARK public inputs,
+  and shared `OpenVerifyEnvelope` admission validation for unsupported backend
+  tags, blank circuit identifiers, zero verifier-key hashes, empty or oversized
+  public inputs, empty or oversized proof bytes, and forbidden auxiliary
+  metadata, with the core IVM-proved overlay path now using the same validator
+  plus node/verifier-record proof-byte bounds before replay and verifier
+  dispatch and IVM host registered-key verify syscalls using it before registry
+  binding, schema matching, and backend verifier dispatch, plus the generic
+  verifier guardrail wrapper using it for decoded Halo2/STARK envelopes before
+  verifier dispatch and the lightweight preverify/dedup cache using it before
+  inserting recognized envelope failures, with the common chain proof metadata
+  helper using it before voting/generic-proof/STARK shielded circuit, schema,
+  and commitment matching and the confidential-transfer-v2 metadata helper
+  using it before confidential schema/circuit interpretation, plus ZK-ACE
+  authorized-transfer admission using it before public-input decoding and STARK
+  wrapper checks, direct Halo2 IPA/STARK verifier dispatch using it before
+  verifier-key matching or backend proof verification, and confidential
+  unshield v2/v3 adversarial coverage matching the transfer-v2 envelope shape
+  cases;
   remaining breadth should emphasize full cross-SDK RNS vectors and broader
   release validation.
 
@@ -159,8 +177,17 @@ track detailed unfinished engineering work.
   gateway policy suites under the next long validation budget. Focused coverage
   is now green for the paid-pin adversarial cases; remaining breadth should
   include historical fee receipt acceptance after governance pricing changes,
-  manifest envelope validation, admission fail-closed, streaming CAR range
-  coverage, and SDK validation once Java is available.
+  broader manifest-envelope lifecycle fixtures beyond the current
+  registry-metadata rotation and stale-envelope digest regression, streaming
+  CAR range coverage, and broader SDK validation beyond the current
+  JavaScript/Java/Kotlin/Python/C#/Swift pin-manifest guards for malformed
+  manifest digests, chunk digests, successor digests, alias proofs,
+  Java/Kotlin storage-class enum values, JavaScript/Python duplicate alias
+  spellings, numeric policy fields, and typed register-response normalization.
+  The Torii gateway adapter now fails closed for alias-proof or
+  malformed-envelope substitution when `require_manifest_envelope` is enabled
+  and rejects stale explicit envelopes after paid-pin registry metadata or
+  envelope-digest rotation.
 
 ## ZK audit validation follow-ups
 
@@ -192,6 +219,58 @@ track detailed unfinished engineering work.
   `require-verified` profiles only accept the C14N 1.0 + single enveloped
   transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,
   extra transforms, and duplicate `Sgntr` blocks now fail closed.
+- Completed 2026-06-02: bound XAdES `QualifyingProperties` objects to their
+  enclosing XMLDSig signature id. When a `QualifyingProperties` element is
+  present, the supported subset now requires exactly one such element inside a
+  single `Object`, requires a non-empty `Target="#..."`, and requires that
+  target to match the `Signature`/`Sgntr` `Id`; copied, duplicate,
+  mis-targeted, targetless, idless, or out-of-object XAdES properties fail
+  closed before signature admission.
+- Completed 2026-06-02: required XAdES `SignedProperties` to be
+  cryptographically referenced from `SignedInfo`. XAdES-bearing signatures now
+  need exactly one payload reference plus exactly one `Reference` whose URI
+  targets the `SignedProperties` `Id`, whose `Type` is the XAdES
+  SignedProperties reference type, and whose SHA-256 digest matches the
+  `SignedProperties` XML in the target-bound `QualifyingProperties` object.
+  Missing, wrong-URI, wrong-Type, digest-tampered, content-tampered, or
+  missing-element XAdES property references fail closed.
+- Completed 2026-06-02: bound XAdES `SigningCertificateV2` to X.509 signer
+  material. X.509 `KeyInfo` signatures with XAdES signed properties now require
+  a single `SigningCertificateV2` / `Cert` / `CertDigest` entry using the
+  supported SHA-256 digest method, and that digest must match the exact signer
+  leaf DER certificate admitted from `KeyInfo`. Missing, duplicate,
+  wrong-algorithm, wrong-digest, or raw-public-key-with-certificate-property
+  cases fail closed.
+- Completed 2026-06-02: made known `SigningCertificateV2` issuer/serial
+  metadata fail closed until the verifier binds it semantically. Digest-valid
+  `IssuerSerial`, `IssuerSerialV2`, prefixed `xades:IssuerSerialV2`, and
+  `X509IssuerSerial` material inside the XAdES certificate entry now fails
+  before X.509 signer admission.
+- Completed 2026-06-02: required the supported XAdES `SignedProperties`
+  structure to carry exactly one `SignedSignatureProperties` block with one
+  non-empty `SigningTime`. X.509 `SigningCertificateV2` signer evidence is now
+  accepted only from inside that `SignedSignatureProperties` block; missing or
+  duplicate signature-properties blocks, missing or duplicate signing times, and
+  `SigningCertificateV2` material outside `SignedSignatureProperties` fail
+  closed.
+- Completed 2026-06-02: tightened XAdES `SigningTime` admission to the
+  supported canonical UTC `YYYY-MM-DDTHH:MM:SSZ` subset with real calendar and
+  clock bounds. Whitespace-spliced values, offsets, fractional seconds,
+  non-ASCII digits, malformed widths, year zero, invalid leap days, invalid
+  month lengths, and out-of-range hours/minutes/seconds now fail closed even
+  when the `SignedProperties` digest and signature are otherwise internally
+  consistent.
+- Completed 2026-06-02: made the supported XAdES property subset fail closed
+  for property classes the verifier does not semantically process. The bridge
+  now rejects `SignedDataObjectProperties` and data-object transform metadata,
+  signed signature policy/place/role properties, and unsigned timestamp,
+  counter-signature, revocation, and archive property families even when the
+  `SignedProperties` digest and XMLDSig signature are internally consistent.
+- Completed 2026-06-02: added namespace-prefixed XMLDSig/XAdES fixture coverage.
+  The `require-verified` verifier now has a positive `ds:`/`xades:` signed
+  P-256 fixture whose prefixed `SignedInfo` is signed directly, plus a prefixed
+  unsupported-property negative case to prove local-name matching does not let
+  namespaced XAdES policy/place/role properties bypass the fail-closed subset.
 - Completed 2026-06-01: added profile-level
   `signature_public_key_sha256_pins` for `require-verified` XMLDSig/XAdES
   profiles. The verifier now fails closed without configured pins, accepts raw
@@ -236,6 +315,11 @@ track detailed unfinished engineering work.
   delegated responders, checks producedAt/thisUpdate/nextUpdate freshness, and
   rejects missing, revoked, unknown, duplicate, stale, malformed, or unauthored
   responses before using the X.509 leaf key.
+- Completed 2026-06-01: required delegated OCSP responder certificates in
+  X.509 XMLDSig revocation paths to mark KeyUsage critical when authorizing
+  `digitalSignature`. Otherwise-valid delegated responses whose embedded
+  responder certificate carries non-critical digitalSignature KeyUsage now fail
+  closed before OCSP coverage can satisfy the rail profile.
 - Completed 2026-06-01: added X.509 path-length constraint enforcement for
   trust-anchor-authorized XMLDSig key-info chains. The verifier now evaluates
   BasicConstraints `pathLenConstraint` values across intermediate CAs and
@@ -261,22 +345,70 @@ track detailed unfinished engineering work.
   the document-signing OID before either direct public-key pins or trust-anchor
   chains can authorize the XMLDSig key; incompatible server-auth-only signer
   leaves fail closed on both paths.
+- Completed 2026-06-01: required X.509 XMLDSig signer certificates to mark
+  KeyUsage critical when authorizing `digitalSignature`. Direct leaf public-key
+  pins and trust-anchor chains now both reject signer leaves whose KeyUsage
+  extension carries `digitalSignature` as a non-critical advisory extension.
 - Completed 2026-06-01: added X.509 Authority Key Identifier / Subject Key
   Identifier binding for trust-anchor XMLDSig chains. When a subordinate
   certificate presents an AKI key identifier and the issuer presents an SKI, the
   identifiers must match before the trust-anchor path can authorize the leaf
   key; issuer-name/signature-valid chains with mismatched key identifiers fail
   closed.
+- Completed 2026-06-01: tightened X.509 Authority Key Identifier issuer/serial
+  binding for trust-anchor XMLDSig chains. When a subordinate certificate
+  presents AKI authorityCertIssuer/authorityCertSerialNumber metadata, the
+  issuer directory name and serial must match the actual issuer certificate
+  before the trust-anchor path can authorize the leaf key; same-subject,
+  same-key trust-anchor substitutions with a different CA serial now fail
+  closed.
+- Completed 2026-06-01: required CA certificates in X.509 XMLDSig
+  trust-anchor chains to mark BasicConstraints critical. Trust anchors and
+  intermediates whose BasicConstraints CA:true extension is non-critical no
+  longer satisfy CA admission, even when keyCertSign is present and signatures
+  otherwise verify.
+- Completed 2026-06-01: required CA certificates in X.509 XMLDSig
+  trust-anchor chains to mark KeyUsage critical. Trust anchors and
+  intermediates whose KeyUsage carries `keyCertSign` but is non-critical no
+  longer satisfy CA admission, so issuer certificates must present both
+  critical BasicConstraints CA:true and critical KeyUsage keyCertSign before
+  they can authorize signer leaves.
+- Completed 2026-06-01: required X.509 NameConstraints on XMLDSig
+  trust-anchor chains to be critical. Constrained issuer certificates now fail
+  closed when the NameConstraints extension is non-critical, even if the
+  permitted/excluded subtree values would otherwise authorize the signer leaf.
 - Remaining ISO signature work is path-policy processing beyond policy OID
   presence/name constraints/path length/end-entity signer admission/
   unknown-critical extension handling/signer validity enforcement/signer EKU
-  purpose binding/AKI-SKI issuer binding.
+  purpose binding/AKI-SKI issuer binding/AKI issuer-serial binding/CA
+  BasicConstraints criticality/CA KeyUsage criticality/NameConstraints
+  criticality/signer KeyUsage criticality/delegated OCSP KeyUsage criticality.
 - Completed 2026-06-01: tightened ISO idempotency so replayed Business
   Application Header `BizMsgIdr` values are rejected across different durable
   message identifiers, including after durable-store reload. Live-profile
   validation now also has regression coverage proving recorded metadata carries
   the exact reference-data snapshot checksum and that checksum changes when the
   loaded reference snapshot provenance changes.
+- Completed 2026-06-02: tightened live-profile UETR admission and replay
+  coverage. Present UETR values now need the canonical UUID hyphen layout and
+  ASCII hex digits before profile metadata is produced; Swift CBPR+ coverage
+  rejects missing and malformed UETRs, exercises padded/malformed direct
+  validator inputs, and proves validated live-profile submissions still reject
+  duplicate Business Application Header `BizMsgIdr` values and case-drifted
+  duplicate UETRs across different durable message identifiers.
+- Completed 2026-06-02: tightened inbound lifecycle reference handling for
+  payment returns, cancellation requests, and securities settlement
+  confirmations. `pacs.004`, `camt.056`, and `sese.025` payloads that carry
+  conflicting original-message references now fail lifecycle id derivation and
+  inbound application before any candidate original record is mutated.
+- Completed 2026-06-02: tightened securities lifecycle durable identifiers and
+  fixture coverage. BAH-wrapped `sese.023`, `sese.024`, and `sese.025`
+  messages are now durably keyed by their transaction `TxId` with a message
+  type prefix, while `BizMsgIdr` remains profile/idempotency metadata; this lets
+  confirmations find the referenced `sese.023:<TxId>` record. Torii tests now
+  wrap the checked-in `sese.023`/`sese.025` XML fixtures in AppHdrs, validate
+  them through a securities CSD live profile with required reference datasets,
+  apply lifecycle state, and reject unsupported version and document-root drift.
 - Completed 2026-06-01: broadened live-profile mismatch and lifecycle
   transition coverage. Swift CBPR+ validation now has negative tests for
   unsupported message-definition versions and business services, while
@@ -303,12 +435,13 @@ track detailed unfinished engineering work.
   and `trusted_certificate_sha256` profile aliases while normalizing them into
   the stricter `signature_public_key_sha256_pins` and
   `x509_trust_anchor_sha256_pins` verifier inputs.
-- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
-  material, including full certificate-chain fixtures and official
-  rail/profile-specific trust-anchor packages.
-- Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
-  profile mismatch, cancellation/return transitions, reference snapshot
-  checksum expectations, and replay by business message id/UETR.
+- Broaden XMLDSig/XAdES fixture coverage beyond the current local fixture set,
+  including full certificate-chain fixtures and official rail/profile-specific
+  trust-anchor packages.
+- Add official MDR/XSD fixture coverage beyond the current live-profile
+  `pacs.008`/`pacs.009` corridor and keep broadening Torii tests for additional
+  lifecycle transition edge cases beyond the current family-mismatch and
+  conflicting-reference/BAH securities-linking guards.
 
 ## Soracles follow-ups
 

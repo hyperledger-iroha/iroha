@@ -51,7 +51,8 @@ use iroha_data_model::{
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
     zk::{
-        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1,
+        BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
+        OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
 use iroha_primitives::json::Json;
@@ -3486,6 +3487,11 @@ mod tests {
             replay.trace_hash,
         );
 
+        // Let oversized public-input metadata reach the shared envelope validator instead of
+        // the existing outer proof-size guard.
+        state.zk.halo2.max_envelope_bytes = usize::MAX;
+        state.zk.halo2.max_proof_bytes = usize::MAX;
+
         let build_tx =
             |events_commitment: Hash,
              gas_policy_commitment: Hash,
@@ -3515,37 +3521,69 @@ mod tests {
                     .sign(kp.private_key())
             };
 
-        let zero_vk_hash_tx = build_tx(
-            expected_events_commitment,
-            expected_gas_policy_commitment,
-            Some(|env| env.vk_hash = [0u8; 32]),
-        );
-        let err = build_overlay_for_transaction(&zero_vk_hash_tx, &state.view())
-            .expect_err("zero verifier-key hash must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg.contains("verifying key commitment mismatch")
+        let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 7] = [
+            (
+                "unsupported backend",
+                |env| env.backend = BackendTag::Unsupported,
+                "backend is unsupported",
             ),
-            "unexpected error: {err:?}"
-        );
-
-        let aux_tx = build_tx(
-            expected_events_commitment,
-            expected_gas_policy_commitment,
-            Some(|env| env.aux = b"ignored-hint".to_vec()),
-        );
-        let err = build_overlay_for_transaction(&aux_tx, &state.view())
-            .expect_err("auxiliary bytes must be rejected");
-        assert!(
-            matches!(
-                &err,
-                OverlayBuildError::ZkProof(msg)
-                    if msg.contains("proof envelope auxiliary bytes must be empty")
+            (
+                "empty circuit id",
+                |env| env.circuit_id.clear(),
+                "circuit id is empty",
             ),
-            "unexpected error: {err:?}"
-        );
+            (
+                "zero verifier-key hash",
+                |env| env.vk_hash = [0u8; 32],
+                "verifier-key hash is zero",
+            ),
+            (
+                "empty public inputs",
+                |env| env.public_inputs.clear(),
+                "public inputs are empty",
+            ),
+            (
+                "oversized public inputs",
+                |env| {
+                    env.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                },
+                "public inputs length",
+            ),
+            (
+                "empty proof bytes",
+                |env| env.proof_bytes.clear(),
+                "proof bytes are empty",
+            ),
+            (
+                "auxiliary bytes",
+                |env| env.aux = b"ignored-hint".to_vec(),
+                "auxiliary bytes must be empty",
+            ),
+        ];
+        for (label, mutate, expected_msg) in invalid_envelope_cases {
+            let tx = build_tx(
+                expected_events_commitment,
+                expected_gas_policy_commitment,
+                Some(mutate),
+            );
+            let err = match build_overlay_for_transaction(&tx, &state.view()) {
+                Ok(_) => panic!("{label} must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(
+                    &err,
+                    OverlayBuildError::ZkProof(msg)
+                        if msg.contains("invalid OpenVerifyEnvelope")
+                            && msg.contains(expected_msg)
+                ),
+                "unexpected {label} error: {err:?}"
+            );
+        }
 
         let bad_events_tx = build_tx(
             Hash::new(b"bad-events"),
@@ -5855,6 +5893,21 @@ where
     // Decode and sanity-check the OpenVerifyEnvelope carried in the proof box.
     let env: ZkOpenVerifyEnvelope = norito::decode_from_bytes(&attachment.proof.bytes)
         .map_err(|_| OverlayBuildError::ZkProof("malformed OpenVerifyEnvelope".to_owned()))?;
+    let max_envelope_proof_bytes = match backend_kind {
+        IvmProvedBackendKind::Halo2Ipa => zk_cfg.halo2.max_proof_bytes,
+        IvmProvedBackendKind::StarkFriV1 => zk_cfg.stark.max_proof_bytes,
+    };
+    let max_envelope_proof_bytes = if vk_record.max_proof_bytes > 0 {
+        max_envelope_proof_bytes
+            .min(usize::try_from(vk_record.max_proof_bytes).unwrap_or(usize::MAX))
+    } else {
+        max_envelope_proof_bytes
+    };
+    env.validate_with_bounds(ZkOpenVerifyEnvelopeBounds {
+        max_proof_bytes: max_envelope_proof_bytes,
+        ..ZkOpenVerifyEnvelopeBounds::default()
+    })
+    .map_err(|err| OverlayBuildError::ZkProof(format!("invalid OpenVerifyEnvelope: {err}")))?;
     match backend_kind {
         IvmProvedBackendKind::Halo2Ipa => {
             if env.backend != ZkBackendTag::Halo2IpaPasta {
@@ -5886,11 +5939,6 @@ where
         return Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required"
                 .to_owned(),
-        ));
-    }
-    if !env.aux.is_empty() {
-        return Err(OverlayBuildError::ZkProof(
-            "proof envelope auxiliary bytes must be empty".to_owned(),
         ));
     }
     let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();

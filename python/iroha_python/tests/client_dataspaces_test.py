@@ -247,6 +247,43 @@ def test_client_dataspace_smoke_counts_dataspace_catalog_lanes() -> None:
     assert smoke.dataspace_id == 42
 
 
+def test_client_dataspace_catalog_metadata_survives_backlog_entries() -> None:
+    client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
+    status = {
+        "dataspace_catalog": [
+            {
+                "alias": "is",
+                "dataspace_id": 6647857470246403404,
+                "lane_alias": "is",
+                "lane_id": 5,
+                "manifest_required": False,
+                "manifest_ready": False,
+                "sealed": False,
+                "storage_profile": "full_replica",
+                "visibility": "restricted",
+            }
+        ],
+        "teu_dataspace_backlog": [
+            {"alias": "is", "dataspace_id": 6647857470246403404, "lane_id": lane_id}
+            for lane_id in range(6)
+        ],
+    }
+
+    route = client.get_dataspace("is", status=status)
+    smoke = client.smoke_dataspace(
+        "is",
+        expected_dataspace_id=6647857470246403404,
+        status=status,
+    )
+
+    assert route is not None
+    assert route["visibility"] == "restricted"
+    assert route["lane_id"] == 5
+    assert smoke.ready is True
+    assert smoke.lane["visibility"] == "restricted"
+    assert smoke.lane["lane_id"] == 5
+
+
 def test_client_dataspace_smoke_rejects_wrong_expected_dataspace_id() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     status = {

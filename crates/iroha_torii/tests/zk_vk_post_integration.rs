@@ -104,7 +104,7 @@ async fn vk_register_update_return_202() {
         iroha_torii::json_entry("version", 1u64),
         iroha_torii::json_entry("circuit_id", "circuit_alpha"),
         iroha_torii::json_entry(
-            "public_inputs_schema_hex",
+            "public_inputs_schema_hash_hex",
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ),
         iroha_torii::json_entry("gas_schedule_id", "halo2_default"),
@@ -133,7 +133,7 @@ async fn vk_register_update_return_202() {
         iroha_torii::json_entry("version", 2u64),
         iroha_torii::json_entry("circuit_id", "circuit_alpha"),
         iroha_torii::json_entry(
-            "public_inputs_schema_hex",
+            "public_inputs_schema_hash_hex",
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ),
         iroha_torii::json_entry("gas_schedule_id", "halo2_default"),

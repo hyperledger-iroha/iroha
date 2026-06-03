@@ -109,9 +109,17 @@ import {
 import {
   getPrivacyAlgorithmDescriptor,
   getPrivacyAlgorithmDescriptors,
+  getPrivacyCapabilities,
   getPrivacyCriteria,
+  validatePrivacyAlgorithmDescriptor,
 } from "../src/privacyAlgorithms.js";
-import { buildZkAceTransferAuthorizationV1 } from "../src/crypto.js";
+import {
+  buildZkAceTransferAuthorizationV1,
+  isPrivacyNativeAvailable,
+  privacyBuildProofV1,
+  privacyCapabilitiesV1,
+  privacyVerifyProofV1,
+} from "../src/crypto.js";
 import {
   noritoDecodeInstruction,
   noritoDecodePrivacyProofEnvelope,
@@ -2090,8 +2098,8 @@ descriptorTest("privacy proof envelopes encode canonical open-verify metadata", 
     publicInputs,
     proofBytes,
     aux,
-    maxProofBytes: 64,
-    maxPublicInputBytes: 16,
+    max_proof_bytes: 64,
+    max_public_input_bytes: 16,
   });
   assert.ok(Buffer.isBuffer(encoded));
   const decoded = noritoDecodePrivacyProofEnvelope(encoded);
@@ -2104,6 +2112,157 @@ descriptorTest("privacy proof envelopes encode canonical open-verify metadata", 
   assert.deepEqual(decoded.public_inputs, Array.from(publicInputs));
   assert.deepEqual(decoded.proof_bytes, Array.from(proofBytes));
   assert.deepEqual(decoded.aux, Array.from(aux));
+});
+
+descriptorTest("privacy proof envelopes decode clean base64 byte strings", () => {
+  const vkHash = Buffer.alloc(32, 0x55);
+  const publicInputBase64 = "0102";
+  const proofBase64 = Buffer.from("stark-proof").toString("base64");
+  const auxBase64 = Buffer.from("{}").toString("base64");
+  const encoded = buildPrivacyProofEnvelope({
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash,
+    publicInputs: publicInputBase64,
+    proofBytes: proofBase64,
+    aux: auxBase64,
+    maxProofBytes: 64,
+    maxPublicInputBytes: 16,
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+  assert.deepEqual(
+    decoded.public_inputs,
+    Array.from(Buffer.from(publicInputBase64, "base64")),
+  );
+  assert.deepEqual(decoded.proof_bytes, Array.from(Buffer.from("stark-proof")));
+  assert.deepEqual(decoded.aux, Array.from(Buffer.from("{}")));
+});
+
+descriptorTest("privacy proof envelopes decode clean verifier-key hash strings", () => {
+  const expectedVkHash = Buffer.alloc(32, 0x55);
+  for (const vkHash of [
+    expectedVkHash.toString("hex"),
+    expectedVkHash.toString("base64"),
+  ]) {
+    const encoded = buildPrivacyProofEnvelope({
+      backend: "stark/fri/sha256-goldilocks",
+      circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+      vkHash,
+      publicInputs: Buffer.from([0x01]),
+      proofBytes: Buffer.from([0x02]),
+      maxProofBytes: 16,
+      maxPublicInputBytes: 16,
+    });
+    const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+    assert.deepEqual(decoded.vk_hash, Array.from(expectedVkHash));
+  }
+});
+
+descriptorTest("privacy proof envelopes accept explicit numeric byte arrays", () => {
+  const encoded = buildPrivacyProofEnvelope({
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash: Array(32).fill(0x55),
+    publicInputs: [0x01, 0x02],
+    proofBytes: [0x03, 0x04],
+    aux: [0x7b, 0x7d],
+    maxProofBytes: "16",
+    maxPublicInputBytes: "16",
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+  assert.deepEqual(decoded.vk_hash, Array(32).fill(0x55));
+  assert.deepEqual(decoded.public_inputs, [0x01, 0x02]);
+  assert.deepEqual(decoded.proof_bytes, [0x03, 0x04]);
+  assert.deepEqual(decoded.aux, [0x7b, 0x7d]);
+});
+
+descriptorTest("privacy proof envelopes accept explicit byte views", () => {
+  const publicInputBacking = Uint8Array.from([0x01, 0x02, 0xff]);
+  const encoded = buildPrivacyProofEnvelope({
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash: Uint8Array.from(Array(32).fill(0x55)),
+    publicInputs: new DataView(publicInputBacking.buffer, 0, 2),
+    proofBytes: Uint8Array.from([0x03, 0x04]).buffer,
+    aux: Uint8Array.from([0x7b, 0x7d]),
+    maxProofBytes: 16,
+    maxPublicInputBytes: 16,
+  });
+  const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+  assert.deepEqual(decoded.vk_hash, Array(32).fill(0x55));
+  assert.deepEqual(decoded.public_inputs, [0x01, 0x02]);
+  assert.deepEqual(decoded.proof_bytes, [0x03, 0x04]);
+  assert.deepEqual(decoded.aux, [0x7b, 0x7d]);
+});
+
+descriptorTest("privacy proof envelopes preserve pending production backend tags", () => {
+  const vkHash = Buffer.alloc(32, 0x66);
+  const cases = [
+    ["halo2-ipa-orchard", "Halo2IpaOrchard"],
+    ["halo2/ipa/orchard", "Halo2IpaOrchard"],
+    ["orchard", "Halo2IpaOrchard"],
+    ["zcash-orchard", "Halo2IpaOrchard"],
+    ["groth16-bls12-377", "Groth16Bls12377"],
+    ["groth16/bls12-377", "Groth16Bls12377"],
+    ["bls12-377", "Groth16Bls12377"],
+    ["decaf377", "Groth16Bls12377"],
+    ["masp", "Groth16Bls12377"],
+    ["penumbra-masp", "Groth16Bls12377"],
+    ["halo2/ipa/penumbra", "Groth16Bls12377"],
+    ["halo2/ipa/masp", "Groth16Bls12377"],
+    ["fcmp-plus-plus-curve-tree", "FcmpPlusPlusCurveTree"],
+    ["fcmp++", "FcmpPlusPlusCurveTree"],
+    ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
+    ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
+    ["halo2/ipa/curve-tree", "FcmpPlusPlusCurveTree"],
+    ["lattice-pcs-sis", "LatticePcsSis"],
+    ["jindo-lattice-pcs-zk", "LatticePcsSis"],
+    ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["miden-stark", "MidenStark"],
+    ["stark/fri/miden", "MidenStark"],
+    ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
+    ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["pq-masp-stark-fri", "PqMaspStarkFri"],
+    ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
+    ["post-quantum-masp", "PqMaspStarkFri"],
+    ["anonymous-pgc", "AnonymousPgc"],
+    ["anonymous-pgc-k-out-of-n", "AnonymousPgc"],
+    ["anonymous-pgc-k-out-of-n-v1", "AnonymousPgc"],
+    ["verange", "VeRange"],
+    ["verange-transparent-range", "VeRange"],
+    ["verange-transparent-range-v1", "VeRange"],
+    ["zkat", "ZkAt"],
+    ["zkAt policy-private authenticator", "ZkAt"],
+    ["zkat-policy-private-auth-v1", "ZkAt"],
+    ["recursive-anonymous-admission", "RecursiveAnonymousAdmission"],
+    ["recursive-anonymous-admission-v0", "RecursiveAnonymousAdmission"],
+    ["zk-ams-recursive-admission-v0", "RecursiveAnonymousAdmission"],
+    ["vega-existing-credential-zk", "VegaExistingCredentialZk"],
+    ["vega-existing-credential-zk-v0", "VegaExistingCredentialZk"],
+    ["silent-threshold-anoncred", "SilentThresholdAnoncred"],
+    ["silent-threshold-anoncred-v0", "SilentThresholdAnoncred"],
+    ["threshold-anonymous-credentials", "SilentThresholdAnoncred"],
+    ["zk-x509", "ZkX509"],
+    ["zkvm-x509-identity", "ZkX509"],
+    ["zk-x509-onchain-identity-v0", "ZkX509"],
+    ["sis-with-hints", "SisWithHints"],
+    ["sis-hints-anoncred-pq-v0", "SisWithHints"],
+    ["lattice-anonymous-credentials", "SisWithHints"],
+  ];
+
+  for (const [backend, expected] of cases) {
+    const encoded = buildPrivacyProofEnvelope({
+      backend,
+      circuitId: `${backend}:pending-production-shape-v0`,
+      vkHash,
+      publicInputs: Buffer.from([0x01]),
+      proofBytes: Buffer.from([0x02]),
+      maxProofBytes: 16,
+      maxPublicInputBytes: 16,
+    });
+    const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+    assert.equal(decoded.backend, expected);
+  }
 });
 
 descriptorTest("zkAt builders normalize policy commitments and authenticator envelopes", () => {
@@ -2199,6 +2358,8 @@ descriptorTest("zkAt builders reject malformed policy and authenticator inputs",
     { policyEpoch: 0 },
     { policyCommitment: Buffer.alloc(32, 0xee) },
     { policyJson: undefined, policyCommitment: undefined },
+    { maxPolicyBytes: undefined },
+    { maxPolicyBytes: null },
   ]) {
     assert.throws(
       () => buildZkAtPolicyCommitment({ ...base, ...patch }),
@@ -2208,6 +2369,8 @@ descriptorTest("zkAt builders reject malformed policy and authenticator inputs",
   for (const patch of [
     { policyEpoch: 0 },
     { payload: Buffer.from("payload"), txDigest: Buffer.alloc(32, 0xee) },
+    { maxPayloadBytes: undefined },
+    { maxPayloadBytes: null },
     { accountId: "alice@wonderland" },
     { actionClass: " " },
     { vkHash: Buffer.alloc(32) },
@@ -2220,7 +2383,7 @@ descriptorTest("zkAt builders reject malformed policy and authenticator inputs",
           proofBytes: Buffer.from("prepared-zkat-proof"),
           ...patch,
         }),
-      /(zkAtAuthenticatorEnvelope|privacyProofEnvelope)/,
+      /(zkAtAuthenticatorEnvelope|privacyProofEnvelope|maxPayloadBytes)/,
     );
   }
 });
@@ -2364,6 +2527,10 @@ descriptorTest("ZK-AMS builders reject malformed admission inputs", () => {
     { recursiveProofDigest: Buffer.alloc(32, 0xee) },
     { admissionBatchRoot: Buffer.alloc(32, 0xdd) },
     { maxBatchSize: 1 },
+    { maxBatchSize: undefined },
+    { maxBatchSize: null },
+    { maxRecursiveProofBytes: undefined },
+    { maxRecursiveProofBytes: null },
   ]) {
     assert.throws(
       () => buildZkAmsAdmissionBatch({ ...base, ...patch }),
@@ -2537,6 +2704,8 @@ descriptorTest("Vega builders reject malformed credential proof inputs", () => {
     { predicateJson: undefined, predicateCommitment: undefined },
     { credentialSchema: " " },
     { predicateCommitment: Buffer.alloc(32) },
+    { maxPredicateBytes: undefined },
+    { maxPredicateBytes: null },
   ]) {
     assert.throws(
       () => buildVegaCredentialPredicateCommitment({ ...predicateInput, ...patch }),
@@ -2554,6 +2723,10 @@ descriptorTest("Vega builders reject malformed credential proof inputs", () => {
     { proofBytes: Buffer.alloc(0) },
     { backend: "groth16" },
     { circuitId: "stark/fri/sha256-goldilocks:wrong" },
+    { maxIssuerBytes: undefined },
+    { maxIssuerBytes: null },
+    { maxPredicateBytes: undefined },
+    { maxPredicateBytes: null },
   ]) {
     assert.throws(
       () =>
@@ -2726,6 +2899,12 @@ descriptorTest("Silent threshold credential builders reject malformed inputs", (
     { verifierPolicyJson: undefined, verifierPolicyHash: undefined },
     { domainSeparator: " " },
     { issuerSetCommitment: Buffer.alloc(32) },
+    { maxIssuerSetBytes: undefined },
+    { maxIssuerSetBytes: null },
+    { maxPolicyBytes: undefined },
+    { maxPolicyBytes: null },
+    { maxShowingBytes: undefined },
+    { maxShowingBytes: null },
   ]) {
     assert.throws(
       () => buildSilentThresholdCredentialCommitments({ ...base, ...patch }),
@@ -2916,6 +3095,14 @@ descriptorTest("ZK-X.509 identity builders reject malformed inputs", () => {
     { accountId: ACCOUNT_ID, walletAddress: "wallet-address-alias" },
     { domainSeparator: " " },
     { caRootCommitment: Buffer.alloc(32) },
+    { maxCaRootBytes: undefined },
+    { maxCaRootBytes: null },
+    { maxPolicyBytes: undefined },
+    { maxPolicyBytes: null },
+    { maxRevocationBytes: undefined },
+    { maxRevocationBytes: null },
+    { maxSubjectBytes: undefined },
+    { maxSubjectBytes: null },
   ]) {
     assert.throws(
       () => buildZkX509IdentityCommitments({ ...base, ...patch }),
@@ -3103,6 +3290,14 @@ descriptorTest("Jindo lattice PCS builders reject malformed inputs", () => {
     { parametersJson: undefined, parameterHash: undefined },
     { domainSeparator: " " },
     { commitment: Buffer.alloc(32) },
+    { maxPolynomialBytes: undefined },
+    { maxPolynomialBytes: null },
+    { maxOpeningClaimBytes: undefined },
+    { maxOpeningClaimBytes: null },
+    { maxQuerySetBytes: undefined },
+    { maxQuerySetBytes: null },
+    { maxParameterBytes: undefined },
+    { maxParameterBytes: null },
   ]) {
     assert.throws(
       () => buildJindoLatticePublicInputs({ ...base, ...patch }),
@@ -3285,6 +3480,14 @@ descriptorTest("SIS-with-hints credential builders reject malformed inputs", () 
     { parametersJson: undefined, parameterHash: undefined },
     { domainSeparator: " " },
     { issuerCommitment: Buffer.alloc(32) },
+    { maxIssuerBytes: undefined },
+    { maxIssuerBytes: null },
+    { maxCredentialBytes: undefined },
+    { maxCredentialBytes: null },
+    { maxPolicyBytes: undefined },
+    { maxPolicyBytes: null },
+    { maxParameterBytes: undefined },
+    { maxParameterBytes: null },
   ]) {
     assert.throws(
       () => buildSisHintsCredentialCommitments({ ...base, ...patch }),
@@ -3508,6 +3711,8 @@ descriptorTest("Anonymous PGC builders reject malformed receiver and proof input
     { receiverSet: { ...receiverSet, receiver_set_commitment: Buffer.alloc(32, 0xaa) } },
     { anonymitySetRoot: Buffer.alloc(32) },
     { payload: Buffer.from("payload"), txDigest: Buffer.alloc(32, 0xee) },
+    { maxPayloadBytes: undefined },
+    { maxPayloadBytes: null },
     { balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x51)] },
     { rangeCommitments: [] },
     { linkTag: Buffer.alloc(32) },
@@ -3516,7 +3721,7 @@ descriptorTest("Anonymous PGC builders reject malformed receiver and proof input
   ]) {
     assert.throws(
       () => buildAnonymousPgcDevProofFixture({ ...baseFixture, ...patch }),
-      /anonymousPgcDevProofFixture/,
+      /anonymousPgcDevProofFixture|maxPayloadBytes/,
     );
   }
 });
@@ -3738,8 +3943,14 @@ descriptorTest("VeRange builders reject malformed commitments and unsafe envelop
     { backend: "groth16" },
     { circuitId: "other_range_v1" },
     { vkHash: Buffer.alloc(32) },
+    { maxPayloadBytes: undefined },
+    { maxPayloadBytes: null },
     { proofBytes: Buffer.alloc(0) },
     { maxProofBytes: 4 },
+    { maxProofBytes: undefined },
+    { maxProofBytes: null },
+    { maxPublicInputBytes: undefined },
+    { maxPublicInputBytes: null },
     { commitment: commitmentA },
   ]) {
     assert.throws(
@@ -3748,7 +3959,28 @@ descriptorTest("VeRange builders reject malformed commitments and unsafe envelop
           ...baseEnvelope,
           ...envelopePatch,
         }),
-      /(veRangeProofEnvelope|privacyProofEnvelope)/,
+      /(veRangeProofEnvelope|privacyProofEnvelope|maxPayloadBytes)/,
+    );
+  }
+
+  for (const fixturePatch of [
+    { maxProofBytes: undefined },
+    { maxProofBytes: null },
+    { maxPublicInputBytes: undefined },
+    { maxPublicInputBytes: null },
+  ]) {
+    assert.throws(
+      () =>
+        buildVeRangeDevProofFixture({
+          commitments: [commitmentA, commitmentB],
+          bitLength: 64,
+          commitmentScheme: "pedersen-v1",
+          domainSeparator: "boi:amount-range:v1",
+          payload,
+          vkHash: Buffer.alloc(32, 0x55),
+          ...fixturePatch,
+        }),
+      /veRangeDevProofFixture/,
     );
   }
 });
@@ -3890,9 +4122,39 @@ descriptorTest("privacy verifier key builders encode register and retire instruc
   assert.equal(retired.record.version, 2);
   assert.equal(retired.record.status, "Withdrawn");
   assert.equal(retired.record.withdraw_height, 12);
+
+  assert.throws(
+    () =>
+      buildRegisterPrivacyVerifierKeyInstruction({
+        id,
+        version: 1,
+        circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+        publicInputsSchemaHash: schemaHash,
+        commitment,
+        verifyingKeyBytes: keyBytes,
+        gasScheduleId: "privacy.verify.stark.dev",
+        activationHeight: 10,
+        withdrawHeight: 9,
+      }),
+    /withdrawHeight must be >= activationHeight/,
+  );
+  assert.throws(
+    () =>
+      buildRetirePrivacyVerifierKeyInstruction({
+        id,
+        record: {
+          ...register.verifying_keys.RegisterVerifyingKey.record,
+          activation_height: 10,
+          withdraw_height: 9,
+        },
+      }),
+    /withdrawHeight must be >= activationHeight/,
+  );
 });
 
 descriptorTest("privacy proof envelope builder rejects malformed and oversized inputs", () => {
+  const vkHashHex = Buffer.alloc(32, 0x55).toString("hex");
+  const vkHashBase64 = Buffer.alloc(32, 0x55).toString("base64");
   const base = {
     backend: "stark/fri/sha256-goldilocks",
     circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
@@ -3900,20 +4162,303 @@ descriptorTest("privacy proof envelope builder rejects malformed and oversized i
     publicInputs: Buffer.from([1, 2]),
     proofBytes: Buffer.from("proof"),
   };
+  const vkHashArrayLike = Object.assign(
+    { length: 32 },
+    Object.fromEntries(Array.from({ length: 32 }, (_, index) => [index, true])),
+  );
+  const missingBackend = {
+    circuitId: base.circuitId,
+    vkHash: base.vkHash,
+    publicInputs: base.publicInputs,
+    proofBytes: base.proofBytes,
+  };
+  const hiddenProductionReady = { ...base };
+  Object.defineProperty(hiddenProductionReady, "productionReady", {
+    value: true,
+  });
+  const symbolProductionReady = {
+    ...base,
+    [Symbol.for("productionReady")]: true,
+  };
+  class EnvelopeOptions {
+    constructor(fields) {
+      Object.assign(this, fields);
+    }
+  }
+  const classInstance = new EnvelopeOptions(base);
+  const accessorProofBytes = { ...base };
+  Object.defineProperty(accessorProofBytes, "proofBytes", {
+    enumerable: true,
+    get() {
+      return Buffer.from("proof");
+    },
+  });
   for (const payload of [
+    missingBackend,
+    hiddenProductionReady,
+    symbolProductionReady,
+    classInstance,
+    accessorProofBytes,
+    { ...base, backend: null },
     { ...base, backend: "mock/dev" },
+    { ...base, backend: " unsupported" },
+    { ...base, backend: "unsupported " },
+    { ...base, backend: " miden-stark" },
+    { ...base, backend: "miden-stark " },
+    { ...base, backend: " stark/fri/sha256-goldilocks" },
+    { ...base, backend: "stark/fri/sha256-goldilocks " },
+    { ...base, backend: "stark/fri/dev-fixture" },
+    { ...base, backend: "stark/fri/d-e-v-f-i-x-t-u-r-e" },
+    { ...base, backend: "stark/fri/dev" },
+    { ...base, backend: "stark/fri/d-e-v" },
+    { ...base, backend: "stark/fri/test" },
+    { ...base, backend: "stark/fri/t-e-s-t" },
+    { ...base, backend: "stark/fri/placeholder" },
+    { ...base, backend: "stark/fri/latest" },
+    { ...base, backend: "stark/fri/attestation" },
+    { ...base, backend: "stark/fri/contest" },
+    { ...base, backend: "stark/fri/random-profile" },
+    { ...base, backend: "stark/fri/sha512-goldilocks" },
+    { ...base, backend: "stark/fri/audit-proof-v1" },
+    { ...base, backend: "halo2\uFF0Fipa" },
+    { ...base, backend: "halo2/\u200Bipa" },
+    { ...base, backend: "h\u0430lo2/ipa" },
+    { ...base, backend: "stark\uFF0Ffri/sha256-goldilocks" },
+    { ...base, backend: "stark/fri/\u200Bsha256-goldilocks" },
+    { ...base, backend: "st\u0430rk/fri/sha256-goldilocks" },
+    { ...base, backend: "halo2/ipa:dev-fixture" },
+    { ...base, backend: "halo2/ipa:dev" },
+    { ...base, backend: "halo2/ipa:d-e-v" },
+    { ...base, backend: "halo2/ipa:dummy" },
+    { ...base, backend: "halo2/ipa:f-a-k-e" },
+    { ...base, backend: "halo2/ipa:stub" },
+    { ...base, backend: "halo2/ipa:s-a-m-p-l-e" },
+    { ...base, backend: "halo2/ipa/orchard/dev-fixture" },
+    { ...base, backend: "stark/fri/miden/claimed-production" },
+    { ...base, backend: "anonymous-pgc-k-out-of-n-v1-production" },
+    { ...base, backend: "sis-hints-anoncred-pq-v0-devfixture" },
+    { ...base, backend: "groth16/bls12-377/../../prod" },
+    { ...base, backend: "post-quantum-masp/audit-claimed" },
     { ...base, circuitId: " " },
+    { ...base, circuitId: " shape" },
+    { ...base, circuitId: "shape " },
+    { ...base, circuitId: "\tshape" },
+    { ...base, circuitId: "shape\n" },
     { ...base, vkHash: Buffer.alloc(32) },
+    { ...base, vkHash: ` ${vkHashHex}` },
+    { ...base, vkHash: `${vkHashHex} ` },
+    { ...base, vkHash: ` ${vkHashBase64}` },
+    { ...base, vkHash: `${vkHashBase64}\n` },
+    { ...base, vkHash: normalizedHashHex(Buffer.alloc(32, 0x55)) },
+    { ...base, vkHash: Array(32).fill(true) },
+    { ...base, vkHash: Array(32).fill("1") },
     { ...base, publicInputs: Buffer.alloc(0) },
     { ...base, proofBytes: Buffer.alloc(0) },
+    { ...base, publicInputs: [true] },
+    { ...base, publicInputs: ["1"] },
+    { ...base, publicInputs: { 0: true, length: 1 } },
+    { ...base, proofBytes: [false, true] },
+    { ...base, proofBytes: [null] },
+    { ...base, proofBytes: { 0: false, 1: true, length: 2 } },
+    { ...base, aux: [true] },
+    { ...base, aux: ["1"] },
+    { ...base, aux: { 0: true, length: 1 } },
+    { ...base, vkHash: vkHashArrayLike },
+    { ...base, publicInputs: new Int16Array([256]) },
+    { ...base, proofBytes: new Float32Array([1.5]) },
+    { ...base, aux: new Uint8ClampedArray([300]) },
+    { ...base, proofBytes: new Int8Array([-1]) },
+    { ...base, vkHash: new Uint16Array(16).fill(0x5555) },
+    { ...base, publicInputs: "proof" },
+    { ...base, proofBytes: "proof" },
+    { ...base, aux: "proof" },
+    { ...base, publicInputs: " AQI=" },
+    { ...base, publicInputs: "AQ I=" },
+    { ...base, proofBytes: "AQI= " },
+    { ...base, aux: "e30=\n" },
     { ...base, proofBytes: Buffer.from("proof"), maxProofBytes: 2 },
     { ...base, publicInputs: Buffer.from([1, 2]), maxPublicInputBytes: 1 },
+    { ...base, maxProofBytes: undefined },
+    { ...base, maxProofBytes: null },
+    { ...base, maxPublicInputBytes: undefined },
+    { ...base, maxPublicInputBytes: null },
+    { ...base, maxProofBytes: "016" },
+    { ...base, maxProofBytes: " 16" },
+    { ...base, maxProofBytes: "16 " },
+    { ...base, maxProofBytes: "16\n" },
+    { ...base, maxPublicInputBytes: "016" },
+    { ...base, maxPublicInputBytes: " 16" },
+    { ...base, maxPublicInputBytes: "16 " },
+    { ...base, maxPublicInputBytes: "16\n" },
+    { ...base, maxProofBytes: 64, max_proof_bytes: 64 },
+    { ...base, maxProofBytes: 64, max_proof_bytes: 2 },
+    { ...base, maxPublicInputBytes: 64, max_public_input_bytes: 64 },
+    { ...base, maxPublicInputBytes: 64, max_public_input_bytes: 1 },
     { ...base, vkHash: Buffer.alloc(32, 0x55), vk_hash: Buffer.alloc(32, 0x66) },
+    { ...base, production: true },
+    { ...base, productionReady: true },
+    { ...base, production_ready: true },
+    { ...base, productionGate: { ready: true } },
+    { ...base, production_gate: { ready: true } },
   ]) {
     assert.throws(
       () => buildPrivacyProofEnvelope(payload),
       /privacyProofEnvelope/,
     );
+  }
+});
+
+descriptorTest("privacy dev proof fixture builders reject production readiness claims", () => {
+  const anonymousPgcReceiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [
+      {
+        accountCommitment: Buffer.alloc(32, 0x21),
+        ciphertextCommitment: Buffer.alloc(32, 0x31),
+      },
+      {
+        accountCommitment: Buffer.alloc(32, 0x22),
+        ciphertextCommitment: Buffer.alloc(32, 0x32),
+      },
+    ],
+  });
+  const devFixtureCases = [
+    [
+      "zkAt",
+      buildZkAtDevProofFixture,
+      {
+        policyJson: { threshold: 2, roles: ["ops", "risk", "treasury"] },
+        policyEpoch: 7,
+        policySchema: "boi-hidden-threshold-v1",
+        payload: Buffer.from("zkat:transparent-transfer:42"),
+        accountId: ACCOUNT_ID,
+        actionClass: "transparent_transfer",
+        domainSeparator: "boi:zkat:v1",
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+    [
+      "ZK-AMS",
+      buildZkAmsAdmissionDevProofFixture,
+      {
+        issuerRoot: Buffer.alloc(32, 0x91),
+        admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+        anonymousAccountCommitments: [
+          Buffer.alloc(32, 0xb1),
+          Buffer.alloc(32, 0xb2),
+        ],
+        recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+        domainSeparator: "boi:zk-ams:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x66),
+      },
+    ],
+    [
+      "Vega",
+      buildVegaCredentialDevProofFixture,
+      {
+        issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+        predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+        credentialSchema: "boi-age-credential-v1",
+        accountId: ACCOUNT_ID,
+        expirationEpoch: 42,
+        domainSeparator: "boi:vega:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x77),
+      },
+    ],
+    [
+      "Silent Threshold",
+      buildSilentThresholdCredentialDevProofFixture,
+      {
+        issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+        thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+        credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+        verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+        domainSeparator: "boi:silent-threshold:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x88),
+      },
+    ],
+    [
+      "ZK-X.509",
+      buildZkX509IdentityDevProofFixture,
+      {
+        caRootJson: { root: "boi-root-ca", version: 1 },
+        certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+        revocationJson: { epoch: 7, root: "revocation-root" },
+        subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+        accountId: ACCOUNT_ID,
+        domainSeparator: "boi:zk-x509:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x99),
+      },
+    ],
+    [
+      "Jindo",
+      buildJindoLatticeDevProofFixture,
+      {
+        polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+        openingClaimJson: { point: "x=42", value_digest: "value" },
+        querySetJson: { queries: [0, 7, 42] },
+        parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+        domainSeparator: "boi:jindo:pcs:pilot:v0",
+        vkHash: Buffer.alloc(32, 0xaa),
+      },
+    ],
+    [
+      "SIS-with-hints",
+      buildSisHintsCredentialDevProofFixture,
+      {
+        issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+        credentialJson: { credential_type: "wallet", nonce: "n-1" },
+        showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+        parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+        domainSeparator: "boi:sis-hints:pilot:v0",
+        vkHash: Buffer.alloc(32, 0xbb),
+      },
+    ],
+    [
+      "Anonymous PGC",
+      buildAnonymousPgcDevProofFixture,
+      {
+        receiverSet: anonymousPgcReceiverSet,
+        anonymitySetRoot: Buffer.alloc(32, 0x41),
+        payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+        balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+        linkTag: Buffer.alloc(32, 0x61),
+        rangeCommitments: [Buffer.alloc(32, 0x71)],
+        chainId: "boi-localnet",
+        domainSeparator: "boi:anonymous-pgc:v1",
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+    [
+      "VeRange",
+      buildVeRangeDevProofFixture,
+      {
+        commitments: [Buffer.alloc(32, 0x44), Buffer.alloc(32, 0x45)],
+        bitLength: 64,
+        commitmentScheme: "pedersen-v1",
+        domainSeparator: "boi:amount-range:v1",
+        payload: Buffer.from("transfer:alice@wonderland:bob@wonderland:42"),
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+  ];
+
+  for (const [name, builder, input] of devFixtureCases) {
+    const fixture = builder(input);
+    assert.equal(fixture.production, false, `${name} fixture must stay dev-only`);
+    for (const [field, value] of [
+      ["production", true],
+      ["productionReady", true],
+      ["production_ready", true],
+      ["productionGate", { ready: true }],
+      ["production_gate", { ready: true }],
+    ]) {
+      assert.throws(
+        () => builder({ ...input, [field]: value }),
+        new RegExp(field),
+        `${name} fixture builder accepted ${field}`,
+      );
+    }
   }
 });
 
@@ -3928,17 +4473,138 @@ descriptorTest("privacy verifier key builders reject unsafe registry records", (
     maxProofBytes: 4096,
     gasScheduleId: "privacy.verify.stark.dev",
   };
+  const baseWithoutInlineKey = { ...base };
+  delete baseWithoutInlineKey.verifyingKeyBytes;
   for (const payload of [
+    { ...base, record: undefined },
+    { ...base, record: null },
     { ...base, id: "mock/dev:vk" },
+    { ...base, id: "stark/fri/dev-fixture:vk" },
+    { ...base, id: "stark/fri/d-e-v-f-i-x-t-u-r-e:vk" },
+    { ...base, id: "stark/fri/dev:vk" },
+    { ...base, id: "stark/fri/d-e-v:vk" },
+    { ...base, id: "stark/fri/test:vk" },
+    { ...base, id: "stark/fri/t-e-s-t:vk" },
+    { ...base, id: "stark/fri/placeholder:vk" },
+    { ...base, id: "stark/fri/latest:vk" },
+    { ...base, id: "stark/fri/attestation:vk" },
+    { ...base, id: "stark/fri/contest:vk" },
+    { ...base, id: "stark/fri/random-profile:vk" },
+    { ...base, id: "stark/fri/sha512-goldilocks:vk" },
+    { ...base, id: "stark/fri/audit-proof-v1:vk" },
+    { ...base, id: "halo2/ipa:dev-fixture:vk" },
+    { ...base, id: "halo2/ipa:dev:vk" },
+    { ...base, id: "halo2/ipa:d-e-v:vk" },
+    { ...base, id: "halo2/ipa:dummy:vk" },
+    { ...base, id: "halo2/ipa:f-a-k-e:vk" },
+    { ...base, id: "halo2/ipa:stub:vk" },
+    { ...base, id: "halo2/ipa:s-a-m-p-l-e:vk" },
+    { ...base, id: "halo2/unknown-native-v1:vk" },
+    { ...base, id: " halo2/ipa:vk" },
+    { ...base, id: "halo2/ipa :vk" },
+    { ...base, id: "\thalo2/ipa:vk" },
+    { ...base, id: "halo2\uFF0Fipa:vk" },
+    { ...base, id: "halo2/\u200Bipa:vk" },
+    { ...base, id: "h\u0430lo2/ipa:vk" },
+    { ...base, id: "stark/fri/sha256-goldilocks :vk" },
+    { ...base, id: "stark\uFF0Ffri/sha256-goldilocks:vk" },
+    { ...base, id: "stark/fri/\u200Bsha256-goldilocks:vk" },
+    { ...base, id: "st\u0430rk/fri/sha256-goldilocks:vk" },
+    { ...base, id: { backend: "halo2/ipa:unknown-native-v1", name: "vk" } },
+    { ...base, id: { backend: "stark/unknown-native-v1", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/tiny-add", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/tiny-add", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:tiny-add", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/tiny-commit-open", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/anon-transfer-2x2", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/anon-transfer-2x2", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:anon-transfer-2x2", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/anon-transfer-2x2-merkle2", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/anon-transfer-2x2-merkle8", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:anon-transfer-2x2-merkle16", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/vote-bool-commit", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/vote-bool-commit", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:vote-bool-commit", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/vote-bool-commit-merkle2", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/vote-bool-commit-merkle8", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:vote-bool-commit-merkle16", name: "vk" } },
+    { ...base, id: { backend: "halo2/pasta/asset-hidden-transfer-public-test", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa/asset-hidden-transfer-public-test", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa:asset-hidden-transfer-public-test", name: "vk" } },
+    { ...base, id: { backend: " halo2/ipa", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa ", name: "vk" } },
+    { ...base, id: { backend: "\thalo2/ipa", name: "vk" } },
+    { ...base, id: { backend: "halo2/ipa\n", name: "vk" } },
+    { ...base, id: { backend: "halo2\uFF0Fipa", name: "vk" } },
+    { ...base, id: { backend: "halo2/\u200Bipa", name: "vk" } },
+    { ...base, id: { backend: "h\u0430lo2/ipa", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/miden", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/latest", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/attestation", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/contest", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/random-profile", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/sha512-goldilocks", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/audit-proof-v1", name: "vk" } },
+    { ...base, id: { backend: " stark/fri/sha256-goldilocks", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/sha256-goldilocks ", name: "vk" } },
+    { ...base, id: { backend: "stark\uFF0Ffri/sha256-goldilocks", name: "vk" } },
+    { ...base, id: { backend: "stark/fri/\u200Bsha256-goldilocks", name: "vk" } },
+    { ...base, id: { backend: "st\u0430rk/fri/sha256-goldilocks", name: "vk" } },
+    { ...base, id: { backend: "halo2/kzg", name: "vk" } },
     { ...base, backendTag: "Groth16" },
     { ...base, curve: "Pallas" },
     { ...base, publicInputsSchemaHash: Buffer.alloc(32) },
     { ...base, commitment: Buffer.alloc(32) },
     { ...base, maxProofBytes: 0 },
+    { ...base, maxProofBytes: undefined },
+    { ...base, maxProofBytes: null },
+    { ...base, maxProofBytes: 4096, max_proof_bytes: 4096 },
+    { ...base, backendTag: undefined },
+    { ...base, backendTag: null },
     { ...base, gasScheduleId: " " },
     { ...base, status: "Withdrawn" },
+    { ...baseWithoutInlineKey, key: undefined },
+    { ...baseWithoutInlineKey, key: null },
     { ...base, key: { backend: "halo2/ipa", bytes: Buffer.from("vk") } },
+    {
+      ...baseWithoutInlineKey,
+      key: {
+        backend: undefined,
+        backendId: "stark/fri/sha256-goldilocks",
+        bytes: Buffer.from("vk"),
+      },
+    },
+    {
+      ...baseWithoutInlineKey,
+      key: {
+        backend: "stark/fri/sha256-goldilocks",
+        backendId: "stark/fri/sha256-goldilocks",
+        bytes: Buffer.from("vk"),
+      },
+    },
+    {
+      ...baseWithoutInlineKey,
+      key: {
+        bytes: undefined,
+        keyBytes: Buffer.from("vk"),
+      },
+    },
+    {
+      ...baseWithoutInlineKey,
+      key: {
+        bytes: Buffer.from("vk"),
+        keyBytes: Buffer.from("vk"),
+      },
+    },
+    {
+      ...baseWithoutInlineKey,
+      key: {
+        backend: "stark/fri/sha256-goldilocks",
+      },
+    },
     { ...base, verifyingKeyBytes: Buffer.from("vk"), vkLen: 999 },
+    { ...base, vkLen: undefined },
+    { ...base, vkLen: null },
     { ...base, circuitId: "a", circuit_id: "b" },
   ]) {
     assert.throws(
@@ -4244,7 +4910,7 @@ descriptorTest("privacy algorithm descriptors expose 2025-2026 BOI research targ
   assert.equal(zkAms.implementationStage, "sdk-builder");
   assert.equal(
     zkAms.publicInputsSchema,
-    "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_proof_digest,domain_separator",
+    "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
   );
   assert.deepEqual(zkAms.sdkEntrypoints, [
     "buildZkAmsAdmissionBatch",
@@ -4374,6 +5040,34 @@ descriptorTest("privacy algorithm descriptors only advertise exported SDK entryp
 descriptorTest("privacy algorithm descriptors enforce PQ and catalog availability invariants", () => {
   const criteria = new Set(getPrivacyCriteria());
   const ids = new Set();
+  const expectedProductionGateEntries = [
+    ["real_proving", false],
+    ["real_verification", false],
+    ["chain_admission", false],
+    ["sdk_parity", false],
+    ["wallet_state", false],
+    ["deterministic_tests", false],
+    ["fuzzing", false],
+    ["performance_gates", false],
+    ["external_audit", false],
+  ];
+  const requiredProductionGateMissing = [
+    "real proving engine is not registered",
+    "real verifier is not registered",
+    "chain admission path is not enabled",
+    "cross-SDK parity is incomplete",
+    "wallet/state support is incomplete",
+    "deterministic tests are incomplete",
+    "fuzzing gate is incomplete",
+    "performance gate is incomplete",
+    "external audit signoff is missing",
+  ];
+  const supplementalProductionGateMissing = [
+    "implementation stage is not production-hardened",
+    "planned SDK entrypoints remain",
+    "dev fixture entrypoints are not production entrypoints",
+    "Iroha production allowlist is not enabled for this audited row",
+  ];
   const allowedCategories = new Set([
     "payment",
     "authorization",
@@ -4393,6 +5087,43 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
   for (const descriptor of getPrivacyAlgorithmDescriptors()) {
     assert.equal(ids.has(descriptor.id), false, `${descriptor.id} must be unique`);
     ids.add(descriptor.id);
+    assert.equal(descriptor.productionReady, false, `${descriptor.id} productionReady`);
+    assert.equal(descriptor.productionGate.version, "privacy-production-gate-v1");
+    assert.equal(descriptor.productionGate.ready, false, `${descriptor.id} production gate`);
+    assert.deepEqual(Object.entries(descriptor.productionGate.gates), expectedProductionGateEntries);
+    assert.deepEqual(
+      descriptor.productionGate.missing,
+      [
+        ...requiredProductionGateMissing,
+        ...supplementalProductionGateMissing.filter((reason) =>
+          descriptor.productionGate.missing.includes(reason),
+        ),
+      ],
+      `${descriptor.id} production gate missing reasons must stay canonical`,
+    );
+    assert.ok(
+      descriptor.productionGate.missing.includes("external audit signoff is missing"),
+      `${descriptor.id} must remain blocked without audit signoff`,
+    );
+    assert.ok(
+      descriptor.productionGate.missing.includes(
+        "Iroha production allowlist is not enabled for this audited row",
+      ),
+      `${descriptor.id} must remain blocked without explicit production allowlist`,
+    );
+    if (
+      descriptor.sdkEntrypoints.some((entrypoint) =>
+        entrypoint.toLowerCase().includes("devprooffixture") ||
+        entrypoint.toLowerCase().includes("devfixture")
+      )
+    ) {
+      assert.ok(
+        descriptor.productionGate.missing.includes(
+          "dev fixture entrypoints are not production entrypoints",
+        ),
+        `${descriptor.id} dev fixtures cannot satisfy production gate`,
+      );
+    }
     assert.equal(allowedCategories.has(descriptor.category), true, `${descriptor.id} category`);
     assert.equal(allowedMaturities.has(descriptor.maturity), true, `${descriptor.id} maturity`);
     assert.match(descriptor.implementationStage ?? "implementation-stage-unset", /^[a-z0-9][a-z0-9-]*(?:-[a-z0-9]+)*(?:-as-of-\d{4}-\d{2})?$/);
@@ -4441,17 +5172,758 @@ descriptorTest("privacy algorithm descriptors enforce PQ and catalog availabilit
   }
 });
 
+function mutablePrivacyDescriptor(id = "transparent-transfer") {
+  const descriptor = getPrivacyAlgorithmDescriptor(id);
+  assert.ok(descriptor);
+  const { backendFamily, productionReady, productionGate, ...rawDescriptor } = descriptor;
+  void backendFamily;
+  void productionReady;
+  void productionGate;
+  return {
+    ...rawDescriptor,
+    coveredCriteria: [...descriptor.coveredCriteria],
+    pqLayers: { ...descriptor.pqLayers },
+    recommendedFor: [...descriptor.recommendedFor],
+    sourceReferences: descriptor.sourceReferences.map((reference) => ({ ...reference })),
+    securityNotes: [...descriptor.securityNotes],
+    requiredState: [...descriptor.requiredState],
+    failureModes: [...descriptor.failureModes],
+    setupSteps: [...descriptor.setupSteps],
+    executionSteps: [...descriptor.executionSteps],
+    sdkEntrypoints: [...descriptor.sdkEntrypoints],
+    plannedSdkEntrypoints: [...descriptor.plannedSdkEntrypoints],
+    chainRequirements: [...descriptor.chainRequirements],
+  };
+}
+
+function withPrivacyNativeBinding(binding, body) {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = binding;
+  try {
+    return body();
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+}
+
+function privacyNoritoFrame(schemaByte) {
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  frame.fill(schemaByte, 6, 22);
+  return frame;
+}
+
+function privacyNoritoFrameWithPayload(schemaByte) {
+  const frame = Buffer.concat([
+    privacyNoritoFrame(schemaByte),
+    Buffer.from([0x00, 0x00, 0xa5, 0x5a, 0x11]),
+  ]);
+  frame.writeBigUInt64LE(3n, 23);
+  Buffer.from([0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24]).copy(frame, 31);
+  return frame;
+}
+
+function privacyNoritoFrameWithSchemaOverride(schemaByte, offset, value) {
+  const frame = Buffer.from(privacyNoritoFrameWithPayload(schemaByte));
+  frame[offset] = value;
+  return frame;
+}
+
+function completePrivacyNativeBinding(overrides = {}) {
+  return {
+    connectNoritoBridgeAbiVersion() {
+      return 6;
+    },
+    privacyCapabilitiesV1() {
+      return privacyNoritoFrameWithPayload(0x50);
+    },
+    privacyBuildProofV1() {
+      return privacyNoritoFrameWithPayload(0x42);
+    },
+    privacyVerifyProofV1() {
+      return privacyNoritoFrameWithPayload(0x56);
+    },
+    ...overrides,
+  };
+}
+
+descriptorTest("privacy algorithm descriptor validator rejects adversarial availability claims", () => {
+  const rawDescriptor = mutablePrivacyDescriptor("pq-masp-stark-v0");
+  const validated = validatePrivacyAlgorithmDescriptor(rawDescriptor);
+  assert.equal(validated.id, "pq-masp-stark-v0");
+  assert.equal(validated.productionReady, false);
+  assert.equal(validated.productionGate.ready, false);
+  assert.equal(Object.isFrozen(validated), true);
+  assert.equal(Object.isFrozen(validated.pqLayers), true);
+  assert.equal(Object.isFrozen(validated.sdkEntrypoints), true);
+  assert.equal(Object.isFrozen(validated.productionGate), true);
+  assert.equal(Object.isFrozen(validated.productionGate.gates), true);
+
+  rawDescriptor.id = "tampered";
+  rawDescriptor.pqLayers.proof = false;
+  rawDescriptor.sdkEntrypoints.push("tamperedEntrypoint");
+  rawDescriptor.sourceReferences[0].url = "https://tampered.invalid";
+  assert.equal(validated.id, "pq-masp-stark-v0");
+  assert.equal(validated.pqLayers.proof, true);
+  assert.equal(validated.sdkEntrypoints.includes("tamperedEntrypoint"), false);
+  assert.equal(validated.sourceReferences[0].url.startsWith("https://tampered.invalid"), false);
+  assert.throws(() => {
+    validated.productionReady = true;
+  });
+  assert.throws(() => {
+    validated.productionGate.ready = true;
+  });
+
+  assert.throws(
+    () => validatePrivacyAlgorithmDescriptor({
+      ...mutablePrivacyDescriptor(),
+      implementationStage: "production-hardened",
+      sdkEntrypoints: ["buildFutureDev.Proof.Fixture"],
+      plannedSdkEntrypoints: [],
+    }),
+    /production-hardened targets cannot advertise fixture\/mock SDK entrypoints/,
+  );
+
+  const namespaced = validatePrivacyAlgorithmDescriptor({
+    ...mutablePrivacyDescriptor(),
+    sdkEntrypoints: ["Iroha.Privacy.buildProof"],
+    plannedSdkEntrypoints: ["Iroha.Privacy.buildFutureProof"],
+  });
+  assert.deepEqual(namespaced.sdkEntrypoints, ["Iroha.Privacy.buildProof"]);
+  assert.deepEqual(namespaced.plannedSdkEntrypoints, ["Iroha.Privacy.buildFutureProof"]);
+
+  for (const [label, patch, message] of [
+    [
+      "status",
+      { status: "available" },
+      /field status is derived and must not be supplied/,
+    ],
+    [
+      "hidden features",
+      { hiddenFeatures: ["hide_sender"] },
+      /field hiddenFeatures is derived and must not be supplied/,
+    ],
+    [
+      "verifier metadata",
+      { verifierKeyMetadata: { proofFamily: "fake" } },
+      /field verifierKeyMetadata is derived and must not be supplied/,
+    ],
+    [
+      "backend family",
+      { backendFamily: "fake-backend" },
+      /field backendFamily is derived and must not be supplied/,
+    ],
+    [
+      "production ready",
+      { productionReady: true },
+      /field productionReady is derived and must not be supplied/,
+    ],
+    [
+      "production gate",
+      { productionGate: { ready: true } },
+      /field productionGate is derived and must not be supplied/,
+    ],
+    [
+      "mainnet-ready summary",
+      { summary: "Mainnet-ready audited production proof." },
+      /summary must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    [
+      "claim-only summary",
+      { summary: "Claimed production proof." },
+      /summary must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    [
+      "claim-only short name",
+      { shortName: "Audit claim" },
+      /shortName must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    [
+      "claim-only recommendation",
+      { recommendedFor: ["claimed audit rollout"] },
+      /recommendedFor\[0\] must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    [
+      "claim-only chain requirement",
+      { chainRequirements: ["production-ready verifier"] },
+      /chainRequirements\[0\] must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    [
+      "claim-only setup step",
+      { setupSteps: ["Install audit claim verifier"] },
+      /setupSteps\[0\] must not claim production\/mainnet\/audit readiness before production gates pass/,
+    ],
+    ["category", { category: "payments" }, /category must be a known category/],
+    ["maturity", { maturity: "blog_post" }, /maturity must be a known maturity/],
+    [
+      "implementation stage",
+      { implementationStage: "Chain-Executable" },
+      /implementationStage must be a lowercase hyphenated identifier/,
+    ],
+    [
+      "backend family registration",
+      { id: "unmapped-backend-family" },
+      /missing backend family metadata/,
+    ],
+    [
+      "unknown criterion",
+      { coveredCriteria: ["hide_sender", "forged_availability"] },
+      /coveredCriteria\[1\] must be a known privacy criterion/,
+    ],
+    [
+      "duplicate criterion",
+      { coveredCriteria: ["hide_sender", "hide_sender"] },
+      /coveredCriteria\[1\] duplicates hide_sender/,
+    ],
+    ["empty sdk entrypoint", { sdkEntrypoints: [""] }, /sdkEntrypoints\[0\] must be a non-empty string/],
+    [
+      "control-character sdk entrypoint",
+      { sdkEntrypoints: ["buildProof\nwithSuffix"] },
+      /sdkEntrypoints\[0\] must be clean and already trimmed/,
+    ],
+    [
+      "completed audit security note",
+      { securityNotes: ["External audit completed and production sign-off received."] },
+      /securityNotes\[0\] must describe missing audit\/review gates, not completed audit or signoff claims/,
+    ],
+    [
+      "claim-only audit security note",
+      { securityNotes: ["Claimed audit coverage is present."] },
+      /securityNotes\[0\] must describe missing audit\/review gates, not completed audit or signoff claims/,
+    ],
+    [
+      "completed audit failure mode",
+      { failureModes: ["External audit completed."] },
+      /failureModes\[0\] must describe concrete failure modes, not completed audit or signoff claims/,
+    ],
+    [
+      "claim-only mainnet failure mode",
+      { failureModes: ["Mainnet claim accepted by reviewer."] },
+      /failureModes\[0\] must describe concrete failure modes, not completed audit or signoff claims/,
+    ],
+    [
+      "shell-like planned entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureProof;rm"] },
+      /plannedSdkEntrypoints\[0\] must be an SDK entrypoint name/,
+    ],
+    [
+      "duplicate sdk entrypoint",
+      { sdkEntrypoints: ["buildTransferAssetInstruction", "buildTransferAssetInstruction"] },
+      /sdkEntrypoints\[1\] duplicates buildTransferAssetInstruction/,
+    ],
+    [
+      "duplicate planned entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureProof", "buildFutureProof"] },
+      /plannedSdkEntrypoints\[1\] duplicates buildFutureProof/,
+    ],
+    [
+      "planned fixture entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureProofFixture"] },
+      /plannedSdkEntrypoints entry buildFutureProofFixture is a fixture\/mock entrypoint/,
+    ],
+    [
+      "planned mock entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureMockProof"] },
+      /plannedSdkEntrypoints entry buildFutureMockProof is a fixture\/mock entrypoint/,
+    ],
+    [
+      "planned punctuation-spliced mock entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureM-o-c-kProof"] },
+      /plannedSdkEntrypoints entry buildFutureM-o-c-kProof is a fixture\/mock entrypoint/,
+    ],
+    [
+      "planned punctuation-spliced dev proof fixture entrypoint",
+      { plannedSdkEntrypoints: ["buildFutureDev.Proof.Fixture"] },
+      /plannedSdkEntrypoints entry buildFutureDev\.Proof\.Fixture is a fixture\/mock entrypoint/,
+    ],
+    [
+      "overlapping planned entrypoint",
+      { plannedSdkEntrypoints: ["buildTransferAssetInstruction"] },
+      /plannedSdkEntrypoints entry buildTransferAssetInstruction is already executable/,
+    ],
+    [
+      "http reference",
+      { sourceReferences: [{ label: "bad", url: "http://example.invalid" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      "percent-encoded loopback host source URL",
+      { sourceReferences: [{ label: "paper", url: "https://127%2e0%2e0%2e1/source" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      "percent-encoded rebinding host source URL",
+      { sourceReferences: [{ label: "paper", url: "https://localhost%2elocaltest%2eme/source" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      "malformed percent escape source URL",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?section=notes%ZZappendix" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      "IPv4-compatible loopback IPv6 source URL",
+      { sourceReferences: [{ label: "paper", url: "https://[::7f00:1]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "NAT64 loopback IPv6 source URL",
+      { sourceReferences: [{ label: "paper", url: "https://[64:ff9b::7f00:1]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "Teredo IPv6 source URL",
+      { sourceReferences: [{ label: "paper", url: "https://[2001:0000:4136:e378:8000:63bf:3fff:fdd2]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "discard-only IPv6 source URL",
+      { sourceReferences: [{ label: "paper", url: "https://[100::]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "ORCHIDv2 IPv6 source URL",
+      { sourceReferences: [{ label: "paper", url: "https://[2001:20::1]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "audit claim in source URL fragment",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224#external-audit-complete" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "readiness claim in source URL query",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?production=ready" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "percent-encoded audit claim in source URL query",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?evidence=audit%3Dcomplete" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "double-encoded readiness claim in source URL query",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?evidence=production%253Dready" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "double-encoded mainnet claim in source URL query",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?evidence=mainnet%2520claim" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "double-encoded audit claim in source URL fragment",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224#external-%2561udit-complete" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "deeply encoded readiness claim in source URL query",
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?evidence=production%2525253Dready" }] },
+      /sourceReferences\[0\]\.url must describe protocol source material, not audit\/signoff or readiness evidence/,
+    ],
+    [
+      "reserved example audit URL reference",
+      { sourceReferences: [{ label: "paper", url: "https://audit.example/forged-signoff" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "nip.io loopback reference",
+      { sourceReferences: [{ label: "paper", url: "https://127.0.0.1.nip.io/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "sslip.io private-network reference",
+      { sourceReferences: [{ label: "paper", url: "https://10.0.0.1.sslip.io/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "localtest.me localhost reference",
+      { sourceReferences: [{ label: "paper", url: "https://localhost.localtest.me/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "lvh.me localhost reference",
+      { sourceReferences: [{ label: "paper", url: "https://lvh.me/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "IPv4-mapped loopback IPv6 reference",
+      { sourceReferences: [{ label: "paper", url: "https://[::ffff:127.0.0.1]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "IPv4-mapped private IPv6 reference",
+      { sourceReferences: [{ label: "paper", url: "https://[::ffff:c0a8:101]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "site-local IPv6 reference",
+      { sourceReferences: [{ label: "paper", url: "https://[fec0::1]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "6to4 loopback IPv6 reference",
+      { sourceReferences: [{ label: "paper", url: "https://[2002:7f00:1::]/source" }] },
+      /sourceReferences\[0\]\.url must not be a placeholder, local, or private-network URL/,
+    ],
+    [
+      "audit-spoof source reference label",
+      { sourceReferences: [{ label: "A.u.d.i.t sign-off", url: "https://zips.z.cash/zip-0224" }] },
+      /sourceReferences\[0\]\.label must describe protocol source material, not audit\/signoff evidence/,
+    ],
+    [
+      "punctuation-spliced review source reference label",
+      { sourceReferences: [{ label: "External.review report", url: "https://zips.z.cash/zip-0224" }] },
+      /sourceReferences\[0\]\.label must describe protocol source material, not audit\/signoff evidence/,
+    ],
+    [
+      "malformed pq layers",
+      { pqLayers: { proof: true, authorization: false, noteEncryption: "yes" } },
+      /pqLayers\.noteEncryption must be a boolean/,
+    ],
+  ]) {
+    assert.throws(
+      () => validatePrivacyAlgorithmDescriptor({ ...mutablePrivacyDescriptor(), ...patch }),
+      message,
+      label,
+    );
+  }
+});
+
+descriptorTest("privacy capabilities report native bridge without production claims", () => {
+  withPrivacyNativeBinding(completePrivacyNativeBinding(), () => {
+    const expectedProductionGateEntries = [
+      ["real_proving", false],
+      ["real_verification", false],
+      ["chain_admission", false],
+      ["sdk_parity", false],
+      ["wallet_state", false],
+      ["deterministic_tests", false],
+      ["fuzzing", false],
+      ["performance_gates", false],
+      ["external_audit", false],
+    ];
+    const requiredProductionGateMissing = [
+      "real proving engine is not registered",
+      "real verifier is not registered",
+      "chain admission path is not enabled",
+      "cross-SDK parity is incomplete",
+      "wallet/state support is incomplete",
+      "deterministic tests are incomplete",
+      "fuzzing gate is incomplete",
+      "performance gate is incomplete",
+      "external audit signoff is missing",
+    ];
+    const supplementalProductionGateMissing = [
+      "implementation stage is not production-hardened",
+      "planned SDK entrypoints remain",
+      "dev fixture entrypoints are not production entrypoints",
+      "Iroha production allowlist is not enabled for this audited row",
+    ];
+    const capabilities = getPrivacyCapabilities();
+    assert.equal(capabilities.javascriptSdkAvailable, true);
+    assert.equal(capabilities.bridgeAvailable, true);
+    assert.deepEqual(Object.keys(capabilities).sort(), [
+      "bridgeAvailable",
+      "javascriptSdkAvailable",
+      "privacyAlgorithms",
+      "privacyCriteria",
+    ]);
+    assert.deepEqual(capabilities.privacyCriteria, getPrivacyCriteria());
+    assert.equal(capabilities.privacyAlgorithms.length, getPrivacyAlgorithmDescriptors().length);
+    assert.equal(
+      capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === false),
+      true,
+    );
+    assert.equal(
+      capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionGate.ready === false),
+      true,
+    );
+    assert.equal(
+      capabilities.privacyAlgorithms.every(
+        (descriptor) => descriptor.productionGate.gates.external_audit === false,
+      ),
+      true,
+    );
+    for (const descriptor of capabilities.privacyAlgorithms) {
+      assert.deepEqual(
+        Object.entries(descriptor.productionGate.gates),
+        expectedProductionGateEntries,
+        `${descriptor.id} production gate entries must stay ordered`,
+      );
+      assert.deepEqual(
+        descriptor.productionGate.missing,
+        [
+          ...requiredProductionGateMissing,
+          ...supplementalProductionGateMissing.filter((reason) =>
+            descriptor.productionGate.missing.includes(reason),
+          ),
+        ],
+        `${descriptor.id} production gate missing reasons must stay ordered`,
+      );
+    }
+    assert.equal(Object.isFrozen(capabilities), true);
+    assert.equal(Object.isFrozen(capabilities.privacyAlgorithms), true);
+    assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0]), true);
+    assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate), true);
+    assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.gates), true);
+    assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.missing), true);
+    assert.equal(Object.isFrozen(capabilities.privacyCriteria), true);
+
+    assert.throws(() => {
+      capabilities.privacyAlgorithms[0].productionReady = true;
+    });
+    assert.throws(() => {
+      capabilities.privacyAlgorithms[0].productionGate.ready = true;
+    });
+    assert.throws(() => {
+      capabilities.privacyAlgorithms[0].productionGate.gates.external_audit = true;
+    });
+    assert.throws(() => {
+      capabilities.privacyCriteria.push("tampered");
+    });
+
+    const fresh = getPrivacyCapabilities();
+    assert.equal(fresh.privacyAlgorithms[0].productionReady, false);
+    assert.equal(fresh.privacyAlgorithms[0].productionGate.ready, false);
+    assert.equal(fresh.privacyAlgorithms[0].productionGate.gates.external_audit, false);
+    assert.deepEqual(
+      Object.entries(fresh.privacyAlgorithms[0].productionGate.gates),
+      expectedProductionGateEntries,
+    );
+    assert.deepEqual(
+      fresh.privacyAlgorithms[0].productionGate.missing.slice(
+        0,
+        requiredProductionGateMissing.length,
+      ),
+      requiredProductionGateMissing,
+    );
+    assert.deepEqual(fresh.privacyCriteria, getPrivacyCriteria());
+  });
+});
+
+descriptorTest("privacy capabilities fail closed when native privacy ABI is incomplete", () => {
+  for (const binding of [
+    {},
+    completePrivacyNativeBinding({ connectNoritoBridgeAbiVersion: undefined }),
+    completePrivacyNativeBinding({
+      connectNoritoBridgeAbiVersion() {
+        return 5;
+      },
+    }),
+    completePrivacyNativeBinding({
+      connectNoritoBridgeAbiVersion() {
+        throw new Error("stale ABI");
+      },
+    }),
+  ]) {
+    withPrivacyNativeBinding(binding, () => {
+      const capabilities = getPrivacyCapabilities();
+      assert.equal(capabilities.bridgeAvailable, false);
+      assert.equal(
+        capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === false),
+        true,
+      );
+    });
+  }
+});
+
+descriptorTest("privacy native wrappers reject wrong-operation result schemas", () => {
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyCapabilitiesV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 returned unexpected privacy result schema/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x42, 6, 0x56);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyBuildProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyBuildProofV1 returned unexpected privacy result schema/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyVerifyProofV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x56, 21, 0x50);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyVerifyProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyVerifyProofV1 returned unexpected privacy result schema/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        assert.fail("wrong-schema build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        assert.fail("wrong-schema verify request must not reach native dispatch");
+      },
+    }),
+    () => {
+      for (const wrongSchemaArchive of [
+        privacyNoritoFrameWithPayload(0x50),
+        privacyNoritoFrameWithPayload(0x42),
+        privacyNoritoFrameWithPayload(0x56),
+        privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
+        privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56),
+      ]) {
+        assert.throws(
+          () => privacyBuildProofV1(wrongSchemaArchive),
+          /requestArchive must use the privacy request schema/,
+        );
+        assert.throws(
+          () => privacyVerifyProofV1(wrongSchemaArchive),
+          /requestArchive must use the privacy request schema/,
+        );
+      }
+    },
+  );
+});
+
+descriptorTest("privacy native wrappers reject empty request and result payloads", () => {
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyCapabilitiesV1() {
+        return privacyNoritoFrame(0x50);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyCapabilitiesV1(),
+        /native privacyCapabilitiesV1 returned empty privacy result payload/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        return privacyNoritoFrame(0x42);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyBuildProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyBuildProofV1 returned empty privacy result payload/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyVerifyProofV1() {
+        return privacyNoritoFrame(0x56);
+      },
+    }),
+    () => {
+      assert.equal(isPrivacyNativeAvailable(), false);
+      assert.throws(
+        () => privacyVerifyProofV1(privacyNoritoFrameWithPayload(0x52)),
+        /native privacyVerifyProofV1 returned empty privacy result payload/,
+      );
+    },
+  );
+
+  withPrivacyNativeBinding(
+    completePrivacyNativeBinding({
+      privacyBuildProofV1() {
+        assert.fail("empty build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        assert.fail("empty verify request must not reach native dispatch");
+      },
+    }),
+    () => {
+      assert.throws(
+        () => privacyBuildProofV1(privacyNoritoFrame(0x52)),
+        /requestArchive must contain a non-empty privacy request payload/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(privacyNoritoFrame(0x52)),
+        /requestArchive must contain a non-empty privacy request payload/,
+      );
+    },
+  );
+});
+
 descriptorTest("privacy algorithm descriptors return defensive copies", () => {
   const first = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
   assert.ok(first);
-  first.coveredCriteria.length = 0;
-  first.pqLayers.proof = false;
-  first.sdkEntrypoints.push("maliciousEntrypoint");
-  first.plannedSdkEntrypoints.push("maliciousPlannedEntrypoint");
-  first.chainRequirements.push("malicious validator");
-  first.recommendedFor.push("malicious recommendation");
-  first.setupSteps.push("malicious setup");
-  first.sourceReferences[0].url = "https://malicious.invalid";
+  assert.equal(Object.isFrozen(first), true);
+  assert.equal(Object.isFrozen(first.coveredCriteria), true);
+  assert.equal(Object.isFrozen(first.pqLayers), true);
+  assert.equal(Object.isFrozen(first.productionGate), true);
+  assert.equal(Object.isFrozen(first.productionGate.gates), true);
+  assert.equal(Object.isFrozen(first.productionGate.missing), true);
+  assert.equal(Object.isFrozen(first.sourceReferences), true);
+  assert.equal(Object.isFrozen(first.sourceReferences[0]), true);
+
+  assert.throws(() => {
+    first.coveredCriteria.length = 0;
+  });
+  assert.throws(() => {
+    first.pqLayers.proof = false;
+  });
+  assert.throws(() => {
+    first.sdkEntrypoints.push("maliciousEntrypoint");
+  });
+  assert.throws(() => {
+    first.plannedSdkEntrypoints.push("maliciousPlannedEntrypoint");
+  });
+  assert.throws(() => {
+    first.chainRequirements.push("malicious validator");
+  });
+  assert.throws(() => {
+    first.productionReady = true;
+  });
+  assert.throws(() => {
+    first.productionGate.ready = true;
+  });
+  assert.throws(() => {
+    first.productionGate.gates.external_audit = true;
+  });
+  assert.throws(() => {
+    first.productionGate.missing.length = 0;
+  });
+  assert.throws(() => {
+    first.recommendedFor.push("malicious recommendation");
+  });
+  assert.throws(() => {
+    first.setupSteps.push("malicious setup");
+  });
+  assert.throws(() => {
+    first.sourceReferences[0].url = "https://malicious.invalid";
+  });
 
   const second = getPrivacyAlgorithmDescriptor("pq-masp-stark-v0");
   assert.ok(second);
@@ -4463,18 +5935,33 @@ descriptorTest("privacy algorithm descriptors return defensive copies", () => {
     false,
   );
   assert.equal(second.chainRequirements.includes("malicious validator"), false);
+  assert.equal(second.productionReady, false);
+  assert.equal(second.productionGate.ready, false);
+  assert.equal(second.productionGate.gates.external_audit, false);
+  assert.ok(second.productionGate.missing.includes("external audit signoff is missing"));
   assert.equal(second.recommendedFor.includes("malicious recommendation"), false);
   assert.equal(second.setupSteps.includes("malicious setup"), false);
   assert.equal(second.sourceReferences[0].url.startsWith("https://www.nist.gov/"), true);
 
   const catalog = getPrivacyAlgorithmDescriptors();
-  catalog.push({ id: "malicious" });
+  assert.equal(Object.isFrozen(catalog), true);
+  assert.throws(() => {
+    catalog.push({ id: "malicious" });
+  });
   const zkAce = catalog.find((descriptor) => descriptor.id === "zk-ace-pq-authorization-v0");
   assert.ok(zkAce);
-  zkAce.sourceReferences[0].url = "https://malicious.invalid";
-  zkAce.securityNotes.push("malicious note");
-  zkAce.requiredState.push("malicious state");
-  zkAce.failureModes.push("malicious failure");
+  assert.throws(() => {
+    zkAce.sourceReferences[0].url = "https://malicious.invalid";
+  });
+  assert.throws(() => {
+    zkAce.securityNotes.push("malicious note");
+  });
+  assert.throws(() => {
+    zkAce.requiredState.push("malicious state");
+  });
+  assert.throws(() => {
+    zkAce.failureModes.push("malicious failure");
+  });
 
   const freshCatalog = getPrivacyAlgorithmDescriptors();
   assert.equal(freshCatalog.some((descriptor) => descriptor.id === "malicious"), false);

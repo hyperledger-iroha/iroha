@@ -7,6 +7,11 @@ edition = "2024"
 name = "iroha_python_rs"
 crate-type = ["cdylib"]
 
+[features]
+compact-len = []
+packed-struct = []
+schema-structural = []
+
 [dependencies]
 iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["bls", "gost", "sm"] }
 iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["json"] }
@@ -19,6 +24,7 @@ ivm = { path = "../../../crates/ivm" }
 sorafs_manifest = { path = "../../../crates/sorafs_manifest" }
 iroha_config = { path = "../../../crates/iroha_config" }
 iroha_core = { path = "../../../crates/iroha_core", features = ["zk-halo2-ipa"] }
+iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 zk_ace_prover = { path = "../../../crates/zk_ace_prover" }
 sorafs_car = { path = "../../../crates/sorafs_car" }
 sorafs_chunker = { path = "../../../crates/sorafs_chunker" }
@@ -41,7 +47,6 @@ tempfile = { workspace = true }
 httpmock = "0.8.2"
 ed25519-dalek = "2.2.0"
 http = { workspace = true }
-iroha_zkp_halo2 = { path = "../../../crates/iroha_zkp_halo2" }
 
 [package.metadata.maturin]
 name = "iroha_python._crypto"

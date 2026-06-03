@@ -351,6 +351,26 @@ def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
     assert parsed.to_i105(0x02F1) == literal
 
 
+@pytest.mark.parametrize(
+    "algorithm",
+    [
+        "future-curve",
+        "ed\t25519",
+        "ed\u200b25519",
+        "\u0435d25519",
+        "ml\uff0ddsa",
+        "gost256\u0430",
+    ],
+)
+def test_account_address_rejects_confusable_signing_algorithm_aliases(algorithm: str) -> None:
+    with pytest.raises(AccountAddressError, match="unsupported signing algorithm"):
+        AccountAddress.from_account(
+            domain="wonderland",
+            public_key=bytes([0x11] * 32),
+            algorithm=algorithm,
+        )
+
+
 def test_i105_parse_without_expected_discriminant_accepts_literal_prefix() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x0171)

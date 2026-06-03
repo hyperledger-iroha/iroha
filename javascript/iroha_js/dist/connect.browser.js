@@ -43,6 +43,7 @@ const PAYLOAD_SIGN_RESULT_ERR = 4;
 const CONTROL_AFTER_KEY_CLOSE = 0;
 const CONTROL_AFTER_KEY_REJECT = 1;
 const ALGORITHM_ED25519 = 0;
+const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -538,9 +539,32 @@ function encodeRole(role) {
   return u32ToBytes(role === ROLE_WALLET ? ROLE_WALLET : ROLE_APP);
 }
 
+function normalizeWalletSignatureAlgorithmTag(algorithm, fieldName = "wallet signature algorithm") {
+  if (algorithm === undefined || algorithm === null) {
+    return ALGORITHM_ED25519;
+  }
+  if (typeof algorithm === "number") {
+    if (Number.isInteger(algorithm) && algorithm === ALGORITHM_ED25519) {
+      return ALGORITHM_ED25519;
+    }
+    throw new TypeError(`${fieldName} must be Ed25519`);
+  }
+  if (typeof algorithm !== "string") {
+    throw new TypeError(`${fieldName} must be a string or numeric tag`);
+  }
+  const normalized = algorithm.trim();
+  if (!normalized || !PRINTABLE_ASCII_RE.test(normalized)) {
+    throw new TypeError(`${fieldName} must be printable ASCII Ed25519`);
+  }
+  if (normalized.toLowerCase() === "ed25519") {
+    return ALGORITHM_ED25519;
+  }
+  throw new TypeError(`${fieldName} must be Ed25519`);
+}
+
 function encodeWalletSignature(signature) {
   return encodeNoritoStruct([
-    Uint8Array.of(signature.algorithm),
+    Uint8Array.of(normalizeWalletSignatureAlgorithmTag(signature.algorithm)),
     encodeNoritoBytes(signature.signature),
   ]);
 }

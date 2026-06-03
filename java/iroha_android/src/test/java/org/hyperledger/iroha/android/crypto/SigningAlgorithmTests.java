@@ -39,4 +39,33 @@ public final class SigningAlgorithmTests {
         == SigningAlgorithm.GOST_2012_512_B;
     assert SigningAlgorithm.fromAlgorithmName("sm-2") == SigningAlgorithm.SM2;
   }
+
+  @Test
+  public void unsupportedAndUnicodeConfusableAliasesFailClosed() {
+    assert SigningAlgorithm.fromAlgorithmName(null) == SigningAlgorithm.ED25519;
+    assert SigningAlgorithm.fromAlgorithmName("") == SigningAlgorithm.ED25519;
+    assert SigningAlgorithm.fromAlgorithmName("   ") == SigningAlgorithm.ED25519;
+
+    final String[] algorithms = {
+      "unknown",
+      "ed\t25519",
+      "ed\u200B25519",
+      "\u0435d25519",
+      "ml\uFF0Ddsa",
+      "gost3410-2012-512-paramset-\u0432"
+    };
+    for (final String algorithm : algorithms) {
+      assertThrows(() -> SigningAlgorithm.fromAlgorithmName(algorithm));
+    }
+  }
+
+  private static void assertThrows(final Runnable action) {
+    boolean failed = false;
+    try {
+      action.run();
+    } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : "expected IllegalArgumentException";
+  }
 }

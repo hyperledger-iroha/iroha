@@ -423,8 +423,13 @@ object ConnectEnvelopeCodec {
     }
 
     private fun algorithmTag(algorithm: String?): Int {
-        if (algorithm.isNullOrBlank()) return 0
-        if ("ed25519".equals(algorithm.trim(), ignoreCase = true)) return 0
+        if (algorithm == null) return 0
+        val normalized = algorithm.trim()
+        if (normalized.isEmpty()) return 0
+        if (!normalized.all { it.code in 0x20..0x7e }) {
+            throw IllegalArgumentException("Unsupported wallet signature algorithm: $algorithm")
+        }
+        if ("ed25519".equals(normalized, ignoreCase = true)) return 0
         throw IllegalArgumentException("Unsupported wallet signature algorithm: $algorithm")
     }
 

@@ -594,6 +594,12 @@ private fun decodeHeader(header: Byte) {
 @Throws(AccountAddressException::class)
 private fun curveIdForAlgorithm(algorithm: String): Byte {
     val normalized = algorithm.trim().lowercase()
+    if (!normalized.all { it.code in 0x20..0x7E }) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+            "unsupported signing algorithm: $algorithm",
+        )
+    }
     val curveId = when (normalized) {
         "ed25519", "ed" -> 0x01
         "ml-dsa", "mldsa", "ml_dsa" -> 0x02

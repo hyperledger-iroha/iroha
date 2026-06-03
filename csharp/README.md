@@ -11,7 +11,7 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - managed BLAKE2b-256/Iroha hash and Norito framing primitives used by the SDK's transaction path
 - canonical Torii request signing headers
 - a `LedgerClient` plus `TransactionBuilder` that can build, sign, and submit canonical asset/domain/asset-definition/NFT transfer transactions, asset mint/burn transactions, `SetAssetKeyValue`, `RemoveAssetKeyValue`, `SetDomainKeyValue`, `RemoveDomainKeyValue`, `SetAccountKeyValue`, `RemoveAccountKeyValue`, `SetAssetDefinitionKeyValue`, `RemoveAssetDefinitionKeyValue`, `SetNftKeyValue`, `RemoveNftKeyValue`, `SetTriggerKeyValue`, `RemoveTriggerKeyValue`, `MintTriggerRepetitions`, `BurnTriggerRepetitions`, and `ExecuteTrigger` transactions with deterministic hashes and pipeline-status polling
-- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer account/domain/asset inventory pages and details, explorer QR snapshots, explorer asset-definition econometrics and holder snapshots, explorer block/transaction/instruction pages, details, latest snapshots, health, metrics, and instruction contract-view reads, typed contract metadata/code-bytes/instance/state reads, write-side contract deploy/instance-activate/call/multisig propose/approve helpers, read-only contract-view execution under `/v1/contracts/view`, typed verified-source job submit/status helpers, typed contract code-view reads under `/v1/contracts/code/{code_hash}/contract-view`, asset balances, transaction summaries, permissions, identifier policy listing, identifier resolution, reverse alias lookup, account and contract alias resolution, alias-index lookup, account onboarding, faucet puzzle and claim flows, multisig onboarding, UAID portfolio reads, and space-directory bindings and manifest inventory reads
+- typed Torii runtime and account-query models for capabilities, ABI, account pages, explorer account/domain/asset inventory pages and details, explorer QR snapshots, explorer asset-definition econometrics and holder snapshots, explorer block/transaction/instruction pages, details, latest snapshots, health, metrics, and instruction contract-view reads, typed contract metadata/code-bytes/instance/state reads, write-side contract deploy/instance-activate/call/multisig propose/approve helpers, verifying-key registry register/update helpers, read-only contract-view execution under `/v1/contracts/view`, typed verified-source job submit/status helpers, typed contract code-view reads under `/v1/contracts/code/{code_hash}/contract-view`, asset balances, transaction summaries, permissions, identifier policy listing, identifier resolution, reverse alias lookup, account and contract alias resolution, alias-index lookup, account onboarding, faucet puzzle and claim flows, multisig onboarding, UAID portfolio reads, and space-directory bindings and manifest inventory reads
 - typed Torii VPN and SoraFS helpers for `/v1/vpn/profile`, signed VPN quote/session/receipt flows under `/v1/vpn/quotes`, `/v1/vpn/sessions`, and `/v1/vpn/receipts`, `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, `/v1/sorafs/denylist/packs/{pack_id}`, and CID content reads under `/sorafs/cid/{cid}/...`
 - low-level `ToriiClient.SubmitSignedQueryAsync(...)`, `OpenEventSseAsync(...)`, and parsed `StreamEventsAsync(...)` helpers plus a managed `SignedQueryBuilder` for the full current singular-query set (`FindExecutorDataModel`, `FindParameters`, `FindAliasesByAccountId`, `FindProofRecordById`, `FindContractManifestByCodeHash`, `FindAbiVersion`, `FindAssetById`, `FindAssetDefinitionById`, `FindTwitterBindingByHash`, `FindDomainEndorsements`, `FindDomainEndorsementPolicy`, `FindDomainCommittee`, `FindDaPinIntentByTicket`, `FindDaPinIntentByManifest`, `FindDaPinIntentByAlias`, `FindDaPinIntentByLaneEpochSequence`, `FindSorafsProviderOwner`, `FindDataspaceNameOwnerById`), a managed `SignedIterableQueryBuilder` for the current fast_dsl iterable subset (`FindDomains`, `FindAccounts`, `FindAssets`, `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`, `FindRwas`, `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`, `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`, `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`, `FindBlockHeaders`, `FindProofRecords`, and cursor `Continue(...)`), and typed `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` plus typed explorer block/transaction/instruction SSE projections
 - a managed faucet PoW solver for `scrypt-leading-zero-bits-v1`, plus `ToriiClient` helpers that can fetch the current puzzle and prepare or submit a faucet claim for an account id
@@ -33,6 +33,104 @@ instruction skeleton Torii produced.
 For SoraFS content, use `OpenSoraFsCidContentAsync(...)` when you want the raw
 HTTP response/stream, or `GetSoraFsCidContentAsync(...)` when buffering the
 payload into memory is acceptable.
+
+## Verifying Key Registry
+
+`ToriiClient.RegisterVerifyingKeyAsync(...)` and
+`UpdateVerifyingKeyAsync(...)` post Torii's `/v1/zk/vk/register` and
+`/v1/zk/vk/update` payloads. The client validates production verifier backends,
+required signing fields, height ranges, and inline verifier-key commitments
+before the HTTP request is sent:
+
+```csharp
+await torii.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
+{
+    Authority = "alice",
+    PrivateKey = "ed25519:...",
+    Backend = "halo2/ipa",
+    Name = "vk_main",
+    Version = 1,
+    CircuitId = "halo2/ipa::transfer_v1",
+    PublicInputsSchemaHashHex = new string('a', 64),
+    GasScheduleId = "halo2_default",
+    VerifyingKeyBytes = new byte[] { 1, 2, 3 },
+    Status = "Active",
+});
+```
+
+## Native Kagemusha Recursive Spend
+
+The optional `Hyperledger.Iroha.Offline.KagemushaRecursiveSpendNative` wrapper
+calls the ABI-6 `connect_norito_bridge` recursive spend surface. `IsAvailable()`
+requires bridge ABI 6 plus `init`, `append`, both transition-profile helpers,
+the append-boundary helper, both lineage-witness helpers, `verify`, and
+`redeem` before reporting recursive spend support. Each entry point accepts raw
+Norito request archives and returns raw Norito archive bytes; the C# SDK does
+not reimplement prover internals.
+`TransitionProfileInit(...)` and `TransitionProfileAppend(...)` return the
+canonical Reserved-lineage accumulator transition profile as raw Norito
+archives for fixture generation and circuit preflight.
+`LineageAppendBoundary(...)` derives the compact append-boundary Norito archive
+from a full append transition profile with native opening preflight material;
+the C# SDK treats the result as opaque verifier material.
+The append-boundary digest uses the public
+`RecursiveSpendLineageAppendBoundaryDomainV1` domain, plus
+`RecursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1` and
+`RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1` for chain/asset
+and final-root/current-note binding.
+
+Use `PreferredMode(...)` to select `recursive_spend_v1` only when the complete
+native surface is available, otherwise fall back to `checked_prefold_v1`. For
+Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
+`RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
+`CanProveAppendOutputCircuitId(...)`, and
+`CanSelectAppendOutputCircuitId(...)` instead of duplicating circuit-id rules in
+app code. `IsSupportedPreviousProofCircuitId(...)` and
+`RequiresPreviousLineageVerifierRecordForAppend(...)` tell app code when to
+reject an unknown previous proof circuit and when to include
+`previous_lineage_verifier_record`. `RecursiveSpendLineageWitnesslessMaxHopsV1`
+is `64`, and `RecursiveSpendLineageTransitionCircuitWiredV1` is `true`:
+witnessless Reserved-lineage online redemption is available for lineage bundles
+inside the 64-hop cap. `CanAppendWitnesslessLineage(...)` returns `true` for
+previous hop counts `1..63`, and `PreferredAppendOutputCircuitId(...)` selects
+Reserved-lineage append inside that range.
+`previous_recursive_proof_open_envelopes_archive` is opaque native prover
+material: C# wallet code must pass it through Norito unchanged and must not
+construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
+`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
+before proving or returning output bytes.
+Semantic append is bounded by the separate `CompactTokenMaxHops` constant;
+witnessless Reserved-lineage append and redeem use
+`RecursiveSpendLineageWitnesslessMaxHopsV1`.
+Reserved-lineage append output is valid only when the previous bundle is
+already Reserved-lineage; semantic previous bundles keep using semantic append
+plus a record-backed lineage witness.
+
+## Native Privacy Bridge
+
+`Hyperledger.Iroha.Privacy.PrivacyNative` exposes the privacy FFI surface as
+generic raw Norito archives: `CapabilitiesV1()`, `BuildProofV1(requestArchive)`,
+and `VerifyProofV1(requestArchive)`. The C# SDK does not expose
+algorithm-specific production proof builders while the privacy rows remain
+gated. Native availability requires ABI 6, the privacy capability/build/verify
+symbols, and successful Norito probe outputs whose operation-specific result
+schema bytes match the called entry point.
+
+All privacy request and response payloads must stay as raw Norito archives. C#
+validates archive magic, length, CRC, the 64 MiB native size cap, and the
+operation-specific result schema before returning bytes to callers. Capability
+metadata reports `privacy-production-gate-v1`, keeps `ProductionReady = false`,
+and remains fail-closed with missing production gates and no audit references
+until real proving, verification, chain admission, deterministic testing,
+fuzzing, performance gates, and external audit signoff are complete.
+
+C# also exposes the deterministic privacy FFI status/error-code contract for
+diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,
+`ErrorMalformedNorito`, `ErrorUnsupportedAlgorithm`,
+`ErrorProductionDisabled`, and `ErrorInvalidRequest`. The stable wire values
+are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
+`unsupported_algorithm = 3`, `production_disabled = 4`, and
+`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
 
 ## Live Testnet Smoke
 

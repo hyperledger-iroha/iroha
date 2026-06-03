@@ -30,6 +30,39 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1,
+  KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1,
+  KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES,
+  KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES,
+  KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
+  KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN,
+  KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
+  canAppendKagemushaRecursiveSpendWitnesslessLineage,
+  canProveKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  canRedeemKagemushaRecursiveSpendWitnessless,
+  canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  isSupportedKagemushaRecursiveSpendAppendProofTransition,
+  isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
+  normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
+  requiresKagemushaRecursiveSpendLineageWitnessForRedeem,
+  requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend,
+  requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend,
+  PRIVACY_FFI_ERROR_INVALID_REQUEST,
+  PRIVACY_FFI_ERROR_MALFORMED_NORITO,
+  PRIVACY_FFI_ERROR_NULL_POINTER,
+  PRIVACY_FFI_ERROR_PRODUCTION_DISABLED,
+  PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
+  PRIVACY_FFI_STATUS_ERROR,
+  PRIVACY_FFI_VERSION_V1,
+  PRIVACY_REQUIRED_BRIDGE_ABI_VERSION,
   SCCP_MESSAGE_TRANSPARENT_PUBLIC_INPUTS_BYTES_V1_LEN,
   SCCP_TON_CURRENT_VALIDATOR_SET_CONFIG_PARAM,
   SCCP_TON_MESSAGE_BODY_BOC_V1,
@@ -102,10 +135,31 @@ import {
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendAppend,
+  kagemushaRecursiveSpendTransitionProfileInit,
+  kagemushaRecursiveSpendTransitionProfileAppend,
+  kagemushaRecursiveSpendLineageAppendBoundary,
   kagemushaRecursiveSpendLineageWitnessFromInitResult,
   kagemushaRecursiveSpendLineageWitnessAppendResult,
   kagemushaRecursiveSpendVerify,
   kagemushaRecursiveSpendRedeem,
+  PRIVACY_NATIVE_ARCHIVE_MAX_BYTES,
+  isPrivacyNativeAvailable,
+  privacyCapabilitiesV1,
+  privacyBuildProofV1,
+  privacyVerifyProofV1,
+  getPrivacyCapabilities,
+  buildPrivacyProofEnvelope,
+  buildZkAtDevProofFixture,
+  buildZkAmsAdmissionDevProofFixture,
+  buildVegaCredentialDevProofFixture,
+  buildSilentThresholdCredentialDevProofFixture,
+  buildZkX509IdentityDevProofFixture,
+  buildJindoLatticeDevProofFixture,
+  buildSisHintsCredentialDevProofFixture,
+  buildAnonymousPgcReceiverSet,
+  buildAnonymousPgcDevProofFixture,
+  buildVeRangeDevProofFixture,
+  noritoDecodePrivacyProofEnvelope,
   canonicalBscCommitMessageBytes,
   canonicalBscCommitSealBytes,
   canonicalBscValidatorSetMetadataProofBytes,
@@ -257,6 +311,152 @@ import { compileKotodamaProgram as compileDistKotodamaProgram } from "../dist/ko
 import { renderCanonicalAccountIdLiteralFromPublicKeyLiteral } from "../src/kotodamaCompiler/accountLiteral.js";
 import { compileKotodamaProgram as compileSrcKotodamaProgram } from "../src/kotodamaCompiler/index.js";
 
+function privacyNoritoFrame(schemaByte) {
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  frame.fill(schemaByte, 6, 22);
+  return frame;
+}
+
+function privacyNoritoFrameWithPayload(schemaByte) {
+  const frame = Buffer.concat([
+    privacyNoritoFrame(schemaByte),
+    Buffer.from([0x00, 0x00, 0xa5, 0x5a, 0x11]),
+  ]);
+  frame.writeBigUInt64LE(3n, 23);
+  Buffer.from([0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24]).copy(frame, 31);
+  return frame;
+}
+
+function privacyNoritoFrameWithPadding(schemaByte, paddingLength) {
+  const frame = Buffer.concat([
+    privacyNoritoFrame(schemaByte),
+    Buffer.alloc(paddingLength),
+    Buffer.from([0xa5, 0x5a, 0x11]),
+  ]);
+  frame.writeBigUInt64LE(3n, 23);
+  Buffer.from([0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24]).copy(frame, 31);
+  return frame;
+}
+
+function privacyNoritoFrameWithSchemaOverride(schemaByte, offset, value) {
+  const frame = Buffer.from(privacyNoritoFrameWithPayload(schemaByte));
+  frame[offset] = value;
+  return frame;
+}
+
+function privacyNoritoFrameWithDeclaredPayloadLength(schemaByte, payloadLength) {
+  const frame = Buffer.from(privacyNoritoFrameWithPayload(schemaByte));
+  frame.writeBigUInt64LE(BigInt(payloadLength), 23);
+  return frame;
+}
+
+function privacyNoritoFrameWithFlags(schemaByte, flags) {
+  const frame = Buffer.from(privacyNoritoFrameWithPayload(schemaByte));
+  frame[39] = flags;
+  return frame;
+}
+
+function slicedPrivacyView(archive, prefix = [0xff, 0x7f, 0x42], suffix = [0x24, 0x13]) {
+  const backing = Uint8Array.from([
+    ...prefix,
+    ...archive,
+    ...suffix,
+  ]);
+  return backing.subarray(prefix.length, prefix.length + archive.length);
+}
+
+function malformedPrivacyRequestArchives() {
+  const badMagic = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badMagic[0] = 0x00;
+  const badVersion = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badVersion[4] = 1;
+  const badMinorVersion = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badMinorVersion[5] = 1;
+  const badCompression = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badCompression[22] = 1;
+  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x52, 6n);
+  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+    0x52,
+    0x8000000000000000n,
+  );
+  const badPadding = Buffer.concat([PRIVACY_REQUEST_ARCHIVE, Buffer.from([0x7f])]);
+  const badExcessivePadding = privacyNoritoFrameWithPadding(0x52, 65);
+  const badFlags = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badFlags[39] = 0x08;
+  const badFieldBitsetFlags = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badFieldBitsetFlags[39] = 0x20;
+  const badChecksum = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badChecksum[31] ^= 0x01;
+  const badPayload = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  badPayload[44] ^= 0x7f;
+  return [
+    Buffer.from([1]),
+    badMagic,
+    badVersion,
+    badMinorVersion,
+    badCompression,
+    badDeclaredPayloadLength,
+    badOversizedDeclaredPayloadLength,
+    badPadding,
+    badExcessivePadding,
+    badFlags,
+    badFieldBitsetFlags,
+    badChecksum,
+    badPayload,
+  ];
+}
+
+const PRIVACY_CAPABILITIES_ARCHIVE = privacyNoritoFrameWithPayload(0x50);
+const PRIVACY_BUILD_ARCHIVE = privacyNoritoFrameWithPayload(0x42);
+const PRIVACY_VERIFY_ARCHIVE = privacyNoritoFrameWithPayload(0x56);
+const PRIVACY_REQUEST_ARCHIVE = privacyNoritoFrameWithPayload(0x52);
+
+function malformedPrivacyNativeOutputArchives(schemaByte) {
+  const archive = privacyNoritoFrameWithPayload(schemaByte);
+  const badMagic = Buffer.from(archive);
+  badMagic[0] = 0x00;
+  const badVersion = Buffer.from(archive);
+  badVersion[4] = 1;
+  const badMinorVersion = Buffer.from(archive);
+  badMinorVersion[5] = 1;
+  const badCompression = Buffer.from(archive);
+  badCompression[22] = 1;
+  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+    schemaByte,
+    6n,
+  );
+  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+    schemaByte,
+    0x8000000000000000n,
+  );
+  const badPadding = Buffer.concat([archive, Buffer.from([0x7f])]);
+  const badExcessivePadding = privacyNoritoFrameWithPadding(schemaByte, 65);
+  const badFlags = Buffer.from(archive);
+  badFlags[39] = 0x08;
+  const badFieldBitsetFlags = Buffer.from(archive);
+  badFieldBitsetFlags[39] = 0x20;
+  const badChecksum = Buffer.from(archive);
+  badChecksum[31] ^= 0x01;
+  const badPayload = Buffer.from(archive);
+  badPayload[44] ^= 0x7f;
+  return [
+    Buffer.from([1]),
+    badMagic,
+    badVersion,
+    badMinorVersion,
+    badCompression,
+    badDeclaredPayloadLength,
+    badOversizedDeclaredPayloadLength,
+    badPadding,
+    badExcessivePadding,
+    badFlags,
+    badFieldBitsetFlags,
+    badChecksum,
+    badPayload,
+  ];
+}
+
 const LEGACY_FULLWIDTH_KANA = /[イロハニホヘトチリヌルヲワカヨタレソツネナラムウノオクヤマケフコエテアサキユメミシヒモセス]/u;
 const HALFWIDTH_KANA = /[ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼﾋﾓｾｽ]/u;
 const DECLARATIONS_TEXT = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
@@ -287,7 +487,7 @@ function declarationExportNames() {
 
 function declarationInterface(name) {
   const match = DECLARATIONS_TEXT.match(
-    new RegExp(`export interface ${name}(?: extends [^{]+)? \\{[\\s\\S]*?\\n\\}`),
+    new RegExp(`export interface ${name}(?:\\s+extends\\s+[^{]+)?\\s*\\{[\\s\\S]*?\\n\\}`),
   );
   assert.ok(match, `missing declaration interface ${name}`);
   return match[0];
@@ -584,10 +784,37 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1",
+    "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1",
+    "KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES",
+    "KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES",
+    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN",
+    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN",
+    "KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
+    "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
     "preferredKagemushaOfflineSpendMode",
+    "canRedeemKagemushaRecursiveSpendWitnessless",
+    "requiresKagemushaRecursiveSpendLineageWitnessForRedeem",
+    "canAppendKagemushaRecursiveSpendWitnesslessLineage",
+    "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId",
+    "isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId",
+    "isSupportedKagemushaRecursiveSpendAppendProofTransition",
+    "isSupportedKagemushaRecursiveSpendPreviousProofCircuitId",
+    "requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend",
+    "preferredKagemushaRecursiveSpendAppendOutputProofCircuitId",
+    "canProveKagemushaRecursiveSpendAppendOutputProofCircuitId",
+    "canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId",
+    "requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend",
     "isKagemushaRecursiveSpendNativeAvailable",
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
+    "kagemushaRecursiveSpendTransitionProfileInit",
+    "kagemushaRecursiveSpendTransitionProfileAppend",
+    "kagemushaRecursiveSpendLineageAppendBoundary",
     "kagemushaRecursiveSpendLineageWitnessFromInitResult",
     "kagemushaRecursiveSpendLineageWitnessAppendResult",
     "kagemushaRecursiveSpendVerify",
@@ -609,6 +836,424 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-spend-lineage-v1",
   );
+  assert.equal(KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS, 64);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1, 64);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1, true);
+  assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
+  assert.equal(KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES, 8 * 1024 * 1024);
+  assert.equal(KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES, 128);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN,
+    "iroha:kagemusha:v1:recursive-spend-transition-profile",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN,
+    "iroha:kagemusha:v1:recursive-spend-transition-profile-digest",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN,
+    "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1,
+    "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1,
+    "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1,
+    "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
+    "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendProofTransition(
+      "unknown-kagemusha-recursive-spend-circuit",
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      "unknown-kagemusha-recursive-spend-circuit",
+    ),
+    "unknown-kagemusha-recursive-spend-circuit",
+  );
+  for (const circuitId of [
+    undefined,
+    null,
+    "",
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  ]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(circuitId),
+      true,
+    );
+  }
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      "unknown-kagemusha-recursive-spend-circuit",
+    ),
+    false,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
+      "unknown-kagemusha-recursive-spend-circuit",
+    ),
+    false,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    ),
+    false,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+      "unknown-kagemusha-recursive-spend-circuit",
+    ),
+    false,
+  );
+  assert.equal(
+    canRedeemKagemushaRecursiveSpendWitnessless(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    canRedeemKagemushaRecursiveSpendWitnessless(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      2,
+    ),
+    false,
+  );
+  for (const [circuitId, hopCount] of [
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, -1],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.MAX_SAFE_INTEGER],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.NaN],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, Number.POSITIVE_INFINITY],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, 1n],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, new Number(1)],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, true],
+    [KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, "1"],
+    [undefined, 1],
+    [null, 1],
+    ["", 1],
+    ["unknown-kagemusha-recursive-spend-circuit", Number.MAX_SAFE_INTEGER],
+  ]) {
+    assert.equal(canRedeemKagemushaRecursiveSpendWitnessless(circuitId, hopCount), false);
+    assert.equal(
+      requiresKagemushaRecursiveSpendLineageWitnessForRedeem(circuitId, hopCount),
+      true,
+    );
+  }
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(0), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1), true);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(63), true);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(64), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1.5), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(-1), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.MAX_SAFE_INTEGER), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.NaN), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(Number.POSITIVE_INFINITY), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(1n), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(new Number(1)), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage(true), false);
+  assert.equal(canAppendKagemushaRecursiveSpendWitnesslessLineage("1"), false);
+  assert.equal(
+    preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(1),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(63),
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(64),
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "preferred append selector falls back at the witnessless hop cap",
+  );
+  assert.equal(
+    preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(0),
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS - 1,
+    ),
+    true,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      0,
+    ),
+    false,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+    ),
+    false,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      63,
+    ),
+    true,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      64,
+    ),
+    false,
+  );
+  assert.equal(
+    canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      "unknown-kagemusha-recursive-spend-circuit",
+      1,
+    ),
+    false,
+  );
+  for (const previousHopCount of [
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    1n,
+    new Number(1),
+    true,
+    "1",
+  ]) {
+    assert.equal(
+      canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        previousHopCount,
+      ),
+      false,
+    );
+  }
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      "unknown-kagemusha-recursive-spend-circuit",
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
+    "semantic previous proofs cannot select Reserved-lineage output",
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      "unknown-kagemusha-recursive-spend-circuit",
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      0,
+    ),
+    false,
+  );
+  for (const previousHopCount of [
+    Number.NaN,
+    1n,
+    new Number(1),
+  ]) {
+    assert.equal(
+      canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        previousHopCount,
+      ),
+      false,
+    );
+  }
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      64,
+    ),
+    true,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+      0,
+    ),
+    false,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+      KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      1,
+    ),
+    false,
+  );
+  assert.equal(
+    requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend("", 1),
+    false,
+  );
+  for (const previousHopCount of [
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    1n,
+    new Number(1),
+    "1",
+  ]) {
+    assert.equal(
+      requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+        previousHopCount,
+      ),
+      false,
+    );
+  }
   assert.equal(
     preferredKagemushaOfflineSpendMode(true),
     KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
@@ -621,12 +1266,1328 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   for (const helper of [
     kagemushaRecursiveSpendInit,
     kagemushaRecursiveSpendAppend,
+    kagemushaRecursiveSpendTransitionProfileInit,
+    kagemushaRecursiveSpendTransitionProfileAppend,
+    kagemushaRecursiveSpendLineageAppendBoundary,
     kagemushaRecursiveSpendLineageWitnessFromInitResult,
     kagemushaRecursiveSpendLineageWitnessAppendResult,
     kagemushaRecursiveSpendVerify,
     kagemushaRecursiveSpendRedeem,
   ]) {
     assert.equal(typeof helper, "function");
+  }
+});
+
+test("package dist Kagemusha recursive spend availability rejects coerced ABI versions", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  try {
+    for (const abiVersion of ["6", true]) {
+      globalThis.__IROHA_NATIVE_BINDING__ = {
+        connectNoritoBridgeAbiVersion() {
+          return abiVersion;
+        },
+        kagemushaRecursiveSpendInit() {
+          return Uint8Array.from([1]);
+        },
+        kagemushaRecursiveSpendAppend() {
+          return Uint8Array.from([2]);
+        },
+        kagemushaRecursiveSpendLineageWitnessFromInitResult() {
+          return Uint8Array.from([3]);
+        },
+        kagemushaRecursiveSpendLineageWitnessAppendResult() {
+          return Uint8Array.from([4]);
+        },
+        kagemushaRecursiveSpendVerify() {
+          return Uint8Array.from([5]);
+        },
+        kagemushaRecursiveSpendRedeem() {
+          return Uint8Array.from([6]);
+        },
+      };
+
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist entrypoint exports privacy native archive helpers", () => {
+  const declarationExports = declarationExportNames();
+  const expected = [
+    "PRIVACY_FFI_VERSION_V1",
+    "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION",
+    "PRIVACY_FFI_STATUS_ERROR",
+    "PRIVACY_FFI_ERROR_NULL_POINTER",
+    "PRIVACY_FFI_ERROR_MALFORMED_NORITO",
+    "PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM",
+    "PRIVACY_FFI_ERROR_PRODUCTION_DISABLED",
+    "PRIVACY_FFI_ERROR_INVALID_REQUEST",
+    "isPrivacyNativeAvailable",
+    "privacyCapabilitiesV1",
+    "privacyBuildProofV1",
+    "privacyVerifyProofV1",
+    "getPrivacyCapabilities",
+  ];
+
+  for (const name of expected) {
+    assert.match(DIST_INDEX_TEXT, new RegExp(`\\b${name}\\b`, "u"));
+    assert.ok(declarationExports.has(name), `missing declaration export ${name}`);
+  }
+  assert.equal(PRIVACY_FFI_VERSION_V1, 1);
+  assert.equal(PRIVACY_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(PRIVACY_FFI_STATUS_ERROR, 1);
+  assert.equal(PRIVACY_FFI_ERROR_NULL_POINTER, 1);
+  assert.equal(PRIVACY_FFI_ERROR_MALFORMED_NORITO, 2);
+  assert.equal(PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM, 3);
+  assert.equal(PRIVACY_FFI_ERROR_PRODUCTION_DISABLED, 4);
+  assert.equal(PRIVACY_FFI_ERROR_INVALID_REQUEST, 5);
+  assert.equal(typeof isPrivacyNativeAvailable(), "boolean");
+  for (const helper of [
+    privacyCapabilitiesV1,
+    privacyBuildProofV1,
+    privacyVerifyProofV1,
+  ]) {
+    assert.equal(typeof helper, "function");
+  }
+  const capabilities = getPrivacyCapabilities();
+  assert.equal(capabilities.javascriptSdkAvailable, true);
+  assert.equal(typeof capabilities.bridgeAvailable, "boolean");
+  assert.deepEqual(Object.keys(capabilities).sort(), [
+    "bridgeAvailable",
+    "javascriptSdkAvailable",
+    "privacyAlgorithms",
+    "privacyCriteria",
+  ]);
+  assert.equal(
+    capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === false),
+    true,
+  );
+  assert.equal(
+    capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionGate.ready === false),
+    true,
+  );
+  assert.equal(Object.isFrozen(capabilities), true);
+  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms), true);
+  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0]), true);
+  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate), true);
+  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.gates), true);
+  assert.equal(Object.isFrozen(capabilities.privacyAlgorithms[0].productionGate.missing), true);
+  assert.equal(Object.isFrozen(capabilities.privacyCriteria), true);
+  assert.throws(() => {
+    capabilities.privacyAlgorithms[0].productionReady = true;
+  });
+  assert.throws(() => {
+    capabilities.privacyAlgorithms[0].productionGate.ready = true;
+  });
+  assert.throws(() => {
+    capabilities.privacyAlgorithms[0].productionGate.gates.external_audit = true;
+  });
+  assert.throws(() => {
+    capabilities.privacyAlgorithms[0].productionGate.missing.length = 0;
+  });
+  assert.throws(() => {
+    capabilities.privacyCriteria.push("tampered");
+  });
+  const fresh = getPrivacyCapabilities();
+  assert.equal(fresh.privacyAlgorithms[0].productionReady, false);
+  assert.equal(fresh.privacyAlgorithms[0].productionGate.ready, false);
+  assert.equal(fresh.privacyAlgorithms[0].productionGate.gates.external_audit, false);
+  assert.ok(
+    fresh.privacyAlgorithms[0].productionGate.missing.includes(
+      "external audit signoff is missing",
+    ),
+  );
+  assert.deepEqual(fresh.privacyCriteria, capabilities.privacyCriteria);
+});
+
+test("package dist privacy proof envelopes preserve pending production backend tags", () => {
+  const vkHash = Buffer.alloc(32, 0x66);
+  const cases = [
+    ["zcash-orchard", "Halo2IpaOrchard"],
+    ["groth16/bls12-377", "Groth16Bls12377"],
+    ["halo2/ipa/penumbra", "Groth16Bls12377"],
+    ["halo2/ipa/masp", "Groth16Bls12377"],
+    ["monero-fcmp++", "FcmpPlusPlusCurveTree"],
+    ["halo2/ipa/monero", "FcmpPlusPlusCurveTree"],
+    ["halo2/ipa/curve-tree", "FcmpPlusPlusCurveTree"],
+    ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["stark/fri/miden", "MidenStark"],
+    ["aztec/private-kernel", "AztecPlonkishPrivateKernel"],
+    ["stark/fri/pq-masp-stark-fri", "PqMaspStarkFri"],
+    ["anonymous-pgc-k-out-of-n-v1", "AnonymousPgc"],
+    ["verange-transparent-range-v1", "VeRange"],
+    ["zkat-policy-private-auth-v1", "ZkAt"],
+    ["recursive-anonymous-admission-v0", "RecursiveAnonymousAdmission"],
+    ["vega-existing-credential-zk-v0", "VegaExistingCredentialZk"],
+    ["silent-threshold-anoncred-v0", "SilentThresholdAnoncred"],
+    ["zk-x509-onchain-identity-v0", "ZkX509"],
+    ["sis-hints-anoncred-pq-v0", "SisWithHints"],
+  ];
+
+  for (const [backend, expected] of cases) {
+    const encoded = buildPrivacyProofEnvelope({
+      backend,
+      circuitId: `${backend}:dist-pending-production-shape-v0`,
+      vkHash,
+      publicInputs: Buffer.from([0x01]),
+      proofBytes: Buffer.from([0x02]),
+      maxProofBytes: 16,
+      maxPublicInputBytes: 16,
+    });
+    const decoded = noritoDecodePrivacyProofEnvelope(encoded);
+    assert.equal(decoded.backend, expected);
+  }
+});
+
+test("package dist privacy proof envelopes reject production metadata claims", () => {
+  const base = {
+    backend: "stark/fri/sha256-goldilocks",
+    circuitId: "stark/fri/sha256-goldilocks:zk_ace_pq_authorization_v0",
+    vkHash: Buffer.alloc(32, 0x55),
+    publicInputs: Buffer.from([1, 2]),
+    proofBytes: Buffer.from("proof"),
+  };
+  for (const payload of [
+    { ...base, production: true },
+    { ...base, productionReady: true },
+    { ...base, production_ready: true },
+    { ...base, productionGate: { ready: true } },
+    { ...base, production_gate: { ready: true } },
+  ]) {
+    assert.throws(
+      () => buildPrivacyProofEnvelope(payload),
+      /privacyProofEnvelope/,
+    );
+  }
+});
+
+test("package dist privacy dev proof fixtures reject production metadata claims", () => {
+  const accountId = AccountAddress.fromAccount({
+    publicKey: Buffer.alloc(32, 0x10),
+  }).toI105(0x02f1);
+  const anonymousPgcReceiverSet = buildAnonymousPgcReceiverSet({
+    threshold: 1,
+    receivers: [
+      {
+        accountCommitment: Buffer.alloc(32, 0x21),
+        ciphertextCommitment: Buffer.alloc(32, 0x31),
+      },
+      {
+        accountCommitment: Buffer.alloc(32, 0x22),
+        ciphertextCommitment: Buffer.alloc(32, 0x32),
+      },
+    ],
+  });
+  const devFixtureCases = [
+    [
+      "zkAt",
+      buildZkAtDevProofFixture,
+      {
+        policyJson: { threshold: 2, roles: ["ops", "risk", "treasury"] },
+        policyEpoch: 7,
+        policySchema: "boi-hidden-threshold-v1",
+        payload: Buffer.from("zkat:transparent-transfer:42"),
+        accountId,
+        actionClass: "transparent_transfer",
+        domainSeparator: "boi:zkat:v1",
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+    [
+      "ZK-AMS",
+      buildZkAmsAdmissionDevProofFixture,
+      {
+        issuerRoot: Buffer.alloc(32, 0x91),
+        admissionNullifiers: [Buffer.alloc(32, 0xa1), Buffer.alloc(32, 0xa2)],
+        anonymousAccountCommitments: [
+          Buffer.alloc(32, 0xb1),
+          Buffer.alloc(32, 0xb2),
+        ],
+        recursiveProof: Buffer.from("zk-ams:recursive-proof:batch-7"),
+        domainSeparator: "boi:zk-ams:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x66),
+      },
+    ],
+    [
+      "Vega",
+      buildVegaCredentialDevProofFixture,
+      {
+        issuerJson: { did: "did:example:issuer:boi", key: "issuer-key-1" },
+        predicateJson: { kind: "age_over", attribute: "age", threshold: 18 },
+        credentialSchema: "boi-age-credential-v1",
+        accountId,
+        expirationEpoch: 42,
+        domainSeparator: "boi:vega:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x77),
+      },
+    ],
+    [
+      "Silent Threshold",
+      buildSilentThresholdCredentialDevProofFixture,
+      {
+        issuerSetJson: { threshold: 2, issuers: ["a", "b", "c"] },
+        thresholdPolicyJson: { threshold: 2, purpose: "wallet" },
+        credentialShowingJson: { credential_type: "wallet", nonce: "n-1" },
+        verifierPolicyJson: { verifier: "boi", purpose: "wallet" },
+        domainSeparator: "boi:silent-threshold:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x88),
+      },
+    ],
+    [
+      "ZK-X.509",
+      buildZkX509IdentityDevProofFixture,
+      {
+        caRootJson: { root: "boi-root-ca", version: 1 },
+        certificatePolicyJson: { eku: ["clientAuth"], policy: "wallet" },
+        revocationJson: { epoch: 7, root: "revocation-root" },
+        subjectJson: { cn: "Bank A", lei: "5493001KJTIIGC8Y1R12" },
+        accountId,
+        domainSeparator: "boi:zk-x509:pilot:v0",
+        vkHash: Buffer.alloc(32, 0x99),
+      },
+    ],
+    [
+      "Jindo",
+      buildJindoLatticeDevProofFixture,
+      {
+        polynomialJson: { ring: "Rq", degree: 1024, digest: "poly" },
+        openingClaimJson: { point: "x=42", value_digest: "value" },
+        querySetJson: { queries: [0, 7, 42] },
+        parametersJson: { scheme: "jindo-pcs-v0", q_bits: 64 },
+        domainSeparator: "boi:jindo:pcs:pilot:v0",
+        vkHash: Buffer.alloc(32, 0xaa),
+      },
+    ],
+    [
+      "SIS-with-hints",
+      buildSisHintsCredentialDevProofFixture,
+      {
+        issuerJson: { issuer: "boi", scheme: "sis-hints-v0" },
+        credentialJson: { credential_type: "wallet", nonce: "n-1" },
+        showingPolicyJson: { verifier: "boi", purpose: "wallet" },
+        parametersJson: { scheme: "sis-hints-anoncred-v0", q_bits: 64 },
+        domainSeparator: "boi:sis-hints:pilot:v0",
+        vkHash: Buffer.alloc(32, 0xbb),
+      },
+    ],
+    [
+      "Anonymous PGC",
+      buildAnonymousPgcDevProofFixture,
+      {
+        receiverSet: anonymousPgcReceiverSet,
+        anonymitySetRoot: Buffer.alloc(32, 0x41),
+        payload: Buffer.from("anonymous-pgc:alice:bob:42"),
+        balanceCommitments: [Buffer.alloc(32, 0x51), Buffer.alloc(32, 0x52)],
+        linkTag: Buffer.alloc(32, 0x61),
+        rangeCommitments: [Buffer.alloc(32, 0x71)],
+        chainId: "boi-localnet",
+        domainSeparator: "boi:anonymous-pgc:v1",
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+    [
+      "VeRange",
+      buildVeRangeDevProofFixture,
+      {
+        commitments: [Buffer.alloc(32, 0x44), Buffer.alloc(32, 0x45)],
+        bitLength: 64,
+        commitmentScheme: "pedersen-v1",
+        domainSeparator: "boi:amount-range:v1",
+        payload: Buffer.from("transfer:alice@wonderland:bob@wonderland:42"),
+        vkHash: Buffer.alloc(32, 0x55),
+      },
+    ],
+  ];
+
+  for (const [name, builder, input] of devFixtureCases) {
+    const fixture = builder(input);
+    assert.equal(fixture.production, false, `${name} fixture must stay dev-only`);
+    for (const [field, value] of [
+      ["production", true],
+      ["productionReady", true],
+      ["production_ready", true],
+      ["productionGate", { ready: true }],
+      ["production_gate", { ready: true }],
+    ]) {
+      assert.throws(
+        () => builder({ ...input, [field]: value }),
+        new RegExp(field),
+        `${name} fixture builder accepted ${field}`,
+      );
+    }
+  }
+});
+
+test("package dist privacy native availability rejects coerced ABI versions", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  try {
+    for (const abiVersion of ["6", true]) {
+      globalThis.__IROHA_NATIVE_BINDING__ = {
+        connectNoritoBridgeAbiVersion() {
+          return abiVersion;
+        },
+        privacyCapabilitiesV1() {
+          return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+        },
+        privacyBuildProofV1() {
+          return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+        },
+        privacyVerifyProofV1() {
+          return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+        },
+      };
+
+      assert.equal(isPrivacyNativeAvailable(), false);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native availability clears request copies after failures", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const completeBinding = (overrides = {}) => ({
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1() {
+      return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+    },
+    privacyVerifyProofV1() {
+      return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+    },
+    ...overrides,
+  });
+  let throwingProbe;
+  let badOutputProbe;
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyBuildProofV1(request) {
+        throwingProbe = request;
+        throw new Error("probe failure after request copy");
+      },
+    });
+    assert.equal(isPrivacyNativeAvailable(), false);
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyVerifyProofV1(request) {
+        badOutputProbe = request;
+        return Buffer.from([0x56]);
+      },
+    });
+    assert.equal(isPrivacyNativeAvailable(), false);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  assert.deepEqual(Buffer.from(throwingProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+  assert.deepEqual(Buffer.from(badOutputProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+});
+
+test("package dist privacy native availability probes reject unsafe raw output", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const completeBinding = (overrides = {}) => ({
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1() {
+      return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+    },
+    privacyVerifyProofV1() {
+      return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+    },
+    ...overrides,
+  });
+  try {
+    const overrides = [
+      {
+        privacyCapabilitiesV1() {
+          return "json is not Norito";
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          return Uint8Array.from([]);
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          return undefined;
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          return [0x42];
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          return Buffer.from([0x42]);
+        },
+      },
+      {
+        privacyCapabilitiesV1() {
+          return Buffer.from(PRIVACY_BUILD_ARCHIVE);
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          return Buffer.from(PRIVACY_VERIFY_ARCHIVE);
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          return Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+        },
+      },
+      {
+        privacyCapabilitiesV1() {
+          const bad = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+          bad[0] = 0x00;
+          return bad;
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          const bad = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+          bad[39] = 0x08;
+          return bad;
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          return Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x01])]);
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          const bad = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.alloc(1)]);
+          bad[31] = 0x01;
+          return bad;
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          throw new Error("native probe failed");
+        },
+      },
+      {
+        privacyCapabilitiesV1() {
+          return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+        },
+      },
+      {
+        privacyBuildProofV1() {
+          return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+        },
+      },
+      {
+        privacyVerifyProofV1() {
+          return Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+        },
+      },
+    ];
+
+    for (const archive of malformedPrivacyNativeOutputArchives(0x50)) {
+      overrides.push({
+        privacyCapabilitiesV1() {
+          return Buffer.from(archive);
+        },
+      });
+    }
+    for (const archive of malformedPrivacyNativeOutputArchives(0x42)) {
+      overrides.push({
+        privacyBuildProofV1() {
+          return Buffer.from(archive);
+        },
+      });
+    }
+    for (const archive of malformedPrivacyNativeOutputArchives(0x56)) {
+      overrides.push({
+        privacyVerifyProofV1() {
+          return Buffer.from(archive);
+        },
+      });
+    }
+
+    for (const override of overrides) {
+      globalThis.__IROHA_NATIVE_BINDING__ = completeBinding(override);
+      assert.equal(isPrivacyNativeAvailable(), false);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers reject wrong-operation result schemas", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const completeBinding = (overrides = {}) => ({
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1() {
+      return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+    },
+    privacyVerifyProofV1() {
+      return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+    },
+    ...overrides,
+  });
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyCapabilitiesV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x50, 21, 0x42);
+      },
+    });
+    assert.equal(isPrivacyNativeAvailable(), false);
+    assert.throws(
+      () => privacyCapabilitiesV1(),
+      /native privacyCapabilitiesV1 returned unexpected privacy result schema/,
+    );
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyBuildProofV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x42, 6, 0x56);
+      },
+    });
+    assert.equal(isPrivacyNativeAvailable(), false);
+    assert.throws(
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyBuildProofV1 returned unexpected privacy result schema/,
+    );
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyVerifyProofV1() {
+        return privacyNoritoFrameWithSchemaOverride(0x56, 21, 0x50);
+      },
+    });
+    assert.equal(isPrivacyNativeAvailable(), false);
+    assert.throws(
+      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyVerifyProofV1 returned unexpected privacy result schema/,
+    );
+
+    globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
+      privacyBuildProofV1() {
+        assert.fail("wrong-schema build request must not reach native dispatch");
+      },
+      privacyVerifyProofV1() {
+        assert.fail("wrong-schema verify request must not reach native dispatch");
+      },
+    });
+    for (const wrongSchemaArchive of [
+      PRIVACY_CAPABILITIES_ARCHIVE,
+      PRIVACY_BUILD_ARCHIVE,
+      PRIVACY_VERIFY_ARCHIVE,
+      privacyNoritoFrameWithSchemaOverride(0x52, 6, 0x42),
+      privacyNoritoFrameWithSchemaOverride(0x52, 21, 0x56),
+    ]) {
+      assert.throws(
+        () => privacyBuildProofV1(Buffer.from(wrongSchemaArchive)),
+        /requestArchive must use the privacy request schema/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(Uint8Array.from(wrongSchemaArchive)),
+        /requestArchive must use the privacy request schema/,
+      );
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers reject oversized output archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const oversized = Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return oversized;
+    },
+    privacyBuildProofV1() {
+      return oversized;
+    },
+    privacyVerifyProofV1() {
+      return oversized;
+    },
+  };
+  try {
+    assert.throws(
+      () => privacyCapabilitiesV1(),
+      /native privacyCapabilitiesV1 returned oversized output/,
+    );
+    assert.throws(
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyBuildProofV1 returned oversized output/,
+    );
+    assert.throws(
+      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyVerifyProofV1 returned oversized output/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers reject invalid Norito-framed output archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const badMagic = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  badMagic[0] = 0x00;
+  const badVersion = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+  badVersion[4] = 1;
+  const badMinorVersion = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+  badMinorVersion[5] = 1;
+  const badDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(0x42, 6n);
+  const badOversizedDeclaredPayloadLength = privacyNoritoFrameWithDeclaredPayloadLength(
+    0x42,
+    0x8000000000000000n,
+  );
+  const badPadding = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x7f])]);
+  const badFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+  badFlags[39] = 0x08;
+  const badFieldBitsetFlags = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+  badFieldBitsetFlags[39] = 0x20;
+  const badChecksum = Buffer.concat([PRIVACY_VERIFY_ARCHIVE, Buffer.alloc(1)]);
+  badChecksum[31] = 0x01;
+  const badPayload = Buffer.from(privacyNoritoFrameWithPayload(0x57));
+  badPayload[44] ^= 0x7f;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return badMagic;
+    },
+    privacyBuildProofV1() {
+      return badVersion;
+    },
+    privacyVerifyProofV1() {
+      return badPadding;
+    },
+  };
+  try {
+    assert.throws(
+      () => privacyCapabilitiesV1(),
+      /native privacyCapabilitiesV1 returned invalid Norito V1 archive/,
+    );
+    assert.throws(
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyBuildProofV1 returned invalid Norito V1 archive/,
+    );
+    assert.throws(
+      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyVerifyProofV1 returned invalid Norito V1 archive/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  for (const invalidBuildOutput of [
+    badMinorVersion,
+    badDeclaredPayloadLength,
+    badOversizedDeclaredPayloadLength,
+  ]) {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      connectNoritoBridgeAbiVersion() {
+        return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+      },
+      privacyCapabilitiesV1() {
+        return PRIVACY_CAPABILITIES_ARCHIVE;
+      },
+      privacyBuildProofV1() {
+        return invalidBuildOutput;
+      },
+      privacyVerifyProofV1() {
+        return PRIVACY_VERIFY_ARCHIVE;
+      },
+    };
+    try {
+      assert.throws(
+        () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+        /native privacyBuildProofV1 returned invalid Norito V1 archive/,
+      );
+    } finally {
+      if (previous === undefined) {
+        delete globalThis.__IROHA_NATIVE_BINDING__;
+      } else {
+        globalThis.__IROHA_NATIVE_BINDING__ = previous;
+      }
+    }
+  }
+
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return PRIVACY_CAPABILITIES_ARCHIVE;
+    },
+    privacyBuildProofV1() {
+      return badFieldBitsetFlags;
+    },
+    privacyVerifyProofV1() {
+      return PRIVACY_VERIFY_ARCHIVE;
+    },
+  };
+  try {
+    assert.throws(
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyBuildProofV1 returned invalid Norito V1 archive/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return badPayload;
+    },
+    privacyBuildProofV1() {
+      return badFlags;
+    },
+    privacyVerifyProofV1() {
+      return badChecksum;
+    },
+  };
+  try {
+    assert.throws(
+      () => privacyCapabilitiesV1(),
+      /native privacyCapabilitiesV1 returned invalid Norito V1 archive/,
+    );
+    assert.throws(
+      () => privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyBuildProofV1 returned invalid Norito V1 archive/,
+    );
+    assert.throws(
+      () => privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE),
+      /native privacyVerifyProofV1 returned invalid Norito V1 archive/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers reject oversized request archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const oversized = Buffer.alloc(PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1, 0x7f);
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1() {
+      assert.fail("oversized build request must not reach native dispatch");
+    },
+    privacyVerifyProofV1() {
+      assert.fail("oversized verify request must not reach native dispatch");
+    },
+  };
+  try {
+    assert.throws(
+      () => privacyBuildProofV1(oversized),
+      /requestArchive must not exceed/,
+    );
+    assert.throws(
+      () => privacyVerifyProofV1(oversized),
+      /requestArchive must not exceed/,
+    );
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers reject invalid request archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1() {
+      assert.fail("invalid build request must not reach native dispatch");
+    },
+    privacyVerifyProofV1() {
+      assert.fail("invalid verify request must not reach native dispatch");
+    },
+  };
+  try {
+    for (const malformedArchive of malformedPrivacyRequestArchives()) {
+      assert.throws(
+        () => privacyBuildProofV1(Buffer.from(malformedArchive)),
+        /requestArchive must be a valid Norito V1 archive/,
+      );
+      assert.throws(
+        () => privacyVerifyProofV1(Uint8Array.from(malformedArchive)),
+        /requestArchive must be a valid Norito V1 archive/,
+      );
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers accept complete field-bitset flags", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const requestArchive = privacyNoritoFrameWithFlags(0x52, 0x26);
+  const buildArchive = privacyNoritoFrameWithFlags(0x42, 0x26);
+  const verifyArchive = privacyNoritoFrameWithFlags(0x56, 0x26);
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1(request) {
+      assert.deepEqual(Buffer.from(request), requestArchive);
+      return buildArchive;
+    },
+    privacyVerifyProofV1(request) {
+      assert.deepEqual(Buffer.from(request), requestArchive);
+      return verifyArchive;
+    },
+  };
+  try {
+    assert.deepEqual(privacyBuildProofV1(requestArchive), buildArchive);
+    assert.deepEqual(privacyVerifyProofV1(requestArchive), verifyArchive);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers sanitize native exceptions", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const witness = Buffer.from("dist-private-witness-never-echo-21f0", "utf8");
+  const requestArchive = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  const capturedRequests = [];
+  const throwLeakingNativeError = (request) => {
+    if (request !== undefined) {
+      capturedRequests.push(request);
+      assert.notEqual(request, requestArchive);
+      assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
+    }
+    throw new Error(`native panic included ${witness.toString("utf8")}`);
+  };
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1: throwLeakingNativeError,
+    privacyBuildProofV1: throwLeakingNativeError,
+    privacyVerifyProofV1: throwLeakingNativeError,
+  };
+  try {
+    for (const [operation, invoke] of [
+      ["privacyCapabilitiesV1", () => privacyCapabilitiesV1()],
+      ["privacyBuildProofV1", () => privacyBuildProofV1(requestArchive)],
+      ["privacyVerifyProofV1", () => privacyVerifyProofV1(requestArchive)],
+    ]) {
+      let error;
+      try {
+        invoke();
+      } catch (caught) {
+        error = caught;
+      }
+      assert.ok(error, `${operation} should throw`);
+      assert.match(error.message, new RegExp(`native ${operation} failed`, "u"));
+      assert.equal(error.cause, undefined);
+      assert.equal(String(error).includes(witness.toString("utf8")), false);
+      assert.equal(String(error.stack).includes(witness.toString("utf8")), false);
+    }
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  assert.equal(capturedRequests.length, 2);
+  for (const request of capturedRequests) {
+    assert.equal(request.every((value) => value === 0), true);
+  }
+  assert.deepEqual(requestArchive, Buffer.from(PRIVACY_REQUEST_ARCHIVE));
+});
+
+test("package dist privacy native wrappers clear temporary request copies", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const requestArchive = Buffer.from(PRIVACY_REQUEST_ARCHIVE);
+  const originalArchive = Buffer.from(requestArchive);
+  let buildRequest;
+  let verifyRequest;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1(request) {
+      buildRequest = request;
+      assert.notEqual(request, requestArchive);
+      assert.deepEqual(Buffer.from(request), originalArchive);
+      return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+    },
+    privacyVerifyProofV1(request) {
+      verifyRequest = request;
+      assert.notEqual(request, requestArchive);
+      assert.deepEqual(Buffer.from(request), originalArchive);
+      return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+    },
+  };
+  try {
+    assert.deepEqual(privacyBuildProofV1(requestArchive), PRIVACY_BUILD_ARCHIVE);
+    assert.deepEqual(privacyVerifyProofV1(requestArchive), PRIVACY_VERIFY_ARCHIVE);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  assert.ok(buildRequest, "build request should be captured");
+  assert.ok(verifyRequest, "verify request should be captured");
+  assert.equal(buildRequest.every((value) => value === 0), true);
+  assert.equal(verifyRequest.every((value) => value === 0), true);
+  assert.deepEqual(requestArchive, originalArchive);
+});
+
+test("package dist privacy native wrappers respect sliced request archive views", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const buildView = slicedPrivacyView(PRIVACY_REQUEST_ARCHIVE);
+  const verifyBacking = Uint8Array.from([
+    0x99,
+    0x88,
+    ...PRIVACY_REQUEST_ARCHIVE,
+    0x77,
+  ]);
+  const verifyView = new DataView(
+    verifyBacking.buffer,
+    2,
+    PRIVACY_REQUEST_ARCHIVE.length,
+  );
+  let buildRequest;
+  let verifyRequest;
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return Uint8Array.from(PRIVACY_CAPABILITIES_ARCHIVE);
+    },
+    privacyBuildProofV1(request) {
+      buildRequest = request;
+      assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
+      return slicedPrivacyView(PRIVACY_BUILD_ARCHIVE);
+    },
+    privacyVerifyProofV1(request) {
+      verifyRequest = request;
+      assert.deepEqual(Buffer.from(request), PRIVACY_REQUEST_ARCHIVE);
+      return new DataView(
+        slicedPrivacyView(PRIVACY_VERIFY_ARCHIVE).buffer,
+        3,
+        PRIVACY_VERIFY_ARCHIVE.length,
+      );
+    },
+  };
+  try {
+    assert.deepEqual(privacyBuildProofV1(buildView), PRIVACY_BUILD_ARCHIVE);
+    assert.deepEqual(privacyVerifyProofV1(verifyView), PRIVACY_VERIFY_ARCHIVE);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+
+  assert.deepEqual(Buffer.from(buildView), PRIVACY_REQUEST_ARCHIVE);
+  assert.deepEqual(
+    Buffer.from(verifyBacking.subarray(2, 2 + PRIVACY_REQUEST_ARCHIVE.length)),
+    PRIVACY_REQUEST_ARCHIVE,
+  );
+  assert.equal(buildRequest.every((value) => value === 0), true);
+  assert.equal(verifyRequest.every((value) => value === 0), true);
+});
+
+test("package dist privacy native wrappers respect sliced native output archive views", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const prefixLength = 3;
+  const capabilitiesBacking = Uint8Array.from([
+    0xff,
+    0x7f,
+    0x50,
+    ...PRIVACY_CAPABILITIES_ARCHIVE,
+    0x24,
+  ]);
+  const buildBacking = Uint8Array.from([
+    0xff,
+    0x7f,
+    0x42,
+    ...PRIVACY_BUILD_ARCHIVE,
+    0x13,
+  ]);
+  const verifyBacking = Uint8Array.from([
+    0xff,
+    0x7f,
+    0x56,
+    ...PRIVACY_VERIFY_ARCHIVE,
+    0x37,
+  ]);
+
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return capabilitiesBacking.subarray(
+        prefixLength,
+        prefixLength + PRIVACY_CAPABILITIES_ARCHIVE.length,
+      );
+    },
+    privacyBuildProofV1() {
+      return new DataView(
+        buildBacking.buffer,
+        prefixLength,
+        PRIVACY_BUILD_ARCHIVE.length,
+      );
+    },
+    privacyVerifyProofV1() {
+      return verifyBacking.subarray(
+        prefixLength,
+        prefixLength + PRIVACY_VERIFY_ARCHIVE.length,
+      );
+    },
+  };
+  try {
+    const capabilitiesArchive = privacyCapabilitiesV1();
+    const buildArchive = privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE);
+    const verifyArchive = privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE);
+
+    assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
+    assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
+    assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+
+    capabilitiesBacking[prefixLength] = 0x00;
+    buildBacking[prefixLength] = 0x00;
+    verifyBacking[prefixLength] = 0x00;
+
+    assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
+    assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
+    assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package dist privacy native wrappers defensively copy native output archives", () => {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  const capabilitiesOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+  const buildOutput = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+  const verifyBacking = Uint8Array.from(
+    Buffer.concat([Buffer.from([0x00]), PRIVACY_VERIFY_ARCHIVE, Buffer.from([0x00])]),
+  );
+  const verifyOutput = verifyBacking.subarray(1, 1 + PRIVACY_VERIFY_ARCHIVE.length);
+  globalThis.__IROHA_NATIVE_BINDING__ = {
+    connectNoritoBridgeAbiVersion() {
+      return PRIVACY_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+    privacyCapabilitiesV1() {
+      return capabilitiesOutput;
+    },
+    privacyBuildProofV1() {
+      return buildOutput;
+    },
+    privacyVerifyProofV1() {
+      return verifyOutput;
+    },
+  };
+  try {
+    const capabilitiesArchive = privacyCapabilitiesV1();
+    assert.notEqual(capabilitiesArchive, capabilitiesOutput);
+    assert.deepEqual(capabilitiesArchive, PRIVACY_CAPABILITIES_ARCHIVE);
+    capabilitiesArchive[0] = 0x7f;
+    assert.deepEqual(capabilitiesOutput, PRIVACY_CAPABILITIES_ARCHIVE);
+
+    const buildArchive = privacyBuildProofV1(PRIVACY_REQUEST_ARCHIVE);
+    assert.notEqual(buildArchive, buildOutput);
+    assert.deepEqual(buildArchive, PRIVACY_BUILD_ARCHIVE);
+    buildArchive[0] = 0x7f;
+    assert.deepEqual(buildOutput, PRIVACY_BUILD_ARCHIVE);
+
+    const verifyArchive = privacyVerifyProofV1(PRIVACY_REQUEST_ARCHIVE);
+    assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+    verifyBacking[1] = 0x7f;
+    assert.deepEqual(verifyArchive, PRIVACY_VERIFY_ARCHIVE);
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.__IROHA_NATIVE_BINDING__;
+    } else {
+      globalThis.__IROHA_NATIVE_BINDING__ = previous;
+    }
+  }
+});
+
+test("package declarations mark privacy capability metadata readonly", () => {
+  const pqLayers = declarationInterface("PrivacyPqLayers");
+  assert.match(pqLayers, /readonly proof: boolean;/);
+  assert.match(pqLayers, /readonly authorization: boolean;/);
+  assert.match(pqLayers, /readonly noteEncryption: boolean;/);
+
+  const productionGate = declarationInterface("PrivacyProductionGate");
+  assert.match(productionGate, /readonly ready: boolean;/);
+  assert.match(productionGate, /readonly gates: Readonly<Record<string, boolean>>;/);
+  assert.match(productionGate, /readonly missing: readonly string\[\];/);
+  assert.match(
+    productionGate,
+    /readonly auditReferences: readonly Readonly<\{ label: string; url: string \}>\[\];/,
+  );
+
+  const descriptor = declarationInterface("PrivacyAlgorithmDescriptor");
+  assert.match(descriptor, /readonly coveredCriteria: readonly PrivacyCriterionKey\[\];/);
+  assert.match(descriptor, /readonly backendFamily: string;/);
+  assert.match(descriptor, /readonly pqLayers: PrivacyPqLayers;/);
+  assert.match(descriptor, /readonly sdkEntrypoints: readonly string\[\];/);
+  assert.match(descriptor, /readonly chainRequirements: readonly string\[\];/);
+  assert.match(descriptor, /readonly productionReady: boolean;/);
+  assert.match(descriptor, /readonly productionGate: PrivacyProductionGate;/);
+
+  const capabilities = declarationInterface("PrivacyCapabilities");
+  assert.match(capabilities, /readonly javascriptSdkAvailable: boolean;/);
+  assert.match(capabilities, /readonly bridgeAvailable: boolean;/);
+  assert.match(
+    capabilities,
+    /readonly privacyAlgorithms: readonly PrivacyAlgorithmDescriptor\[\];/,
+  );
+  assert.match(capabilities, /readonly privacyCriteria: readonly PrivacyCriterionKey\[\];/);
+
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function getPrivacyCriteria\(\): readonly PrivacyCriterionKey\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export function getPrivacyAlgorithmDescriptors\(\): readonly PrivacyAlgorithmDescriptor\[\];/,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES: number;/,
+  );
+  for (const [name, value] of [
+    ["PRIVACY_FFI_STATUS_ERROR", 1],
+    ["PRIVACY_FFI_ERROR_NULL_POINTER", 1],
+    ["PRIVACY_FFI_ERROR_MALFORMED_NORITO", 2],
+    ["PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM", 3],
+    ["PRIVACY_FFI_ERROR_PRODUCTION_DISABLED", 4],
+    ["PRIVACY_FFI_ERROR_INVALID_REQUEST", 5],
+  ]) {
+    assert.match(
+      DECLARATIONS_TEXT,
+      new RegExp(`export const ${name}: ${value};`),
+    );
+  }
+});
+
+test("package declarations do not advertise privacy production metadata inputs", () => {
+  for (const name of [
+    "PrivacyProofEnvelopeInput",
+    "ZkAtAuthenticatorEnvelopeInput",
+    "ZkAmsAdmissionProofEnvelopeInput",
+    "VegaCredentialProofEnvelopeInput",
+    "SilentThresholdCredentialEnvelopeInput",
+    "ZkX509IdentityEnvelopeInput",
+    "JindoLatticeProofEnvelopeInput",
+    "SisHintsCredentialEnvelopeInput",
+    "AnonymousPgcDevProofFixtureInput",
+    "VeRangeProofEnvelopeInput",
+    "VeRangeDevProofFixtureInput",
+  ]) {
+    const declaration = declarationInterface(name);
+    assert.doesNotMatch(declaration, /\bproduction\b/u, `${name} exposes production`);
+    assert.doesNotMatch(
+      declaration,
+      /\bproductionReady\b/u,
+      `${name} exposes productionReady`,
+    );
+    assert.doesNotMatch(
+      declaration,
+      /\bproductionGate\b/u,
+      `${name} exposes productionGate`,
+    );
   }
 });
 

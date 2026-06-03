@@ -65,6 +65,17 @@ _NONCE_LENGTH = 16
 _CONNECT_URI_VERSION = "1"
 
 
+def _normalize_connect_wallet_signature_algorithm(algorithm: str) -> str:
+    if not isinstance(algorithm, str):
+        raise TypeError("wallet signature algorithm must be a string")
+    normalized = algorithm.strip()
+    if not normalized or any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in normalized):
+        raise ValueError("unsupported wallet signature algorithm")
+    if normalized.lower() != "ed25519":
+        raise ValueError("unsupported wallet signature algorithm")
+    return "ed25519"
+
+
 @dataclass(frozen=True)
 class ConnectUri:
     """Structured representation of an `iroha://connect` URI."""
@@ -504,7 +515,7 @@ class ConnectControlApprove(_ConnectControlBase):
         )
         self.account_id = account_id
         self.signature = _ensure_bytes(signature, size=64, field="signature")
-        self.algorithm = algorithm
+        self.algorithm = _normalize_connect_wallet_signature_algorithm(algorithm)
         self.permissions = permissions
         self.proof = proof
 
@@ -774,7 +785,7 @@ class ConnectSignResultOkPayload:
 
     def __init__(self, *, signature: _BytesLike, algorithm: str = "Ed25519") -> None:
         self.signature = _ensure_bytes(signature, size=None, field="signature")
-        self.algorithm = algorithm
+        self.algorithm = _normalize_connect_wallet_signature_algorithm(algorithm)
 
     def to_wire_dict(self) -> Dict[str, Any]:
         return {

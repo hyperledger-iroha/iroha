@@ -5168,7 +5168,7 @@ function decodeVerifyingKeyBoxValue(payload, context) {
 function encodeBackendTagValue(value, context) {
   const normalized = assertNonEmptyString(value, context)
     .toLowerCase()
-    .replace(/[-_/]/g, "");
+    .replace(/[^a-z0-9]/g, "");
   switch (normalized) {
     case "halo2ipapasta":
     case "halo2pasta":
@@ -5185,6 +5185,82 @@ function encodeBackendTagValue(value, context) {
       return encodeEnumTagValue(3);
     case "unsupported":
       return encodeEnumTagValue(4);
+    case "halo2ipaorchard":
+    case "orchard":
+    case "zcashorchard":
+      return encodeEnumTagValue(5);
+    case "groth16bls12377":
+    case "groth16bls12377decaf377":
+    case "bls12377":
+    case "decaf377":
+    case "masp":
+    case "penumbra":
+    case "penumbramasp":
+    case "halo2ipapenumbra":
+    case "halo2ipamasp":
+      return encodeEnumTagValue(6);
+    case "fcmppluspluscurvetree":
+    case "fcmp":
+    case "monero":
+    case "monerofcmp":
+    case "monerofcmpplusplus":
+    case "curvetree":
+    case "halo2ipamonero":
+    case "halo2ipacurvetree":
+      return encodeEnumTagValue(7);
+    case "latticepcssis":
+    case "latticepcszk":
+    case "jindo":
+    case "jindolatticepcszk":
+    case "jindolatticepcszkv0":
+    case "jindolatticepcssis":
+      return encodeEnumTagValue(8);
+    case "starkfrimiden":
+    case "midenstark":
+      return encodeEnumTagValue(9);
+    case "aztecplonkishprivatekernel":
+    case "aztecprivatekernel":
+      return encodeEnumTagValue(10);
+    case "pqmaspstarkfri":
+    case "pqmaspstark":
+    case "starkfripqmaspstarkfri":
+    case "postquantummasp":
+      return encodeEnumTagValue(11);
+    case "anonymouspgc":
+    case "anonymouspgckoutofn":
+    case "anonymouspgckoutofnv1":
+      return encodeEnumTagValue(12);
+    case "verange":
+    case "verangetransparentrange":
+    case "verangetransparentrangev1":
+      return encodeEnumTagValue(13);
+    case "zkat":
+    case "zkatpolicyprivateauthenticator":
+    case "zkatpolicyprivateauthv1":
+      return encodeEnumTagValue(14);
+    case "recursiveanonymousadmission":
+    case "recursiveanonymousadmissionv0":
+    case "zkamsrecursiveadmission":
+    case "zkamsrecursiveadmissionv0":
+      return encodeEnumTagValue(15);
+    case "vegaexistingcredentialzk":
+    case "vegaexistingcredentialzkv0":
+      return encodeEnumTagValue(16);
+    case "silentthresholdanoncred":
+    case "silentthresholdanoncredv0":
+    case "silentthresholdanonymouscredential":
+    case "thresholdanonymouscredentials":
+      return encodeEnumTagValue(17);
+    case "zkx509":
+    case "zkvmx509identity":
+    case "zkx509onchainidentity":
+    case "zkx509onchainidentityv0":
+      return encodeEnumTagValue(18);
+    case "siswithhints":
+    case "sishints":
+    case "sishintsanoncredpqv0":
+    case "latticeanonymouscredentials":
+      return encodeEnumTagValue(19);
     default:
       throw new Error(`${context} uses unsupported backend tag ${value}`);
   }
@@ -5205,6 +5281,36 @@ function decodeBackendTagValue(payload, context) {
       return "Stark";
     case 4:
       return "Unsupported";
+    case 5:
+      return "Halo2IpaOrchard";
+    case 6:
+      return "Groth16Bls12377";
+    case 7:
+      return "FcmpPlusPlusCurveTree";
+    case 8:
+      return "LatticePcsSis";
+    case 9:
+      return "MidenStark";
+    case 10:
+      return "AztecPlonkishPrivateKernel";
+    case 11:
+      return "PqMaspStarkFri";
+    case 12:
+      return "AnonymousPgc";
+    case 13:
+      return "VeRange";
+    case 14:
+      return "ZkAt";
+    case 15:
+      return "RecursiveAnonymousAdmission";
+    case 16:
+      return "VegaExistingCredentialZk";
+    case 17:
+      return "SilentThresholdAnoncred";
+    case 18:
+      return "ZkX509";
+    case 19:
+      return "SisWithHints";
     default:
       throw new Error(`${context} uses unsupported backend tag ${tag}`);
   }

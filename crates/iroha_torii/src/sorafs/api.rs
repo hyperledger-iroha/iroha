@@ -5235,73 +5235,22 @@ impl Write for StreamingBodyWriter {
     }
 }
 
-fn manifest_envelope_valid(
-    headers: &HeaderMap,
-    manifest: &StoredManifest,
-    record: Option<&PinManifestRecord>,
-) -> bool {
-    if let Some(envelope_b64) = headers
+fn manifest_envelope_valid(headers: &HeaderMap, record: Option<&PinManifestRecord>) -> bool {
+    let Some(envelope_b64) = headers
         .get(HEADER_SORA_MANIFEST_ENVELOPE)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        if let Some(record) = record {
-            if let Ok(envelope) = BASE64_STANDARD.decode(envelope_b64.as_bytes())
-                && validate_manifest_envelope_bytes(record, &envelope)
-            {
-                return true;
-            }
-        }
-        return alias_manifest_proof_valid(headers, manifest);
-    }
-
-    alias_manifest_proof_valid(headers, manifest)
-}
-
-fn alias_manifest_proof_valid(headers: &HeaderMap, manifest: &StoredManifest) -> bool {
-    let proof_b64 = headers
-        .get(HEADER_SORA_PROOF)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let alias = headers
-        .get(HEADER_SORA_NAME)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let (proof_b64, alias) = match (proof_b64, alias) {
-        (Some(proof_b64), Some(alias)) => (proof_b64, alias),
-        _ => return false,
-    };
-    let proof_bytes = match BASE64_STANDARD.decode(proof_b64.as_bytes()) {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    let bundle = match crate::sorafs::decode_alias_proof(&proof_bytes) {
-        Ok(bundle) => bundle,
-        Err(_) => return false,
-    };
-    if !bundle.binding.alias.eq_ignore_ascii_case(alias) {
+    else {
         return false;
-    }
-    if let Some(cid) = headers
-        .get(HEADER_SORA_CID)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let decoded = match hex::decode(cid) {
-            Ok(bytes) => bytes,
-            Err(_) => return false,
-        };
-        if decoded != bundle.binding.manifest_cid
-            || decoded.as_slice() != manifest.manifest_digest()
-        {
-            return false;
-        }
-    }
-    true
+    };
+    let Some(record) = record else {
+        return false;
+    };
+    let Ok(envelope) = BASE64_STANDARD.decode(envelope_b64.as_bytes()) else {
+        return false;
+    };
+    validate_manifest_envelope_bytes(record, &envelope)
 }
 
 fn validate_manifest_envelope_bytes(record: &PinManifestRecord, envelope: &[u8]) -> bool {
@@ -5664,11 +5613,7 @@ fn enforce_gateway_policy_for_request(
     let mut context = RequestContext::new(&fingerprint, now, monotonic_now)
         .with_manifest_digest(manifest.manifest_digest())
         .with_content_cid(manifest.manifest_cid())
-        .with_manifest_envelope(manifest_envelope_valid(
-            headers,
-            manifest,
-            pin_record.as_ref(),
-        ))
+        .with_manifest_envelope(manifest_envelope_valid(headers, pin_record.as_ref()))
         .with_remote_addr(remote);
 
     if let Some(host) = headers
@@ -6316,6 +6261,195 @@ mod gateway_policy_violation_tests {
         );
         let mismatched = norito::json::to_vec(&Value::Object(envelope)).expect("json");
         assert!(!validate_manifest_envelope_bytes(&record, &mismatched));
+    }
+
+    #[test]
+    fn manifest_envelope_adapter_rejects_alias_or_malformed_envelope_substitution() {
+        let private =
+            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x12; 32]).expect("key");
+        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
+        let record = PinManifestRecord::new(
+            ManifestDigest::new([0x31; 32]),
+            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            },
+            [0x32; 32],
+            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
+            5,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        )
+        .with_content_length(1);
+        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let mut sig_entry = Map::new();
+        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
+        sig_entry.insert(
+            "signer".into(),
+            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
+        );
+        sig_entry.insert(
+            "signature".into(),
+            Value::from(hex::encode(signature.payload())),
+        );
+        let mut envelope = Map::new();
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode(record.digest.as_bytes())),
+        );
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode(record.chunk_digest_sha3_256)),
+        );
+        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
+        envelope.insert(
+            "signatures".into(),
+            Value::Array(vec![Value::Object(sig_entry)]),
+        );
+        let encoded = norito::json::to_vec(&Value::Object(envelope.clone())).expect("json");
+        let encoded_b64 = BASE64_STANDARD.encode(&encoded);
+
+        let mut headers = HeaderMap::new();
+        assert!(
+            !manifest_envelope_valid(&headers, Some(&record)),
+            "missing explicit envelope header must not satisfy envelope policy"
+        );
+
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_NAME),
+            HeaderValue::from_static("docs@sorafs"),
+        );
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_PROOF),
+            alias_proof_header("docs@sorafs"),
+        );
+        assert!(
+            !manifest_envelope_valid(&headers, Some(&record)),
+            "alias proof headers must not stand in for manifest envelope evidence"
+        );
+
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+            HeaderValue::from_static("%%%not-base64%%%"),
+        );
+        assert!(
+            !manifest_envelope_valid(&headers, Some(&record)),
+            "malformed envelope header must fail closed even when alias proof headers are valid"
+        );
+
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode([0xFF; 32])),
+        );
+        let mismatched =
+            BASE64_STANDARD.encode(norito::json::to_vec(&Value::Object(envelope)).expect("json"));
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+            header_value(&mismatched, HEADER_SORA_MANIFEST_ENVELOPE),
+        );
+        assert!(
+            !manifest_envelope_valid(&headers, Some(&record)),
+            "mismatched envelope metadata must fail closed instead of falling back to alias proof"
+        );
+
+        headers.insert(
+            header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+            header_value(&encoded_b64, HEADER_SORA_MANIFEST_ENVELOPE),
+        );
+        assert!(
+            !manifest_envelope_valid(&headers, None),
+            "envelope validation requires the registered paid-pin manifest record"
+        );
+        assert!(
+            manifest_envelope_valid(&headers, Some(&record)),
+            "valid signed envelope metadata should satisfy the adapter"
+        );
+    }
+
+    #[test]
+    fn manifest_envelope_rejects_stale_registry_metadata_after_rotation() {
+        let private =
+            iroha_crypto::PrivateKey::from_bytes(Algorithm::Ed25519, &[0x13; 32]).expect("key");
+        let keypair = iroha_crypto::KeyPair::from_private_key(private).expect("keypair");
+        let record = PinManifestRecord::new(
+            ManifestDigest::new([0x41; 32]),
+            iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle {
+                profile_id: 1,
+                namespace: "sorafs".to_owned(),
+                name: "sf1".to_owned(),
+                semver: "1.0.0".to_owned(),
+                multihash_code: sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            },
+            [0x42; 32],
+            iroha_data_model::sorafs::pin_registry::PinPolicy::default(),
+            iroha_data_model::account::AccountId::new(keypair.public_key().clone()),
+            5,
+            None,
+            None,
+            iroha_data_model::metadata::Metadata::default(),
+        )
+        .with_content_length(1);
+        let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
+        let mut sig_entry = Map::new();
+        sig_entry.insert("algorithm".into(), Value::from("ed25519"));
+        sig_entry.insert(
+            "signer".into(),
+            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
+        );
+        sig_entry.insert(
+            "signature".into(),
+            Value::from(hex::encode(signature.payload())),
+        );
+        let mut envelope = Map::new();
+        envelope.insert(
+            "manifest_blake3".into(),
+            Value::from(hex::encode(record.digest.as_bytes())),
+        );
+        envelope.insert(
+            "chunk_digest_sha3_256".into(),
+            Value::from(hex::encode(record.chunk_digest_sha3_256)),
+        );
+        envelope.insert("profile".into(), Value::from(record.chunker.to_handle()));
+        envelope.insert(
+            "signatures".into(),
+            Value::Array(vec![Value::Object(sig_entry)]),
+        );
+        let encoded = norito::json::to_vec(&Value::Object(envelope)).expect("json");
+
+        assert!(validate_manifest_envelope_bytes(&record, &encoded));
+
+        let mut rotated_chunk_record = record.clone();
+        rotated_chunk_record.chunk_digest_sha3_256 = [0x43; 32];
+        assert!(
+            !validate_manifest_envelope_bytes(&rotated_chunk_record, &encoded),
+            "an envelope signed for an older chunk digest must not satisfy a rotated registry record"
+        );
+
+        let mut rotated_profile_record = record.clone();
+        rotated_profile_record.chunker.semver = "2.0.0".to_owned();
+        assert!(
+            !validate_manifest_envelope_bytes(&rotated_profile_record, &encoded),
+            "an envelope signed for an older chunker profile must not satisfy a rotated registry record"
+        );
+
+        let mut approved_record = record.clone();
+        approved_record.approve(6, Some(*blake3_hash(&encoded).as_bytes()));
+        assert!(
+            validate_manifest_envelope_bytes(&approved_record, &encoded),
+            "the approved record should accept the exact recorded envelope digest"
+        );
+
+        let mut rotated_envelope_record = record;
+        rotated_envelope_record.approve(7, Some([0x44; 32]));
+        assert!(
+            !validate_manifest_envelope_bytes(&rotated_envelope_record, &encoded),
+            "an envelope whose bytes no longer match the approved registry envelope digest must fail closed"
+        );
     }
 }
 

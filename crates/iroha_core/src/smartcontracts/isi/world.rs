@@ -608,10 +608,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if crate::zk::is_trusted_setup_backend_label(backend)
-            || crate::zk::is_developer_only_backend_label(backend)
-            || !(backend.starts_with("halo2/") || crate::zk::is_stark_fri_v1_backend(backend))
-        {
+        if !crate::zk::is_production_verify_backend_label(backend) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -729,6 +726,20 @@ pub mod isi {
     }
 
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
+        if BackendTag::is_pending_production_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "pending-production verifying key backends are not supported".into(),
+                ),
+            ));
+        }
+        if crate::zk::is_production_claim_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "production-claim verifying key backends are not supported".into(),
+                ),
+            ));
+        }
         if crate::zk::is_trusted_setup_backend_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -743,7 +754,42 @@ pub mod isi {
                 ),
             ));
         }
+        if !crate::zk::is_production_verify_backend_label(backend) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "unsupported verifying key backends are not supported".into(),
+                ),
+            ));
+        }
         Ok(())
+    }
+
+    fn pending_production_verifying_key_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "pending-production verifying key backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn pending_production_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "pending-production proof backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn production_claim_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "production-claim proof backends are not supported".into(),
+        ))
+        .into()
+    }
+
+    fn unsupported_proof_backend_error() -> Error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            "unsupported proof backends are not supported".into(),
+        ))
+        .into()
     }
 
     fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
@@ -821,6 +867,9 @@ pub mod isi {
                     format!("{label} proof must use OpenVerifyEnvelope payload").into(),
                 )
             })?;
+        envelope
+            .validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
         if envelope.backend != BackendTag::Halo2IpaPasta {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
@@ -2242,6 +2291,9 @@ pub mod isi {
                             ),
                         ));
                     }
+                }
+                backend if backend.is_pending_production_backend() => {
+                    return Err(pending_production_verifying_key_backend_error());
                 }
                 _ => {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -6213,6 +6265,9 @@ pub mod isi {
                     ));
                 }
             }
+            backend if backend.is_pending_production_backend() => {
+                return Err(pending_production_verifying_key_backend_error());
+            }
             _ => {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -7089,6 +7144,12 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
+        if BackendTag::is_pending_production_backend_label(attachment.backend.as_str()) {
+            return Err(pending_production_proof_backend_error());
+        }
+        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
+            return Err(production_claim_proof_backend_error());
+        }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -7102,6 +7163,9 @@ pub mod isi {
                     "developer-only proof backends are not supported".into(),
                 ),
             ));
+        }
+        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
+            return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -7122,18 +7186,7 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        if crate::zk::is_trusted_setup_backend_label(backend)
-            || crate::zk::is_developer_only_backend_label(backend)
-        {
-            return false;
-        }
-        if crate::zk::is_stark_fri_v1_backend(backend) {
-            return tag == BackendTag::Stark;
-        }
-        if backend.starts_with("halo2/") {
-            return tag == BackendTag::Halo2IpaPasta;
-        }
-        true
+        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
     }
 
     struct ProofEventArgs<'a> {
@@ -8863,6 +8916,9 @@ pub mod isi {
             return Err(InstructionExecutionError::InvariantViolation(
                 "verifying key is not active".into(),
             ));
+        }
+        if rec.backend.is_pending_production_backend() {
+            return Err(pending_production_verifying_key_backend_error());
         }
         if rec.gas_schedule_id.is_none() {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -15332,6 +15388,8 @@ pub mod isi {
         };
 
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+        #[cfg(feature = "zk-stark")]
+        use iroha_data_model::zk::{StarkFriOpenProofV1, ZkAcePublicInputsV1};
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
@@ -15375,8 +15433,6 @@ pub mod isi {
             prelude::Parameter,
             zk::{OpenVerifyEnvelope, ZkAceWitnessV1},
         };
-        #[cfg(feature = "zk-stark")]
-        use iroha_data_model::zk::{StarkFriOpenProofV1, ZkAcePublicInputsV1};
 
         #[test]
         fn derive_ballot_nullifier_is_unambiguous_for_delimiters() {
@@ -17307,6 +17363,68 @@ pub mod isi {
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
             );
+
+            for (label, envelope, expected) in [
+                (
+                    "empty_circuit",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "",
+                        commitment,
+                        b"schema:voting:v1".to_vec(),
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_public_inputs",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        Vec::new(),
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_proof_bytes",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        b"schema:voting:v1".to_vec(),
+                        Vec::new(),
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "oversized_public_inputs",
+                    OpenVerifyEnvelope::new(
+                        BackendTag::Halo2IpaPasta,
+                        "halo2/ipa:test-circuit",
+                        commitment,
+                        vec![
+                            0xA5;
+                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES + 1
+                        ],
+                        vec![0xAA],
+                    ),
+                    "invalid OpenVerifyEnvelope",
+                ),
+            ] {
+                let err = validate_open_verify_envelope_metadata(
+                    "ballot",
+                    "halo2/ipa",
+                    &envelope,
+                    &vk_rec,
+                )
+                .expect_err("{label} must reject");
+                assert!(
+                    err.to_string().contains(expected),
+                    "unexpected {label} rejection: {err}"
+                );
+            }
         }
 
         #[test]
@@ -17447,7 +17565,23 @@ pub mod isi {
                 vec![4, 5, 6],
             );
             let bytes = norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope");
-            for backend in ["halo2/ipa: KZG", "halo2/ipa:Mock-Proof"] {
+            for backend in [
+                " halo2/ipa",
+                "halo2/ipa ",
+                "halo2/ipa\n",
+                "halo2/ipa\0",
+                "../halo2/ipa",
+                "halo2/ipa/../tiny-add",
+                "halo2/ipa/orchard",
+                "halo2/unknown-native-v1",
+                "halo2/ipa: KZG",
+                "halo2/ipa:Mock-Proof",
+                " stark/fri/sha256-goldilocks",
+                "stark/fri/sha256-goldilocks ",
+                "stark/fri/sha256-goldilocks\0",
+                "../stark/fri",
+                "stark/fri/miden",
+            ] {
                 let proof_box = ProofBox::new(backend.into(), bytes.clone());
                 assert!(
                     decode_open_verify_envelope(&proof_box).is_none(),
@@ -17486,6 +17620,40 @@ pub mod isi {
                 "stark/fri/sha256-goldilocks",
                 BackendTag::Halo2IpaPasta
             ));
+            assert!(!open_verify_backend_tag_matches(
+                "halo2/unknown-native-v1",
+                BackendTag::Halo2IpaPasta
+            ));
+            assert!(!open_verify_backend_tag_matches(
+                "unknown/privacy/backend",
+                BackendTag::Halo2IpaPasta
+            ));
+            for pending_backend in [
+                "halo2-ipa-orchard",
+                "groth16-bls12-377",
+                "fcmp-plus-plus-curve-tree",
+                "lattice-pcs-sis",
+                "miden-stark",
+                "aztec-plonkish-private-kernel",
+                "pq-masp-stark-fri",
+                "anonymous-pgc",
+                "verange",
+                "zkat",
+                "zk-ams",
+                "vega-existing-credential-zk",
+                "silent-threshold-anoncred",
+                "zk-x509",
+                "sis-with-hints",
+            ] {
+                assert!(
+                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Halo2IpaPasta),
+                    "{pending_backend} must stay fail-closed against Halo2 envelopes"
+                );
+                assert!(
+                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Stark),
+                    "{pending_backend} must stay fail-closed against STARK envelopes"
+                );
+            }
         }
 
         #[test]
@@ -17580,6 +17748,27 @@ pub mod isi {
             .expect_err("developer-only attachment backend must fail before envelope use");
             let msg = smart_contract_instruction_error_message(err);
             assert!(msg.contains("developer-only"), "unexpected error: {msg}");
+            let unsupported_proof = ProofBox::new(
+                "halo2/unknown-native-v1".into(),
+                norito::to_bytes(&envelope).expect("encode envelope"),
+            );
+            let unsupported_attachment = ProofAttachment::new_ref(
+                "halo2/unknown-native-v1".into(),
+                unsupported_proof.clone(),
+                VerifyingKeyId::new("halo2/unknown-native-v1", "vk"),
+            );
+            let err = validate_proof_attachment(
+                &unsupported_attachment,
+                &unsupported_proof,
+                true,
+                Some(&envelope),
+            )
+            .expect_err("unsupported attachment backend must fail before envelope use");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("unsupported proof backends"),
+                "unexpected error: {msg}"
+            );
             assert!(!open_verify_backend_tag_matches(
                 "halo2/debug",
                 BackendTag::Halo2IpaPasta
@@ -18104,8 +18293,7 @@ pub mod isi {
         fn weak_zk_ace_verifying_key_box_for_test() -> VerifyingKeyBox {
             let payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
                 version: 1,
-                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID
-                    .to_owned(),
+                circuit_id: iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.to_owned(),
                 n_log2: 4,
                 blowup_log2: 1,
                 fold_arity: 2,
@@ -19420,8 +19608,7 @@ pub mod isi {
                 .get_mut(&fixture.vk_id)
                 .expect("ZK-ACE verifier is installed");
             weak_record.commitment = weak_commitment;
-            weak_record.vk_len =
-                u32::try_from(weak_vk.bytes.len()).expect("weak VK length fits");
+            weak_record.vk_len = u32::try_from(weak_vk.bytes.len()).expect("weak VK length fits");
             weak_record.key = Some(weak_vk);
 
             let err = iroha_data_model::isi::zk::RegisterZkAceIdentityCommitment::new(
@@ -22381,6 +22568,69 @@ pub mod isi {
             }
         }
 
+        const PENDING_PRODUCTION_VERIFIER_LABELS: &[&str] = &[
+            "halo2/ipa/orchard",
+            "halo2/ipa:zcash-orchard",
+            "groth16/bls12-377",
+            "penumbra-masp",
+            "fcmp-plus-plus-curve-tree",
+            "lattice-pcs-sis",
+            "jindo",
+            "miden-stark",
+            "stark/fri/miden",
+            "aztec-plonkish-private-kernel",
+            "pq-masp-stark-fri",
+            "stark/fri/pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "zk-ams",
+            "vega-existing-credential-zk",
+            "silent-threshold-anoncred",
+            "zk-x509",
+            "sis-with-hints",
+        ];
+
+        const PENDING_PRODUCTION_VERIFIER_TAGS: &[BackendTag] = &[
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ];
+
+        const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:mainnet-ready",
+            "halo2/ipa:production-certified",
+            "stark/fri/audit-signoff",
+            "stark/fri/externally-audited",
+            "stark/fri/security-review-passed",
+            "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        ];
+
+        fn pending_label_generic_record_profile(
+            backend: &str,
+        ) -> (BackendTag, &'static str, &'static str) {
+            if backend.starts_with("stark/fri") {
+                (BackendTag::Stark, "goldilocks", "stark_default")
+            } else {
+                (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
+            }
+        }
+
         #[cfg(feature = "zk-halo2-ipa")]
         fn pasta_scalar_word(value: u64) -> [u8; 32] {
             let mut out = [0u8; 32];
@@ -22453,9 +22703,7 @@ pub mod isi {
                 output_commitment,
                 [0u8; 32],
                 root_hint,
-                crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
-                    stx.chain_id.as_str(),
-                ),
+                crate::zk::confidential_v2::derive_confidential_chain_tag_v2(stx.chain_id.as_str()),
             ];
             let initial_fixture =
                 crate::zk::test_utils::halo2_asset_hidden_transfer_fixture_envelope(
@@ -22488,7 +22736,9 @@ pub mod isi {
             record.status = ConfidentialStatus::Active;
             record.key = Some(vk_box);
             record.gas_schedule_id = Some("halo2_default".into());
-            stx.world.verifying_keys.insert(vk_id.clone(), record.clone());
+            stx.world
+                .verifying_keys
+                .insert(vk_id.clone(), record.clone());
             stx.world
                 .verifying_keys_by_circuit
                 .insert((record.circuit_id.clone(), record.version), vk_id.clone());
@@ -22547,6 +22797,10 @@ pub mod isi {
                 BackendTag,
                 CircuitId,
                 PublicInputsSchema,
+                EmptyCircuitId,
+                EmptyPublicInputs,
+                OversizedPublicInputs,
+                EmptyProofBytes,
                 AuxiliaryBytes,
                 ZeroVerifyingKeyHash,
                 VerifyingKeyHash,
@@ -22568,6 +22822,26 @@ pub mod isi {
                     "schema",
                     Tamper::PublicInputsSchema,
                     "public inputs schema mismatch",
+                ),
+                (
+                    "empty_circuit",
+                    Tamper::EmptyCircuitId,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_public_inputs",
+                    Tamper::EmptyPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "oversized_public_inputs",
+                    Tamper::OversizedPublicInputs,
+                    "invalid OpenVerifyEnvelope",
+                ),
+                (
+                    "empty_proof_bytes",
+                    Tamper::EmptyProofBytes,
+                    "invalid OpenVerifyEnvelope",
                 ),
                 (
                     "aux",
@@ -22652,6 +22926,16 @@ pub mod isi {
                     Tamper::PublicInputsSchema => {
                         envelope.public_inputs = b"not the confidential transfer schema".to_vec();
                     }
+                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                    Tamper::OversizedPublicInputs => {
+                        envelope.public_inputs = vec![
+                            0xA5;
+                            iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                                + 1
+                        ];
+                    }
+                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
                     Tamper::AuxiliaryBytes => envelope.aux = b"fee-binding".to_vec(),
                     Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
                     Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
@@ -22750,8 +23034,15 @@ pub mod isi {
             #[derive(Clone, Copy)]
             enum Tamper {
                 BackendTag,
+                CircuitId,
                 PublicInputsSchema,
+                EmptyCircuitId,
+                EmptyPublicInputs,
+                OversizedPublicInputs,
+                EmptyProofBytes,
                 AuxiliaryBytes,
+                ZeroVerifyingKeyHash,
+                VerifyingKeyHash,
                 MissingCircuitIndex,
             }
 
@@ -22776,14 +23067,49 @@ pub mod isi {
                         "unexpected OpenVerifyEnvelope backend tag",
                     ),
                     (
+                        "circuit",
+                        Tamper::CircuitId,
+                        "verifying key circuit mismatch",
+                    ),
+                    (
                         "schema",
                         Tamper::PublicInputsSchema,
                         "public inputs schema mismatch",
                     ),
                     (
+                        "empty_circuit_id",
+                        Tamper::EmptyCircuitId,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "empty_public_inputs",
+                        Tamper::EmptyPublicInputs,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "oversized_public_inputs",
+                        Tamper::OversizedPublicInputs,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
+                        "empty_proof_bytes",
+                        Tamper::EmptyProofBytes,
+                        "invalid OpenVerifyEnvelope",
+                    ),
+                    (
                         "aux",
                         Tamper::AuxiliaryBytes,
                         "envelope auxiliary bytes must be empty",
+                    ),
+                    (
+                        "zero_vk_hash",
+                        Tamper::ZeroVerifyingKeyHash,
+                        "verifier-key hash must be non-zero",
+                    ),
+                    (
+                        "wrong_vk_hash",
+                        Tamper::VerifyingKeyHash,
+                        "verifying key commitment mismatch",
                     ),
                     (
                         "missing_circuit_index",
@@ -22850,11 +23176,26 @@ pub mod isi {
                     };
                     match tamper {
                         Tamper::BackendTag => envelope.backend = BackendTag::Stark,
+                        Tamper::CircuitId => {
+                            envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
+                        }
                         Tamper::PublicInputsSchema => {
                             envelope.public_inputs =
                                 b"not the confidential unshield schema".to_vec();
                         }
+                        Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                        Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                        Tamper::OversizedPublicInputs => {
+                            envelope.public_inputs = vec![
+                                0xA5;
+                                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                                    + 1
+                            ];
+                        }
+                        Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
                         Tamper::AuxiliaryBytes => envelope.aux = b"side-channel".to_vec(),
+                        Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
+                        Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
                         Tamper::MissingCircuitIndex => {}
                     }
                     let proof_box = ProofBox::new(
@@ -23754,6 +24095,187 @@ pub mod isi {
         }
 
         #[test]
+        fn register_vk_rejects_pending_production_record_tags() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_tag_{idx}"));
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("pending-tag-{idx}"),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    [0x6A; 32],
+                    [0x6B; 32],
+                );
+                rec.status = ConfidentialStatus::Active;
+                rec.gas_schedule_id = Some("halo2_default".into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("pending-production verifier tag must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{} must not be admitted to WSV",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_pending_production_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_pending_label_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let (record_backend, curve, schedule) =
+                    pending_label_generic_record_profile(backend);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:pending-production-circuit"),
+                    None,
+                    "test",
+                    record_backend,
+                    curve,
+                    [0x6C; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("pending-production verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{backend} must not be admitted to WSV"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_production_claim_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let (record_backend, curve, schedule) =
+                    pending_label_generic_record_profile(backend);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:claimed-production-circuit"),
+                    None,
+                    "test",
+                    record_backend,
+                    curve,
+                    [0x7B; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                    id: id.clone(),
+                    record: rec,
+                }
+                .into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("production-claim verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("production-claim verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+                assert!(
+                    stx.world.verifying_keys.get(&id).is_none(),
+                    "{backend} must not be admitted to WSV"
+                );
+            }
+        }
+
+        #[test]
         fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -23912,6 +24434,139 @@ pub mod isi {
                 let msg = smart_contract_error_message(err);
                 assert!(
                     msg.contains("developer-only verifying key backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn register_vk_rejects_unsupported_backend_labels() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, (backend, tag, curve, schedule)) in [
+                (
+                    " halo2/ipa",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa ",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa\n",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa\0",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "../halo2/ipa",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa/../tiny-add",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "halo2/ipa:unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                ),
+                (
+                    "stark/unknown-native-v1",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    " stark/fri/sha256-goldilocks",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/sha256-goldilocks ",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "stark/fri/sha256-goldilocks\0",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+                (
+                    "../stark/fri",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let mut stx = state_block.transaction();
+                let id = VerifyingKeyId::new(backend, format!("vk_unsupported_{idx}"));
+                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("{backend}:unsupported-circuit"),
+                    None,
+                    "test",
+                    tag,
+                    curve,
+                    [0x73; 32],
+                    hash_vk(&vk_box),
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some(schedule.into());
+                let instr: InstructionBox =
+                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                    .expect_err("unsupported verifier label must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("unsupported verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }
@@ -25446,6 +26101,74 @@ pub mod isi {
         }
 
         #[test]
+        fn update_vk_rejects_pending_production_record_tags_from_legacy_state() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let exec = Executor::default();
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let id = VerifyingKeyId::new("halo2/ipa", format!("vk_pending_update_tag_{idx}"));
+                let mut old_rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    format!("pending-update-tag-{idx}"),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    [0x6D; 32],
+                    [0x6E; 32],
+                );
+                old_rec.status = ConfidentialStatus::Active;
+                old_rec.gas_schedule_id = Some("halo2_default".into());
+
+                let mut seed_stx = state_block.transaction();
+                seed_stx
+                    .world
+                    .verifying_keys
+                    .insert(id.clone(), old_rec.clone());
+                seed_stx
+                    .world
+                    .verifying_keys_by_circuit
+                    .insert((old_rec.circuit_id.clone(), old_rec.version), id.clone());
+                seed_stx.apply();
+
+                let mut new_rec = old_rec;
+                new_rec.version = 2;
+                new_rec.public_inputs_schema_hash = [0x6F; 32];
+                new_rec.commitment = [0x70; 32];
+                let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                    id: id.clone(),
+                    record: new_rec,
+                }
+                .into();
+                let mut stx = state_block.transaction();
+                let err = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                    .expect_err("pending-production verifier tag update must be rejected");
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
+        }
+
+        #[test]
         fn update_vk_rejects_non_production_existing_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -25466,6 +26189,27 @@ pub mod isi {
 
             let exec = Executor::default();
             for (idx, (backend, tag, curve, schedule, expected_msg)) in [
+                (
+                    "halo2/ipa/orchard",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "pending-production verifying key backends",
+                ),
+                (
+                    "stark/fri/miden",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "pending-production verifying key backends",
+                ),
+                (
+                    "anonymous-pgc",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "pending-production verifying key backends",
+                ),
                 (
                     "halo2/mock",
                     BackendTag::Halo2IpaPasta,
@@ -25488,6 +26232,20 @@ pub mod isi {
                     "developer-only verifying key backends",
                 ),
                 (
+                    "halo2/ipa:production-ready",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "production-claim verifying key backends",
+                ),
+                (
+                    "stark/fri/security-review-passed",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "production-claim verifying key backends",
+                ),
+                (
                     "halo2/kzg",
                     BackendTag::Halo2IpaPasta,
                     "pallas",
@@ -25500,6 +26258,20 @@ pub mod isi {
                     "goldilocks",
                     "stark_default",
                     "trusted-setup verifying key backends",
+                ),
+                (
+                    "halo2/unknown-native-v1",
+                    BackendTag::Halo2IpaPasta,
+                    "pallas",
+                    "halo2_default",
+                    "unsupported verifying key backends",
+                ),
+                (
+                    "stark/unknown-native-v1",
+                    BackendTag::Stark,
+                    "goldilocks",
+                    "stark_default",
+                    "unsupported verifying key backends",
                 ),
             ]
             .into_iter()
@@ -25904,6 +26676,191 @@ pub mod isi {
                 .expect_err("missing envelope should reject proof");
             let msg = smart_contract_error_message(err);
             assert!(msg.contains("OpenVerifyEnvelope"), "unexpected msg: {msg}");
+        }
+
+        #[test]
+        fn verify_proof_rejects_pending_production_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PENDING_PRODUCTION_VERIFIER_LABELS
+                .iter()
+                .copied()
+                .enumerate()
+            {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.apply();
+
+                let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
+                let attachment = ProofAttachment::new_ref(
+                    backend.into(),
+                    proof_box,
+                    VerifyingKeyId::new(backend, format!("vk_pending_proof_label_{idx}")),
+                );
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "pending-production proof backend must reject before registry lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production proof backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
+            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.apply();
+
+                let proof_box = ProofBox::new(backend.into(), vec![u8::try_from(idx).unwrap()]);
+                let attachment = ProofAttachment::new_ref(
+                    backend.into(),
+                    proof_box,
+                    VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
+                );
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "production-claim proof backend must reject before registry lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("production-claim proof backends"),
+                    "unexpected msg for {backend}: {msg}"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_proof_preverified_cache_does_not_bypass_pending_production_record_tags() {
+            for (idx, backend_tag) in PENDING_PRODUCTION_VERIFIER_TAGS.iter().copied().enumerate() {
+                let kura = Kura::blank_kura_for_testing();
+                let query_handle = LiveQueryStore::start_test();
+                let state = State::new(World::default(), kura, query_handle);
+
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).unwrap(),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let exec = Executor::default();
+
+                let vk_id =
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_pending_record_tag_{idx}"));
+                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
+                let vk_commitment = hash_vk(&vk_box);
+                let public_inputs = vec![1, 2, 3, idx as u8];
+                let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
+                let circuit_id = format!("circuit_pending_record_tag_{idx}");
+                let mut rec = VerifyingKeyRecord::new_with_owner(
+                    1,
+                    circuit_id.clone(),
+                    None,
+                    "test",
+                    backend_tag,
+                    "pallas",
+                    public_inputs_schema_hash,
+                    vk_commitment,
+                );
+                rec.vk_len = 3;
+                rec.status = ConfidentialStatus::Active;
+                rec.key = Some(vk_box);
+                rec.gas_schedule_id = Some("halo2_default".into());
+
+                let envelope = OpenVerifyEnvelope {
+                    backend: BackendTag::Halo2IpaPasta,
+                    circuit_id: circuit_id.clone(),
+                    vk_hash: vk_commitment,
+                    public_inputs,
+                    proof_bytes: vec![4, 5, 6, idx as u8],
+                    aux: Vec::new(),
+                };
+                let proof_box = ProofBox::new(
+                    "halo2/ipa".into(),
+                    norito::to_bytes(&envelope).expect("encode envelope"),
+                );
+                let attachment =
+                    ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
+
+                let mut stx = block.transaction();
+                bootstrap_alice_account(&mut stx);
+                stx.world.verifying_keys.insert(vk_id.clone(), rec.clone());
+                stx.world
+                    .verifying_keys_by_circuit
+                    .insert((rec.circuit_id.clone(), rec.version), vk_id.clone());
+                stx.apply();
+
+                let mut map = BTreeMap::new();
+                map.insert(
+                    crate::zk::PreverifiedProofKey::new(
+                        &attachment.proof,
+                        &attachment.vk_ref,
+                        vk_commitment,
+                    ),
+                    true,
+                );
+                block.set_preverified_batch(Arc::new(map));
+
+                let mut stx_verify = block.transaction();
+                let verify: InstructionBox =
+                    iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+                let err = exec
+                    .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
+                    .expect_err(
+                        "pending-production verifier record must reject before preverify lookup",
+                    );
+                let msg = smart_contract_error_message(err);
+                assert!(
+                    msg.contains("pending-production verifying key backends"),
+                    "unexpected msg for {}: {msg}",
+                    backend_tag.canonical_label()
+                );
+            }
         }
 
         #[test]

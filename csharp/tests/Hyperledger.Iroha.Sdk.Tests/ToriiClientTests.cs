@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Http;
@@ -1743,6 +1745,313 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
+    public async Task RegisterSoraFsPinManifestAsyncPostsNormalizedPayloadAndDeserializesResponse()
+    {
+        var manifestHex = new string('a', 64);
+        var chunkHex = new string('b', 64);
+        var successorHex = new string('c', 64);
+        var aliasProof = Convert.ToBase64String("alias-proof"u8.ToArray());
+
+        using var handler = new RecordingHandler(request =>
+        {
+            var payload = ReadBodyAsJson(request);
+            var root = payload.RootElement;
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/v1/sorafs/pin/register", request.RequestUri!.AbsolutePath);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
+            Assert.Equal("alice@boi", root.GetProperty("authority").GetString());
+            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
+            Assert.Equal((uint)1, root.GetProperty("chunker").GetProperty("profile_id").GetUInt32());
+            Assert.Equal("sorafs", root.GetProperty("chunker").GetProperty("namespace").GetString());
+            Assert.Equal("sf1", root.GetProperty("chunker").GetProperty("name").GetString());
+            Assert.Equal("1.0.0", root.GetProperty("chunker").GetProperty("semver").GetString());
+            Assert.Equal((uint)0, root.GetProperty("chunker").GetProperty("multihash_code").GetUInt32());
+            var pinPolicy = root.GetProperty("pin_policy");
+            Assert.Equal((uint)3, pinPolicy.GetProperty("min_replicas").GetUInt32());
+            Assert.Equal("Hot", pinPolicy.GetProperty("storage_class").GetProperty("type").GetString());
+            Assert.Equal((ulong)72, pinPolicy.GetProperty("retention_epoch").GetUInt64());
+            Assert.Equal(manifestHex, root.GetProperty("manifest_digest_hex").GetString());
+            Assert.Equal(chunkHex, root.GetProperty("chunk_digest_sha3_256_hex").GetString());
+            Assert.Equal((ulong)4096, root.GetProperty("content_length").GetUInt64());
+            Assert.Equal((ulong)42, root.GetProperty("submitted_epoch").GetUInt64());
+            Assert.Equal("docs", root.GetProperty("alias").GetProperty("namespace").GetString());
+            Assert.Equal("main", root.GetProperty("alias").GetProperty("name").GetString());
+            Assert.Equal(aliasProof, root.GetProperty("alias").GetProperty("proof_base64").GetString());
+            Assert.Equal(successorHex, root.GetProperty("successor_of_hex").GetString());
+
+            return JsonResponse($$"""
+                {
+                  "manifest_digest_hex": "{{manifestHex.ToUpperInvariant()}}",
+                  "chunker_handle": "sorafs.sf1@1.0.0",
+                  "submitted_epoch": 42,
+                  "content_length": 4096,
+                  "pin_fee_nano": 500000000,
+                  "pin_fee_asset_id": "xor#universal",
+                  "pin_fee_treasury_account_id": "treasury@boi",
+                  "alias": {
+                    "namespace": "docs",
+                    "name": "main",
+                    "proof_base64": "{{aliasProof}}"
+                  },
+                  "successor_of_hex": "0x{{successorHex.ToUpperInvariant()}}"
+                }
+                """);
+        });
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        var response = await client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest());
+
+        Assert.Equal(manifestHex, response.ManifestDigestHex);
+        Assert.Equal("sorafs.sf1@1.0.0", response.ChunkerHandle);
+        Assert.Equal((ulong)42, response.SubmittedEpoch);
+        Assert.Equal((ulong)4096, response.ContentLength);
+        Assert.Equal((ulong)500000000, response.PinFeeNano);
+        Assert.Equal("xor#universal", response.PinFeeAssetId);
+        Assert.Equal("treasury@boi", response.PinFeeTreasuryAccountId);
+        Assert.Equal("docs", response.Alias!.Namespace);
+        Assert.Equal("main", response.Alias.Name);
+        Assert.Equal(aliasProof, response.Alias.ProofBase64);
+        Assert.Equal(successorHex, response.SuccessorOfHex);
+    }
+
+    [Fact]
+    public async Task RegisterSoraFsPinManifestAsyncRejectsMalformedInputsBeforeRequest()
+    {
+        var valid = ValidSoraFsPinRegisterRequest();
+        var invalidRequests = new[]
+        {
+            valid with { ManifestDigestHex = "abc123" },
+            valid with { ChunkDigestSha3_256Hex = new string('z', 64) },
+            valid with { SuccessorOfHex = new string('c', 63) },
+            valid with { ContentLength = null },
+            valid with { SubmittedEpoch = null },
+            valid with { Chunker = null },
+            valid with { Chunker = valid.Chunker! with { ProfileId = null } },
+            valid with { Chunker = valid.Chunker! with { ProfileId = 0 } },
+            valid with { Chunker = valid.Chunker! with { Namespace = " " } },
+            valid with { Chunker = valid.Chunker! with { Semver = "" } },
+            valid with { PinPolicy = null },
+            valid with { PinPolicy = valid.PinPolicy! with { MinReplicas = null } },
+            valid with { PinPolicy = valid.PinPolicy! with { MinReplicas = 0 } },
+            valid with { PinPolicy = valid.PinPolicy! with { StorageClass = null } },
+            valid with
+            {
+                PinPolicy = valid.PinPolicy! with
+                {
+                    StorageClass = ToriiSoraFsStorageClass.From("lava"),
+                },
+            },
+            valid with { Alias = valid.Alias! with { Namespace = "" } },
+            valid with { Alias = valid.Alias! with { ProofBase64 = null } },
+            valid with { Alias = valid.Alias! with { ProofBase64 = "not base64!" } },
+            valid with { Alias = valid.Alias! with { ProofBase64 = Convert.ToBase64String(Array.Empty<byte>()) } },
+        };
+
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request should not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var request in invalidRequests)
+        {
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.RegisterSoraFsPinManifestAsync(request));
+            Assert.Null(handler.LastRequest);
+        }
+    }
+
+    [Fact]
+    public async Task RegisterSoraFsPinManifestAsyncRejectsMalformedResponse()
+    {
+        using var handler = new RecordingHandler(_ => JsonResponse("""
+            {
+              "manifest_digest_hex": "abc123",
+              "chunker_handle": "sorafs.sf1@1.0.0",
+              "submitted_epoch": 42,
+              "content_length": 4096,
+              "pin_fee_nano": 500000000,
+              "pin_fee_asset_id": "xor#universal",
+              "pin_fee_treasury_account_id": "treasury@boi"
+            }
+            """));
+
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.RegisterSoraFsPinManifestAsync(ValidSoraFsPinRegisterRequest()));
+        Assert.Equal("/v1/sorafs/pin/register", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task RegisterVerifyingKeyAsyncCanonicalizesInlineCommitmentPayload()
+    {
+        var vkBytes = "abc"u8.ToArray();
+        var commitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes);
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("/v1/zk/vk/register", request.RequestUri!.AbsolutePath);
+            using var body = ReadBodyAsJson(request);
+            var root = body.RootElement;
+            Assert.Equal("alice", root.GetProperty("authority").GetString());
+            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
+            Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
+            Assert.Equal("vk_main", root.GetProperty("name").GetString());
+            Assert.Equal(1u, root.GetProperty("version").GetUInt32());
+            Assert.Equal(new string('a', 64), root.GetProperty("public_inputs_schema_hash_hex").GetString());
+            Assert.Equal(commitmentHex, root.GetProperty("commitment_hex").GetString());
+            Assert.Equal(Convert.ToBase64String(vkBytes), root.GetProperty("vk_bytes").GetString());
+            Assert.Equal(3u, root.GetProperty("vk_len").GetUInt32());
+            Assert.Equal("Active", root.GetProperty("status").GetString());
+            return JsonResponse("""{"accepted":true}""", HttpStatusCode.Accepted);
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        using var response = await client.RegisterVerifyingKeyAsync(new ToriiVerifyingKeyRegisterRequest
+        {
+            Authority = " alice ",
+            PrivateKey = " ed25519:deadbeef ",
+            Backend = "halo2/ipa",
+            Name = " vk_main ",
+            Version = 1,
+            CircuitId = " halo2/ipa::transfer_v1 ",
+            PublicInputsSchemaHashHex = "0x" + new string('A', 64),
+            GasScheduleId = " halo2_default ",
+            VerifyingKeyBytes = vkBytes,
+            CommitmentHex = commitmentHex.ToUpperInvariant(),
+            Status = "active",
+        });
+
+        Assert.True(response.RootElement.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task UpdateVerifyingKeyAsyncCanonicalizesPrivateKeyAndInlineCommitmentPayload()
+    {
+        var vkBytes = "abcd"u8.ToArray();
+        var commitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes);
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("/v1/zk/vk/update", request.RequestUri!.AbsolutePath);
+            using var body = ReadBodyAsJson(request);
+            var root = body.RootElement;
+            Assert.Equal("alice", root.GetProperty("authority").GetString());
+            Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
+            Assert.Equal("halo2/ipa", root.GetProperty("backend").GetString());
+            Assert.Equal("vk_main", root.GetProperty("name").GetString());
+            Assert.Equal(2u, root.GetProperty("version").GetUInt32());
+            Assert.Equal(new string('b', 64), root.GetProperty("public_inputs_schema_hash_hex").GetString());
+            Assert.Equal(commitmentHex, root.GetProperty("commitment_hex").GetString());
+            Assert.Equal(Convert.ToBase64String(vkBytes), root.GetProperty("vk_bytes").GetString());
+            Assert.Equal(4u, root.GetProperty("vk_len").GetUInt32());
+            Assert.Equal("Withdrawn", root.GetProperty("status").GetString());
+            return JsonResponse("""{"accepted":true}""", HttpStatusCode.Accepted);
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        using var response = await client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
+        {
+            Authority = " alice ",
+            PrivateKey = " ed25519:deadbeef ",
+            Backend = "halo2/ipa",
+            Name = " vk_main ",
+            Version = 2,
+            CircuitId = " halo2/ipa::transfer_v2 ",
+            PublicInputsSchemaHashHex = "0x" + new string('B', 64),
+            VerifyingKeyBytes = vkBytes,
+            CommitmentHex = commitmentHex.ToUpperInvariant(),
+            Status = "withdrawn",
+        });
+
+        Assert.True(response.RootElement.GetProperty("accepted").GetBoolean());
+    }
+
+    [Fact]
+    public async Task UpdateVerifyingKeyAsyncRejectsMismatchedInlineCommitmentBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
+            {
+                Authority = "alice",
+                PrivateKey = "ed25519:deadbeef",
+                Backend = "halo2/ipa",
+                Name = "vk_main",
+                Version = 2,
+                CircuitId = "halo2/ipa::transfer_v2",
+                PublicInputsSchemaHashHex = new string('b', 64),
+                VerifyingKeyBytes = "abc"u8.ToArray(),
+                CommitmentHex = new string('0', 64),
+            }));
+        Assert.Contains("commitment_hex must match domain-separated SHA-256", error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task VerifyingKeyRequestsRejectMalformedInputsBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var valid = ValidVerifyingKeyRegisterRequest();
+        ToriiVerifyingKeyRegisterRequest[] invalid =
+        {
+            valid with { Backend = " halo2/ipa" },
+            valid with { PrivateKey = "" },
+            valid with { Backend = "halo2/ipa/orchard" },
+            valid with { Backend = "halo2/\u200Bipa" },
+            valid with { Name = "vk:main" },
+            valid with { Name = " " },
+            valid with { Version = 0 },
+            valid with { PublicInputsSchemaHashHex = "abc123" },
+            valid with { GasScheduleId = "" },
+            valid with { VerifyingKeyBytes = Array.Empty<byte>() },
+            valid with { VerifyingKeyLength = 99 },
+            valid with { VerifyingKeyBytes = null, VerifyingKeyLength = 3, CommitmentHex = null },
+            valid with { ActivationHeight = 10, WithdrawHeight = 9 },
+            valid with { Status = "production-ready" },
+        };
+
+        foreach (var request in invalid)
+        {
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.RegisterVerifyingKeyAsync(request));
+            Assert.Null(handler.LastRequest);
+        }
+
+        foreach (var backend in new[] { "halo2/ipa ", "halo2\uFF0Fipa", "mock/dev" })
+        {
+            await Assert.ThrowsAnyAsync<ArgumentException>(() => client.GetVerifyingKeyAsync(backend, "vk_main"));
+            Assert.Null(handler.LastRequest);
+        }
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
+            {
+                Authority = "alice",
+                PrivateKey = "ed25519:deadbeef",
+                Backend = "halo2/ipa",
+                Name = "vk_main",
+                Version = 2,
+                CircuitId = "halo2/ipa::transfer_v2",
+                PublicInputsSchemaHashHex = new string('b', 64),
+                ActivationHeight = 10,
+                WithdrawHeight = 9,
+            }));
+        Assert.Null(handler.LastRequest);
+
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.UpdateVerifyingKeyAsync(new ToriiVerifyingKeyUpdateRequest
+            {
+                Authority = "alice",
+                PrivateKey = "",
+                Backend = "halo2/ipa",
+                Name = "vk_main",
+                Version = 2,
+                CircuitId = "halo2/ipa::transfer_v2",
+                PublicInputsSchemaHashHex = new string('b', 64),
+            }));
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
     public async Task GetSoraFsDenylistCatalogAsyncDeserializesPackSummaries()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -2008,6 +2317,142 @@ public sealed class ToriiClientTests
         Assert.NotNull(events[1].JsonData);
         Assert.Equal(1, events[1].JsonData!["height"]!.GetValue<int>());
         Assert.Equal("Applied", events[1].JsonData!["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task OpenEventSseAsyncRejectsUnsupportedProductionBackendEventFiltersBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var filterJson in new[]
+        {
+            """{"VerifyingKey":{"id_matcher":{"backend":"halo2/ipa/orchard","name":"vk"},"event_set":{"Registered":true}}}""",
+            """{"VerifyingKey":{"id_matcher":{"backend":" halo2/ipa","name":"vk"},"event_set":{"Registered":true}}}""",
+            """{"Proof":{"id_matcher":{"backend":"mock/dev","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
+            """{"Proof":{"id_matcher":{"backend":"groth16/bls12-377","hash_hex":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"event_set":{"Verified":true}}}""",
+        })
+        {
+            var error = await Assert.ThrowsAsync<ArgumentException>(
+                () => client.OpenEventSseAsync(EventFilterQuery(filterJson)));
+            Assert.Contains("unsupported production verifier backend", error.Message);
+            Assert.Null(handler.LastRequest);
+        }
+    }
+
+    [Fact]
+    public async Task OpenEventSseAsyncRejectsMalformedVerifyingKeyEventNamesBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var nameJson in new[]
+        {
+            "\"\"",
+            "\"   \"",
+            "\"\\t\"",
+            "\"\\n\"",
+            "\"vk:main\"",
+            "42",
+        })
+        {
+            var filterJson =
+                "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":"
+                + nameJson
+                + "},\"event_set\":{\"Registered\":true}}}";
+            var error = await Assert.ThrowsAsync<ArgumentException>(
+                () => client.OpenEventSseAsync(EventFilterQuery(filterJson)));
+            Assert.True(
+                error.Message.Contains("non-empty string", StringComparison.Ordinal)
+                    || error.Message.Contains("must not contain ':'", StringComparison.Ordinal)
+                    || error.Message.Contains("must be a string", StringComparison.Ordinal),
+                $"unexpected error: {error.Message}");
+            Assert.Null(handler.LastRequest);
+        }
+    }
+
+    [Fact]
+    public async Task OpenEventSseAsyncCanonicalizesVerifyingKeyEventNamesBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(": keepalive\n\n"),
+            };
+            response.Content.Headers.ContentType = new("text/event-stream");
+            return response;
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        using var response = await client.OpenEventSseAsync(EventFilterQuery(
+            """{"VerifyingKey":{"id_matcher":{"backend":"halo2/ipa","name":" vk_main "},"event_set":{"Registered":true}}}"""));
+
+        var filter = QueryParameter(handler.LastRequest!.RequestUri!.Query, "filter");
+        Assert.Contains("\"name\":\"vk_main\"", filter);
+    }
+
+    [Fact]
+    public async Task StreamEventsAsyncRejectsMalformedProofEventHashesBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("request must not be sent"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var hashJson in new[]
+        {
+            "\"\"",
+            "\"abc\"",
+            "\"" + new string('z', 64) + "\"",
+            "\"0x0x" + new string('a', 64) + "\"",
+            "42",
+        })
+        {
+            var filterJson =
+                "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":"
+                + hashJson
+                + "},\"event_set\":{\"Verified\":true}}}";
+            var error = await Assert.ThrowsAsync<ArgumentException>(async () =>
+            {
+                await foreach (var _ in client.StreamEventsAsync(EventFilterQuery(filterJson)))
+                {
+                }
+            });
+            Assert.True(
+                error.Message.Contains("32-byte hex string", StringComparison.Ordinal)
+                    || error.Message.Contains("must be a string", StringComparison.Ordinal),
+                $"unexpected error: {error.Message}");
+            Assert.Null(handler.LastRequest);
+        }
+    }
+
+    [Fact]
+    public async Task OpenEventSseAsyncCanonicalizesProofHashEventFiltersBeforeRequest()
+    {
+        using var handler = new RecordingHandler(_ =>
+        {
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(": keepalive\n\n"),
+            };
+            response.Content.Headers.ContentType = new("text/event-stream");
+            return response;
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var hashHex = new string('A', 64);
+        var proofHashHex = new string('B', 64);
+        var filterJson =
+            "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":\"0x"
+            + hashHex
+            + "\",\"proof_hash_hex\":\""
+            + proofHashHex
+            + "\"},\"event_set\":{\"Verified\":true}}}";
+
+        using var response = await client.OpenEventSseAsync(EventFilterQuery(filterJson));
+
+        var filter = QueryParameter(handler.LastRequest!.RequestUri!.Query, "filter");
+        Assert.Contains("\"hash_hex\":\"" + new string('a', 64) + "\"", filter);
+        Assert.Contains("\"proof_hash_hex\":\"" + new string('b', 64) + "\"", filter);
     }
 
     [Fact]
@@ -3821,6 +4266,110 @@ public sealed class ToriiClientTests
         {
             Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
         };
+    }
+
+    private static ToriiSoraFsPinRegisterRequest ValidSoraFsPinRegisterRequest()
+    {
+        return new ToriiSoraFsPinRegisterRequest
+        {
+            Authority = " alice@boi ",
+            PrivateKey = " ed25519:deadbeef ",
+            Chunker = new ToriiSoraFsChunkerHandle
+            {
+                ProfileId = 1,
+                Namespace = " sorafs ",
+                Name = " sf1 ",
+                Semver = " 1.0.0 ",
+                MultihashCode = 0,
+            },
+            PinPolicy = new ToriiSoraFsPinPolicy
+            {
+                MinReplicas = 3,
+                StorageClass = ToriiSoraFsStorageClass.From("hot"),
+                RetentionEpoch = 72,
+            },
+            ManifestDigestHex = "0x" + new string('A', 64),
+            ChunkDigestSha3_256Hex = "0x" + new string('B', 64),
+            ContentLength = 4096,
+            SubmittedEpoch = 42,
+            Alias = new ToriiSoraFsPinAlias
+            {
+                Namespace = " docs ",
+                Name = " main ",
+                ProofBase64 = Convert.ToBase64String("alias-proof"u8.ToArray()),
+            },
+            SuccessorOfHex = new string('C', 64),
+        };
+    }
+
+    private static ToriiVerifyingKeyRegisterRequest ValidVerifyingKeyRegisterRequest()
+    {
+        var vkBytes = "abc"u8.ToArray();
+        return new ToriiVerifyingKeyRegisterRequest
+        {
+            Authority = "alice",
+            PrivateKey = "ed25519:deadbeef",
+            Backend = "halo2/ipa",
+            Name = "vk_main",
+            Version = 1,
+            CircuitId = "halo2/ipa::transfer_v1",
+            PublicInputsSchemaHashHex = new string('a', 64),
+            GasScheduleId = "halo2_default",
+            VerifyingKeyBytes = vkBytes,
+            CommitmentHex = VerifyingKeyCommitmentHex("halo2/ipa", vkBytes),
+            Status = "Active",
+        };
+    }
+
+    private static string VerifyingKeyCommitmentHex(string backend, byte[] bytes)
+    {
+        var domainBytes = Encoding.UTF8.GetBytes("iroha:zk:v1:vk");
+        var backendBytes = Encoding.UTF8.GetBytes(backend);
+        var preimage = new byte[domainBytes.Length + 8 + backendBytes.Length + 8 + bytes.Length];
+        var offset = 0;
+        Buffer.BlockCopy(domainBytes, 0, preimage, offset, domainBytes.Length);
+        offset += domainBytes.Length;
+        WriteUInt64BigEndian(preimage, offset, (ulong)backendBytes.Length);
+        offset += 8;
+        Buffer.BlockCopy(backendBytes, 0, preimage, offset, backendBytes.Length);
+        offset += backendBytes.Length;
+        WriteUInt64BigEndian(preimage, offset, (ulong)bytes.Length);
+        offset += 8;
+        Buffer.BlockCopy(bytes, 0, preimage, offset, bytes.Length);
+        return Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
+    }
+
+    private static void WriteUInt64BigEndian(byte[] target, int offset, ulong value)
+    {
+        for (var index = 7; index >= 0; index--)
+        {
+            target[offset + index] = (byte)(value & 0xff);
+            value >>= 8;
+        }
+    }
+
+    private static string EventFilterQuery(string filterJson)
+    {
+        return "filter=" + Uri.EscapeDataString(filterJson);
+    }
+
+    private static string QueryParameter(string query, string name)
+    {
+        var queryText = query.StartsWith("?", StringComparison.Ordinal) ? query[1..] : query;
+        foreach (var segment in queryText.Split('&'))
+        {
+            var equalsIndex = segment.IndexOf('=');
+            var rawName = equalsIndex >= 0 ? segment[..equalsIndex] : segment;
+            if (!string.Equals(Uri.UnescapeDataString(rawName), name, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var rawValue = equalsIndex >= 0 ? segment[(equalsIndex + 1)..] : string.Empty;
+            return Uri.UnescapeDataString(rawValue.Replace("+", " ", StringComparison.Ordinal));
+        }
+
+        throw new InvalidOperationException($"Query parameter {name} was not present.");
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

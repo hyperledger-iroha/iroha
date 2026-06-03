@@ -18070,13 +18070,7 @@ fn sccp_message_transparent_public_input_columns(
 }
 
 fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
-    match backend {
-        BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
-        BackendTag::Halo2Bn254 => "halo2-bn254",
-        BackendTag::Groth16 => "groth16",
-        BackendTag::Stark => "stark",
-        BackendTag::Unsupported => "unsupported",
-    }
+    backend.canonical_label()
 }
 
 fn saturating_u32(value: usize) -> u32 {

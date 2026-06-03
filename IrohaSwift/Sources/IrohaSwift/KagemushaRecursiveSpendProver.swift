@@ -28,6 +28,26 @@ public enum KagemushaRecursiveSpendProver {
     public static let requiredBridgeAbiVersion: UInt32 = 6
     public static let recursiveAggregationProofCircuitIdV1 = "kagemusha-recursive-aggregation-v1"
     public static let recursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1"
+    public static let compactTokenMaxHops: UInt32 = 64
+    public static let recursiveSpendLineageWitnesslessMaxHopsV1: UInt32 = 64
+    public static let recursiveSpendLineageTransitionCircuitWiredV1 = true
+    public static let recursivePreviousProofOpenEnvelopesRequiredCountV1 = 1
+    public static let recursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024
+    public static let recursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128
+    public static let recursiveSpendTransitionProfileDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile"
+    public static let recursiveSpendTransitionProfileDigestDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-digest"
+    public static let recursiveSpendTransitionProfileBindingDigestDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"
+    public static let recursiveSpendLineageAppendOpeningsPreflightDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1"
+    public static let recursiveSpendLineageAppendBoundaryDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1"
+    public static let recursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1"
+    public static let recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
@@ -39,6 +59,109 @@ public enum KagemushaRecursiveSpendProver {
 
     public static func preferredMode(recursiveSpendAvailable: Bool) -> KagemushaOfflineSpendMode {
         recursiveSpendAvailable ? .recursiveSpendV1 : .checkedPrefoldV1
+    }
+
+    public static func canRedeemWitnessless(circuitId: String, hopCount: UInt32) -> Bool {
+        recursiveSpendLineageTransitionCircuitWiredV1
+            && circuitId == recursiveSpendLineageProofCircuitIdV1
+            && hopCount >= 1
+            && hopCount <= recursiveSpendLineageWitnesslessMaxHopsV1
+    }
+
+    public static func requiresLineageWitnessForRedeem(circuitId: String, hopCount: UInt32) -> Bool {
+        !canRedeemWitnessless(circuitId: circuitId, hopCount: hopCount)
+    }
+
+    public static func canAppendWitnesslessLineage(previousHopCount: UInt32) -> Bool {
+        recursiveSpendLineageTransitionCircuitWiredV1
+            && previousHopCount >= 1
+            && previousHopCount < recursiveSpendLineageWitnesslessMaxHopsV1
+    }
+
+    public static func normalizedAppendOutputCircuitId(_ outputCircuitId: String?) -> String {
+        guard let outputCircuitId, !outputCircuitId.isEmpty else {
+            return recursiveAggregationProofCircuitIdV1
+        }
+        return outputCircuitId
+    }
+
+    public static func isSupportedAppendOutputCircuitId(_ outputCircuitId: String?) -> Bool {
+        let normalized = normalizedAppendOutputCircuitId(outputCircuitId)
+        return normalized == recursiveAggregationProofCircuitIdV1
+            || normalized == recursiveSpendLineageProofCircuitIdV1
+    }
+
+    public static func isSupportedPreviousProofCircuitId(_ previousProofCircuitId: String?) -> Bool {
+        previousProofCircuitId == recursiveAggregationProofCircuitIdV1
+            || previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+    }
+
+    public static func requiresPreviousLineageVerifierRecordForAppend(
+        previousProofCircuitId: String?
+    ) -> Bool {
+        previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+    }
+
+    public static func isSupportedAppendProofTransition(
+        previousProofCircuitId: String?,
+        outputCircuitId: String?
+    ) -> Bool {
+        let normalizedOutput = normalizedAppendOutputCircuitId(outputCircuitId)
+        return (previousProofCircuitId == recursiveAggregationProofCircuitIdV1
+            && normalizedOutput == recursiveAggregationProofCircuitIdV1)
+            || (previousProofCircuitId == recursiveSpendLineageProofCircuitIdV1
+                && (
+                    normalizedOutput == recursiveAggregationProofCircuitIdV1
+                        || normalizedOutput == recursiveSpendLineageProofCircuitIdV1
+                ))
+    }
+
+    public static func preferredAppendOutputCircuitId(previousHopCount: UInt32) -> String {
+        canAppendWitnesslessLineage(previousHopCount: previousHopCount)
+            ? recursiveSpendLineageProofCircuitIdV1
+            : recursiveAggregationProofCircuitIdV1
+    }
+
+    public static func canProveAppendOutputCircuitId(
+        _ outputCircuitId: String?,
+        previousHopCount: UInt32
+    ) -> Bool {
+        guard previousHopCount >= 1 else {
+            return false
+        }
+        switch normalizedAppendOutputCircuitId(outputCircuitId) {
+        case recursiveAggregationProofCircuitIdV1:
+            return previousHopCount < compactTokenMaxHops
+        case recursiveSpendLineageProofCircuitIdV1:
+            return canAppendWitnesslessLineage(previousHopCount: previousHopCount)
+        default:
+            return false
+        }
+    }
+
+    public static func canSelectAppendOutputCircuitId(
+        previousProofCircuitId: String?,
+        outputCircuitId: String?,
+        previousHopCount: UInt32
+    ) -> Bool {
+        guard canProveAppendOutputCircuitId(outputCircuitId, previousHopCount: previousHopCount) else {
+            return false
+        }
+        guard isSupportedPreviousProofCircuitId(previousProofCircuitId) else {
+            return false
+        }
+        return isSupportedAppendProofTransition(
+            previousProofCircuitId: previousProofCircuitId,
+            outputCircuitId: outputCircuitId
+        )
+    }
+
+    public static func requiresPreviousProofOpenEnvelopesForAppend(
+        outputCircuitId: String?,
+        previousHopCount: UInt32
+    ) -> Bool {
+        normalizedAppendOutputCircuitId(outputCircuitId) == recursiveSpendLineageProofCircuitIdV1
+            && previousHopCount >= 1
     }
 
     public static func initSpend(requestArchive: Data) throws -> Data {
@@ -56,6 +179,39 @@ public enum KagemushaRecursiveSpendProver {
             bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
         ) {
             try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppend(requestArchive: $0)
+        }
+    }
+
+    public static func transitionProfileInit(requestArchive: Data) throws -> Data {
+        try call(
+            requestArchive: requestArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendTransitionProfileInit(
+                requestArchive: $0
+            )
+        }
+    }
+
+    public static func transitionProfileAppend(requestArchive: Data) throws -> Data {
+        try call(
+            requestArchive: requestArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendTransitionProfileAppend(
+                requestArchive: $0
+            )
+        }
+    }
+
+    public static func lineageAppendBoundary(profileArchive: Data) throws -> Data {
+        try call(
+            requestArchive: profileArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendLineageAppendBoundary(
+                profileArchive: $0
+            )
         }
     }
 

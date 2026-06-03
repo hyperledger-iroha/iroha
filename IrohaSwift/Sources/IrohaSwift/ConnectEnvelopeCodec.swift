@@ -6,6 +6,7 @@ public enum ConnectEnvelopeCodecError: Error, LocalizedError, Sendable, Equatabl
     case encryptFailed
     case invalidKeyLength(expected: Int, actual: Int)
     case invalidSessionIdentifierLength(expected: Int, actual: Int)
+    case unsupportedSignatureAlgorithm(String)
 
     public var errorDescription: String? {
         switch self {
@@ -21,6 +22,8 @@ public enum ConnectEnvelopeCodecError: Error, LocalizedError, Sendable, Equatabl
             return "Connect envelope key must be \(expected) bytes (got \(actual))."
         case let .invalidSessionIdentifierLength(expected, actual):
             return "Connect session identifiers must be \(expected) bytes (got \(actual))."
+        case let .unsupportedSignatureAlgorithm(algorithm):
+            return "Unsupported connect wallet signature algorithm '\(algorithm)'."
         }
     }
 }
@@ -31,8 +34,17 @@ public enum ConnectEnvelopeCodec {
     public static func encodeSignResultOk(sequence: UInt64,
                                           algorithm: String? = nil,
                                           signature: Data) throws -> Data {
+        let normalizedAlgorithm: String?
+        if let algorithm {
+            guard let normalized = ConnectWalletSignatureAlgorithm.normalize(algorithm) else {
+                throw ConnectEnvelopeCodecError.unsupportedSignatureAlgorithm(algorithm)
+            }
+            normalizedAlgorithm = normalized
+        } else {
+            normalizedAlgorithm = nil
+        }
         guard let envelope = NoritoNativeBridge.shared.encodeEnvelopeSignResultOk(sequence: sequence,
-                                                                                  algorithm: algorithm,
+                                                                                  algorithm: normalizedAlgorithm,
                                                                                   signature: signature) else {
             throw mapBridgeFailure()
         }

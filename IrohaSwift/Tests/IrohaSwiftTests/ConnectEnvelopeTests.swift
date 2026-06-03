@@ -35,6 +35,29 @@ final class ConnectEnvelopeTests: XCTestCase {
         }
     }
 
+    func testDecodeSignResultOkRejectsConfusableAlgorithms() {
+        let signature = Data(repeating: 0x55, count: 64).base64EncodedString()
+        for algorithm in [
+            "secp256k1",
+            "ed\t25519",
+            "ed\u{200B}25519",
+            "\u{0435}d25519",
+            "ed\u{FF0D}25519"
+        ] {
+            let payload: [String: Any] = [
+                "algorithm": algorithm,
+                "signature_b64": signature
+            ]
+
+            XCTAssertThrowsError(try ConnectEnvelopePayload(kind: "SignResultOk", payload: payload)) { error in
+                guard case ConnectEnvelopeError.unsupportedSignatureAlgorithm = error else {
+                    XCTFail("Expected unsupportedSignatureAlgorithm, got \(error)")
+                    return
+                }
+            }
+        }
+    }
+
     func testDecodeRejectsFractionalSequence() throws {
         let payload: [String: Any] = [
             "DisplayRequest": ["title": "Hello", "body": "World"]

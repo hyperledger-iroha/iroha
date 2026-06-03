@@ -73,7 +73,7 @@ use iroha_data_model::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
     },
-    zk::BackendTag,
+    zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_primitives::calendar;
 #[cfg(test)]
@@ -2438,10 +2438,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         // Early sanity: ensure commitments and backend labels match the
         // production no-trusted-setup verifier policy.
         for (id, rec) in &map {
+            if rec.backend.is_pending_production_backend() {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             if !matches!(rec.backend, BackendTag::Halo2IpaPasta | BackendTag::Stark) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
             let backend_label = Self::backend_label_for_record(id, rec);
+            if BackendTag::is_pending_production_backend_label(&backend_label) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
             if crate::zk::is_trusted_setup_backend_label(&backend_label) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
@@ -2486,6 +2492,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             BackendTag::Groth16 => "groth16",
             BackendTag::Stark => "stark",
             BackendTag::Unsupported => "unsupported",
+            BackendTag::Halo2IpaOrchard
+            | BackendTag::Groth16Bls12377
+            | BackendTag::FcmpPlusPlusCurveTree
+            | BackendTag::LatticePcsSis
+            | BackendTag::MidenStark
+            | BackendTag::AztecPlonkishPrivateKernel
+            | BackendTag::PqMaspStarkFri => rec.backend.canonical_label(),
+            _ => rec.backend.canonical_label(),
         }
         .to_string()
     }
@@ -2617,6 +2631,25 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         Ok(())
     }
 
+    fn map_open_verify_envelope_validation_error(err: OpenVerifyEnvelopeValidationError) -> u64 {
+        match err {
+            OpenVerifyEnvelopeValidationError::UnsupportedBackend
+            | OpenVerifyEnvelopeValidationError::PendingProductionBackend { .. } => {
+                ivm::host::ERR_BACKEND
+            }
+            OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash => ivm::host::ERR_VK_MISSING,
+            OpenVerifyEnvelopeValidationError::NonEmptyAux => ivm::host::ERR_VK_MISMATCH,
+            OpenVerifyEnvelopeValidationError::ProofBytesTooLarge { .. } => {
+                ivm::host::ERR_PROOF_LEN
+            }
+            OpenVerifyEnvelopeValidationError::PublicInputsTooLarge { .. }
+            | OpenVerifyEnvelopeValidationError::AuxTooLarge { .. } => ivm::host::ERR_ENVELOPE_SIZE,
+            OpenVerifyEnvelopeValidationError::EmptyCircuitId
+            | OpenVerifyEnvelopeValidationError::EmptyPublicInputs
+            | OpenVerifyEnvelopeValidationError::EmptyProofBytes => ivm::host::ERR_DECODE,
+        }
+    }
+
     fn parse_zk1_ipa_k(vk_bytes: &[u8]) -> Option<u32> {
         const MAGIC: &[u8; 4] = b"ZK1\0";
         if vk_bytes.len() < 4 || &vk_bytes[..4] != MAGIC {
@@ -2668,12 +2701,15 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let env: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(payload).map_err(|_| ivm::host::ERR_DECODE)?;
         self.validate_envelope_header(&env, payload.len())?;
-        if !env.aux.is_empty() {
-            return Err(ivm::host::ERR_VK_MISMATCH);
-        }
-        if env.vk_hash == [0u8; 32] {
-            return Err(ivm::host::ERR_VK_MISSING);
-        }
+        let max_proof_bytes = match env.backend {
+            BackendTag::Stark => self.stark_config.max_proof_bytes,
+            _ => self.halo2_config.max_proof_bytes,
+        };
+        env.validate_with_bounds(OpenVerifyEnvelopeBounds {
+            max_proof_bytes,
+            ..OpenVerifyEnvelopeBounds::default()
+        })
+        .map_err(Self::map_open_verify_envelope_validation_error)?;
         let (vk_rec, backend_label) = self.load_vk_record_any_namespace(env.vk_hash)?;
         if let Some(expected_namespace) = namespace
             && vk_rec.namespace != expected_namespace
@@ -17249,6 +17285,83 @@ seiyaku Vault {
     }
 
     #[test]
+    fn set_verifying_keys_rejects_pending_production_backend_labels() {
+        crate::test_alias::ensure();
+        for backend in [
+            "halo2/ipa/orchard",
+            "halo2/ipa:zcash-orchard",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "anonymous-pgc",
+            "verange",
+            "zk-ams",
+            "zk-x509",
+            "sis-with-hints",
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                &format!("{backend}:test-circuit"),
+                "core",
+                vk_bytes,
+            );
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {backend} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn set_verifying_keys_rejects_pending_production_record_tags() {
+        crate::test_alias::ensure();
+        for backend_tag in [
+            BackendTag::Halo2IpaOrchard,
+            BackendTag::Groth16Bls12377,
+            BackendTag::FcmpPlusPlusCurveTree,
+            BackendTag::LatticePcsSis,
+            BackendTag::MidenStark,
+            BackendTag::AztecPlonkishPrivateKernel,
+            BackendTag::PqMaspStarkFri,
+            BackendTag::AnonymousPgc,
+            BackendTag::VeRange,
+            BackendTag::ZkAt,
+            BackendTag::RecursiveAnonymousAdmission,
+            BackendTag::VegaExistingCredentialZk,
+            BackendTag::SilentThresholdAnoncred,
+            BackendTag::ZkX509,
+            BackendTag::SisWithHints,
+        ] {
+            let mut host = CoreHost::new(fixture_account("alice"));
+            let backend = "halo2/ipa";
+            let vk_bytes = vec![1, 2, 3, 4];
+            let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+            let mut rec = active_vk_record(
+                commitment,
+                [0x42; 32],
+                backend,
+                "halo2/ipa:test-circuit",
+                "core",
+                vk_bytes,
+            );
+            rec.backend = backend_tag;
+            let mut map = BTreeMap::new();
+            map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+            assert!(
+                host.set_verifying_keys(map).is_err(),
+                "case {} must be rejected",
+                backend_tag.canonical_label()
+            );
+        }
+    }
+
+    #[test]
     fn state_syscall_works_without_access_logging() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -18454,6 +18567,20 @@ seiyaku Vault {
         norito::to_bytes(&env).expect("serialize envelope")
     }
 
+    fn mutated_dummy_env(
+        circuit_id: &str,
+        vk_hash: [u8; 32],
+        public_inputs: Vec<u8>,
+        proof_bytes: Vec<u8>,
+        mutate: impl FnOnce(&mut iroha_data_model::zk::OpenVerifyEnvelope),
+    ) -> Vec<u8> {
+        let mut env: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(&dummy_env(circuit_id, vk_hash, public_inputs, proof_bytes))
+                .expect("decode dummy envelope");
+        mutate(&mut env);
+        norito::to_bytes(&env).expect("serialize mutated envelope")
+    }
+
     fn minimal_zk1_vk_bytes(k: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"ZK1\0");
@@ -18579,6 +18706,99 @@ seiyaku Vault {
         assert_eq!(
             host.enforce_zk_envelope(&bad_circuit_env, "transfer"),
             Err(ivm::host::ERR_VK_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+        host.halo2_config.max_envelope_bytes = usize::MAX;
+        host.halo2_config.max_proof_bytes = usize::MAX;
+
+        let backend = "halo2/ipa";
+        let circuit_id = "halo2/ipa:transfer-check";
+        let vk_bytes = minimal_zk1_vk_bytes(6);
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let public_inputs = vec![1u8, 2, 3, 4];
+        let schema_hash = schema_hash(&public_inputs);
+        let rec = active_vk_record(
+            commitment,
+            schema_hash,
+            backend,
+            circuit_id,
+            "transfer",
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+
+        let invalid_cases: [(&str, fn(&mut iroha_data_model::zk::OpenVerifyEnvelope), u64); 6] = [
+            (
+                "empty circuit id",
+                |env| env.circuit_id.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "zero verifier-key hash",
+                |env| env.vk_hash = [0u8; 32],
+                ivm::host::ERR_VK_MISSING,
+            ),
+            (
+                "empty public inputs",
+                |env| env.public_inputs.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "oversized public inputs",
+                |env| {
+                    env.public_inputs = vec![
+                        0xA5;
+                        iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
+                            + 1
+                    ];
+                },
+                ivm::host::ERR_ENVELOPE_SIZE,
+            ),
+            (
+                "empty proof bytes",
+                |env| env.proof_bytes.clear(),
+                ivm::host::ERR_DECODE,
+            ),
+            (
+                "auxiliary bytes",
+                |env| env.aux = b"ignored-hint".to_vec(),
+                ivm::host::ERR_VK_MISMATCH,
+            ),
+        ];
+        for (label, mutate, expected_code) in invalid_cases {
+            let payload = mutated_dummy_env(
+                circuit_id,
+                commitment,
+                public_inputs.clone(),
+                vec![0xAA; 16],
+                mutate,
+            );
+            assert_eq!(
+                host.enforce_zk_envelope(&payload, "transfer"),
+                Err(expected_code),
+                "{label} should map to the shared validation error code"
+            );
+        }
+
+        host.halo2_config.max_proof_bytes = 8;
+        let too_large_proof = dummy_env(
+            circuit_id,
+            commitment,
+            public_inputs,
+            vec![0xAA; host.halo2_config.max_proof_bytes + 1],
+        );
+        assert_eq!(
+            host.enforce_zk_envelope(&too_large_proof, "transfer"),
+            Err(ivm::host::ERR_PROOF_LEN)
         );
     }
 

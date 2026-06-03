@@ -6,6 +6,8 @@ cd "$ROOT"
 
 CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/sccp-production-corridor}"
 NORITO_SKIP_BINDINGS_SYNC="${NORITO_SKIP_BINDINGS_SYNC:-1}"
+SCCP_CORRIDOR_NODE_BIN="${SCCP_CORRIDOR_NODE_BIN:-node}"
+SCCP_CORRIDOR_PYTHON_BIN="${SCCP_CORRIDOR_PYTHON_BIN:-python3}"
 DRY_RUN=0
 LOG_DIR=""
 
@@ -52,6 +54,10 @@ Environment:
   DOTNET_ROOT                  .NET SDK root for the native C# SCCP phase.
                                Falls back to /tmp/iroha-dotnet/sdk, then dotnet
                                on PATH.
+  SCCP_CORRIDOR_NODE_BIN       Node runtime for JavaScript and contract phases.
+                               Defaults to node.
+  SCCP_CORRIDOR_PYTHON_BIN     Python runtime for evidence and Python SDK phases.
+                               Defaults to python3.
 EOF
 }
 
@@ -198,13 +204,13 @@ resolve_java_home() {
     return 0
   fi
 
-  if [[ -n "${JAVA_HOME:-}" && -x "$JAVA_HOME/bin/java" ]]; then
+  if [[ -n "${JAVA_HOME:-}" ]] && is_java_21_home "$JAVA_HOME"; then
     printf '%s\n' "$JAVA_HOME"
     return 0
   fi
 
   local bundled="$ROOT/target/java/jdk-21/Contents/Home"
-  if [[ -x "$bundled/bin/java" ]]; then
+  if is_java_21_home "$bundled"; then
     printf '%s\n' "$bundled"
     return 0
   fi
@@ -212,7 +218,7 @@ resolve_java_home() {
   if command -v /usr/libexec/java_home >/dev/null 2>&1; then
     local macos_java_home
     if macos_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)" \
-      && [[ -x "$macos_java_home/bin/java" ]]; then
+      && is_java_21_home "$macos_java_home"; then
       printf '%s\n' "$macos_java_home"
       return 0
     fi
@@ -226,7 +232,7 @@ resolve_java_home() {
   )
   local candidate
   for candidate in "${homebrew_candidates[@]}"; do
-    if [[ -x "$candidate/bin/java" ]]; then
+    if is_java_21_home "$candidate"; then
       printf '%s\n' "$candidate"
       return 0
     fi
@@ -234,6 +240,21 @@ resolve_java_home() {
 
   echo "JDK 21 not found. Set JAVA_HOME, install the repo-local target/java/jdk-21 bundle, or install Homebrew openjdk@21." >&2
   return 1
+}
+
+is_java_21_home() {
+  local java_home="$1"
+  local version_line
+  [[ -x "$java_home/bin/java" ]] || return 1
+  version_line="$("$java_home/bin/java" -version 2>&1 | head -n 1)"
+  [[ "$version_line" =~ version[[:space:]]+\"21(\.|\") ]]
+}
+
+run_java_version_check() {
+  local java_home="$1"
+  run_cmd \
+    env "JAVA_HOME=$java_home" "PATH=$java_home/bin:$PATH" \
+    java -version
 }
 
 resolve_android_home() {
@@ -320,11 +341,11 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_tron_live_evidence_test.py
     pytests/scripts/sccp_tron_source_bridge_evidence_test.py
   )
-  run_cmd python3 -m pytest -q "${tests[@]}"
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q "${tests[@]}"
 }
 
 phase_js_sdk() {
-  run_cmd node --test \
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --test \
     javascript/iroha_js/test/sccpSolanaProver.test.js \
     javascript/iroha_js/test/sccpEthereumMainnet.test.js \
     javascript/iroha_js/test/sccpBscMainnet.test.js \
@@ -333,7 +354,7 @@ phase_js_sdk() {
 }
 
 phase_python_sdk() {
-  run_cmd python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py
+  run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q python/iroha_torii_client/tests/sccp_test.py
 }
 
 phase_swift_sdk() {
@@ -349,6 +370,7 @@ phase_swift_sdk() {
 phase_kotlin_sdk() {
   local java_home
   java_home="$(resolve_java_home)"
+  run_java_version_check "$java_home"
   run_in_dir "$ROOT/kotlin" \
     env "JAVA_HOME=$java_home" "PATH=$java_home/bin:$PATH" \
     ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.*'
@@ -363,6 +385,7 @@ phase_java_android() {
   android_home="$(resolve_android_home)"
   android_sdk_root="${ANDROID_SDK_ROOT:-$android_home}"
   android_harness_mains="org.hyperledger.iroha.android.sccp.EvmSccpProverTests,org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,org.hyperledger.iroha.android.sccp.SubstrateSccpProverTests,org.hyperledger.iroha.android.sccp.TonSccpProverTests,org.hyperledger.iroha.android.sccp.TronSccpProverTests"
+  run_java_version_check "$java_home"
   run_in_dir "$ROOT/java/iroha_android" \
     env "JAVA_HOME=$java_home" "ANDROID_HOME=$android_home" "ANDROID_SDK_ROOT=$android_sdk_root" "PATH=$java_home/bin:$PATH" \
     "ANDROID_HARNESS_MAINS=$android_harness_mains" \
@@ -389,7 +412,7 @@ phase_dotnet_sdk() {
 }
 
 phase_contract_smoke() {
-  run_cmd node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
+  run_cmd "$SCCP_CORRIDOR_NODE_BIN" --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js
   run_cmd bash scripts/sccp_evm_contract_smoke.sh
 }
 

@@ -198,6 +198,33 @@ int32_t connect_norito_kagemusha_recursive_spend_append(
     uint8_t** out_bundle_ptr,
     unsigned long* out_bundle_len);
 
+// Build the canonical initial Reserved-lineage accumulator transition profile.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
+int32_t connect_norito_kagemusha_recursive_spend_transition_profile_init(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_profile_ptr,
+    unsigned long* out_profile_len);
+
+// Build the canonical append Reserved-lineage accumulator transition profile.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendAppendRequestV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
+int32_t connect_norito_kagemusha_recursive_spend_transition_profile_append(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_profile_ptr,
+    unsigned long* out_profile_len);
+
+// Build the compact Reserved-lineage append boundary from a transition profile.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendTransitionProfileV1`.
+// Output: Norito-archive bytes of `KagemushaRecursiveSpendLineageAppendBoundaryV1`.
+int32_t connect_norito_kagemusha_recursive_spend_lineage_append_boundary(
+    const uint8_t* profile_norito_ptr,
+    unsigned long profile_norito_len,
+    uint8_t** out_boundary_ptr,
+    unsigned long* out_boundary_len);
+
 // Build the initial recursive spend lineage witness.
 // Inputs: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`
 // and the resulting `KagemushaRecursiveSpendBundleV1`.
@@ -245,6 +272,27 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem(
     unsigned long* out_instruction_len);
 
 void connect_norito_free(uint8_t* ptr);
+
+// ---------------- Privacy proof native FFI ----------------
+// Output buffers are Norito V1 archives allocated by the bridge and must be
+// released with `iroha_privacy_free_buffer`.
+int32_t iroha_privacy_capabilities_v1(
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+int32_t iroha_privacy_build_proof_v1(
+    const uint8_t* request_ptr,
+    unsigned long request_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+int32_t iroha_privacy_verify_proof_v1(
+    const uint8_t* request_ptr,
+    unsigned long request_len,
+    uint8_t** out_ptr,
+    unsigned long* out_len);
+
+void iroha_privacy_free_buffer(uint8_t* ptr);
 
 // ---------------- Envelope helpers ----------------
 int32_t connect_norito_encode_envelope_sign_request_tx(

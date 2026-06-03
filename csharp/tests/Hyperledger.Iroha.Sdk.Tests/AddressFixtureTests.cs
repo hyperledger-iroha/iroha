@@ -73,6 +73,30 @@ public sealed class AddressFixtureTests
         Assert.Equal(AccountAddressErrorCode.InvalidI105Char, exception.Code);
     }
 
+    [Fact]
+    public void CurveAlgorithmAliasesRejectConfusableOrControlLabels()
+    {
+        var publicKey = Enumerable.Repeat((byte)0x11, 32).ToArray();
+        var algorithms = new[]
+        {
+            "future-curve",
+            "ed\t25519",
+            "ed\u200B25519",
+            "\u0435d25519",
+            "ml\uFF0Ddsa",
+            "gost256\u0430",
+        };
+
+        foreach (var algorithm in algorithms)
+        {
+            var exception = Assert.Throws<AccountAddressException>(() =>
+                AccountAddress.FromPublicKey(publicKey, algorithm));
+
+            Assert.Equal(AccountAddressErrorCode.UnsupportedAlgorithm, exception.Code);
+            Assert.Contains(algorithm, exception.Message, StringComparison.Ordinal);
+        }
+    }
+
     private static AddressFixtureRoot LoadFixture()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "address_vectors.json");

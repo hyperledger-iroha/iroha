@@ -2132,7 +2132,7 @@ export class ToriiClient {
    */
   async getVerifyingKey(backend, name, options = {}) {
     const normalizedBackend = encodeURIComponent(
-      requireNonEmptyString(backend, "getVerifyingKey backend"),
+      assertProductionVerifyBackendLabel(backend, "getVerifyingKey backend"),
     );
     const normalizedName = encodeURIComponent(
       requireNonEmptyString(name, "getVerifyingKey name"),
@@ -9310,12 +9310,17 @@ export class ToriiClient {
       return undefined;
     }
     if (typeof filter === "string") {
-      return filter;
+      return normalizeProductionEventFilterBackendPayload(filter, "eventFilter");
     }
     if (typeof filter === "object") {
       try {
-        return JSON.stringify(filter);
+        return JSON.stringify(
+          normalizeProductionEventFilterBackendPayload(filter, "eventFilter"),
+        );
       } catch (error) {
+        if (error instanceof ValidationError) {
+          throw error;
+        }
         throw createValidationError(
           ValidationErrorCode.INVALID_JSON_VALUE,
           `failed to serialise filter: ${
@@ -23066,46 +23071,85 @@ function normalizeSorafsPinRegisterResponse(
   context = "sorafs pin register response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
+  const manifestDigestValue = pickSorafsRegisterField(
+    record,
+    ["manifest_digest_hex", "manifestDigestHex"],
+    `${context}.manifest_digest_hex`,
+  );
+  const chunkerHandleValue = pickSorafsRegisterField(
+    record,
+    ["chunker_handle", "chunkerHandle"],
+    `${context}.chunker_handle`,
+  );
+  const submittedEpochValue = pickSorafsRegisterField(
+    record,
+    ["submitted_epoch", "submittedEpoch"],
+    `${context}.submitted_epoch`,
+  );
+  const contentLengthValue = pickSorafsRegisterField(
+    record,
+    ["content_length", "contentLength"],
+    `${context}.content_length`,
+  );
+  const pinFeeNanoValue = pickSorafsRegisterField(
+    record,
+    ["pin_fee_nano", "pinFeeNano"],
+    `${context}.pin_fee_nano`,
+  );
+  const pinFeeAssetValue = pickSorafsRegisterField(
+    record,
+    ["pin_fee_asset_id", "pinFeeAssetId"],
+    `${context}.pin_fee_asset_id`,
+  );
+  const pinFeeTreasuryValue = pickSorafsRegisterField(
+    record,
+    ["pin_fee_treasury_account_id", "pinFeeTreasuryAccountId"],
+    `${context}.pin_fee_treasury_account_id`,
+  );
   const aliasValue =
     record.alias === undefined || record.alias === null
       ? null
       : normalizeSorafsPinAliasRequest(record.alias, `${context}.alias`);
-  const successorValue = record.successor_of_hex ?? record.successorOfHex ?? null;
+  const successorValue = pickSorafsRegisterField(
+    record,
+    ["successor_of_hex", "successorOfHex"],
+    `${context}.successor_of_hex`,
+  );
   return {
     manifest_digest_hex: normalizeHex32String(
-      record.manifest_digest_hex ?? record.manifestDigestHex,
+      manifestDigestValue,
       `${context}.manifest_digest_hex`,
     ),
     chunker_handle: requireNonEmptyString(
-      record.chunker_handle ?? record.chunkerHandle,
+      chunkerHandleValue,
       `${context}.chunker_handle`,
     ),
     submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_epoch ?? record.submittedEpoch,
+      submittedEpochValue,
       `${context}.submitted_epoch`,
       { allowZero: true },
     ),
     content_length: ToriiClient._normalizeUnsignedInteger(
-      record.content_length ?? record.contentLength,
+      contentLengthValue,
       `${context}.content_length`,
       { allowZero: true },
     ),
     pin_fee_nano: ToriiClient._normalizeUnsignedInteger(
-      record.pin_fee_nano ?? record.pinFeeNano,
+      pinFeeNanoValue,
       `${context}.pin_fee_nano`,
       { allowZero: true },
     ),
     pin_fee_asset_id: requireNonEmptyString(
-      record.pin_fee_asset_id ?? record.pinFeeAssetId,
+      pinFeeAssetValue,
       `${context}.pin_fee_asset_id`,
     ),
     pin_fee_treasury_account_id: requireNonEmptyString(
-      record.pin_fee_treasury_account_id ?? record.pinFeeTreasuryAccountId,
+      pinFeeTreasuryValue,
       `${context}.pin_fee_treasury_account_id`,
     ),
     alias: aliasValue,
     successor_of_hex:
-      successorValue === null
+      successorValue === SORAFS_REGISTER_FIELD_MISSING || successorValue === null
         ? null
         : normalizeHex32String(successorValue, `${context}.successor_of_hex`),
   };
@@ -23543,50 +23587,95 @@ function buildSorafsPinRegisterPayload(record, context) {
   }
   const chunker = ensureRecord(chunkerInput, `${context}.chunker`);
   const chunkerProfileId = ToriiClient._normalizeUnsignedInteger(
-    chunker.profileId ?? chunker.profile_id,
+    pickSorafsRegisterField(
+      chunker,
+      ["profileId", "profile_id"],
+      `${context}.chunker.profileId`,
+    ),
     `${context}.chunker.profileId`,
     { allowZero: false },
   );
   const chunkerNamespace = requireNonEmptyString(
-    chunker.namespace ?? chunker.ns ?? chunker.profile_namespace,
+    pickSorafsRegisterField(
+      chunker,
+      ["namespace", "ns", "profile_namespace", "profileNamespace"],
+      `${context}.chunker.namespace`,
+    ),
     `${context}.chunker.namespace`,
   );
   const chunkerName = requireNonEmptyString(
-    chunker.name ?? chunker.handle ?? chunker.profile ?? chunker.id,
+    pickSorafsRegisterField(
+      chunker,
+      ["name", "handle", "profile", "id"],
+      `${context}.chunker.name`,
+    ),
     `${context}.chunker.name`,
   );
   const chunkerSemver = requireNonEmptyString(
-    chunker.semver ?? chunker.version ?? chunker.rev,
+    pickSorafsRegisterField(
+      chunker,
+      ["semver", "version", "rev"],
+      `${context}.chunker.semver`,
+    ),
     `${context}.chunker.semver`,
   );
   const multihashCode = ToriiClient._normalizeUnsignedInteger(
-    chunker.multihashCode ?? chunker.multihash_code ?? chunker.multihash ?? 0,
+    valueOrDefault(
+      pickSorafsRegisterField(
+        chunker,
+        ["multihashCode", "multihash_code", "multihash"],
+        `${context}.chunker.multihashCode`,
+      ),
+      0,
+    ),
     `${context}.chunker.multihashCode`,
     { allowZero: true },
   );
-  const pinPolicySource = record.pinPolicy;
+  const pinPolicySource = pickSorafsRegisterField(
+    record,
+    ["pinPolicy", "pin_policy"],
+    `${context}.pinPolicy`,
+  );
   if (!pinPolicySource || typeof pinPolicySource !== "object") {
     throw new TypeError(`${context}.pinPolicy is required`);
   }
   const pinPolicy = normalizeSorafsPinPolicyRequest(pinPolicySource, `${context}.pinPolicy`);
   const manifestDigestHex = normalizeHex32String(
-    record.manifestDigestHex ?? record.manifest_digest_hex,
+    pickSorafsRegisterField(
+      record,
+      ["manifestDigestHex", "manifest_digest_hex"],
+      `${context}.manifestDigestHex`,
+    ),
     `${context}.manifestDigestHex`,
   );
   const chunkDigestHex = normalizeHex32String(
-    record.chunkDigestSha3_256Hex ??
-      record.chunk_digest_sha3_256_hex ??
-      record.chunkDigest ??
-      record.chunk_digest,
+    pickSorafsRegisterField(
+      record,
+      [
+        "chunkDigestSha3_256Hex",
+        "chunk_digest_sha3_256_hex",
+        "chunkDigest",
+        "chunk_digest",
+      ],
+      `${context}.chunkDigestSha3_256Hex`,
+    ),
     `${context}.chunkDigestSha3_256Hex`,
   );
   const contentLength = ToriiClient._normalizeUnsignedInteger(
-    record.contentLength ?? record.content_length,
+    pickSorafsRegisterField(
+      record,
+      ["contentLength", "content_length"],
+      `${context}.contentLength`,
+    ),
     `${context}.contentLength`,
     { allowZero: true },
   );
   const submittedEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.submittedEpoch ?? record.submitted_epoch,
+    pickSorafsRegisterField(
+      record,
+      ["submittedEpoch", "submitted_epoch"],
+      `${context}.submittedEpoch`,
+    ),
     `${context}.submittedEpoch`,
     { allowZero: true },
   );
@@ -23604,25 +23693,60 @@ function buildSorafsPinRegisterPayload(record, context) {
     content_length: contentLength,
     submitted_epoch: submittedEpoch,
   };
+  const aliasObject = pickSorafsRegisterField(record, ["alias"], `${context}.alias`);
+  const aliasNamespace = pickSorafsRegisterField(
+    record,
+    ["aliasNamespace", "alias_namespace"],
+    `${context}.aliasNamespace`,
+  );
+  const aliasName = pickSorafsRegisterField(
+    record,
+    ["aliasName", "alias_name"],
+    `${context}.aliasName`,
+  );
+  const aliasProof = pickSorafsRegisterField(
+    record,
+    [
+      "aliasProof",
+      "alias_proof",
+      "aliasProofB64",
+      "alias_proof_b64",
+      "aliasProofBase64",
+      "alias_proof_base64",
+    ],
+    `${context}.aliasProof`,
+  );
+  const hasFlatAlias =
+    aliasNamespace !== SORAFS_REGISTER_FIELD_MISSING ||
+    aliasName !== SORAFS_REGISTER_FIELD_MISSING ||
+    aliasProof !== SORAFS_REGISTER_FIELD_MISSING;
+  if (aliasObject !== SORAFS_REGISTER_FIELD_MISSING && hasFlatAlias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.alias must not be combined with flat alias fields`,
+      `${context}.alias`,
+    );
+  }
   const aliasInput =
-    record.alias ??
-    (record.aliasNamespace || record.aliasName || record.aliasProof
-      ? {
-          namespace: record.aliasNamespace,
-          name: record.aliasName,
-          proof:
-            record.aliasProof ??
-            record.alias_proof ??
-            record.aliasProofB64 ??
-            record.alias_proof_b64,
-        }
-      : null);
+    aliasObject !== SORAFS_REGISTER_FIELD_MISSING
+      ? aliasObject
+      : hasFlatAlias
+        ? {
+            namespace:
+              aliasNamespace === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasNamespace,
+            name: aliasName === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasName,
+            proof: aliasProof === SORAFS_REGISTER_FIELD_MISSING ? undefined : aliasProof,
+          }
+        : null;
   if (aliasInput) {
     payload.alias = normalizeSorafsPinAliasRequest(aliasInput, `${context}.alias`);
   }
-  const successorHex =
-    record.successorOfHex ?? null;
-  if (successorHex !== undefined && successorHex !== null) {
+  const successorHex = pickSorafsRegisterField(
+    record,
+    ["successorOfHex", "successor_of_hex"],
+    `${context}.successorOfHex`,
+  );
+  if (successorHex !== SORAFS_REGISTER_FIELD_MISSING && successorHex !== null) {
     payload.successor_of_hex = normalizeHex32String(
       successorHex,
       `${context}.successorOfHex`,
@@ -23634,16 +23758,29 @@ function buildSorafsPinRegisterPayload(record, context) {
 function normalizeSorafsPinPolicyRequest(value, context) {
   const record = ensureRecord(value ?? {}, context);
   const minReplicas = ToriiClient._normalizeUnsignedInteger(
-    record.minReplicas,
+    pickSorafsRegisterField(
+      record,
+      ["minReplicas", "min_replicas"],
+      `${context}.minReplicas`,
+    ),
     `${context}.minReplicas`,
   );
+  const retentionEpochInput = pickSorafsRegisterField(
+    record,
+    ["retentionEpoch", "retention_epoch"],
+    `${context}.retentionEpoch`,
+  );
   const retentionEpoch = ToriiClient._normalizeUnsignedInteger(
-    record.retentionEpoch ?? 0,
+    valueOrDefault(retentionEpochInput, 0),
     `${context}.retentionEpoch`,
     { allowZero: true },
   );
   const storageClass = normalizeSorafsStorageClass(
-    record.storageClass,
+    pickSorafsRegisterField(
+      record,
+      ["storageClass", "storage_class"],
+      `${context}.storageClass`,
+    ),
     `${context}.storageClass`,
   );
   return {
@@ -23659,7 +23796,7 @@ function normalizeSorafsStorageClass(value, context) {
   }
   let label = value;
   if (typeof value === "object") {
-    label = value.type ?? value.name ?? value.label ?? null;
+    label = pickSorafsRegisterField(value, ["type", "name", "label"], context);
   }
   const normalized = requireNonEmptyString(label, context).toLowerCase();
   switch (normalized) {
@@ -23678,13 +23815,12 @@ function normalizeSorafsPinAliasRequest(value, context) {
   const record = ensureRecord(value ?? {}, context);
   const namespace = requireNonEmptyString(record.namespace, `${context}.namespace`);
   const name = requireNonEmptyString(record.name, `${context}.name`);
-  const proofValue =
-    record.proof ??
-    record.proof_b64 ??
-    record.proofB64 ??
-    record.proof_base64 ??
-    record.proofBase64;
-  if (proofValue === undefined || proofValue === null) {
+  const proofValue = pickSorafsRegisterField(
+    record,
+    ["proof", "proof_b64", "proofB64", "proof_base64", "proofBase64"],
+    `${context}.proof`,
+  );
+  if (proofValue === SORAFS_REGISTER_FIELD_MISSING || proofValue === null) {
     throw new TypeError(`${context}.proof is required`);
   }
   return {
@@ -23692,6 +23828,28 @@ function normalizeSorafsPinAliasRequest(value, context) {
     name,
     proof_base64: normalizeRequiredBase64Payload(proofValue, `${context}.proof`),
   };
+}
+
+const SORAFS_REGISTER_FIELD_MISSING = Symbol("sorafs-register-field-missing");
+
+function pickSorafsRegisterField(record, aliases, context) {
+  const present = aliases.filter(
+    (alias) =>
+      Object.prototype.hasOwnProperty.call(record, alias) &&
+      record[alias] !== undefined,
+  );
+  if (present.length > 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} has ambiguous aliases: ${present.join(", ")}`,
+      context,
+    );
+  }
+  return present.length === 0 ? SORAFS_REGISTER_FIELD_MISSING : record[present[0]];
+}
+
+function valueOrDefault(value, fallback) {
+  return value === SORAFS_REGISTER_FIELD_MISSING ? fallback : value;
 }
 
 function normalizeDaSamplingPlan(payload, context = "da manifest response.sampling_plan") {
@@ -25992,6 +26150,99 @@ function normalizeEventStreamOptions(options, context, allowedExtraKeys = []) {
   return { signal, lastEventId };
 }
 
+function normalizeProductionEventFilterBackendPayload(filter, context) {
+  if (typeof filter === "string") {
+    const trimmed = filter.trim();
+    if (!trimmed || (trimmed[0] !== "{" && trimmed[0] !== "[")) {
+      return filter;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      const normalized = normalizeProductionEventFilterBackendPayload(
+        parsed,
+        context,
+      );
+      return normalized === parsed ? filter : JSON.stringify(normalized);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
+      return filter;
+    }
+  }
+  if (
+    filter === null ||
+    typeof filter !== "object" ||
+    Array.isArray(filter)
+  ) {
+    return filter;
+  }
+
+  let normalized = filter;
+  for (const eventKind of ["VerifyingKey", "Proof"]) {
+    const body = filter[eventKind];
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      continue;
+    }
+    const matcher = body.id_matcher;
+    if (
+      matcher === null ||
+      typeof matcher !== "object" ||
+      Array.isArray(matcher) ||
+      !Object.prototype.hasOwnProperty.call(matcher, "backend")
+    ) {
+      continue;
+    }
+    const backend = assertProductionVerifyBackendLabel(
+      matcher.backend,
+      `${context}.${eventKind}.id_matcher.backend`,
+    );
+    const normalizedMatcher = {
+      ...matcher,
+      backend,
+    };
+    if (eventKind === "Proof") {
+      if (Object.prototype.hasOwnProperty.call(matcher, "hash_hex")) {
+        normalizedMatcher.hash_hex = normalizeHex32String(
+          matcher.hash_hex,
+          `${context}.${eventKind}.id_matcher.hash_hex`,
+        );
+      }
+      if (Object.prototype.hasOwnProperty.call(matcher, "proof_hash_hex")) {
+        normalizedMatcher.proof_hash_hex = normalizeHex32String(
+          matcher.proof_hash_hex,
+          `${context}.${eventKind}.id_matcher.proof_hash_hex`,
+        );
+      }
+    } else if (Object.prototype.hasOwnProperty.call(matcher, "name")) {
+      normalizedMatcher.name = normalizeVerifyingKeyEventMatcherName(
+        matcher.name,
+        `${context}.${eventKind}.id_matcher.name`,
+      );
+    }
+    if (normalized === filter) {
+      normalized = { ...filter };
+    }
+    normalized[eventKind] = {
+      ...body,
+      id_matcher: normalizedMatcher,
+    };
+  }
+  return normalized;
+}
+
+function normalizeVerifyingKeyEventMatcherName(value, context) {
+  const normalized = requireNonEmptyString(value, context);
+  if (normalized.includes(":")) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain ':'`,
+      context,
+    );
+  }
+  return normalized;
+}
+
 function isAbortSignalLike(value) {
   return (
     typeof value === "object" &&
@@ -26209,7 +26460,10 @@ function buildVerifyingKeyListQuery(options = {}) {
   const params = {};
   const backendValue = options.backend ?? options.backend_filter;
   if (backendValue !== undefined && backendValue !== null) {
-    params.backend = requireNonEmptyString(backendValue, "listVerifyingKeys.backend");
+    params.backend = assertProductionVerifyBackendLabel(
+      backendValue,
+      "listVerifyingKeys.backend",
+    );
   }
   const statusValue =
     options.status ?? options.statusFilter ?? options.verifyingKeyStatus;
@@ -26314,7 +26568,7 @@ function normalizeVerifyingKeyDetail(
 function normalizeVerifyingKeyId(payload, context) {
   const record = ensureRecord(payload, context);
   return {
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
     name: requireNonEmptyString(record.name, `${context}.name`),
   };
 }
@@ -26326,6 +26580,23 @@ function normalizeVerifyingKeyRecord(payload, context) {
   const vkBytesCid = record.vk_bytes_cid ?? null;
   const inlinePayload =
     record.key ?? null;
+  const activationHeight =
+    record.activation_height === undefined || record.activation_height === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          record.activation_height,
+          `${context}.activation_height`,
+          { allowZero: true },
+        );
+  const withdrawHeight =
+    record.withdraw_height === undefined || record.withdraw_height === null
+      ? null
+      : ToriiClient._normalizeUnsignedInteger(
+          record.withdraw_height,
+          `${context}.withdraw_height`,
+          { allowZero: true },
+        );
+  validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context);
   return {
     version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
       allowZero: false,
@@ -26334,7 +26605,7 @@ function normalizeVerifyingKeyRecord(payload, context) {
       record.circuit_id,
       `${context}.circuit_id`,
     ),
-    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    backend: assertProductionVerifyBackendLabel(record.backend, `${context}.backend`),
     curve:
       record.curve === undefined || record.curve === null
         ? null
@@ -26366,22 +26637,8 @@ function normalizeVerifyingKeyRecord(payload, context) {
       metadataCid === null ? null : requireNonEmptyString(metadataCid, `${context}.metadata_uri_cid`),
     vk_bytes_cid:
       vkBytesCid === null ? null : requireNonEmptyString(vkBytesCid, `${context}.vk_bytes_cid`),
-    activation_height:
-      record.activation_height === undefined || record.activation_height === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            record.activation_height,
-            `${context}.activation_height`,
-            { allowZero: true },
-          ),
-    withdraw_height:
-      record.withdraw_height === undefined || record.withdraw_height === null
-        ? null
-        : ToriiClient._normalizeUnsignedInteger(
-            record.withdraw_height,
-            `${context}.withdraw_height`,
-            { allowZero: true },
-          ),
+    activation_height: activationHeight,
+    withdraw_height: withdrawHeight,
     status: normalizeVerifyingKeyStatusValue(record.status, `${context}.status`),
     inline_key: normalizeVerifyingKeyInline(inlinePayload, `${context}.inline_key`),
   };
@@ -26392,7 +26649,7 @@ function normalizeVerifyingKeyInline(value, context) {
     return null;
   }
   const record = ensureRecord(value, context);
-  const backend = requireNonEmptyString(record.backend, `${context}.backend`);
+  const backend = assertProductionVerifyBackendLabel(record.backend, `${context}.backend`);
   const bytesValue = record.bytes_b64;
   return {
     backend,
@@ -26415,6 +26672,261 @@ function normalizeVerifyingKeyStatusValue(value, context, { optional = false } =
   return canonical;
 }
 
+const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
+  "halo2/pasta/kaigi-roster-v1",
+  "halo2/pasta/kaigi-usage-v1",
+  "halo2/pasta/ivm-overlay-bind",
+  "halo2/pasta/ivm-execution-v1",
+  "halo2/pasta/offline-note-recursive",
+  "halo2/pasta/kagemusha-folded-v1",
+  "halo2/pasta/kagemusha-recursive-aggregation-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+  "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+  "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
+  "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+]);
+
+const TRUSTED_SETUP_BACKEND_SEGMENTS = new Set([
+  "groth16",
+  "kzg",
+  "bn254",
+  "bn256",
+  "bls12",
+  "srs",
+  "crs",
+  "ptau",
+  "ceremony",
+  "powersoftau",
+]);
+
+const TRUSTED_SETUP_COMPACT_TOKENS = [
+  "groth16",
+  "kzg",
+  "bn254",
+  "bn256",
+  "bls12381",
+  "bls12",
+  "srs",
+  "crs",
+  "ptau",
+  "ceremony",
+  "trustedsetup",
+  "structuredreferencestring",
+  "universalsrs",
+  "powersoftau",
+];
+
+const PRODUCTION_CLAIM_BACKEND_FRAGMENTS = [
+  "productionready",
+  "productionhardened",
+  "productionenabled",
+  "productionapproved",
+  "productioncertified",
+  "productionclaim",
+  "claimedproduction",
+  "mainnetready",
+  "mainnetcomplete",
+  "mainnetclaim",
+  "claimedmainnet",
+  "auditedproduction",
+  "externallyaudited",
+  "auditpassed",
+  "auditapproved",
+  "auditsignoff",
+  "auditclaim",
+  "claimedaudit",
+  "securityreviewpassed",
+];
+
+function compactPrivacyBackendLabel(value) {
+  return String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isPendingProductionVerifierBackendLabel(value) {
+  const compact = compactPrivacyBackendLabel(value);
+  return (
+    compact.includes("pqmasp") ||
+    compact.includes("postquantummasp") ||
+    compact.includes("anonymouspgc") ||
+    compact.includes("pgckoutofn") ||
+    compact.includes("verange") ||
+    compact.includes("zkat") ||
+    compact.includes("policyprivateauthenticator") ||
+    compact.includes("zkams") ||
+    compact.includes("recursiveanonymousadmission") ||
+    compact.includes("vega") ||
+    compact.includes("existingcredentialzk") ||
+    compact.includes("silentthreshold") ||
+    compact.includes("thresholdanonymouscredential") ||
+    compact.includes("zkx509") ||
+    compact.includes("x509") ||
+    compact.includes("zkvmx509") ||
+    compact.includes("siswithhints") ||
+    compact.includes("sishints") ||
+    compact.includes("latticeanonymouscredentials") ||
+    compact.includes("orchard") ||
+    compact.includes("zcashorchard") ||
+    compact.includes("penumbra") ||
+    compact.includes("masp") ||
+    compact.includes("bls12377") ||
+    compact.includes("decaf377") ||
+    compact.includes("fcmp") ||
+    compact.includes("monero") ||
+    compact.includes("curvetree") ||
+    compact.includes("lattice") ||
+    compact.includes("pcssis") ||
+    compact.includes("jindo") ||
+    compact.includes("miden") ||
+    compact.includes("aztec")
+  );
+}
+
+function hasTrustedSetupBackendSegment(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .some((segment) => TRUSTED_SETUP_BACKEND_SEGMENTS.has(segment));
+}
+
+function isTrustedSetupVerifierBackendLabel(value) {
+  const backend = String(value).trim().toLowerCase();
+  const compact = compactPrivacyBackendLabel(value);
+  return (
+    hasTrustedSetupBackendSegment(value) ||
+    TRUSTED_SETUP_COMPACT_TOKENS.some((token) => compact.includes(token)) ||
+    backend === "groth16" ||
+    backend.startsWith("groth16/") ||
+    backend === "kzg" ||
+    backend.startsWith("kzg/") ||
+    backend === "bn254" ||
+    backend === "bn256" ||
+    backend === "bls12_381" ||
+    backend === "bls12-381" ||
+    backend === "halo2/bn254" ||
+    backend.startsWith("halo2/bn254/") ||
+    backend.includes("/bn254") ||
+    backend.includes(":bn254") ||
+    backend.includes("/bn256") ||
+    backend.includes(":bn256") ||
+    backend.includes("/bls12") ||
+    backend.includes(":bls12") ||
+    backend === "halo2/kzg" ||
+    backend.startsWith("halo2/kzg/") ||
+    backend.includes("/kzg") ||
+    backend.includes(":kzg")
+  );
+}
+
+function isDeveloperOnlyVerifierBackendLabel(value) {
+  const backend = String(value).trim().toLowerCase();
+  const embedded = ["debug", "mock", "fixture", "dev"];
+  const exact = new Set(["test", "dummy", "fake", "stub", "sample", "placeholder"]);
+  const isDeveloperOnlyRun = (run) => embedded.some((token) => run.includes(token)) || exact.has(run);
+  let letterRun = "";
+  for (const token of backend.split(/[^a-z0-9]+/u).filter(Boolean)) {
+    if (isDeveloperOnlyRun(token)) {
+      return true;
+    }
+    if (token.length === 1) {
+      letterRun += token;
+      continue;
+    }
+    if (isDeveloperOnlyRun(letterRun)) {
+      return true;
+    }
+    letterRun = "";
+  }
+  return isDeveloperOnlyRun(letterRun);
+}
+
+function isProductionClaimVerifierBackendLabel(value) {
+  const compact = compactPrivacyBackendLabel(value);
+  return PRODUCTION_CLAIM_BACKEND_FRAGMENTS.some((fragment) => compact.includes(fragment));
+}
+
+const STARK_FRI_PRODUCTION_BACKEND_LABELS = new Set([
+  "stark/fri",
+  "stark/fri/sha256-goldilocks",
+  "stark/fri/poseidon2-goldilocks",
+  "stark/fri/sha256_goldilocks.v1",
+]);
+
+function isStarkFriProductionBackendLabel(backend) {
+  return STARK_FRI_PRODUCTION_BACKEND_LABELS.has(backend);
+}
+
+function isPortableVerifierBackendLabel(backend) {
+  return /^[A-Za-z0-9/_.:-]+$/u.test(backend);
+}
+
+function normalizeNativeHalo2PastaBackendLabel(value) {
+  const backend = String(value);
+  if (backend.length === 0 || backend.trim() !== backend) {
+    return null;
+  }
+  for (const [prefix, targetPrefix] of [
+    ["halo2/pasta/ipa/", "halo2/pasta/"],
+    ["halo2/pasta/", "halo2/pasta/"],
+    ["halo2/ipa::", "halo2/pasta/"],
+    ["halo2/ipa:", "halo2/pasta/"],
+    ["halo2/ipa/", "halo2/pasta/"],
+  ]) {
+    if (backend.startsWith(prefix)) {
+      const rest = backend.slice(prefix.length);
+      return rest.length === 0 ? null : `${targetPrefix}${rest}`;
+    }
+  }
+  return null;
+}
+
+function isNativeHalo2PastaProductionBackendLabel(backend) {
+  const normalized = normalizeNativeHalo2PastaBackendLabel(backend);
+  return normalized !== null && PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(normalized);
+}
+
+function isProductionVerifyBackendLabel(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const backend = value;
+  if (
+    backend.length === 0 ||
+    backend.trim() !== backend ||
+    !isPortableVerifierBackendLabel(backend) ||
+    isPendingProductionVerifierBackendLabel(backend) ||
+    isProductionClaimVerifierBackendLabel(backend) ||
+    isTrustedSetupVerifierBackendLabel(backend) ||
+    isDeveloperOnlyVerifierBackendLabel(backend)
+  ) {
+    return false;
+  }
+  return (
+    backend === "halo2/ipa" ||
+    isStarkFriProductionBackendLabel(backend) ||
+    isNativeHalo2PastaProductionBackendLabel(backend)
+  );
+}
+
+function assertProductionVerifyBackendLabel(value, context) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must be a non-empty string`,
+      context,
+    );
+  }
+  const backend = value;
+  if (!isProductionVerifyBackendLabel(backend)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} uses unsupported production verifier backend ${backend}`,
+      context,
+    );
+  }
+  return backend;
+}
+
 function normalizeVerifyingKeyRegisterPayload(input) {
   const record = ensureRecord(input, "registerVerifyingKey payload");
   const authorityValue =
@@ -26426,8 +26938,8 @@ function normalizeVerifyingKeyRegisterPayload(input) {
       "registerVerifyingKey.authority",
     ),
     private_key: requireNonEmptyString(privateKeyValue, "registerVerifyingKey.privateKey"),
-    backend: requireNonEmptyString(record.backend, "registerVerifyingKey.backend"),
-    name: requireNonEmptyString(record.name, "registerVerifyingKey.name"),
+    backend: assertProductionVerifyBackendLabel(record.backend, "registerVerifyingKey.backend"),
+    name: normalizeVerifyingKeyName(record.name, "registerVerifyingKey.name"),
     version: ToriiClient._normalizeUnsignedInteger(
       record.version,
       "registerVerifyingKey.version",
@@ -26464,8 +26976,8 @@ function normalizeVerifyingKeyUpdatePayload(input) {
       "updateVerifyingKey.authority",
     ),
     private_key: requireNonEmptyString(privateKeyValue, "updateVerifyingKey.privateKey"),
-    backend: requireNonEmptyString(record.backend, "updateVerifyingKey.backend"),
-    name: requireNonEmptyString(record.name, "updateVerifyingKey.name"),
+    backend: assertProductionVerifyBackendLabel(record.backend, "updateVerifyingKey.backend"),
+    name: normalizeVerifyingKeyName(record.name, "updateVerifyingKey.name"),
     version: ToriiClient._normalizeUnsignedInteger(
       record.version,
       "updateVerifyingKey.version",
@@ -26504,7 +27016,7 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
     payload.max_proof_bytes = ToriiClient._normalizeUnsignedInteger(
       maxProofBytes,
       `${context}.maxProofBytes`,
-      { allowZero: false },
+      { allowZero: true },
     );
   }
   const metadataCid = record.metadata_uri_cid;
@@ -26537,6 +27049,11 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       { allowZero: true },
     );
   }
+  validateVerifyingKeyHeightRange(
+    payload.activation_height,
+    payload.withdraw_height,
+    context,
+  );
   const commitmentValue = record.commitment_hex;
   if (commitmentValue !== undefined && commitmentValue !== null) {
     payload.commitment_hex = requireHexString(
@@ -26588,12 +27105,87 @@ function assignVerifyingKeyOptionalFields(record, payload, context) {
       { allowZero: false },
     );
   }
+  if (payload.vk_bytes === undefined) {
+    if (payload.commitment_hex === undefined) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.commitment_hex is required when vk_bytes is omitted`,
+        `${context}.commitmentHex`,
+      );
+    }
+    if (payload.vk_len === undefined) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.vk_len is required when vk_bytes is omitted`,
+        `${context}.vkLen`,
+      );
+    }
+  }
+  if (payload.vk_bytes !== undefined && payload.commitment_hex !== undefined) {
+    const expectedCommitmentHex = computeVerifyingKeyCommitmentHex(
+      payload.backend,
+      payload.vk_bytes,
+    );
+    if (payload.commitment_hex !== expectedCommitmentHex) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.commitment_hex must match domain-separated SHA-256 of backend and vk_bytes`,
+        `${context}.commitmentHex`,
+      );
+    }
+  }
+}
+
+function normalizeVerifyingKeyName(value, context) {
+  const name = requireNonEmptyString(value, context);
+  if (name.includes(":")) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_STRING,
+      `${context} must not contain ':'`,
+      context,
+    );
+  }
+  return name;
+}
+
+function validateVerifyingKeyHeightRange(activationHeight, withdrawHeight, context) {
+  if (
+    activationHeight !== undefined &&
+    activationHeight !== null &&
+    withdrawHeight !== undefined &&
+    withdrawHeight !== null &&
+    withdrawHeight < activationHeight
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.withdraw_height must be >= activation_height`,
+      `${context}.withdrawHeight`,
+    );
+  }
 }
 
 function normalizeVerifyingKeyBytesValue(value, context) {
   const base64 = normalizeRequiredBase64Payload(value, context);
   const buffer = Buffer.from(base64, "base64");
   return { base64, length: buffer.length };
+}
+
+function computeVerifyingKeyCommitmentHex(backend, base64Bytes) {
+  const backendBytes = Buffer.from(backend, "utf8");
+  const vkBytes = Buffer.from(base64Bytes, "base64");
+  return createHash("sha256")
+    .update(Buffer.from("iroha:zk:v1:vk", "utf8"))
+    .update(u64BeBuffer(backendBytes.length))
+    .update(backendBytes)
+    .update(u64BeBuffer(vkBytes.length))
+    .update(vkBytes)
+    .digest("hex");
+}
+
+function u64BeBuffer(value) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64BE(BigInt(value));
+  return buffer;
 }
 
 function normalizeProverReportList(payload, filters, context) {

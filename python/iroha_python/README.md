@@ -68,6 +68,83 @@ readiness = client.get_offline_readiness()
 print("offline notes", readiness.offline_note)
 ```
 
+## Native Recursive Kagemusha Spend
+
+The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
+spend-again-offline helpers when the compiled `_crypto` extension is present.
+`preferred_kagemusha_offline_spend_mode()` returns `recursive_spend_v1` only
+when the native extension reports bridge ABI 6 and every required method rejects
+the malformed availability probe: `kagemusha_recursive_spend_init`,
+`kagemusha_recursive_spend_append`,
+`kagemusha_recursive_spend_transition_profile_init`,
+`kagemusha_recursive_spend_transition_profile_append`,
+the append-boundary helper
+`kagemusha_recursive_spend_lineage_append_boundary`, both lineage-witness
+helpers, `kagemusha_recursive_spend_verify`, and
+`kagemusha_recursive_spend_redeem`.
+
+All helper inputs and outputs are raw Norito archives. The transition-profile
+helpers return the canonical Reserved-lineage accumulator transition profile for
+fixture generation and circuit preflight, so Python wallets do not duplicate
+proof internals.
+`kagemusha_recursive_spend_lineage_append_boundary(profile_archive)` derives the
+compact append-boundary Norito archive from a full append transition profile
+with native opening preflight material. The append-boundary digest uses the
+public `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain,
+plus
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1`
+and
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1`
+for chain/asset and final-root/current-note binding.
+`previous_recursive_proof_open_envelopes_archive` is opaque native prover
+material: Python wallet code must pass it through Norito unchanged and must not
+construct, rewrite, or mutate it. The PyO3 host validates `vk_commitment`,
+`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
+before proving or returning output bytes.
+Reserved-lineage append output is valid only when the previous bundle is
+already Reserved-lineage; semantic previous bundles keep using semantic append
+plus a record-backed lineage witness.
+
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
+and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is
+`True`: witnessless Reserved-lineage online redemption is available for lineage
+bundles inside the 64-hop cap.
+Use the exported redeem/append decision helpers; append selects Reserved-lineage
+for previous hop counts `1..63`.
+Semantic append is bounded by the separate
+`KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS` constant; witnessless Reserved-lineage
+append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1`.
+
+## Native Privacy Bridge
+
+The privacy native surface is intentionally exposed as a generic raw Norito
+archive bridge: `privacy_capabilities_v1()`,
+`privacy_build_proof_v1(request_archive)`, and
+`privacy_verify_proof_v1(request_archive)`. The Python SDK does not expose
+algorithm-specific production proof builders while the privacy rows remain
+gated. Native availability requires bridge ABI 6 plus successful
+`capabilities`, `build`, and `verify` probes whose operation-specific result
+schema bytes match the called entry point.
+
+All privacy request and response payloads must stay as raw Norito archives.
+Python validates archive magic, length, CRC, the 64 MiB native size cap, and the
+operation-specific result schema before returning bytes to callers.
+`privacy_capabilities()` reports `privacy-production-gate-v1`, keeps
+`production_ready = False`, and remains fail-closed with missing production
+gates and no audit references until real proving, verification, chain
+admission, deterministic testing, fuzzing, performance gates, and external
+audit signoff are complete.
+
+Python also exposes the deterministic privacy FFI status/error-code contract
+for diagnostics and cross-language parity: `PRIVACY_FFI_STATUS_ERROR`,
+`PRIVACY_FFI_ERROR_NULL_POINTER`, `PRIVACY_FFI_ERROR_MALFORMED_NORITO`,
+`PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM`,
+`PRIVACY_FFI_ERROR_PRODUCTION_DISABLED`, and
+`PRIVACY_FFI_ERROR_INVALID_REQUEST`. The stable wire values are
+`status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
+`unsupported_algorithm = 3`, `production_disabled = 4`, and
+`invalid_request = 5`; treat them as sanitized status metadata, not proof success.
+
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
@@ -141,6 +218,36 @@ call = client.call_contract_and_wait(
 policy = client.get_sns_policy(2)
 registration = client.get_sns_name("domain", "wonderland.is")
 vk_active = client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
+```
+
+Verifying-key register/update helpers post the Torii app API payloads directly
+and validate production backends, required `authority` / `private_key` fields,
+height ranges, and inline verifier-key commitments before the request is sent:
+
+```python
+client.register_zk_verifying_key({
+    "authority": "adult@is",
+    "private_key": "<multihash-private-key>",
+    "backend": "halo2/ipa",
+    "name": "vk_transfer",
+    "version": 1,
+    "circuit_id": "halo2/ipa::transfer_v1",
+    "public_inputs_schema_hash_hex": "a" * 64,
+    "gas_schedule_id": "halo2_default",
+    "vk_bytes": "AQID",
+    "status": "Active",
+})
+
+client.update_zk_verifying_key({
+    "authority": "adult@is",
+    "private_key": "<multihash-private-key>",
+    "backend": "halo2/ipa",
+    "name": "vk_transfer",
+    "version": 2,
+    "circuit_id": "halo2/ipa::transfer_v1",
+    "public_inputs_schema_hash_hex": "a" * 64,
+    "status": "Withdrawn",
+})
 ```
 
 ZK-capable assets can be registered and moved through the same transaction

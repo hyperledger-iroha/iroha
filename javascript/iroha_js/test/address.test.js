@@ -17,6 +17,11 @@ import {
   inspectAccountId,
   configureCurveSupport,
 } from "../src/address.js";
+import {
+  AccountAddress as DistAccountAddress,
+  AccountAddressError as DistAccountAddressError,
+  AccountAddressErrorCode as DistAccountAddressErrorCode,
+} from "../dist/address.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -400,6 +405,40 @@ test("fromAccount rejects unsupported domain and registryId options", () => {
         error instanceof TypeError &&
         /unsupported fields/.test(error.message),
     );
+  }
+});
+
+test("fromAccount rejects control and Unicode-confusable curve algorithm aliases in src and dist", () => {
+  const sdkVariants = [
+    {
+      AccountAddress,
+      AccountAddressError,
+      AccountAddressErrorCode,
+    },
+    {
+      AccountAddress: DistAccountAddress,
+      AccountAddressError: DistAccountAddressError,
+      AccountAddressErrorCode: DistAccountAddressErrorCode,
+    },
+  ];
+  const algorithms = [
+    "future-curve",
+    "ed\t25519",
+    "ed\u200B25519",
+    "\u0435d25519",
+    "ml\uFF0Ddsa",
+    "gost256\u0430",
+  ];
+
+  for (const sdk of sdkVariants) {
+    for (const algorithm of algorithms) {
+      assert.throws(
+        () => sdk.AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY, algorithm }),
+        (error) =>
+          error instanceof sdk.AccountAddressError &&
+          error.code === sdk.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+      );
+    }
   }
 });
 

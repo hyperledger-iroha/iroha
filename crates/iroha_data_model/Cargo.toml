@@ -1,5 +1,6 @@
 [package]
 name = "iroha_data_model"
+autobins = false
 
 edition.workspace = true
 version.workspace = true
@@ -143,4 +144,9 @@ required-features = ["test-fixtures"]
 [[bin]]
 name = "offline_vectors"
 path = "src/bin/offline_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]
+
+[[bin]]
+name = "offline_v2_vectors"
+path = "src/bin/offline_v2_vectors.rs"
 required-features = ["test-fixtures", "transparent_api"]

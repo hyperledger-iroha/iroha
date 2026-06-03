@@ -224,6 +224,7 @@ use iroha_data_model::{
     },
     peer::{Peer, PeerId},
     role::RoleId,
+    smart_contract::{ContractAddress, ContractAlias},
     sorafs::{pin_registry::StorageClass as SorafsStorageClass, pricing::PricingScheduleRecord},
     taikai::TaikaiAvailabilityClass,
 };
@@ -12605,6 +12606,21 @@ pub struct NexusFees {
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     #[config(default = "Vec::new()")]
     pub successful_claim_fee_exempt_authorities: Vec<String>,
+    /// Contract calls eligible for fee sponsorship.
+    #[config(default = "default_sponsored_contract_operation_allowlist()")]
+    pub sponsored_contract_operation_allowlist: Vec<SponsoredContractOperationAllowlistEntry>,
+}
+
+/// User-level sponsored contract operation allowlist entry.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct SponsoredContractOperationAllowlistEntry {
+    /// Contract alias that must match the call target, if set.
+    pub contract_alias: Option<String>,
+    /// Contract address that must match the call target, if set.
+    pub contract_address: Option<String>,
+    /// Contract entrypoints eligible for sponsorship under this target rule.
+    #[config(default = "Vec::new()")]
+    pub entrypoints: Vec<String>,
 }
 
 /// User-level configuration container for shared Hugging Face lease policy.
@@ -12799,8 +12815,94 @@ impl Default for NexusFees {
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
             successful_claim_fee_exempt_authorities: Vec::new(),
+            sponsored_contract_operation_allowlist: default_sponsored_contract_operation_allowlist(
+            ),
         }
     }
+}
+
+fn default_sponsored_contract_operation_allowlist() -> Vec<SponsoredContractOperationAllowlistEntry>
+{
+    vec![SponsoredContractOperationAllowlistEntry {
+        contract_alias: Some(defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS.to_owned()),
+        contract_address: None,
+        entrypoints: defaults::nexus::fees::dpn_sponsored_contract_entrypoints(),
+    }]
+}
+
+fn trim_optional_config_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|raw| raw.trim().to_owned())
+        .filter(|raw| !raw.is_empty())
+}
+
+fn parse_sponsored_contract_operation_allowlist(
+    entries: Vec<SponsoredContractOperationAllowlistEntry>,
+    emitter: &mut Emitter<ParseError>,
+) -> Option<Vec<actual::SponsoredContractOperationAllowlistEntry>> {
+    let mut parsed_entries = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let context = format!("nexus.fees.sponsored_contract_operation_allowlist[{index}]");
+        let contract_alias = match trim_optional_config_string(entry.contract_alias) {
+            Some(raw) => match raw.parse::<ContractAlias>() {
+                Ok(parsed) => Some(parsed),
+                Err(err) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidNexusConfig)
+                            .attach(format!("{context}.contract_alias is invalid: {err}")),
+                    );
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let contract_address = match trim_optional_config_string(entry.contract_address) {
+            Some(raw) => match raw.parse::<ContractAddress>() {
+                Ok(parsed) => Some(parsed),
+                Err(err) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidNexusConfig)
+                            .attach(format!("{context}.contract_address is invalid: {err}")),
+                    );
+                    return None;
+                }
+            },
+            None => None,
+        };
+        if contract_alias.is_none() && contract_address.is_none() {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "{context} must set contract_alias or contract_address"
+            )));
+            return None;
+        }
+
+        let mut entrypoints = BTreeSet::new();
+        for raw in entry.entrypoints {
+            let entrypoint = raw.trim();
+            if entrypoint.is_empty() {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "{context}.entrypoints must not contain empty values"
+                )));
+                return None;
+            }
+            entrypoints.insert(entrypoint.to_owned());
+        }
+        if entrypoints.is_empty() {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach(format!("{context}.entrypoints must not be empty")),
+            );
+            return None;
+        }
+
+        parsed_entries.push(actual::SponsoredContractOperationAllowlistEntry {
+            contract_alias,
+            contract_address,
+            entrypoints,
+        });
+    }
+
+    Some(parsed_entries)
 }
 
 impl NexusFees {
@@ -12852,6 +12954,10 @@ impl NexusFees {
             );
             return None;
         }
+        let sponsored_contract_operation_allowlist = parse_sponsored_contract_operation_allowlist(
+            self.sponsored_contract_operation_allowlist,
+            emitter,
+        )?;
 
         Some(actual::NexusFees {
             fee_asset_id,
@@ -12874,6 +12980,7 @@ impl NexusFees {
                 .map(|authority| authority.trim().to_string())
                 .filter(|authority| !authority.is_empty())
                 .collect(),
+            sponsored_contract_operation_allowlist,
         })
     }
 }
@@ -13021,6 +13128,127 @@ mod nexus_asset_selector_tests {
     fn nexus_fees_parse_rejects_non_xor_asset_selector() {
         let cfg = NexusFees {
             fee_asset_id: "pkr#paynet".to_owned(),
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        assert!(cfg.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    fn test_contract_address_literal() -> String {
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        ContractAddress::derive(
+            defaults::common::chain_discriminant(),
+            &account_id,
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive test contract address")
+        .to_string()
+    }
+
+    #[test]
+    fn nexus_fees_default_sponsored_allowlist_contains_dpn_entrypoints() {
+        let mut emitter = Emitter::new();
+        let parsed = NexusFees::default()
+            .parse(&mut emitter)
+            .expect("default fees config should parse");
+
+        assert!(emitter.into_result().is_ok());
+        let [entry] = parsed.sponsored_contract_operation_allowlist.as_slice() else {
+            panic!("expected one default sponsored contract allowlist entry");
+        };
+        assert_eq!(
+            entry.contract_alias.as_ref().map(ToString::to_string),
+            Some(defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS.to_owned())
+        );
+        assert_eq!(entry.contract_address, None);
+        for entrypoint in defaults::nexus::fees::dpn_sponsored_contract_entrypoints() {
+            assert!(
+                entry.entrypoints.contains(&entrypoint),
+                "missing sponsored DPN entrypoint {entrypoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn nexus_fees_parse_accepts_address_scoped_sponsored_operation_rule() {
+        let address = test_contract_address_literal();
+        let cfg = NexusFees {
+            sponsored_contract_operation_allowlist: vec![
+                SponsoredContractOperationAllowlistEntry {
+                    contract_alias: None,
+                    contract_address: Some(address.clone()),
+                    entrypoints: vec!["transfer_dpn".to_owned(), "freeze_dpn".to_owned()],
+                },
+            ],
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let parsed = cfg.parse(&mut emitter).expect("fees config should parse");
+
+        assert!(emitter.into_result().is_ok());
+        let [entry] = parsed.sponsored_contract_operation_allowlist.as_slice() else {
+            panic!("expected one sponsored contract allowlist entry");
+        };
+        assert_eq!(entry.contract_alias, None);
+        assert_eq!(
+            entry.contract_address.as_ref().map(ToString::to_string),
+            Some(address)
+        );
+        assert!(entry.entrypoints.contains("transfer_dpn"));
+        assert!(entry.entrypoints.contains("freeze_dpn"));
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_sponsored_operation_without_contract_target() {
+        let cfg = NexusFees {
+            sponsored_contract_operation_allowlist: vec![
+                SponsoredContractOperationAllowlistEntry {
+                    contract_alias: None,
+                    contract_address: None,
+                    entrypoints: vec!["transfer_dpn".to_owned()],
+                },
+            ],
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        assert!(cfg.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_blank_sponsored_entrypoint() {
+        let cfg = NexusFees {
+            sponsored_contract_operation_allowlist: vec![
+                SponsoredContractOperationAllowlistEntry {
+                    contract_alias: Some("dpn_suite::dpn".to_owned()),
+                    contract_address: None,
+                    entrypoints: vec!["transfer_dpn".to_owned(), " ".to_owned()],
+                },
+            ],
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        assert!(cfg.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_invalid_sponsored_contract_alias() {
+        let cfg = NexusFees {
+            sponsored_contract_operation_allowlist: vec![
+                SponsoredContractOperationAllowlistEntry {
+                    contract_alias: Some("not a contract alias".to_owned()),
+                    contract_address: None,
+                    entrypoints: vec!["transfer_dpn".to_owned()],
+                },
+            ],
             ..NexusFees::default()
         };
 

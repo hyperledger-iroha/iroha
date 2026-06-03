@@ -1,6 +1,7 @@
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Transactions;
+using Hyperledger.Iroha.Zk;
 
 namespace Hyperledger.Iroha.Queries;
 
@@ -97,8 +98,10 @@ public sealed class SignedQueryBuilder
     {
         ResetArguments();
         singularQueryKind = ManagedSingularQueryKind.FindProofRecordById;
-        proofBackend = NormalizeRequiredValue(backend, nameof(backend));
-        this.proofHash = NormalizeRequiredValue(proofHash, nameof(proofHash));
+        proofBackend = VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(
+            backend,
+            nameof(backend));
+        this.proofHash = NormalizeProofHashHex(proofHash, nameof(proofHash));
         return this;
     }
 
@@ -402,6 +405,35 @@ public sealed class SignedQueryBuilder
     private static string? NormalizeOptionalValue(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static string NormalizeProofHashHex(string value, string paramName)
+    {
+        var normalized = NormalizeRequiredValue(value, paramName).ToLowerInvariant();
+        if (normalized.StartsWith("0x", StringComparison.Ordinal))
+        {
+            normalized = normalized[2..];
+        }
+
+        if (normalized.Length != 64 || !IsLowerHex(normalized))
+        {
+            throw new ArgumentException("Value must be a 32-byte hex string.", paramName);
+        }
+
+        return normalized;
+    }
+
+    private static bool IsLowerHex(string value)
+    {
+        foreach (var c in value)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private enum ManagedSingularQueryKind

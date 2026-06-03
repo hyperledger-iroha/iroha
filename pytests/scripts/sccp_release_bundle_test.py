@@ -6680,9 +6680,57 @@ def test_release_bundle_verifier_rejects_phase_log_without_expected_command(
     assert verified.returncode == 1
     assert (
         "readiness report phase contract-smoke evidence artifact is missing "
-        "expected phase-block command: node --check "
+        "expected phase-block command: --check "
         "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_release_verifier_tests_in_evidence_phase(
+    tmp_path: Path,
+) -> None:
+    """Published evidence-scripts logs must prove release verifier tests ran."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    required_verifier_tests = (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+    )
+    for omitted in required_verifier_tests:
+        assert omitted in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        phase_log = output_dir / "corridor" / "evidence-scripts.log"
+        required_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+            if fragment != omitted
+        ]
+        phase_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: evidence-scripts",
+                    *phase_command_lines(required_fragments),
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            "readiness report phase evidence-scripts evidence artifact is missing "
+            f"expected phase-block command: {omitted}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
@@ -6718,7 +6766,7 @@ def test_release_bundle_verifier_rejects_output_only_phase_command_fragment(
     assert verified.returncode == 1
     assert (
         "readiness report phase contract-smoke evidence artifact is missing "
-        "expected phase-block command: node --check "
+        "expected phase-block command: --check "
         "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
     ) in verified.stdout
 
@@ -6998,7 +7046,7 @@ def test_release_bundle_verifier_rejects_phase_command_outside_claimed_block(
     assert verified.returncode == 1
     assert (
         "readiness report phase contract-smoke evidence artifact is missing "
-        "expected phase-block command: node --check "
+        "expected phase-block command: --check "
         "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
     ) in verified.stdout
 
@@ -7039,6 +7087,57 @@ def test_release_bundle_verifier_rejects_phase_log_without_success_marker(
         "readiness report phase contract-smoke evidence artifact is missing "
         "expected phase-block success marker: sccp_message_bridge_smoke: ok"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_mobile_jdk21_transcripts(
+    tmp_path: Path,
+) -> None:
+    """Strict bundles must prove mobile SDK phases ran under JDK 21."""
+
+    report = load_report_module()
+    jdk21_marker = 'version "21'
+
+    for phase in ("kotlin-sdk", "java-android"):
+        phase_tmp_path = tmp_path / phase
+        phase_tmp_path.mkdir()
+        output_dir = build_ready_bundle(phase_tmp_path)
+        phase_log = output_dir / "corridor" / f"{phase}.log"
+        assert "java -version" in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+        assert jdk21_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase]
+        success_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase]
+            if fragment != jdk21_marker
+        ]
+        phase_log.write_text(
+            "\n".join(
+                (
+                    f"==> SCCP production corridor: {phase}",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        rewrite_report_phase_artifact(output_dir, phase)
+
+        verified = subprocess.run(
+            ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert verified.returncode == 1
+        assert (
+            f"readiness report phase {phase} evidence artifact is missing "
+            f"expected phase-block success marker: {jdk21_marker}"
+        ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_prefix_alias_phase_marker(

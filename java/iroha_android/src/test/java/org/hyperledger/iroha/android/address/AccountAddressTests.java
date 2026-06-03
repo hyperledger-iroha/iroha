@@ -28,6 +28,7 @@ public final class AccountAddressTests {
     curveSupportDefaults();
     curveSupportConfigurationToggle();
     fullCryptoCurveRegistry();
+    curveAlgorithmAliasesRejectControlsAndUnicodeConfusables();
     longGostLabelsAcceptedWhenEnabled();
     singleKeyPayloadExtraction();
     System.out.println("[IrohaAndroid] Account address tests passed.");
@@ -295,6 +296,28 @@ public final class AccountAddressTests {
         Objects.requireNonNull(PublicKeyCodec.decodeCompactPublicKeyPayload(compact));
     assert decodedCompact.curveId() == 0x04;
     assert Arrays.equals(secpKey, decodedCompact.keyBytes());
+  }
+
+  private static void curveAlgorithmAliasesRejectControlsAndUnicodeConfusables() {
+    final byte[] key = new byte[32];
+    Arrays.fill(key, (byte) 0x11);
+    for (final String algorithm :
+        new String[] {
+          "future-curve",
+          "ed\t25519",
+          "ed\u200B25519",
+          "\u0435d25519",
+          "ml\uFF0Ddsa",
+          "gost256\u0430",
+        }) {
+      boolean threw = false;
+      try {
+        AccountAddress.fromAccount(key, algorithm);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
+      }
+      assert threw : "expected unsupported curve algorithm for " + algorithm;
+    }
   }
 
   private static void longGostLabelsAcceptedWhenEnabled() throws Exception {

@@ -1,0 +1,181 @@
+name: SoraFS Pin Register SDK Guard
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr_sorafs_pin_register_sdk.yml"
+      - "ci/check_no_tracked_python_bytecode.sh"
+      - "ci/check_sorafs_pin_register_csharp_sdk.sh"
+      - "ci/check_sorafs_pin_register_js_sdk.sh"
+      - "ci/check_sorafs_pin_register_jvm_sdk.sh"
+      - "ci/check_sorafs_pin_register_python_sdk.sh"
+      - "ci/check_sorafs_pin_register_sdk_guard.sh"
+      - "ci/check_sorafs_pin_register_swift_sdk.sh"
+      - "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstructionTest.kt"
+      - "javascript/iroha_js/package.json"
+      - "javascript/iroha_js/package-lock.json"
+      - "javascript/iroha_js/src/toriiClient.js"
+      - "javascript/iroha_js/dist/toriiClient.js"
+      - "javascript/iroha_js/index.d.ts"
+      - "javascript/iroha_js/test/toriiClient.test.js"
+      - "javascript/iroha_js/test/sorafsPinRegisterSdkGuard.test.js"
+      - "python/iroha_python/src/iroha_python/__init__.py"
+      - "python/iroha_python/src/iroha_python/client.py"
+      - "python/iroha_python/tests/client_sorafs_pin_register_test.py"
+      - "roadmap.md"
+      - "status.md"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sorafs_pin_register_swift_sdk_check:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: SoraFS pin-register Swift SDK check
+        run: bash ci/check_sorafs_pin_register_swift_sdk.sh
+
+  sorafs_pin_register_jvm_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: SoraFS pin-register JVM and Java SDK tests
+        run: bash ci/check_sorafs_pin_register_jvm_sdk.sh
+
+  sorafs_pin_register_csharp_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: SoraFS pin-register C# SDK tests
+        run: bash ci/check_sorafs_pin_register_csharp_sdk.sh
+
+  sorafs_pin_register_javascript_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --prefix javascript/iroha_js
+      - name: SoraFS pin-register JavaScript SDK tests
+        run: bash ci/check_sorafs_pin_register_js_sdk.sh
+
+  sorafs_pin_register_python_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: SoraFS pin-register Python SDK tests
+        run: bash ci/check_sorafs_pin_register_python_sdk.sh
+
+  sorafs-pin-register-sdk-guard:
+    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: SoraFS pin-register SDK guard negative controls
+        run: |
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-workflow-path
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-workflow-command
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-negative-controls-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-negative-controls-comment-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-negative-controls-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-bytecode-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-job-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-runner-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-script-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-version-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-override-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-sdk-needs-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-job-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-setup-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-distribution-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-java-version-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-setup-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-script-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-jdk21-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-java-home-override-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-java-home-reject-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-jvm-sdk-needs-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-job-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-setup-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-dotnet-version-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-setup-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-dotnet-version-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-dotnet-override-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-dotnet-major-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-script-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-sdk-needs-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-job-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-runner-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-setup-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-version-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-version-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-override-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-resolver-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-major-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-cache-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-node-setup-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-install-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-script-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-install-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-test-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-sdk-needs-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-job-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-setup-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-version-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-setup-order-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-version-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-override-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-resolver-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-major-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-venv-rebuild-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-bytecode-script
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-script-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-sdk-needs-workflow
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-source-endpoint
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-adversarial-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-adversarial-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-contract-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-malformed-response-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-builder-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-kotlin-chunker-unsigned-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-builder-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-java-chunker-unsigned-test
+      - name: Reject tracked Python bytecode
+        run: bash ci/check_no_tracked_python_bytecode.sh
+      - name: SoraFS pin-register SDK guard
+        run: bash ci/check_sorafs_pin_register_sdk_guard.sh

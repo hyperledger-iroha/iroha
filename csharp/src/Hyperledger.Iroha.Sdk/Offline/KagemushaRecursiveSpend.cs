@@ -5,6 +5,10 @@ namespace Hyperledger.Iroha.Offline;
 
 public sealed record KagemushaRecursiveSpendArchive(byte[] NoritoBytes);
 
+public sealed record KagemushaRecursiveSpendTransitionProfileArchive(byte[] NoritoBytes);
+
+public sealed record KagemushaRecursiveSpendLineageAppendBoundaryArchive(byte[] NoritoBytes);
+
 public sealed record KagemushaRecursiveSpendLineageWitnessArchive(byte[] NoritoBytes);
 
 public sealed record KagemushaRecursiveSpendVerifyArchive(byte[] NoritoBytes);
@@ -39,8 +43,29 @@ public static class KagemushaRecursiveSpendNative
     public const string RecursiveSpendLineageProofCircuitIdV1 = "kagemusha-recursive-spend-lineage-v1";
 
     public const uint RequiredBridgeAbiVersion = 6;
+    public const uint CompactTokenMaxHops = 64;
+    public const uint RecursiveSpendLineageWitnesslessMaxHopsV1 = 64;
+    public const bool RecursiveSpendLineageTransitionCircuitWiredV1 = true;
+    public const int RecursivePreviousProofOpenEnvelopesRequiredCountV1 = 1;
+    public const int RecursivePreviousProofOpenEnvelopesMaxBytes = 8 * 1024 * 1024;
+    public const int RecursivePallasOpenEnvelopeMaxTranscriptLabelBytes = 128;
+    public const string RecursiveSpendTransitionProfileDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile";
+    public const string RecursiveSpendTransitionProfileDigestDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
+    public const string RecursiveSpendTransitionProfileBindingDigestDomain =
+        "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
+    public const string RecursiveSpendLineageAppendOpeningsPreflightDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
+    public const string RecursiveSpendLineageAppendBoundaryDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
+    public const string RecursiveSpendLineageAppendBoundaryChainAssetBindingDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
+    public const string RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1 =
+        "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
     private const string LibraryName = "connect_norito_bridge";
-    private const int ExpectedEmptyArchiveProbeErrorCode = -311;
+    private const int ExpectedMalformedArchiveProbeErrorCode = -311;
+    private static readonly byte[] MalformedArchiveProbe = new byte[] { 0x00 };
 
     public static bool IsAvailable()
     {
@@ -70,7 +95,15 @@ public static class KagemushaRecursiveSpendNative
         {
             return false;
         }
+        catch (ArgumentException)
+        {
+            return false;
+        }
         catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
         {
             return false;
         }
@@ -88,6 +121,108 @@ public static class KagemushaRecursiveSpendNative
             : KagemushaOfflineSpendMode.CheckedPrefoldV1;
     }
 
+    public static bool CanRedeemWitnessless(string? circuitId, uint hopCount)
+    {
+        return RecursiveSpendLineageTransitionCircuitWiredV1
+            && circuitId == RecursiveSpendLineageProofCircuitIdV1
+            && hopCount >= 1
+            && hopCount <= RecursiveSpendLineageWitnesslessMaxHopsV1;
+    }
+
+    public static bool RequiresLineageWitnessForRedeem(string? circuitId, uint hopCount)
+    {
+        return !CanRedeemWitnessless(circuitId, hopCount);
+    }
+
+    public static bool CanAppendWitnesslessLineage(uint previousHopCount)
+    {
+        return RecursiveSpendLineageTransitionCircuitWiredV1
+            && previousHopCount >= 1
+            && previousHopCount < RecursiveSpendLineageWitnesslessMaxHopsV1;
+    }
+
+    public static string NormalizeAppendOutputCircuitId(string? outputCircuitId)
+    {
+        return string.IsNullOrEmpty(outputCircuitId)
+            ? RecursiveAggregationProofCircuitIdV1
+            : outputCircuitId!;
+    }
+
+    public static bool IsSupportedAppendOutputCircuitId(string? outputCircuitId)
+    {
+        var normalized = NormalizeAppendOutputCircuitId(outputCircuitId);
+        return normalized == RecursiveAggregationProofCircuitIdV1
+            || normalized == RecursiveSpendLineageProofCircuitIdV1;
+    }
+
+    public static bool IsSupportedPreviousProofCircuitId(string? previousProofCircuitId)
+    {
+        return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
+            || previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1;
+    }
+
+    public static bool RequiresPreviousLineageVerifierRecordForAppend(string? previousProofCircuitId)
+    {
+        return previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1;
+    }
+
+    public static bool IsSupportedAppendProofTransition(
+        string? previousProofCircuitId,
+        string? outputCircuitId)
+    {
+        var normalizedOutput = NormalizeAppendOutputCircuitId(outputCircuitId);
+        return previousProofCircuitId == RecursiveAggregationProofCircuitIdV1
+            && normalizedOutput == RecursiveAggregationProofCircuitIdV1
+            || previousProofCircuitId == RecursiveSpendLineageProofCircuitIdV1
+            && (
+                normalizedOutput == RecursiveAggregationProofCircuitIdV1
+                || normalizedOutput == RecursiveSpendLineageProofCircuitIdV1);
+    }
+
+    public static string PreferredAppendOutputCircuitId(uint previousHopCount)
+    {
+        return CanAppendWitnesslessLineage(previousHopCount)
+            ? RecursiveSpendLineageProofCircuitIdV1
+            : RecursiveAggregationProofCircuitIdV1;
+    }
+
+    public static bool CanProveAppendOutputCircuitId(string? outputCircuitId, uint previousHopCount)
+    {
+        if (previousHopCount < 1)
+        {
+            return false;
+        }
+        var normalized = NormalizeAppendOutputCircuitId(outputCircuitId);
+        return normalized switch
+        {
+            RecursiveAggregationProofCircuitIdV1 => previousHopCount < CompactTokenMaxHops,
+            RecursiveSpendLineageProofCircuitIdV1 => CanAppendWitnesslessLineage(previousHopCount),
+            _ => false,
+        };
+    }
+
+    public static bool CanSelectAppendOutputCircuitId(
+        string? previousProofCircuitId,
+        string? outputCircuitId,
+        uint previousHopCount)
+    {
+        if (!CanProveAppendOutputCircuitId(outputCircuitId, previousHopCount))
+        {
+            return false;
+        }
+        if (!IsSupportedPreviousProofCircuitId(previousProofCircuitId))
+        {
+            return false;
+        }
+        return IsSupportedAppendProofTransition(previousProofCircuitId, outputCircuitId);
+    }
+
+    public static bool RequiresPreviousProofOpenEnvelopesForAppend(string? outputCircuitId, uint previousHopCount)
+    {
+        return NormalizeAppendOutputCircuitId(outputCircuitId) == RecursiveSpendLineageProofCircuitIdV1
+            && previousHopCount >= 1;
+    }
+
     public static KagemushaRecursiveSpendArchive Init(ReadOnlySpan<byte> requestArchive)
     {
         return new KagemushaRecursiveSpendArchive(Call(
@@ -102,6 +237,33 @@ public static class KagemushaRecursiveSpendNative
             requestArchive,
             "connect_norito_kagemusha_recursive_spend_append",
             NativeAppend));
+    }
+
+    public static KagemushaRecursiveSpendTransitionProfileArchive TransitionProfileInit(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return new KagemushaRecursiveSpendTransitionProfileArchive(Call(
+            requestArchive,
+            "connect_norito_kagemusha_recursive_spend_transition_profile_init",
+            NativeTransitionProfileInit));
+    }
+
+    public static KagemushaRecursiveSpendTransitionProfileArchive TransitionProfileAppend(
+        ReadOnlySpan<byte> requestArchive)
+    {
+        return new KagemushaRecursiveSpendTransitionProfileArchive(Call(
+            requestArchive,
+            "connect_norito_kagemusha_recursive_spend_transition_profile_append",
+            NativeTransitionProfileAppend));
+    }
+
+    public static KagemushaRecursiveSpendLineageAppendBoundaryArchive LineageAppendBoundary(
+        ReadOnlySpan<byte> profileArchive)
+    {
+        return new KagemushaRecursiveSpendLineageAppendBoundaryArchive(Call(
+            profileArchive,
+            "connect_norito_kagemusha_recursive_spend_lineage_append_boundary",
+            NativeLineageAppendBoundary));
     }
 
     public static KagemushaRecursiveSpendLineageWitnessArchive LineageWitnessFromInitResult(
@@ -277,18 +439,14 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
-    private static byte[] ReadBridgeOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
+    internal static byte[] ReadBridgeOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
     {
         if (code != 0)
         {
             throw new InvalidOperationException($"{symbol} failed with bridge error code {code}.");
         }
 
-        if (outPtr == IntPtr.Zero)
-        {
-            throw new InvalidOperationException($"{symbol} returned a null output pointer.");
-        }
-
+        var shouldFree = outPtr != IntPtr.Zero;
         try
         {
             var length = checked((int)outLen.ToUInt64());
@@ -296,13 +454,20 @@ public static class KagemushaRecursiveSpendNative
             {
                 throw new InvalidOperationException($"{symbol} returned empty output.");
             }
+            if (outPtr == IntPtr.Zero)
+            {
+                throw new InvalidOperationException($"{symbol} returned a null output pointer.");
+            }
             var result = new byte[length];
             Marshal.Copy(outPtr, result, 0, length);
             return result;
         }
         finally
         {
-            NativeFree(outPtr);
+            if (shouldFree)
+            {
+                NativeFree(outPtr);
+            }
         }
     }
 
@@ -312,6 +477,9 @@ public static class KagemushaRecursiveSpendNative
         {
             if (!Probe(NativeInit)
                 || !Probe(NativeAppend)
+                || !Probe(NativeTransitionProfileInit)
+                || !Probe(NativeTransitionProfileAppend)
+                || !Probe(NativeLineageAppendBoundary)
                 || !Probe(NativeVerify)
                 || !Probe((NativeArchivePairCall)NativeLineageWitnessFromInitResult)
                 || !Probe((NativeArchiveTripleCall)NativeLineageWitnessAppendResult)
@@ -334,49 +502,71 @@ public static class KagemushaRecursiveSpendNative
         {
             return false;
         }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
     }
 
     private static bool Probe(NativeArchiveCall nativeCall)
     {
-        var code = nativeCall(Array.Empty<byte>(), UIntPtr.Zero, out var outPtr, out var outLen);
-        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
+        var code = nativeCall(
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
+            out var outPtr,
+            out var outLen);
+        return ConsumeProbeResult(code, outPtr, outLen);
     }
 
     private static bool Probe(NativeArchivePairCall nativeCall)
     {
         var code = nativeCall(
-            Array.Empty<byte>(),
-            UIntPtr.Zero,
-            Array.Empty<byte>(),
-            UIntPtr.Zero,
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
             out var outPtr,
             out var outLen);
-        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
+        return ConsumeProbeResult(code, outPtr, outLen);
     }
 
     private static bool Probe(NativeArchiveTripleCall nativeCall)
     {
         var code = nativeCall(
-            Array.Empty<byte>(),
-            UIntPtr.Zero,
-            Array.Empty<byte>(),
-            UIntPtr.Zero,
-            Array.Empty<byte>(),
-            UIntPtr.Zero,
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
+            MalformedArchiveProbe,
+            (UIntPtr)MalformedArchiveProbe.Length,
             out var outPtr,
             out var outLen);
-        return IsExpectedEmptyArchiveProbeResult(code, outPtr, outLen);
+        return ConsumeProbeResult(code, outPtr, outLen);
     }
 
-    internal static bool IsExpectedEmptyArchiveProbeResult(int code, IntPtr outPtr, UIntPtr outLen)
+    private static bool ConsumeProbeResult(int code, IntPtr outPtr, UIntPtr outLen)
     {
+        var expected = IsExpectedMalformedArchiveProbeResult(code, outPtr, outLen);
         if (outPtr != IntPtr.Zero)
         {
             NativeFree(outPtr);
-            return false;
         }
+        return expected;
+    }
 
-        return code == ExpectedEmptyArchiveProbeErrorCode && outLen == UIntPtr.Zero;
+    internal static bool IsExpectedMalformedArchiveProbeResult(int code, IntPtr outPtr, UIntPtr outLen)
+    {
+        return code == ExpectedMalformedArchiveProbeErrorCode
+            && outPtr == IntPtr.Zero
+            && outLen == UIntPtr.Zero;
     }
 
     private static bool TryGetAbiVersion(out uint version)
@@ -411,6 +601,15 @@ public static class KagemushaRecursiveSpendNative
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_append", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeAppend(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_transition_profile_init", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeTransitionProfileInit(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_transition_profile_append", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeTransitionProfileAppend(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_lineage_append_boundary", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeLineageAppendBoundary(byte[] profilePtr, UIntPtr profileLen, out IntPtr outPtr, out UIntPtr outLen);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeLineageWitnessFromInitResult(

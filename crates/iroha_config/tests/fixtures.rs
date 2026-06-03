@@ -1563,6 +1563,37 @@ fn minimal_config_snapshot() {
                     burn_from_unix_timestamp_ms: 18446744073709551615,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
+                    sponsored_contract_operation_allowlist: [
+                        SponsoredContractOperationAllowlistEntry {
+                            contract_alias: Some(
+                                ContractAlias(
+                                    "dpn_suite::dpn",
+                                ),
+                            ),
+                            contract_address: None,
+                            entrypoints: {
+                                "approve_factored_invoice_counterparty",
+                                "approve_factoring",
+                                "approve_reverse_factored_invoice_counterparty",
+                                "configure",
+                                "confirm_factoring_funds_received",
+                                "finalize_factored_invoice_dpn",
+                                "finalize_factoring",
+                                "finalize_reverse_factored_invoice_dpn",
+                                "freeze_dpn",
+                                "mark_factoring_funds_sent",
+                                "mark_pending_settlement",
+                                "record_issued_dpn",
+                                "register_ed25519_key",
+                                "request_factored_invoice_issue",
+                                "request_factoring",
+                                "request_reverse_factored_invoice_issue",
+                                "sync_nft_metadata",
+                                "transfer_dpn",
+                                "unfreeze_dpn",
+                            },
+                        },
+                    ],
                 },
                 relay_worker: NexusRelayWorker {
                     enabled: false,

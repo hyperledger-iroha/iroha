@@ -622,7 +622,8 @@ public final class ConnectFrameCodec {
   private static <T> byte[] encodeField(
       final T value, final TypeAdapter<T> adapter, final String label) throws ConnectProtocolException {
     try {
-      final NoritoCodec.AdaptiveEncoding encoding = NoritoCodec.encodeWithHeaderFlags(value, adapter);
+      final NoritoCodec.AdaptiveEncoding encoding =
+          NoritoCodec.encodeAdaptive(value, adapter, CONNECT_LAYOUT_FLAGS);
       if (encoding.flags() != CONNECT_LAYOUT_FLAGS) {
         throw new ConnectProtocolException(
             "Unsupported Norito flags in " + label + ": " + encoding.flags());

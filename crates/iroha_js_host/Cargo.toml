@@ -12,6 +12,11 @@ build = "build.rs"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+compact-len = []
+packed-struct = []
+schema-structural = []
+
 [lints]
 workspace = true
 
@@ -40,4 +45,5 @@ halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch"
 bs58 = "0.5.1"
 
 [dev-dependencies]
+iroha_zkp_halo2 = { workspace = true }
 tempfile = { workspace = true }

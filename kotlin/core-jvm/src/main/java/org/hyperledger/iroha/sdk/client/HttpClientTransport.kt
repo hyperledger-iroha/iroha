@@ -36,6 +36,7 @@ import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTag
 import org.hyperledger.iroha.sdk.sccp.SccpSourceProofs
 
 /**
@@ -269,6 +270,16 @@ class HttpClientTransport(
 
     fun listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceiptListResponse> =
         fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list")
+
+    fun registerVerifyingKey(requestBody: VerifyingKeyRegisterRequest): CompletableFuture<ClientResponse> {
+        val body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody))
+        return executeAccepted(buildJsonPostRequest("/v1/zk/vk/register", body), "verifying key register", 202)
+    }
+
+    fun updateVerifyingKey(requestBody: VerifyingKeyUpdateRequest): CompletableFuture<ClientResponse> {
+        val body = encodeJsonBody(buildVerifyingKeyUpdatePayload(requestBody))
+        return executeAccepted(buildJsonPostRequest("/v1/zk/vk/update", body), "verifying key update", 202)
+    }
 
     fun deployContract(
         authority: String,
@@ -623,6 +634,7 @@ class HttpClientTransport(
         private const val PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status"
         private const val REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure"
         private const val SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384
+        private const val U32_MAX = 4_294_967_295L
         private const val SCCP_DOMAIN_SORA = 0
         private val SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
             BigInteger("30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47", 16)
@@ -848,6 +860,70 @@ class HttpClientTransport(
             return payload
         }
 
+        @JvmStatic internal fun buildVerifyingKeyRegisterPayload(request: VerifyingKeyRegisterRequest): Map<String, Any> {
+            val backend = VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend, "backend")
+            val vkPayload = normalizeVerifierBytes(request.verifyingKeyBytes, request.verifyingKeyLength)
+            val commitmentHex = normalizeOptionalHex32(request.commitmentHex, "commitmentHex")
+            validateVerifyingKeyMaterial(vkPayload, commitmentHex)
+            validateInlineVerifyingKeyCommitment(backend, vkPayload?.bytes, commitmentHex)
+            validateVerifyingKeyHeightRange(request.activationHeight, request.withdrawHeight)
+
+            val payload = LinkedHashMap<String, Any>()
+            payload["authority"] = normalizeNonBlank(request.authority, "authority")
+            payload["private_key"] = normalizeNonBlank(request.privateKey, "privateKey")
+            payload["backend"] = backend
+            payload["name"] = normalizeVerifyingKeyName(request.name)
+            payload["version"] = normalizePositiveU32(request.version, "version")
+            payload["circuit_id"] = normalizeNonBlank(request.circuitId, "circuitId")
+            payload["public_inputs_schema_hash_hex"] = normalizeHex32(request.publicInputsSchemaHashHex, "publicInputsSchemaHashHex")
+            payload["gas_schedule_id"] = normalizeNonBlank(request.gasScheduleId, "gasScheduleId")
+            putOptionalVerifierFields(
+                payload,
+                request.curve,
+                request.maxProofBytes,
+                request.metadataUriCid,
+                request.verifyingKeyBytesCid,
+                request.activationHeight,
+                request.withdrawHeight,
+                commitmentHex,
+                vkPayload,
+                request.status,
+            )
+            return payload
+        }
+
+        @JvmStatic internal fun buildVerifyingKeyUpdatePayload(request: VerifyingKeyUpdateRequest): Map<String, Any> {
+            val backend = VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend, "backend")
+            val vkPayload = normalizeVerifierBytes(request.verifyingKeyBytes, request.verifyingKeyLength)
+            val commitmentHex = normalizeOptionalHex32(request.commitmentHex, "commitmentHex")
+            validateVerifyingKeyMaterial(vkPayload, commitmentHex)
+            validateInlineVerifyingKeyCommitment(backend, vkPayload?.bytes, commitmentHex)
+            validateVerifyingKeyHeightRange(request.activationHeight, request.withdrawHeight)
+
+            val payload = LinkedHashMap<String, Any>()
+            payload["authority"] = normalizeNonBlank(request.authority, "authority")
+            payload["private_key"] = normalizeNonBlank(request.privateKey, "privateKey")
+            payload["backend"] = backend
+            payload["name"] = normalizeVerifyingKeyName(request.name)
+            payload["version"] = normalizePositiveU32(request.version, "version")
+            payload["circuit_id"] = normalizeNonBlank(request.circuitId, "circuitId")
+            payload["public_inputs_schema_hash_hex"] = normalizeHex32(request.publicInputsSchemaHashHex, "publicInputsSchemaHashHex")
+            request.gasScheduleId?.let { payload["gas_schedule_id"] = normalizeNonBlank(it, "gasScheduleId") }
+            putOptionalVerifierFields(
+                payload,
+                request.curve,
+                request.maxProofBytes,
+                request.metadataUriCid,
+                request.verifyingKeyBytesCid,
+                request.activationHeight,
+                request.withdrawHeight,
+                commitmentHex,
+                vkPayload,
+                request.status,
+            )
+            return payload
+        }
+
         @JvmStatic internal fun buildContractTargetSelector(contractAddress: String?, contractAlias: String?): Map<String, String> {
             val hasContractAddress = contractAddress != null
             val hasContractAlias = contractAlias != null
@@ -869,6 +945,11 @@ class HttpClientTransport(
 
         @JvmStatic internal fun normalizeOptionalNonBlank(value: String?, field: String): String? = if (value == null) null else normalizeNonBlank(value, field)
         @JvmStatic internal fun normalizeNonBlank(value: String, field: String): String { val trimmed = value.trim(); require(trimmed.isNotEmpty()) { "$field must not be blank" }; return trimmed }
+        @JvmStatic internal fun normalizeVerifyingKeyName(value: String): String {
+            val normalized = normalizeNonBlank(value, "name")
+            require(!normalized.contains(':')) { "name must not contain ':' characters" }
+            return normalized
+        }
         @JvmStatic internal fun normalizeEvenLengthHex(value: String, field: String): String {
             var trimmed = normalizeNonBlank(value, field)
             if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) trimmed = trimmed.substring(2)
@@ -960,6 +1041,132 @@ class HttpClientTransport(
             preflightSccpBridgeSubmitBundleSelection(fields, path)
         }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
+        @JvmStatic internal fun normalizeOptionalHex32(value: String?, field: String): String? = if (value == null || value.trim().isEmpty()) null else normalizeHex32(value, field)
+
+        @JvmStatic internal fun normalizePositiveU32(value: Long, field: String): Long {
+            require(value > 0L && value <= U32_MAX) { "$field must be a positive u32" }
+            return value
+        }
+
+        @JvmStatic internal fun normalizeOptionalU32(value: Long?, field: String): Long? {
+            if (value == null) return null
+            require(value >= 0L && value <= U32_MAX) { "$field must be a u32" }
+            return value
+        }
+
+        @JvmStatic internal fun normalizeOptionalNonNegative(value: Long?, field: String): Long? {
+            if (value == null) return null
+            require(value >= 0L) { "$field must be non-negative" }
+            return value
+        }
+
+        @JvmStatic internal fun normalizeVerifyingKeyStatus(value: String?): String? {
+            val normalized = normalizeOptionalNonBlank(value, "status")?.lowercase() ?: return null
+            return when (normalized) {
+                "proposed" -> "Proposed"
+                "active" -> "Active"
+                "withdrawn" -> "Withdrawn"
+                else -> throw IllegalArgumentException("status must be Proposed, Active, or Withdrawn")
+            }
+        }
+
+        private data class VerifyingKeyPayload(val bytes: ByteArray?, val length: Long?)
+
+        private fun normalizeVerifierBytes(bytes: ByteArray?, explicitLength: Long?): VerifyingKeyPayload? {
+            if (bytes == null) {
+                val length = explicitLength?.let { normalizePositiveU32(it, "vkLen") }
+                return if (length == null) null else VerifyingKeyPayload(null, length)
+            }
+            require(bytes.isNotEmpty()) { "vkBytes must not be empty" }
+            val actualLength = bytes.size.toLong()
+            require(actualLength <= U32_MAX) { "vkBytes length must fit in a u32" }
+            if (explicitLength != null) {
+                val expected = normalizePositiveU32(explicitLength, "vkLen")
+                require(expected == actualLength) { "vkLen must match vkBytes length" }
+            }
+            return VerifyingKeyPayload(bytes.copyOf(), actualLength)
+        }
+
+        @JvmStatic internal fun validateVerifyingKeyHeightRange(activationHeight: Long?, withdrawHeight: Long?) {
+            val activation = normalizeOptionalNonNegative(activationHeight, "activationHeight")
+            val withdraw = normalizeOptionalNonNegative(withdrawHeight, "withdrawHeight")
+            require(activation == null || withdraw == null || withdraw >= activation) {
+                "withdrawHeight must be greater than or equal to activationHeight"
+            }
+        }
+
+        private fun validateVerifyingKeyMaterial(
+            vkPayload: VerifyingKeyPayload?,
+            commitmentHex: String?,
+        ) {
+            if (vkPayload?.bytes == null) {
+                require(commitmentHex != null) { "commitmentHex is required when vkBytes is omitted" }
+                require(vkPayload?.length != null) { "vkLen is required when vkBytes is omitted" }
+            }
+        }
+
+        @JvmStatic internal fun validateInlineVerifyingKeyCommitment(backend: String, bytes: ByteArray?, commitmentHex: String?) {
+            if (bytes == null || commitmentHex == null) return
+            val expected = verifyingKeyCommitmentHex(backend, bytes)
+            require(expected == commitmentHex) {
+                "commitmentHex must match domain-separated SHA-256 of backend and vkBytes"
+            }
+        }
+
+        private fun verifyingKeyCommitmentHex(backend: String, bytes: ByteArray): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val backendBytes = backend.toByteArray(StandardCharsets.UTF_8)
+            digest.update("iroha:zk:v1:vk".toByteArray(StandardCharsets.UTF_8))
+            digest.update(u64Be(backendBytes.size.toLong()))
+            digest.update(backendBytes)
+            digest.update(u64Be(bytes.size.toLong()))
+            digest.update(bytes)
+            return hexLower(digest.digest())
+        }
+
+        private fun u64Be(value: Long): ByteArray {
+            var remaining = value
+            val out = ByteArray(8)
+            for (index in 7 downTo 0) {
+                out[index] = (remaining and 0xffL).toByte()
+                remaining = remaining ushr 8
+            }
+            return out
+        }
+
+        private fun putOptionalVerifierFields(
+            payload: MutableMap<String, Any>,
+            curve: String?,
+            maxProofBytes: Long?,
+            metadataUriCid: String?,
+            verifyingKeyBytesCid: String?,
+            activationHeight: Long?,
+            withdrawHeight: Long?,
+            commitmentHex: String?,
+            vkPayload: VerifyingKeyPayload?,
+            status: String?,
+        ) {
+            curve?.let { payload["curve"] = normalizeNonBlank(it, "curve") }
+            normalizeOptionalU32(maxProofBytes, "maxProofBytes")?.let { payload["max_proof_bytes"] = it }
+            metadataUriCid?.let { payload["metadata_uri_cid"] = normalizeNonBlank(it, "metadataUriCid") }
+            verifyingKeyBytesCid?.let { payload["vk_bytes_cid"] = normalizeNonBlank(it, "verifyingKeyBytesCid") }
+            normalizeOptionalNonNegative(activationHeight, "activationHeight")?.let { payload["activation_height"] = it }
+            normalizeOptionalNonNegative(withdrawHeight, "withdrawHeight")?.let { payload["withdraw_height"] = it }
+            commitmentHex?.let { payload["commitment_hex"] = it }
+            vkPayload?.bytes?.let { payload["vk_bytes"] = Base64.getEncoder().encodeToString(it) }
+            vkPayload?.length?.let { payload["vk_len"] = it }
+            normalizeVerifyingKeyStatus(status)?.let { payload["status"] = it }
+        }
+
+        private fun hexLower(bytes: ByteArray): String {
+            val out = StringBuilder(bytes.size * 2)
+            for (byte in bytes) {
+                val value = byte.toInt() and 0xff
+                if (value < 16) out.append('0')
+                out.append(value.toString(16))
+            }
+            return out.toString()
+        }
 
         private fun abiWordU32Hex(value: Int): String {
             require(value >= 0) { "SCCP ABI word value must be a u32" }

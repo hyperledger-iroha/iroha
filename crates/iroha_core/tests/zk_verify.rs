@@ -26,6 +26,45 @@ use nonzero_ext::nonzero;
 mod test_world;
 
 const TINY_ADD_CIRCUIT_ID: &str = "halo2/ipa:tiny-add";
+const PENDING_PRODUCTION_ATTACHMENT_BACKENDS: &[&str] = &[
+    "halo2/ipa/orchard",
+    "stark/fri/miden",
+    "anonymous-pgc",
+    "verange",
+    "zk-ams",
+    "zk-x509",
+    "sis-with-hints",
+    "pq-masp-stark-fri",
+];
+
+const PRODUCTION_CLAIM_ATTACHMENT_BACKENDS: &[&str] = &[
+    "halo2/ipa:production-ready",
+    "halo2/ipa:claimed-production",
+    "halo2/ipa:mainnet-ready",
+    "stark/fri/audit-signoff",
+    "stark/fri/externally-audited",
+    "stark/fri/security-review-passed",
+    "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+    "stark/fri/a-u-d-i-t-c-l-a-i-m",
+];
+
+const PENDING_PRODUCTION_BACKEND_TAGS: &[BackendTag] = &[
+    BackendTag::Halo2IpaOrchard,
+    BackendTag::Groth16Bls12377,
+    BackendTag::FcmpPlusPlusCurveTree,
+    BackendTag::LatticePcsSis,
+    BackendTag::MidenStark,
+    BackendTag::AztecPlonkishPrivateKernel,
+    BackendTag::PqMaspStarkFri,
+    BackendTag::AnonymousPgc,
+    BackendTag::VeRange,
+    BackendTag::ZkAt,
+    BackendTag::RecursiveAnonymousAdmission,
+    BackendTag::VegaExistingCredentialZk,
+    BackendTag::SilentThresholdAnoncred,
+    BackendTag::ZkX509,
+    BackendTag::SisWithHints,
+];
 
 fn build_vk_record(
     _name: &str,
@@ -402,6 +441,90 @@ fn preverify_rejects_vk_ref_backend_mismatch_before_lookup() {
 }
 
 #[test]
+fn preverify_rejects_pending_production_backend_labels_before_lookup() {
+    for (idx, backend) in PENDING_PRODUCTION_ATTACHMENT_BACKENDS
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let world = test_world::world_with_test_accounts();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+        let exec = Executor::default();
+
+        let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            backend.into(),
+            iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
+            iroha_data_model::proof::VerifyingKeyId::new(
+                backend,
+                format!("vk_pending_attachment_{idx}"),
+            ),
+        );
+        let tx =
+            signed_empty_tx_with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![
+                attachment,
+            ]));
+
+        let mut stx = block.transaction();
+        let err = exec
+            .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("pending-production attachment backend must fail before registry lookup");
+        assert!(
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("pending-production proof backends")),
+            "unexpected preverify error for {backend}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn preverify_rejects_production_claim_backend_labels_before_lookup() {
+    for (idx, backend) in PRODUCTION_CLAIM_ATTACHMENT_BACKENDS
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let world = test_world::world_with_test_accounts();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+        let exec = Executor::default();
+
+        let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            backend.into(),
+            iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
+            iroha_data_model::proof::VerifyingKeyId::new(
+                backend,
+                format!("vk_production_claim_attachment_{idx}"),
+            ),
+        );
+        let tx =
+            signed_empty_tx_with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![
+                attachment,
+            ]));
+
+        let mut stx = block.transaction();
+        let err = exec
+            .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("production-claim attachment backend must fail before registry lookup");
+        assert!(
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("production-claim proof backends")),
+            "unexpected preverify error for {backend}: {err:?}"
+        );
+    }
+}
+
+#[test]
 fn preverify_rejects_commitment_only_missing_vk_reference() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
@@ -485,6 +608,65 @@ fn preverify_rejects_inactive_registered_vk_even_with_matching_commitment() {
 }
 
 #[test]
+fn preverify_rejects_pending_production_verifier_records_from_legacy_state() {
+    for (idx, backend_tag) in PENDING_PRODUCTION_BACKEND_TAGS.iter().copied().enumerate() {
+        let world = test_world::world_with_test_accounts();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
+        let exec = Executor::default();
+
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new(
+            "halo2/ipa",
+            format!("vk_pending_preverify_{idx}"),
+        );
+        let fixture = halo2_fixture_envelope(TINY_ADD_CIRCUIT_ID, [0u8; 32]);
+        let vk_box = fixture.vk_box("halo2/ipa").expect("fixture verifying key");
+        let mut vk_record = build_vk_record("vk_pending_preverify", vk_box, fixture.schema_hash);
+        vk_record.backend = backend_tag;
+        let mut attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+            "halo2/ipa".into(),
+            fixture.proof_box("halo2/ipa"),
+            vk_id.clone(),
+        );
+        attachment.vk_commitment = Some(vk_record.commitment);
+
+        {
+            let mut seed_stx = block.transaction();
+            seed_stx
+                .world
+                .verifying_keys
+                .insert(vk_id.clone(), vk_record.clone());
+            seed_stx
+                .world
+                .verifying_keys_by_circuit
+                .insert((vk_record.circuit_id.clone(), vk_record.version), vk_id);
+            seed_stx.apply();
+        }
+
+        let tx =
+            signed_empty_tx_with_attachments(iroha_data_model::proof::ProofAttachmentList(vec![
+                attachment,
+            ]));
+
+        let mut stx = block.transaction();
+        let err = exec
+            .execute_transaction(&mut stx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+            .expect_err("pending-production verifier record must not preverify");
+        assert!(
+            matches!(&err, ValidationFail::NotPermitted(msg) if msg.contains("pending-production verifying key backends")),
+            "unexpected preverify error for {}: {err:?}",
+            backend_tag.canonical_label()
+        );
+    }
+}
+
+#[test]
 fn verifyproof_requires_registered_verifying_key() {
     let world = test_world::world_with_test_accounts();
     let kura = Kura::blank_kura_for_testing();
@@ -556,6 +738,30 @@ fn verifyproof_rejects_vk_ref_backend_mismatch_before_lookup() {
         .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
         .expect_err("vk_ref backend mismatch must fail before registry lookup");
     assert!(format!("{err:?}").contains("verifying key backend mismatch"));
+}
+
+#[test]
+fn verifyproof_rejects_unsupported_backend_before_lookup() {
+    let world = test_world::world_with_test_accounts();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new(world, kura, query_handle);
+
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let exec = Executor::default();
+
+    let attachment = iroha_data_model::proof::ProofAttachment::new_ref(
+        "halo2/unknown-native-v1".into(),
+        iroha_data_model::proof::ProofBox::new("halo2/unknown-native-v1".into(), vec![1, 2, 3]),
+        iroha_data_model::proof::VerifyingKeyId::new("halo2/unknown-native-v1", "vk_missing"),
+    );
+    let verify: InstructionBox = iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), verify)
+        .expect_err("unsupported proof backend must fail before registry lookup");
+    assert!(format!("{err:?}").contains("unsupported proof backends"));
 }
 
 #[test]

@@ -1251,6 +1251,14 @@ impl Iso20022BridgeRuntime {
         if message_profile.require_uetr && uetr.is_none() {
             return Err(MsgError::MissingField("UETR"));
         }
+        if let Some(value) = uetr.as_deref()
+            && !is_valid_uetr(value)
+        {
+            return Err(MsgError::InvalidValue {
+                field: "UETR".to_owned(),
+                kind: InvalidValueKind::Enum,
+            });
+        }
         self.validate_amount_minor_units(message_profile, parsed)?;
         self.validate_supplementary_data_limit(message_profile, parsed)?;
         self.validate_structured_address_mode(message_profile, parsed)?;
@@ -1688,18 +1696,27 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<String, MsgError> {
-        let id = business_message_id(parsed)
-            .or_else(|| parsed.field_text("Assgnmt/Id"))
-            .or_else(|| parsed.field_text("TxId"))
-            .or_else(|| lifecycle_referenced_message_id(message_type, parsed))
-            .ok_or(MsgError::MissingField("MsgId"))?;
+        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?;
+        let securities_tx_id = if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
+            unique_field_text_by_suffix(parsed, &["TxId"], "TxId")?
+        } else {
+            None
+        };
+        let id = if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
+            securities_tx_id
+                .or_else(|| business_message_id(parsed))
+                .or(referenced_message_id)
+        } else {
+            business_message_id(parsed)
+                .or_else(|| parsed.field_text("Assgnmt/Id"))
+                .or(referenced_message_id)
+        }
+        .ok_or(MsgError::MissingField("MsgId"))?;
         let id = id.trim();
         if id.is_empty() {
             return Err(MsgError::MissingField("MsgId"));
         }
-        if matches!(message_type, "sese.023" | "sese.024" | "sese.025")
-            && business_message_id(parsed).is_none()
-        {
+        if matches!(message_type, "sese.023" | "sese.024" | "sese.025") {
             Ok(format!("{message_type}:{id}"))
         } else {
             Ok(id.to_owned())
@@ -1713,7 +1730,7 @@ impl Iso20022BridgeRuntime {
         message_type: &str,
         parsed: &ParsedMessage,
     ) -> Result<IsoLifecycleOutcome, MsgError> {
-        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)
+        let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?
             .map(ToOwned::to_owned)
             .map(|id| {
                 if matches!(message_type, "sese.024" | "sese.025") {
@@ -2856,16 +2873,16 @@ fn uetr(parsed: &ParsedMessage) -> Option<&str> {
 fn lifecycle_referenced_message_id<'a>(
     message_type: &str,
     parsed: &'a ParsedMessage,
-) -> Option<&'a str> {
+) -> Result<Option<&'a str>, MsgError> {
     match message_type {
-        "pacs.002" => parsed.field_text("OrgnlMsgId"),
-        "pacs.004" => parsed.field_text("OrgnlGrpInf/OrgnlMsgId"),
-        "camt.056" => parsed.field_text("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId"),
-        "sese.024" | "sese.025" => parsed.field_text("TxId"),
-        "sese.023" => None,
-        _ => None,
+        "pacs.002" => unique_field_text_by_suffix(parsed, &["OrgnlMsgId"], "OrgnlMsgId"),
+        "pacs.004" | "camt.056" => {
+            unique_field_text_by_suffix(parsed, &["OrgnlGrpInf/OrgnlMsgId"], "OrgnlMsgId")
+        }
+        "sese.024" | "sese.025" => unique_field_text_by_suffix(parsed, &["TxId"], "TxId"),
+        "sese.023" => Ok(None),
+        _ => Ok(None),
     }
-    .filter(|value| !value.trim().is_empty())
 }
 
 fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> Option<&'a str> {
@@ -3011,6 +3028,38 @@ fn field_text_by_suffix<'a>(parsed: &'a ParsedMessage, suffixes: &[&str]) -> Opt
     })
 }
 
+fn unique_field_text_by_suffix<'a>(
+    parsed: &'a ParsedMessage,
+    suffixes: &[&str],
+    field_name: &str,
+) -> Result<Option<&'a str>, MsgError> {
+    let mut selected = None;
+    for (field, value) in parsed.iter() {
+        if !suffixes
+            .iter()
+            .any(|suffix| field_matches_suffix(field, suffix))
+        {
+            continue;
+        }
+        let text = core::str::from_utf8(value).map_err(|_| MsgError::InvalidValue {
+            field: field_name.to_owned(),
+            kind: InvalidValueKind::Utf8,
+        })?;
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if let Some(previous) = selected {
+            if previous != text {
+                return Err(MsgError::ValidationFailed);
+            }
+        } else {
+            selected = Some(text);
+        }
+    }
+    Ok(selected)
+}
+
 fn field_matches_suffix(field: &str, suffix: &str) -> bool {
     field == suffix
         || field
@@ -3037,9 +3086,48 @@ struct XmlElementSpan {
     end: usize,
 }
 
+struct XadesSignedProperties<'a> {
+    id: String,
+    xml: &'a str,
+    signed_signature_properties_start: usize,
+    signed_signature_properties_xml: &'a str,
+}
+
 const XMLDSIG_ECDSA_SHA256: &str = "http://www.w3.org/2001/04/xmldsig-more#ecdsa-sha256";
 const XMLDSIG_SHA256: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
 const XMLDSIG_ENVELOPED_SIGNATURE: &str = "http://www.w3.org/2000/09/xmldsig#enveloped-signature";
+const XADES_SIGNED_PROPERTIES_REFERENCE_TYPE: &str = "http://uri.etsi.org/01903#SignedProperties";
+const XADES_UNSUPPORTED_QUALIFYING_PROPERTIES_ELEMENTS: &[&str] = &[
+    "UnsignedProperties",
+    "UnsignedSignatureProperties",
+    "SignatureTimeStamp",
+    "CompleteCertificateRefs",
+    "CompleteRevocationRefs",
+    "AttributeCertificateRefs",
+    "AttributeRevocationRefs",
+    "SigAndRefsTimeStamp",
+    "RefsOnlyTimeStamp",
+    "CertificateValues",
+    "RevocationValues",
+    "ArchiveTimeStamp",
+    "CounterSignature",
+];
+const XADES_UNSUPPORTED_SIGNED_PROPERTIES_ELEMENTS: &[&str] = &[
+    "SignedDataObjectProperties",
+    "DataObjectFormat",
+    "CommitmentTypeIndication",
+    "AllDataObjectsTimeStamp",
+    "IndividualDataObjectsTimeStamp",
+];
+const XADES_UNSUPPORTED_SIGNED_SIGNATURE_PROPERTIES_ELEMENTS: &[&str] = &[
+    "SigningPolicyIdentifier",
+    "SignatureProductionPlace",
+    "SignatureProductionPlaceV2",
+    "SignerRole",
+    "SignerRoleV2",
+];
+const XADES_UNSUPPORTED_SIGNING_CERTIFICATE_ELEMENTS: &[&str] =
+    &["IssuerSerial", "IssuerSerialV2", "X509IssuerSerial"];
 const XML_C14N_1_0: &str = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315";
 const XML_C14N_1_1: &str = "http://www.w3.org/2006/12/xml-c14n11";
 const XML_EXCLUSIVE_C14N_1_0: &str = "http://www.w3.org/2001/10/xml-exc-c14n#";
@@ -3086,6 +3174,7 @@ fn verify_embedded_xml_signature(
         return Err(MsgError::ValidationFailed);
     }
     let signature_xml = &text[signature_span.start..signature_span.end];
+    let xades_signed_properties = verify_xades_qualifying_properties(signature_xml)?;
     let signed_info_span =
         find_first_xml_element(signature_xml, "SignedInfo").ok_or(MsgError::ValidationFailed)?;
     let signed_info_xml = &signature_xml[signed_info_span.start..signed_info_span.end];
@@ -3099,11 +3188,17 @@ fn verify_embedded_xml_signature(
     if signature_algorithm != XMLDSIG_ECDSA_SHA256 {
         return Err(MsgError::ValidationFailed);
     }
-    verify_xml_signature_references(text, signature_span, signed_info_xml)?;
+    verify_xml_signature_references(
+        text,
+        signature_span,
+        signed_info_xml,
+        xades_signed_properties.as_ref(),
+    )?;
 
     let signature_value = decode_required_child_base64(signature_xml, "SignatureValue")?;
     let public_key = xml_signature_public_key(
         signature_xml,
+        xades_signed_properties.as_ref(),
         signature_public_key_sha256_pins,
         x509_trust_anchor_sha256_pins,
         x509_required_certificate_policy_oids,
@@ -3122,18 +3217,286 @@ fn verify_embedded_xml_signature(
     Ok(true)
 }
 
+fn verify_xades_qualifying_properties(
+    signature_xml: &str,
+) -> Result<Option<XadesSignedProperties<'_>>, MsgError> {
+    let Some(qualifying_properties_span) =
+        find_first_xml_element(signature_xml, "QualifyingProperties")
+    else {
+        return Ok(None);
+    };
+    if find_first_xml_element(
+        &signature_xml[qualifying_properties_span.end..],
+        "QualifyingProperties",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signature_span = find_first_xml_element(signature_xml, "Signature")
+        .or_else(|| find_first_xml_element(signature_xml, "Sgntr"))
+        .ok_or(MsgError::ValidationFailed)?;
+    let signature_id = element_attr(signature_xml, signature_span, "Id")
+        .or_else(|| element_attr(signature_xml, signature_span, "ID"))
+        .or_else(|| element_attr(signature_xml, signature_span, "id"))
+        .ok_or(MsgError::ValidationFailed)?;
+    if signature_id.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let target = element_attr(signature_xml, qualifying_properties_span, "Target")
+        .ok_or(MsgError::ValidationFailed)?;
+    let Some(target_id) = target.strip_prefix('#') else {
+        return Err(MsgError::ValidationFailed);
+    };
+    if target_id.is_empty() || target_id != signature_id {
+        return Err(MsgError::ValidationFailed);
+    }
+
+    let object_span =
+        find_first_xml_element(signature_xml, "Object").ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(&signature_xml[object_span.end..], "Object").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    if qualifying_properties_span.start < object_span.content_start
+        || qualifying_properties_span.end > object_span.content_end
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+
+    let qualifying_properties_xml =
+        &signature_xml[qualifying_properties_span.start..qualifying_properties_span.end];
+    reject_xades_elements(
+        qualifying_properties_xml,
+        XADES_UNSUPPORTED_QUALIFYING_PROPERTIES_ELEMENTS,
+    )?;
+    let signed_properties_span =
+        find_first_xml_element(qualifying_properties_xml, "SignedProperties")
+            .ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(
+        &qualifying_properties_xml[signed_properties_span.end..],
+        "SignedProperties",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let first_signed_properties_span = find_first_xml_element(signature_xml, "SignedProperties")
+        .ok_or(MsgError::ValidationFailed)?;
+    if first_signed_properties_span.start
+        != qualifying_properties_span.start + signed_properties_span.start
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    if find_first_xml_element(
+        &signature_xml[first_signed_properties_span.end..],
+        "SignedProperties",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signed_properties_id =
+        element_attr(qualifying_properties_xml, signed_properties_span, "Id")
+            .or_else(|| element_attr(qualifying_properties_xml, signed_properties_span, "ID"))
+            .or_else(|| element_attr(qualifying_properties_xml, signed_properties_span, "id"))
+            .ok_or(MsgError::ValidationFailed)?;
+    if signed_properties_id.is_empty() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signed_properties_xml =
+        &qualifying_properties_xml[signed_properties_span.start..signed_properties_span.end];
+    reject_xades_elements(
+        signed_properties_xml,
+        XADES_UNSUPPORTED_SIGNED_PROPERTIES_ELEMENTS,
+    )?;
+    let signed_signature_properties_span =
+        validate_xades_signed_signature_properties(signed_properties_xml)?;
+
+    Ok(Some(XadesSignedProperties {
+        id: signed_properties_id,
+        xml: signed_properties_xml,
+        signed_signature_properties_start: signed_signature_properties_span.start,
+        signed_signature_properties_xml: &signed_properties_xml
+            [signed_signature_properties_span.start..signed_signature_properties_span.end],
+    }))
+}
+
+fn validate_xades_signed_signature_properties(
+    signed_properties_xml: &str,
+) -> Result<XmlElementSpan, MsgError> {
+    let signed_signature_properties_span =
+        find_first_xml_element(signed_properties_xml, "SignedSignatureProperties")
+            .ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(
+        &signed_properties_xml[signed_signature_properties_span.end..],
+        "SignedSignatureProperties",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signed_signature_properties_xml = &signed_properties_xml
+        [signed_signature_properties_span.start..signed_signature_properties_span.end];
+    reject_xades_elements(
+        signed_signature_properties_xml,
+        XADES_UNSUPPORTED_SIGNED_SIGNATURE_PROPERTIES_ELEMENTS,
+    )?;
+    let signing_time_span = find_first_xml_element(signed_signature_properties_xml, "SigningTime")
+        .ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(
+        &signed_signature_properties_xml[signing_time_span.end..],
+        "SigningTime",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signing_time = &signed_signature_properties_xml
+        [signing_time_span.content_start..signing_time_span.content_end];
+    if !is_canonical_xades_signing_time(signing_time) {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(signed_signature_properties_span)
+}
+
+fn reject_xades_elements(container: &str, elements: &[&str]) -> Result<(), MsgError> {
+    for element in elements {
+        if find_first_xml_element(container, element).is_some() {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn is_canonical_xades_signing_time(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    let Some(year) = parse_ascii_decimal_u32(bytes, 0, 4) else {
+        return false;
+    };
+    let Some(month) = parse_ascii_decimal_u32(bytes, 5, 2) else {
+        return false;
+    };
+    let Some(day) = parse_ascii_decimal_u32(bytes, 8, 2) else {
+        return false;
+    };
+    let Some(hour) = parse_ascii_decimal_u32(bytes, 11, 2) else {
+        return false;
+    };
+    let Some(minute) = parse_ascii_decimal_u32(bytes, 14, 2) else {
+        return false;
+    };
+    let Some(second) = parse_ascii_decimal_u32(bytes, 17, 2) else {
+        return false;
+    };
+    year > 0
+        && (1..=12).contains(&month)
+        && day >= 1
+        && day <= days_in_month(year, month)
+        && hour <= 23
+        && minute <= 59
+        && second <= 59
+}
+
+fn parse_ascii_decimal_u32(bytes: &[u8], offset: usize, len: usize) -> Option<u32> {
+    let mut value = 0u32;
+    for byte in bytes.get(offset..offset + len)? {
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + u32::from(byte - b'0');
+    }
+    Some(value)
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
 fn verify_xml_signature_references(
     full_xml: &str,
     signature_span: XmlElementSpan,
     signed_info_xml: &str,
+    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
 ) -> Result<(), MsgError> {
-    let reference_span =
-        find_first_xml_element(signed_info_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
-    if find_first_xml_element(&signed_info_xml[reference_span.end..], "Reference").is_some() {
+    let mut references = Vec::new();
+    let mut rest = signed_info_xml;
+    while let Some(reference_span) = find_first_xml_element(rest, "Reference") {
+        references.push(&rest[reference_span.start..reference_span.end]);
+        rest = &rest[reference_span.end..];
+    }
+    let expected_reference_count = if xades_signed_properties.is_some() {
+        2
+    } else {
+        1
+    };
+    if references.len() != expected_reference_count {
         return Err(MsgError::ValidationFailed);
     }
-    let reference_xml = &signed_info_xml[reference_span.start..reference_span.end];
-    let uri = element_attr(signed_info_xml, reference_span, "URI").unwrap_or_default();
+    let mut saw_payload_reference = false;
+    let mut saw_signed_properties_reference = false;
+    for reference_xml in references {
+        let reference_span =
+            find_first_xml_element(reference_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
+        let uri = element_attr(reference_xml, reference_span, "URI").unwrap_or_default();
+        let reference_type = element_attr(reference_xml, reference_span, "Type");
+        if uri.is_empty() && reference_type.is_none() {
+            if saw_payload_reference {
+                return Err(MsgError::ValidationFailed);
+            }
+            verify_payload_xml_signature_reference(full_xml, signature_span, reference_xml)?;
+            saw_payload_reference = true;
+            continue;
+        }
+        let Some(xades_signed_properties) = xades_signed_properties else {
+            return Err(MsgError::ValidationFailed);
+        };
+        if saw_signed_properties_reference {
+            return Err(MsgError::ValidationFailed);
+        }
+        verify_signed_properties_xml_signature_reference(
+            reference_xml,
+            &uri,
+            reference_type.as_deref(),
+            xades_signed_properties,
+        )?;
+        saw_signed_properties_reference = true;
+    }
+    if !saw_payload_reference
+        || (xades_signed_properties.is_some() && !saw_signed_properties_reference)
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn verify_payload_xml_signature_reference(
+    full_xml: &str,
+    signature_span: XmlElementSpan,
+    reference_xml: &str,
+) -> Result<(), MsgError> {
+    let reference_span =
+        find_first_xml_element(reference_xml, "Reference").ok_or(MsgError::ValidationFailed)?;
+    let uri = element_attr(reference_xml, reference_span, "URI").unwrap_or_default();
     if !uri.is_empty() {
         return Err(MsgError::ValidationFailed);
     }
@@ -3163,8 +3526,108 @@ fn verify_xml_signature_references(
     Ok(())
 }
 
+fn verify_signed_properties_xml_signature_reference(
+    reference_xml: &str,
+    uri: &str,
+    reference_type: Option<&str>,
+    xades_signed_properties: &XadesSignedProperties<'_>,
+) -> Result<(), MsgError> {
+    let expected_uri = format!("#{}", xades_signed_properties.id);
+    if uri != expected_uri
+        || reference_type != Some(XADES_SIGNED_PROPERTIES_REFERENCE_TYPE)
+        || find_first_xml_element(reference_xml, "Transform").is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let digest_algorithm =
+        child_attr(reference_xml, "DigestMethod", "Algorithm").ok_or(MsgError::ValidationFailed)?;
+    if digest_algorithm != XMLDSIG_SHA256 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let expected_digest = decode_required_child_base64(reference_xml, "DigestValue")?;
+    let digest = Sha256::digest(xades_signed_properties.xml.as_bytes());
+    if expected_digest.as_slice() != &digest[..] {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
+fn xades_signed_properties_has_signing_certificate_v2(
+    xades_signed_properties: &XadesSignedProperties<'_>,
+) -> bool {
+    find_first_xml_element(
+        xades_signed_properties.signed_signature_properties_xml,
+        "SigningCertificateV2",
+    )
+    .is_some()
+}
+
+fn validate_xades_signing_certificate_v2(
+    xades_signed_properties: &XadesSignedProperties<'_>,
+    leaf_certificate_der: &[u8],
+) -> Result<(), MsgError> {
+    if find_first_xml_element(xades_signed_properties.xml, "SigningCertificate").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let global_signing_certificate_span =
+        find_first_xml_element(xades_signed_properties.xml, "SigningCertificateV2")
+            .ok_or(MsgError::ValidationFailed)?;
+    let signing_certificate_span = find_first_xml_element(
+        xades_signed_properties.signed_signature_properties_xml,
+        "SigningCertificateV2",
+    )
+    .ok_or(MsgError::ValidationFailed)?;
+    let expected_start =
+        xades_signed_properties.signed_signature_properties_start + signing_certificate_span.start;
+    let expected_end =
+        xades_signed_properties.signed_signature_properties_start + signing_certificate_span.end;
+    if global_signing_certificate_span.start != expected_start
+        || global_signing_certificate_span.end != expected_end
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    if find_first_xml_element(
+        &xades_signed_properties.xml[global_signing_certificate_span.end..],
+        "SigningCertificateV2",
+    )
+    .is_some()
+    {
+        return Err(MsgError::ValidationFailed);
+    }
+    let signing_certificate_xml = &xades_signed_properties.signed_signature_properties_xml
+        [signing_certificate_span.start..signing_certificate_span.end];
+    reject_xades_elements(
+        signing_certificate_xml,
+        XADES_UNSUPPORTED_SIGNING_CERTIFICATE_ELEMENTS,
+    )?;
+    let cert_span = find_first_xml_element(signing_certificate_xml, "Cert")
+        .ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(&signing_certificate_xml[cert_span.end..], "Cert").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let cert_xml = &signing_certificate_xml[cert_span.start..cert_span.end];
+    let cert_digest_span =
+        find_first_xml_element(cert_xml, "CertDigest").ok_or(MsgError::ValidationFailed)?;
+    if find_first_xml_element(&cert_xml[cert_digest_span.end..], "CertDigest").is_some() {
+        return Err(MsgError::ValidationFailed);
+    }
+    let cert_digest_xml = &cert_xml[cert_digest_span.start..cert_digest_span.end];
+    let digest_algorithm = child_attr(cert_digest_xml, "DigestMethod", "Algorithm")
+        .ok_or(MsgError::ValidationFailed)?;
+    if digest_algorithm != XMLDSIG_SHA256 {
+        return Err(MsgError::ValidationFailed);
+    }
+    let expected_digest = decode_required_child_base64(cert_digest_xml, "DigestValue")?;
+    let digest = Sha256::digest(leaf_certificate_der);
+    if expected_digest.as_slice() != &digest[..] {
+        return Err(MsgError::ValidationFailed);
+    }
+    Ok(())
+}
+
 fn xml_signature_public_key(
     signature_xml: &str,
+    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
     signature_public_key_sha256_pins: &[String],
     x509_trust_anchor_sha256_pins: &[String],
     x509_required_certificate_policy_oids: &[String],
@@ -3180,6 +3643,11 @@ fn xml_signature_public_key(
     embedded_ocsp_responses.extend(child_texts_compact(signature_xml, "EncapsulatedOCSPValue"));
     match (public_key, certificates.is_empty()) {
         (Some(public_key), true) => {
+            if xades_signed_properties
+                .is_some_and(xades_signed_properties_has_signing_certificate_v2)
+            {
+                return Err(MsgError::ValidationFailed);
+            }
             if x509_require_crl_revocation_check
                 || !x509_crl_der_base64.is_empty()
                 || !embedded_crls.is_empty()
@@ -3201,6 +3669,7 @@ fn xml_signature_public_key(
             &certificates,
             &embedded_crls,
             &embedded_ocsp_responses,
+            xades_signed_properties,
             signature_public_key_sha256_pins,
             x509_trust_anchor_sha256_pins,
             x509_required_certificate_policy_oids,
@@ -3217,6 +3686,7 @@ fn x509_signature_public_key(
     certificate_values: &[String],
     embedded_crl_values: &[String],
     embedded_ocsp_response_values: &[String],
+    xades_signed_properties: Option<&XadesSignedProperties<'_>>,
     signature_public_key_sha256_pins: &[String],
     x509_trust_anchor_sha256_pins: &[String],
     x509_required_certificate_policy_oids: &[String],
@@ -3228,6 +3698,9 @@ fn x509_signature_public_key(
     let certificate_chain = decode_x509_certificate_chain(certificate_values)?;
     ensure_x509_certificates_parse(&certificate_chain)?;
     let leaf = parse_x509_certificate_der(&certificate_chain[0])?;
+    if let Some(xades_signed_properties) = xades_signed_properties {
+        validate_xades_signing_certificate_v2(xades_signed_properties, &certificate_chain[0])?;
+    }
     if !leaf.validity().is_valid() {
         return Err(MsgError::ValidationFailed);
     }
@@ -3344,6 +3817,7 @@ fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Res
         let [certificate, issuer] = chain_pair else {
             continue;
         };
+        validate_x509_authority_issuer_and_serial(certificate, issuer)?;
         let Some(authority_key_identifier) =
             x509_certificate_authority_key_identifier(certificate)?
         else {
@@ -3353,6 +3827,59 @@ fn validate_x509_authority_key_identifiers(certificate_chain: &[Vec<u8>]) -> Res
             continue;
         };
         if authority_key_identifier != subject_key_identifier {
+            return Err(MsgError::ValidationFailed);
+        }
+    }
+    Ok(())
+}
+
+fn validate_x509_authority_issuer_and_serial(
+    certificate: &X509Certificate<'_>,
+    issuer: &X509Certificate<'_>,
+) -> Result<(), MsgError> {
+    let mut authority_key_identifier_count = 0usize;
+    for extension in certificate.extensions() {
+        let ParsedExtension::AuthorityKeyIdentifier(authority_key) = extension.parsed_extension()
+        else {
+            continue;
+        };
+        authority_key_identifier_count += 1;
+        if authority_key_identifier_count > 1 {
+            return Err(MsgError::ValidationFailed);
+        }
+        let has_issuer = authority_key.authority_cert_issuer.is_some();
+        let has_serial = authority_key.authority_cert_serial.is_some();
+        if has_issuer != has_serial {
+            return Err(MsgError::ValidationFailed);
+        }
+        let Some(authority_cert_issuer) = &authority_key.authority_cert_issuer else {
+            continue;
+        };
+        let Some(authority_cert_serial) = authority_key.authority_cert_serial else {
+            return Err(MsgError::ValidationFailed);
+        };
+        if authority_cert_serial != issuer.raw_serial() {
+            return Err(MsgError::ValidationFailed);
+        }
+        let mut matched_directory_name = false;
+        for issuer_name in authority_cert_issuer {
+            match issuer_name {
+                GeneralName::DirectoryName(name) if name == issuer.subject() => {
+                    matched_directory_name = true;
+                }
+                GeneralName::DirectoryName(_) => {}
+                GeneralName::Invalid(_, _)
+                | GeneralName::DNSName(_)
+                | GeneralName::EDIPartyName(_)
+                | GeneralName::IPAddress(_)
+                | GeneralName::OtherName(_, _)
+                | GeneralName::RFC822Name(_)
+                | GeneralName::RegisteredID(_)
+                | GeneralName::URI(_)
+                | GeneralName::X400Address(_) => return Err(MsgError::ValidationFailed),
+            }
+        }
+        if !matched_directory_name {
             return Err(MsgError::ValidationFailed);
         }
     }
@@ -3437,6 +3964,9 @@ fn validate_x509_name_constraints(certificate_chain: &[Vec<u8>]) -> Result<(), M
         else {
             continue;
         };
+        if !name_constraints.critical {
+            return Err(MsgError::ValidationFailed);
+        }
         validate_x509_name_constraint_bases(name_constraints.value)?;
         for certificate in &parsed_chain[..issuer_index] {
             validate_x509_certificate_against_name_constraints(
@@ -3967,6 +4497,9 @@ fn x509_certificate_allows_ocsp_signing(
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(eku.value.ocsp_signing && key_usage.value.digital_signature())
 }
 
@@ -4392,6 +4925,9 @@ fn x509_certificate_is_ca(certificate: &X509Certificate<'_>) -> Result<bool, Msg
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(key_usage.value.key_cert_sign())
 }
 
@@ -4426,6 +4962,9 @@ fn x509_certificate_allows_digital_signature(
     else {
         return Ok(false);
     };
+    if !key_usage.critical {
+        return Ok(false);
+    }
     Ok(key_usage.value.digital_signature())
 }
 
@@ -4741,6 +5280,21 @@ fn normalise_uetr(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
+fn is_valid_uetr(value: &str) -> bool {
+    if value.len() != 36 {
+        return false;
+    }
+    for (idx, byte) in value.bytes().enumerate() {
+        match idx {
+            8 | 13 | 18 | 23 if byte == b'-' => {}
+            8 | 13 | 18 | 23 => return false,
+            _ if byte.is_ascii_hexdigit() => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 fn normalise_business_message_id(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
@@ -4872,6 +5426,10 @@ mod tests {
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.008.001.08.xsd");
     const OFFICIAL_XSD_PACS009_001_08: &str =
         include_str!(r"../../../fixtures/iso20022/xsd/iso/pacs.009.001.08.xsd");
+    const SESE023_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese023_fixture.xml");
+    const SESE025_FIXTURE_XML: &str =
+        include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
     const TEST_X509_CERTIFICATE_DER_B64: &str = "MIIBlTCCATugAwIBAgIUXiaSrYGsJgKt3u4x6BKKksfNLiAwCgYIKoZIzj0EAwIwIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMB4XDTI2MDYwMTExMjgyOVoXDTM2MDUyOTExMjgyOVowIDEeMBwGA1UEAwwVSXJvaGEgSVNPIFRlc3QgU2lnbmVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEAWqzmlOSaGzSgxorUv+ewSw3Fy3Sde/6hMOgKLkgt21a791Jequ1zTyts6rrpZoBLozZBqHl0A7E8vTW587o9KNTMFEwHQYDVR0OBBYEFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMB8GA1UdIwQYMBaAFBL9Vo3Y+LvYlfKs0v5haxjUm1rtMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgZQdqU2vQe1kA3tnVW3/Md+A0CvjHC4VwaRGw1GTVsQwCIQD7mrXnQAnnVmnriWX35eVtmDSz2uGA5Xztav0D1Gd0PA==";
     const TEST_X509_CHAIN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgUryIDQvn/6N9fG2pQEVTQEP9UqzRspBrkNdwndN+s+WhRANCAARTR4/Y7uTA2FBawlygx0Q7obN3BTEoh3AKjHTqZl+nMYfoiY+9bGJ7YHVDy6Ca/xWf2Yd0y64/7P1Ti9rJqPM6";
     const TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBnzCCAUagAwIBAgIUUOi8MD0vRAq9AAbDmuxRfRDZdeQwCgYIKoZIzj0EAwIwHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgUm9vdDAgFw0yNjA2MDExMjAwMzhaGA8yMTI2MDUwODEyMDAzOFowHjEcMBoGA1UEAwwTSXJvaGEgSVNPIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABFNHj9ju5MDYUFrCXKDHRDuhs3cFMSiHcAqMdOpmX6cxh+iJj71sYntgdUPLoJr/FZ/Zh3TLrj/s/VOL2smo8zqjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBS7L2CAjWtk6fBcYscT8f7Cjpv4vDAfBgNVHSMEGDAWgBRD+yqEVN85+okIsrT2tOc86jK3HzAKBggqhkjOPQQDAgNHADBEAiAled9C2Mpk2BdR84/evD5DyQ+Kt9TZuNrZMkkrjx6tiwIgLHYNDEXdEZMgKj838ELQ/9vtz5f2WSNaUN5ehURQBjY=";
@@ -4888,16 +5446,29 @@ mod tests {
     const TEST_X509_EKU_SERVER_AUTH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvzCCAWSgAwIBAgICVAEwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMBMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNJADBGAiEA80XbzD+kQkvxz0lVKw6hxMshLFrBLljrn/Eie/aOLLECIQDH9cIjJ+0q6GT8hxjy2Zrinp0hEWWFcrDSYqR+16dI8A==";
     const TEST_X509_EKU_CODE_SIGNING_LEAF_CERTIFICATE_DER_B64: &str = "MIIBvjCCAWSgAwIBAgICVAIwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABM26MEsftebV9HUoDYRId0GdebiVkuhhYnk5W1/zu0vUDPvc9cKRO+Jb0Ww51+m67OVPqJ53MOF0mGC0n0z7kPejeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMDMB0GA1UdDgQWBBRdLeN//loyIevVCUwqXAXSXvi5DDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzAKBggqhkjOPQQDAgNIADBFAiEArCveMHtRjAb9O9tQIggTSieFTBjtKfDJwFY/DxUV0isCIFBmhdw3hBukzDnT7UCa4M0T8q+5InkGViRB1hJsWJUf";
     const TEST_X509_EKU_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqjCCAVCgAwIBAgICVAAwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBFS1UgVGVzdCBSb290MCAXDTI2MDYwMTAwMDAwMFoYDzIxMjYwNTA4MDAwMDAwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEVLVSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASbO+iaWs5QpwhZg7deT9kyxeYA0y9fU2CsQbypJ/b094JPiNSXpOBaGQxJ8J2I3bcUppbb1LZKSvLWfD676ViXo2YwZDAfBgNVHSMEGDAWgBTq3At1R1SiiD7JqTLIuO97oe0rUzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU6twLdUdUoog+yakyyLjve6HtK1MwCgYIKoZIzj0EAwIDSAAwRQIgQ4wWk9FJqPGbhxcgqsKj1qrdAPH0I8dcnYpDxWp3dfQCIQDniAMtw8kFXoKfNSwpMzRGrFKQOxQhfhecnQqz5ByaDQ==";
+    const TEST_X509_SIGNER_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg5UFXQIVYvipD5b/bJIJwUlvT/wtHRLPRQAHR7/Xo3zihRANCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+";
+    const TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1zCCAX2gAwIBAgIDAPIyMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+o3gwdjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUKgvg9C1cI4oB4tNiE3OvyEDlolMwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwCgYIKoZIzj0EAwIDSAAwRQIhAKNuC/zhQzy8NDIKmTCakHj65AvJ627JJCHKGUkc1cYDAiBzkgMAhhSadW5bgEgST7YirOGaizOeiYIo4nCQVw5BjA==";
+    const TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1TCCAXqgAwIBAgIDAPIzMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQaUrTehs+FPEzXTPpCc4QKx4tj2YBjKgg6fB0GCywzaUSpA5xJqgl5n4X7m4kk9IZikRcB8g555pZAlVoEmEE+o3UwczAMBgNVHRMBAf8EAjAAMAsGA1UdDwQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUKgvg9C1cI4oB4tNiE3OvyEDlolMwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwCgYIKoZIzj0EAwIDSQAwRgIhAJYUdJGsThOe7M0v5IdaJoP62D8HiOxXIjKWDuo1UzHdAiEA1as/FoNbk6nBOy52nSluR91TzEn9Nbyf+2hVGbqUVug=";
+    const TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64: &str = "MIIBwzCCAWmgAwIBAgIDAPIxMAoGCCqGSM49BAMCMDUxMzAxBgNVBAMMKklyb2hhIElTTyBYTUxTaWcgU2lnbmVyIEtleVVzYWdlIFRlc3QgUm9vdDAgFw0yNjA2MDExOTI3MDdaGA8yMTI2MDUwODE5MjcwN1owNTEzMDEGA1UEAwwqSXJvaGEgSVNPIFhNTFNpZyBTaWduZXIgS2V5VXNhZ2UgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAELYvhBCgswQnmjIP212n/Sg8aaHIc88jWhsxFBCUYk25HvvTQ3w0PbF48hwDedzXYNthUQKTwOKYR1D9o+IzvWaNmMGQwHwYDVR0jBBgwFoAUnb9uvIuaroSGC6Jzlv3lWiREJIcwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFJ2/bryLmq6Ehguic5b95VokRCSHMAoGCCqGSM49BAMCA0gAMEUCIBQMQk64nXDmfx+cc9ch4DdqTg9ePtJxe1zgCW3hx7GfAiEAihlUpuQvkUteb0Pc6DRT7lynuKOCSj+ugEZH22mK49k=";
     const TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgIbpvFmbT9cRto3u2cGl0aEN1ILgj53hfqWISj9Z4FrGhRANCAASnJEA0zYlAtBJ/99IdK9PRjgqQr2lzoheFLeIr4GiVDrmOZ7ClB83w0EC6v9qxOLKv8Z4R7F9R73piCmHj4zMO";
     const TEST_X509_AKI_GOOD_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP0wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBSP6E0gWMamRvzD9eCdgBSKIg7EUzAKBggqhkjOPQQDAgNIADBFAiBQawuxq3WkxOm5+BbWUYKBRtQ+2ccg3x5qFYdYfMBfKwIhAOCaEu01UZlm4A0T3nwZ+EhWI2cyY+oJPjDqRJ3Eu0f1";
     const TEST_X509_AKI_MISMATCH_LEAF_CERTIFICATE_DER_B64: &str = "MIIBpjCCAUygAwIBAgICCP4wCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjArMSkwJwYDVQQDDCBJcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABKckQDTNiUC0En/30h0r09GOCpCvaXOiF4Ut4ivgaJUOuY5nsKUHzfDQQLq/2rE4sq/xnhHsX1HvemIKYePjMw6jYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQhgAM/46TZbpLtPqj0Z0dC7SdJcjAfBgNVHSMEGDAWgBQAAQIDBAUGBwgJCgsMDQ4PEBESEzAKBggqhkjOPQQDAgNIADBFAiAmC8Z1kxOihFzhRVv22y7nOXsP+yQzeMZwygHqNT66pgIhAPg6FMjnmIGR0uRpi2z+LgBC1J2dVRWqV9aAeIZ8ftAB";
     const TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64: &str = "MIIBqTCCAVCgAwIBAgICCPwwCgYIKoZIzj0EAwIwKTEnMCUGA1UEAwweSXJvaGEgSVNPIFhNTFNpZyBBS0kgVGVzdCBSb290MCAXDTI2MDYwMTE3NDg0MFoYDzIxMjYwNjAyMTc0ODQwWjApMScwJQYDVQQDDB5Jcm9oYSBJU08gWE1MU2lnIEFLSSBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQ/Em5Yl6PMhJyD6wpfJCIbiCQDxhHCVgsGNwVrTbohBzwpTEeb0KJ53DXKOaMcYVzYa9Muu8Lx8LwEmr3ekrqzo2YwZDASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUj+hNIFjGpkb8w/XgnYAUiiIOxFMwHwYDVR0jBBgwFoAUj+hNIFjGpkb8w/XgnYAUiiIOxFMwCgYIKoZIzj0EAwIDRwAwRAIgMnybkgg5FuPiE8HIN0IoeqVkSfSZHT7hDlC/5T879hkCIHpO6mfD7jpwaax5m16w0nDd8Qvr/nqfpXqVG3pydKSo";
+    const TEST_X509_AKI_ISSUER_SERIAL_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgadw0P0NjhFAt1IoFHZN+KmZH3Z++vhUfAPD2Hfkn6fyhRANCAAR1H4jN1hpS2sQzNWGkX3PHXxZKvPxxAoPt7V54udCkdrgH6DlN78HLyzpdEjBWWlphAFNbe2Rf6NH3nKBXbCqS";
+    const TEST_X509_AKI_ISSUER_SERIAL_LEAF_CERTIFICATE_DER_B64: &str = "MIICBjCCAaugAwIBAgICIyswCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDkxNzA1BgNVBAMMLklyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAR1H4jN1hpS2sQzNWGkX3PHXxZKvPxxAoPt7V54udCkdrgH6DlN78HLyzpdEjBWWlphAFNbe2Rf6NH3nKBXbCqSo4GiMIGfMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQk1h1DP1hOcxG9lUgkQNoS/uxlazBgBgNVHSMEWTBXgBQ/2M1nxfK7G5VTWEpafgeI4hWf4aE7pDkwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3SCAiMpMAoGCCqGSM49BAMCA0kAMEYCIQCO/fvBr4aXwORfYiCTQGXVm2/s3M1c0nw8l2oMQI0s7QIhAO6y/eycfH+ovxRb4csV7cBMuxrv4X1cxYTMXHAFjsJY";
+    const TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBxzCCAWygAwIBAgICIykwCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDcxNTAzBgNVBAMMLElyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdV+jyYom08qQk3WgYHpDHVdCoLky92PaF629ZAMWF8g4i7kAj1mZpFOmNEq6f7Jx087luHb/gpzrKyMe5glC56NmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFD/YzWfF8rsblVNYSlp+B4jiFZ/hMB8GA1UdIwQYMBaAFD/YzWfF8rsblVNYSlp+B4jiFZ/hMAoGCCqGSM49BAMCA0kAMEYCIQDY3Xt+sDyM5L+lIKpmbAcRrqz9HFZMnvi6sWgsGIn96wIhALxwxBgI3Gq8Rfih2QZebzIi6aoeJrlucWy582djkjG2";
+    const TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWygAwIBAgICIyowCgYIKoZIzj0EAwIwNzE1MDMGA1UEAwwsSXJvaGEgSVNPIFhNTFNpZyBBS0kgSXNzdWVyIFNlcmlhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgzMzM5WhgPMjEyNjA1MDgxODMzMzlaMDcxNTAzBgNVBAMMLElyb2hhIElTTyBYTUxTaWcgQUtJIElzc3VlciBTZXJpYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdV+jyYom08qQk3WgYHpDHVdCoLky92PaF629ZAMWF8g4i7kAj1mZpFOmNEq6f7Jx087luHb/gpzrKyMe5glC56NmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFD/YzWfF8rsblVNYSlp+B4jiFZ/hMB8GA1UdIwQYMBaAFD/YzWfF8rsblVNYSlp+B4jiFZ/hMAoGCCqGSM49BAMCA0cAMEQCIFoI8pga25X94V7BSKMltbYdD7b6SZvRT+2HmZ0jtx3wAiBjnGaVjkHECAaWCsVQJS0t/20osfvx0OaYAa5wF6+z6g==";
     const TEST_X509_NONCRITICAL_CA_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgljE4ysq6tQwL/RKH82ieLq02OCKb6Ltyh7GCeNTtMWuhRANCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqA";
     const TEST_X509_NONCRITICAL_CA_LEAF_BY_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvDCCAWKgAwIBAgICCWMwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREc/PpLrPUYay18NCpDfFfzGPpDymbLK6BF3e3zwAOdF/8n/HmQLpbrBoZ1Y5GvOjMp0PL+zqFM9VRGXpdZiqAo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUFaJ/rKuYGvi+PxRB22ZXDKoO8dAwHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIgSDBYGXhu1fppKim3f8h2Fsz3GKTaGmu9+KzoI/xZUCUCIQDnsqPyZNGf7ry6MQQ/cpJzRhNpMu1DPIUOWEROUGuEWw==";
     const TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64: &str = "MIIBvTCCAWOgAwIBAgICCWEwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNjMGEwDwYDVR0TBAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0gAMEUCIQDIsSzxKS8PptJ5tPca0zcACNmCKJnlS2Se6vh0o5AXyAIgVrtXd95gcxc3D6dP9TQSFRi5Eg2AQXmv7GxSpnN72aw=";
     const TEST_X509_NONCRITICAL_CA_LEAF_BY_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWqgAwIBAgICCWQwCgYIKoZIzj0EAwIwPDE6MDgGA1UEAwwxSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IEludGVybWVkaWF0ZTAgFw0yNjA2MDExODA5NDhaGA8yMTI2MDYwMjE4MDk0OFowNjE0MDIGA1UEAwwrSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFNpZ25lcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABERz8+kus9RhrLXw0KkN8V/MY+kPKZssroEXd7fPAA50X/yf8eZAulusGhnVjka86MynQ8v7OoUz1VEZel1mKoCjYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBQVon+sq5ga+L4/FEHbZlcMqg7x0DAfBgNVHSMEGDAWgBTSIdk47R3IN2fGfAV07ZazvkDLWjAKBggqhkjOPQQDAgNJADBGAiEAz4j9lvrlPCLAlVujRAtnOjK35uagY1u4LffNUIPkN0oCIQCXFTK6kiRvRna8zAmm9RecoI3SeotyEik8HgVB/bT5Iw==";
     const TEST_X509_NONCRITICAL_CA_INTERMEDIATE_CERTIFICATE_DER_B64: &str = "MIIBxTCCAWugAwIBAgICCWIwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBJbnRlcm1lZGlhdGUwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATdcxl1DWMRs1xo2bZnc+vc4MyBIaNE9QqmsLN6LlbVRDdjWGph4USBr94mpc39y4CjGlJ/6z7jLyQGUQkEDs0To2MwYTAPBgNVHRMECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU0iHZOO0dyDdnxnwFdO2Ws75Ay1owHwYDVR0jBBgwFoAUpkQahrltTKiydqFXw/uybHsKKvgwCgYIKoZIzj0EAwIDSAAwRQIhAKxXs6GWdsoSz9BWHryxZBLh6t3W93WCe/B84WbsjXijAiBeRrksPygF9mjsz7MyqxoJLWeVar+NU2LLePykEDjxfQ==";
     const TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBwTCCAWagAwIBAgICCWAwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBCYXNpYyBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTgwOTQ4WhgPMjEyNjA2MDIxODA5NDhaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgQmFzaWMgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE7e0xHCR1qKXlfIXTt3NmtNXH9F4VB8LBcYZww4zlNSyp4OzM+XescC1uZOEaRnbSSp08DwiimCOycqTmBa+4GqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBAjAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFKZEGoa5bUyosnahV8P7smx7Cir4MB8GA1UdIwQYMBaAFKZEGoa5bUyosnahV8P7smx7Cir4MAoGCCqGSM49BAMCA0kAMEYCIQDo0n5RsdheNjfgo0b7s5SCQXzeFx+jIZ14u+oW+5QbVQIhAOpmgh7CZGXY99bYe++unYsNUbUyQzZErBvAs2YKGeci";
+    const TEST_X509_CA_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcTm6qQhUWbfK0khVuanbH6jjfCcRB/wBNnNv+yaNBJWhRANCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7f";
+    const TEST_X509_CA_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIByDCCAW6gAwIBAgICI48wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7fo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUrs5CXPcBQpieUJfsEc0R8TuGUpgwHwYDVR0jBBgwFoAUWvA7KGvHX76rYZGGkoJ+QtqXuhcwCgYIKoZIzj0EAwIDSAAwRQIgNFkSQH3feKGte7E9fqOSIHX1Dlx7kT5GsZbLBYE5sXwCIQDcipB1PKEiA3w4W67qgG2ceNQAd78y1AONK8p23ewr5Q==";
+    const TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIBzTCCAXKgAwIBAgICI40wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDoxODA2BgNVBAMML0lyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVCQi7pbbUpRHqYKcczOEPFnwakWILra833q8o0LknN2Nu3qS6F5ePaXDiaVdbyvOOX/fAAzSs7wGj10xWjpgXqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFFrwOyhrx1++q2GRhpKCfkLal7oXMB8GA1UdIwQYMBaAFFrwOyhrx1++q2GRhpKCfkLal7oXMAoGCCqGSM49BAMCA0kAMEYCIQCcJ5ewzDdqQvrzdCChLnjT5i8NAE8B2oh+J9AkMi2nggIhAKkFHS8GiDLmgrrKZgQ8pnI3/FIklDz2VXsM0kd/n7bX";
+    const TEST_X509_CA_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIByTCCAW6gAwIBAgICI5AwCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDwxOjA4BgNVBAMMMUlyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAASo9smSCBzz8bN5+eVwNkcgC30mGIZZddqQxsq1iBESLSwrU+OPRbHSTw2OPTvEETNZ45dCywS+uv9xZ2q29W7fo2AwXjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUrs5CXPcBQpieUJfsEc0R8TuGUpgwHwYDVR0jBBgwFoAUWvA7KGvHX76rYZGGkoJ+QtqXuhcwCgYIKoZIzj0EAwIDSQAwRgIhAKr7u0tz0BgJQqzVqrIRuHMo93fDrPHrmV+2rI1lWfwYAiEAuzGvAiSxT9+py//QyqyuLJNq0Qtlw6BGYjkUimFLZI8=";
+    const TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIByjCCAW+gAwIBAgICI44wCgYIKoZIzj0EAwIwOjE4MDYGA1UEAwwvSXJvaGEgSVNPIFhNTFNpZyBDQSBLZXlVc2FnZSBDcml0aWNhbCBUZXN0IFJvb3QwIBcNMjYwNjAxMTg1MjU1WhgPMjEyNjA1MDgxODUyNTVaMDoxODA2BgNVBAMML0lyb2hhIElTTyBYTUxTaWcgQ0EgS2V5VXNhZ2UgQ3JpdGljYWwgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVCQi7pbbUpRHqYKcczOEPFnwakWILra833q8o0LknN2Nu3qS6F5ePaXDiaVdbyvOOX/fAAzSs7wGj10xWjpgXqNjMGEwEgYDVR0TAQH/BAgwBgEB/wIBATALBgNVHQ8EBAMCAQYwHQYDVR0OBBYEFFrwOyhrx1++q2GRhpKCfkLal7oXMB8GA1UdIwQYMBaAFFrwOyhrx1++q2GRhpKCfkLal7oXMAoGCCqGSM49BAMCA0kAMEYCIQCAE7EZKVPDwnnRq70x4fix/PqxtCnPDMOqX3FU7gAyigIhANQPn5V8k0RY36nI5ZtlXAcQxpzMyWlaq4aZRof6ezzO";
     const TEST_X509_PATHLEN_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3nuXdJt4HKvYmPHNQhHghYBH5m2rJhLM6X2mb3ZEAiWhRANCAAQSY1wJcCoKdL3Jofs44Th6YP3PrDlitaq8jMZY10IlqxoRWJCt4cQNbFs9MOjiDirdTGH/1LtNso+pt4/7A9nW";
     const TEST_X509_PATHLEN_LEAF_CERTIFICATE_DER_B64: &str = "MIIBuDCCAV6gAwIBAgIUAroD5KgdplQBUFMVASJFffMavp8wCgYIKoZIzj0EAwIwLjEsMCoGA1UEAwwjSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBJbnRlcm1lZGlhdGUwIBcNMjYwNjAxMTUxOTMxWhgPMjEyNjA1MDgxNTE5MzFaMCYxJDAiBgNVBAMMG0lyb2hhIElTTyBQYXRoTGVuIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABBJjXAlwKgp0vcmh+zjhOHpg/c+sOWK1qryMxljXQiWrGhFYkK3hxA1sWz0w6OIOKt1MYf/Uu02yj6m3j/sD2dajYDBeMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBRd71CtjCd8i1OrveZVj7PhbftdozAfBgNVHSMEGDAWgBQ+9z6697KLGLz8FsX7pXkDmF0y0jAKBggqhkjOPQQDAgNIADBFAiEAqH2FNcRnBYe2euURS2b4HiWwDsDBLaYKvJUqcaGSF8kCIAr+D9sGxQyezdmBSLqdtK6Vf05V3CoDSQHAGcnhJgDU";
     const TEST_X509_PATHLEN_ROOT0_CERTIFICATE_DER_B64: &str = "MIIBtzCCAVygAwIBAgIUQdOUC+LffkVAc60QoHHaziSBgJMwCgYIKoZIzj0EAwIwJjEkMCIGA1UEAwwbSXJvaGEgSVNPIFBhdGhMZW4gVGVzdCBSb290MCAXDTI2MDYwMTE1MTkzMVoYDzIxMjYwNTA4MTUxOTMxWjAmMSQwIgYDVQQDDBtJcm9oYSBJU08gUGF0aExlbiBUZXN0IFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATHfMRmNRjSg2Q0EEqdYcGAJVEKCCTOnpjDZKgeUb/AwXgu42NfeTHsq7t3wFPd/pbCIqhBp/vJqw4btetClty+o2YwZDASBgNVHRMBAf8ECDAGAQH/AgEAMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQULFjuLrmZd/w+EKb109b4f6d0C7gwHwYDVR0jBBgwFoAULFjuLrmZd/w+EKb109b4f6d0C7gwCgYIKoZIzj0EAwIDSQAwRgIhAIBI5KM6i2Abfp7Qn2AKIht2AMV1LAdLDDOK3+sLNPsKAiEA6eEOPnEEFLK47Xw8h+Gho0BzPRwtUBPYrTDadszwWRI=";
@@ -4921,6 +5492,11 @@ mod tests {
     const TEST_X509_NAME_CONSTRAINTS_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgbOLWcsasQZL6fbjY5AJAEf4V54T/tVnjaA21ui71Q1+hRANCAAQFuA9elo/hc8MHsTJv/iLY/uJQ23YVh0wQM4s++iXnmrEfkHpNV3w2tGUoDbztQC6AxpM0V6ZNGgdDII+cFl88";
     const TEST_X509_NAME_CONSTRAINTS_ALLOWED_LEAF_CERTIFICATE_DER_B64: &str = "MIIBwzCCAWmgAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDfwwCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjfTB7MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBTdZE7Rq40abeZVmD8GVvGmUSyeEzAfBgNVHSMEGDAWgBT9eipz/v6UBltMJtYpHCUGdBPJrjAbBgNVHREEFDASghBzaWduZXIuYmFuay50ZXN0MAoGCCqGSM49BAMCA0gAMEUCIQCKJidOlBwkTttdoh4Xl7Q2Xf3Av6dSTpn2VTcxEFc/QAIgShrDnNKILYLcMSLtjNjLci6jWDzcYGqNWiiM6THC59U=";
     const TEST_X509_NAME_CONSTRAINTS_ROOT_CERTIFICATE_DER_B64: &str = "MIIB5TCCAYqgAwIBAgIUPqN14bWcN646xRoOnH66kHDQXTMwCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABMy3R6Uv13TYux3PLQDyOyNbTSwCt4q2ti20XJELV5v+y9Pu3clkQM9YyuYJYdtubTIx5tYde8tuQp6gL2ygSECjgZ0wgZowEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFP16KnP+/pQGW0wm1ikcJQZ0E8muMB8GA1UdIwQYMBaAFP16KnP+/pQGW0wm1ikcJQZ0E8muMDQGA1UdHgEB/wQqMCigDjAMggouYmFuay50ZXN0oRYwFIISLmJsb2NrZWQuYmFuay50ZXN0MAoGCCqGSM49BAMCA0kAMEYCIQD6JqC+JihQ7z7DK3Xv5rj++4ZKO2NTDMPfac0ITWR36QIhAOVHAJPEcxcsl4aiMEIr7x65CwEi74PIPHRZskv23hiO";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgWeTNiFpo3kDTiIYnTvahYiFKp/NvCfKh8/knb9Y1CHOhRANCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_CERTIFICATE_DER_B64: &str = "MIIB2jCCAX+gAwIBAgICI/MwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0o30wezAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUlzGp40AiB8VzCkdMfFNanDMzNJowHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwGwYDVR0RBBQwEoIQc2lnbmVyLmJhbmsudGVzdDAKBggqhkjOPQQDAgNJADBGAiEAph3RldFpGvIgak5HbFh0gl8xngTQpCwDy1m7isROqW4CIQDhWqQGAO2SnTeVwjUoeqIMyTY2693pUFZeNMmkDvIVzA==";
+    const TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64: &str = "MIIB9zCCAZ6gAwIBAgICI/EwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZX458qvJqq1A/b+XBftsbudDl3By+j24QmLUslW7rdJPHQ0zdb9sF2tIC9hcsV/00xc6TOjy6uO7grXF9Q90saOBnTCBmjASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU+dijqo29klh4tMimqT7YPXvrQIgwHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwNAYDVR0eAQH/BCowKKAOMAyCCi5iYW5rLnRlc3ShFjAUghIuYmxvY2tlZC5iYW5rLnRlc3QwCgYIKoZIzj0EAwIDRwAwRAIgH4Koa7Xv+iDi/cET0L0iP2X/62xIP9UwTRpOHbEKm78CIE4/8r8CyAR4yM+Jrkw+GXxZnKNyxKGsJTeXzCzb3mtw";
+    const TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_LEAF_CERTIFICATE_DER_B64: &str = "MIIB2TCCAX+gAwIBAgICI/QwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDYxNDAyBgNVBAMMK0lyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBTaWduZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARJO6Ihq1XTRmYaPz+MYjmJpdNWzZcn0EZYqECHmhSM1AJAVWnOxGUZYI3kFOuxgVE1seXKx1yIcsyPdtQwmpv0o30wezAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUlzGp40AiB8VzCkdMfFNanDMzNJowHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwGwYDVR0RBBQwEoIQc2lnbmVyLmJhbmsudGVzdDAKBggqhkjOPQQDAgNIADBFAiBfvSwqkFueSZejkC/Aw8wUIXgYJPJZ5YKDyRXPuMtdHwIhAL8wIvlGu0dhBjyMJrrMYKIyZZC5TMwN8eD6Q/2OZ9Lh";
+    const TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64: &str = "MIIB9jCCAZugAwIBAgICI/IwCgYIKoZIzj0EAwIwNDEyMDAGA1UEAwwpSXJvaGEgSVNPIFhNTFNpZyBOQyBDcml0aWNhbGl0eSBUZXN0IFJvb3QwIBcNMjYwNjAxMTkwNjE2WhgPMjEyNjA1MDgxOTA2MTZaMDQxMjAwBgNVBAMMKUlyb2hhIElTTyBYTUxTaWcgTkMgQ3JpdGljYWxpdHkgVGVzdCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEZX458qvJqq1A/b+XBftsbudDl3By+j24QmLUslW7rdJPHQ0zdb9sF2tIC9hcsV/00xc6TOjy6uO7grXF9Q90saOBmjCBlzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQU+dijqo29klh4tMimqT7YPXvrQIgwHwYDVR0jBBgwFoAU+dijqo29klh4tMimqT7YPXvrQIgwMQYDVR0eBCowKKAOMAyCCi5iYW5rLnRlc3ShFjAUghIuYmxvY2tlZC5iYW5rLnRlc3QwCgYIKoZIzj0EAwIDSQAwRgIhALvzfIOlIuXO8/7dyWKDlqJtKoB15w2dvLBtsP6uNUgKAiEAxWHRMqOrrM57gNk5Toh9lVM4H6Ygd0MXA+OkuHXIFKw=";
     const TEST_X509_NAME_CONSTRAINTS_OUTSIDE_LEAF_CERTIFICATE_DER_B64: &str = "MIIBxjCCAW2gAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDf0wCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjgYAwfjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQU3WRO0auNGm3mVZg/BlbxplEsnhMwHwYDVR0jBBgwFoAU/Xoqc/7+lAZbTCbWKRwlBnQTya4wHgYDVR0RBBcwFYITc2lnbmVyLmV4YW1wbGUudGVzdDAKBggqhkjOPQQDAgNHADBEAiAjNtnk4lfeqsqjExCVTfrtqlu0RlU/Dn0LDqqoOSh/ogIgcPprmjBwegQXpjksGPVCP/TLkNi3esvozSmkH/pAzvo=";
     const TEST_X509_NAME_CONSTRAINTS_EXCLUDED_LEAF_CERTIFICATE_DER_B64: &str = "MIIBzDCCAXKgAwIBAgIULYzUNb+BDIiGxVl4bJ1EEd3bDf4wCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgUm9vdDAgFw0yNjA2MDExMzUwNTZaGA8yMTI2MDUwODEzNTA1NlowITEfMB0GA1UEAwwWSXJvaGEgSVNPIE5DIFRlc3QgTGVhZjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABAW4D16Wj+FzwwexMm/+Itj+4lDbdhWHTBAziz76JeeasR+Qek1XfDa0ZSgNvO1ALoDGkzRXpk0aB0Mgj5wWXzyjgYUwgYIwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwHQYDVR0OBBYEFN1kTtGrjRpt5lWYPwZW8aZRLJ4TMB8GA1UdIwQYMBaAFP16KnP+/pQGW0wm1ikcJQZ0E8muMCIGA1UdEQQbMBmCF3BheWVlLmJsb2NrZWQuYmFuay50ZXN0MAoGCCqGSM49BAMCA0gAMEUCIQCk5NPOJkXsvdwWCQ9NIYaS37JlivB/8dTHjv/HUA4fUQIgb65DjzIAyQdveqDve8AT0AW+iZwY8dcqyExZVfZx5bQ=";
     const TEST_X509_OCSP_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgOzTGZkOgS1T9pB1fWVC+0w+Prc/yFCID0klpj9gC5wyhRANCAAShay14G5YTdNi3gcQ1HU57Tqq/djk9NjZUUB188pQKBl28Re1rPtOGcqnp/cQ/fXJ4wCZL+VZIZLBXPnWI+ycM";
@@ -4933,6 +5509,11 @@ mod tests {
     const TEST_X509_OCSP_DELEGATED_ROOT_CERTIFICATE_DER_B64: &str = "MIIBuzCCAWCgAwIBAgIUUMvPwuhsVdnJyn9ENoMZSLHctPEwCgYIKoZIzj0EAwIwKDEmMCQGA1UEAwwdSXJvaGEgSVNPIE9DU1AgRGVsZWdhdGVkIFJvb3QwIBcNMjYwNjAxMTQzNjI3WhgPMjEyNjA1MDgxNDM2MjdaMCgxJjAkBgNVBAMMHUlyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvftG/vk1C8ioQjTeL0Nr5fDqrQs4DyBB7JVVEf7RoTjgEJojUCOT1TXV42KDPF4Ou6t/m3GHJb7FnbqE8LGxwqNmMGQwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAYYwHQYDVR0OBBYEFETROUIW9SV+wTWLmyaMBQCdIe5eMB8GA1UdIwQYMBaAFETROUIW9SV+wTWLmyaMBQCdIe5eMAoGCCqGSM49BAMCA0kAMEYCIQDIkyHlFpZC6XaESe0K+84GJb0k+I4LRpWxfmCV0cjfdAIhALPdEDSnKxJOXugAqWzj7LXBm63ISwzFQkZm3Olpc+zN";
     const TEST_X509_OCSP_DELEGATED_GOOD_RESPONSE_DER_B64: &str = "MIIDUwoBAKCCA0wwggNIBgkrBgEFBQcwAQEEggM5MIIDNTCB/qEvMC0xKzApBgNVBAMMIklyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSZXNwb25kZXIYDzIwMjYwNjAxMTQzNjI3WjCBlDCBkTBpMA0GCWCGSAFlAwQCAQUABCCdvQl6x4ExlidXQVvJaOO18NCxQamAPKLpdT3RYW2aZwQgOR36gtHUOgMjPcOprp5f1+pmvdtIaCE5GBV0FmFzSU8CFC7Dci4NhmbybLsbtGeBNfq44P8FgAAYDzIwMjYwNjAxMTQzNjI3WqARGA8yMTI2MDUwODE0MzYyN1qhIzAhMB8GCSsGAQUFBzABAgQSBBC7tDgAD3HvEmvGnxZumAhBMAoGCCqGSM49BAMCA0gAMEUCIFUNO3cufftkA53FMOw9jL55Pn9DYhk2sY/3ZqHxByVwAiEA7ppZRWYFtpqWGsd26/alBWQrvJNNXhIiL2TDb+Z5C7CgggHaMIIB1jCCAdIwggF3oAMCAQICFC7Dci4NhmbybLsbtGeBNfq44P8GMAoGCCqGSM49BAMCMCgxJjAkBgNVBAMMHUlyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSb290MCAXDTI2MDYwMTE0MzYyN1oYDzIxMjYwNTA4MTQzNjI3WjAtMSswKQYDVQQDDCJJcm9oYSBJU08gT0NTUCBEZWxlZ2F0ZWQgUmVzcG9uZGVyMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGTD2ooQHAbEE/MDCFGMkyP49kdn13dUG9OqfuQJT5WGUaElh+XRiebSgzrsJT4UZJ5CROd4RjJ5L35cspDr5KqN4MHYwDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCB4AwFgYDVR0lAQH/BAwwCgYIKwYBBQUHAwkwHQYDVR0OBBYEFCV3N7muRz5ulCe3ltUOfKcWwsRDMB8GA1UdIwQYMBaAFETROUIW9SV+wTWLmyaMBQCdIe5eMAoGCCqGSM49BAMCA0kAMEYCIQCzL+5oyJ5K2V2JvwqqOzT0OLFM5bpcfQzcE+4IMb+DZwIhAMmwczkcst9vLrwTjqZFAoNu0+GSnwnRWwpGJRSENSFq";
     const TEST_X509_OCSP_DELEGATED_GOOD_NO_CERTS_RESPONSE_DER_B64: &str = "MIIBdQoBAKCCAW4wggFqBgkrBgEFBQcwAQEEggFbMIIBVzCB/qEvMC0xKzApBgNVBAMMIklyb2hhIElTTyBPQ1NQIERlbGVnYXRlZCBSZXNwb25kZXIYDzIwMjYwNjAxMTQzNjI3WjCBlDCBkTBpMA0GCWCGSAFlAwQCAQUABCCdvQl6x4ExlidXQVvJaOO18NCxQamAPKLpdT3RYW2aZwQgOR36gtHUOgMjPcOprp5f1+pmvdtIaCE5GBV0FmFzSU8CFC7Dci4NhmbybLsbtGeBNfq44P8FgAAYDzIwMjYwNjAxMTQzNjI3WqARGA8yMTI2MDUwODE0MzYyN1qhIzAhMB8GCSsGAQUFBzABAgQSBBC7tDgAD3HvEmvGnxZumAhBMAoGCCqGSM49BAMCA0gAMEUCIC3xUMoiVdy4ENrVP6PHecQfp4PsrBxPercEvmEcpV0rAiEAjIe5JEkGyBNjY+VhKHCAdPvnKeLGbt6KKnLNJ3wChuQ=";
+    const TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64: &str = "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgw4Xm6RUcszzflriWs7j3OF/YHWF0DRlPsY33QYzwjcuhRANCAARBQtgnBzqZIqXWZLKKNauig7jbYWPcsR+1LCYoARYirRp/Zyg6JhpCwbXeqGDktDMAb48jG9yQ6gmdBRSWVNF2";
+    const TEST_X509_OCSP_KEY_USAGE_LEAF_CERTIFICATE_DER_B64: &str = "MIIB1jCCAXygAwIBAgIDAPYaMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIExlYWYwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARBQtgnBzqZIqXWZLKKNauig7jbYWPcsR+1LCYoARYirRp/Zyg6JhpCwbXeqGDktDMAb48jG9yQ6gmdBRSWVNF2o4GUMIGRMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMB0GA1UdDgQWBBSdGpB4C5PvGSTHU6bDG8MZP5M/czAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzAxBggrBgEFBQcBAQQlMCMwIQYIKwYBBQUHMAGGFWh0dHA6Ly9vY3NwLmJhbmsudGVzdDAKBggqhkjOPQQDAgNIADBFAiBLnF8ndqSQhil2PBceSx1GOkyFCnNPCzWo9cQ6P1w6mgIhALA6XbShIm0jKHUZOlkhM/np7Vb9zBzRNFYaFykEz8ML";
+    const TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64: &str = "MIIBpzCCAU2gAwIBAgIDAPYZMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAS+Qyb8g1S6UQ47777rHKDGGfCH3ypVZBXTh/n/QQqEChbGrCDqT/Ibx+Ym/PUeH1YRqU6nrFdavLAfBpbhnwTXo2YwZDAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzASBgNVHRMBAf8ECDAGAQH/AgEBMA4GA1UdDwEB/wQEAwIBBjAdBgNVHQ4EFgQUMbnVOxs0+KntDBiujWpp1m4lLCMwCgYIKoZIzj0EAwIDSAAwRQIhAMz+B00Y8dPfuc2ZgxMCtRfDrhpfqiDEaZmicJw2MSHgAiB5AzGkp9HosLCcSdXaX6dCxzaFUCs0ao+k5ujBaTIOAQ==";
+    const TEST_X509_OCSP_KEY_USAGE_CRITICAL_GOOD_RESPONSE_DER_B64: &str = "MIIDKwoBAKCCAyQwggMgBgkrBgEFBQcwAQEEggMRMIIDDTCB7KEuMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlchgPMjAyNjA2MDExOTQ4MzBaMIGDMIGAMFgwDQYJYIZIAWUDBAIBBQAEIECKTV6OtpBmfUfcGIXn5ROeB4F9gkGvkles+bHnrE0vBCBCO4wtLt9bo0SxNoKEr5hKfy2HKamLGdfUrX9S4+TczgIDAPYagAAYDzIwMjYwNjAxMTk0ODMwWqARGA8yMTI2MDUwODE5NDgzMFqhIzAhMB8GCSsGAQUFBzABAgQSBBAB1YsJIGXWUvPyGk6lbNQ3MAoGCCqGSM49BAMCA0cAMEQCICi5uAklXyhULJYp071XCqd5DfPjMWrl8W8CGVASyrAeAiACDZJX2C1Pb0Oc9ae6RJ9QbqDMvPh4c7o6k+SQcpu5BqCCAcUwggHBMIIBvTCCAWSgAwIBAgIDAPYbMAoGCCqGSM49BAMCMCcxJTAjBgNVBAMMHElyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJvb3QwIBcNMjYwNjAxMTk0ODA4WhgPMjEyNjA1MDgxOTQ4MDhaMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlcjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABEWA8wb4XTQCrnqxYXm6iJ6/47d3hDZy6F3C9sYNeHOp/AFkAq70sEknuVjb7/ovNfiIHigSvV1PgSA66r8T5ISjeDB2MAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMJMB0GA1UdDgQWBBRDZ9PDUab0DvC+v6fnYp6fI7p4sjAfBgNVHSMEGDAWgBQxudU7GzT4qe0MGK6NamnWbiUsIzAKBggqhkjOPQQDAgNHADBEAiBodtskV8Uu1r0zqrG3a7Zfb6VxZks80LBo2Uo3ILjImgIgc1GLmUgvDnYjoP6fUZUAivHAOsga0P1hN3Pe+hnaMcM=";
+    const TEST_X509_OCSP_KEY_USAGE_NONCRITICAL_GOOD_RESPONSE_DER_B64: &str = "MIIDKwoBAKCCAyQwggMgBgkrBgEFBQcwAQEEggMRMIIDDTCB7KEuMCwxKjAoBgNVBAMMIUlyb2hhIElTTyBPQ1NQIEtleVVzYWdlIFJlc3BvbmRlchgPMjAyNjA2MDExOTQ4MzBaMIGDMIGAMFgwDQYJYIZIAWUDBAIBBQAEIECKTV6OtpBmfUfcGIXn5ROeB4F9gkGvkles+bHnrE0vBCBCO4wtLt9bo0SxNoKEr5hKfy2HKamLGdfUrX9S4+TczgIDAPYagAAYDzIwMjYwNjAxMTk0ODMwWqARGA8yMTI2MDUwODE5NDgzMFqhIzAhMB8GCSsGAQUFBzABAgQSBBCBX5ZXbbP2Ahkm3qHJGRQZMAoGCCqGSM49BAMCA0gAMEUCIDxBU1VVYacjInqi3K5IXpZhU540l3iALNNO4C7FvFaqAiEAnwTZ0BHkmIoAEeIuqqmM4w89+HRw0gjcy/s5cdKA5ACgggHEMIIBwDCCAbwwggFhoAMCAQICAwD2HDAKBggqhkjOPQQDAjAnMSUwIwYDVQQDDBxJcm9oYSBJU08gT0NTUCBLZXlVc2FnZSBSb290MCAXDTI2MDYwMTE5NDgwOFoYDzIxMjYwNTA4MTk0ODA4WjAsMSowKAYDVQQDDCFJcm9oYSBJU08gT0NTUCBLZXlVc2FnZSBSZXNwb25kZXIwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARFgPMG+F00Aq56sWF5uoiev+O3d4Q2cuhdwvbGDXhzqfwBZAKu9LBJJ7lY2+/6LzX4iB4oEr1dT4EgOuq/E+SEo3UwczAMBgNVHRMBAf8EAjAAMAsGA1UdDwQEAwIHgDAWBgNVHSUBAf8EDDAKBggrBgEFBQcDCTAdBgNVHQ4EFgQUQ2fTw1Gm9A7wvr+n52KenyO6eLIwHwYDVR0jBBgwFoAUMbnVOxs0+KntDBiujWpp1m4lLCMwCgYIKoZIzj0EAwIDSQAwRgIhANKeOqXIx6jqHWvRCTSMvIXSTJfzXgiJJ6XswtK+MMpjAiEAzGcYAnSK4R6UF6diRLBbxIJfCxzU1zniE8ux0kC2yi4=";
 
     fn assert_outbox_error_contains(err: crate::Error, expected: &str) {
         match err {
@@ -5023,6 +5604,44 @@ mod tests {
                 supplementary_data_max_bytes: 4096,
                 amount_minor_units: Vec::new(),
             }],
+        }
+    }
+
+    fn live_securities_lifecycle_profile() -> actual::IsoBridgeProfile {
+        let message_profile = |message_type: &str, version: &str| actual::IsoMessageProfile {
+            message_type: message_type.to_owned(),
+            direction: "inbound".to_owned(),
+            versions: vec![version.to_owned()],
+            business_services: vec!["securities.csd.cash".to_owned()],
+            require_app_header: true,
+            require_business_service: true,
+            require_uetr: false,
+            structured_address_mode: "permissive".to_owned(),
+            supplementary_data_max_bytes: 4096,
+            amount_minor_units: Vec::new(),
+        };
+        actual::IsoBridgeProfile {
+            id: "securities-csd-lifecycle-fixtures".to_owned(),
+            rail: "securities-csd".to_owned(),
+            embedded_signature_policy: None,
+            signature_public_key_sha256_pins: Vec::new(),
+            x509_trust_anchor_sha256_pins: Vec::new(),
+            x509_required_certificate_policy_oids: Vec::new(),
+            x509_require_crl_revocation_check: false,
+            x509_crl_der_base64: Vec::new(),
+            x509_require_ocsp_revocation_check: false,
+            x509_ocsp_response_der_base64: Vec::new(),
+            trusted_public_key_sha256: Vec::new(),
+            trusted_certificate_sha256: Vec::new(),
+            required_reference_datasets: vec![
+                "bic-lei".to_owned(),
+                "isin-cusip".to_owned(),
+                "mic-directory".to_owned(),
+            ],
+            message_profiles: vec![
+                message_profile("sese.023", "sese.023.001.11"),
+                message_profile("sese.025", "sese.025.001.11"),
+            ],
         }
     }
 
@@ -5188,6 +5807,31 @@ mod tests {
         sha256_hex(&certificate)
     }
 
+    fn test_x509_signer_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("signer KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("signer KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_signer_key_usage_leaf_public_key_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64)
+            .expect("critical signer KeyUsage leaf X.509 fixture must decode");
+        let (_, certificate) = X509Certificate::from_der(&certificate)
+            .expect("critical signer KeyUsage leaf X.509 fixture must parse");
+        let public_key = certificate.public_key().subject_public_key.data.to_vec();
+        sha256_hex(&public_key)
+    }
+
+    fn test_x509_signer_key_usage_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64)
+            .expect("signer KeyUsage root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
     fn test_x509_aki_leaf_signing_key() -> P256SigningKey {
         let pkcs8 = BASE64_STANDARD
             .decode(TEST_X509_AKI_LEAF_SIGNING_KEY_PKCS8_DER_B64)
@@ -5199,6 +5843,28 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64)
             .expect("AKI root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_aki_issuer_serial_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("AKI issuer/serial leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("AKI issuer/serial leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_aki_issuer_serial_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("AKI issuer/serial root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_aki_issuer_serial_mismatch_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64)
+            .expect("AKI issuer/serial mismatch root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -5221,6 +5887,27 @@ mod tests {
         let certificate = BASE64_STANDARD
             .decode(TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64)
             .expect("critical CA root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_ca_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("CA KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8).expect("CA KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_ca_key_usage_critical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("critical CA KeyUsage root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_ca_key_usage_noncritical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("non-critical CA KeyUsage root X.509 fixture must decode");
         sha256_hex(&certificate)
     }
 
@@ -5319,6 +6006,28 @@ mod tests {
         sha256_hex(&certificate)
     }
 
+    fn test_x509_name_constraints_criticality_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("name-constraints criticality leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("name-constraints criticality leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_name_constraints_criticality_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64)
+            .expect("critical NameConstraints root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
+    fn test_x509_name_constraints_noncritical_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64)
+            .expect("non-critical NameConstraints root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
     fn test_x509_ocsp_leaf_signing_key() -> P256SigningKey {
         let pkcs8 = BASE64_STANDARD
             .decode(TEST_X509_OCSP_LEAF_SIGNING_KEY_PKCS8_DER_B64)
@@ -5348,25 +6057,179 @@ mod tests {
         sha256_hex(&certificate)
     }
 
+    fn test_x509_ocsp_key_usage_leaf_signing_key() -> P256SigningKey {
+        let pkcs8 = BASE64_STANDARD
+            .decode(TEST_X509_OCSP_KEY_USAGE_LEAF_SIGNING_KEY_PKCS8_DER_B64)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must decode");
+        P256SigningKey::from_pkcs8_der(&pkcs8)
+            .expect("OCSP KeyUsage leaf PKCS#8 fixture must parse")
+    }
+
+    fn test_x509_ocsp_key_usage_root_certificate_pin() -> String {
+        let certificate = BASE64_STANDARD
+            .decode(TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64)
+            .expect("OCSP KeyUsage root X.509 fixture must decode");
+        sha256_hex(&certificate)
+    }
+
     fn signed_pacs008_xml() -> String {
         let signing_key = test_p256_signing_key();
+        signed_pacs008_xml_with_key_info(&signing_key, &test_p256_key_info(&signing_key))
+    }
+
+    fn test_p256_key_info(signing_key: &P256SigningKey) -> String {
         let public_key = BASE64_STANDARD.encode(
             signing_key
                 .verifying_key()
                 .to_encoded_point(false)
                 .as_bytes(),
         );
-        signed_pacs008_xml_with_key_info(
-            &signing_key,
-            &format!(
-                concat!(
-                    "<KeyInfo><KeyValue><ECKeyValue>",
-                    r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
-                    "<PublicKey>{public_key}</PublicKey>",
-                    "</ECKeyValue></KeyValue></KeyInfo>"
-                ),
-                public_key = public_key
+        format!(
+            concat!(
+                "<KeyInfo><KeyValue><ECKeyValue>",
+                r#"<NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
+                "<PublicKey>{public_key}</PublicKey>",
+                "</ECKeyValue></KeyValue></KeyInfo>"
             ),
+            public_key = public_key
+        )
+    }
+
+    fn test_p256_namespaced_key_info(signing_key: &P256SigningKey) -> String {
+        let public_key = BASE64_STANDARD.encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        );
+        format!(
+            concat!(
+                "<ds:KeyInfo><ds:KeyValue><ds:ECKeyValue>",
+                r#"<ds:NamedCurve URI="urn:oid:1.2.840.10045.3.1.7"/>"#,
+                "<ds:PublicKey>{public_key}</ds:PublicKey>",
+                "</ds:ECKeyValue></ds:KeyValue></ds:KeyInfo>"
+            ),
+            public_key = public_key
+        )
+    }
+
+    fn test_xades_signed_properties_xml() -> String {
+        test_xades_signed_properties_xml_with_extra("")
+    }
+
+    fn test_xades_signed_properties_xml_for_key_info(key_info: &str) -> String {
+        child_text_compact(key_info, "X509Certificate")
+            .map_or_else(test_xades_signed_properties_xml, |certificate| {
+                test_xades_signed_properties_xml_for_certificate(&certificate)
+            })
+    }
+
+    fn test_xades_signed_properties_xml_for_certificate(certificate: &str) -> String {
+        test_xades_signed_properties_xml_with_extra(&test_xades_signing_certificate_v2_xml(
+            certificate,
+        ))
+    }
+
+    fn test_xades_signed_properties_xml_with_extra(
+        signed_signature_properties_extra: &str,
+    ) -> String {
+        test_xades_signed_properties_xml_with_signing_time_and_extra(
+            "2026-06-02T00:00:00Z",
+            signed_signature_properties_extra,
+        )
+    }
+
+    fn test_xades_signed_properties_xml_with_signing_time(signing_time: &str) -> String {
+        test_xades_signed_properties_xml_with_signing_time_and_extra(signing_time, "")
+    }
+
+    fn test_xades_signed_properties_xml_with_signing_time_and_extra(
+        signing_time: &str,
+        signed_signature_properties_extra: &str,
+    ) -> String {
+        format!(
+            r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties><SigningTime>{signing_time}</SigningTime>{signed_signature_properties_extra}</SignedSignatureProperties></SignedProperties>"#
+        )
+    }
+
+    fn test_xades_namespaced_signed_properties_xml() -> String {
+        test_xades_namespaced_signed_properties_xml_with_extra("")
+    }
+
+    fn test_xades_namespaced_signed_properties_xml_with_extra(
+        signed_signature_properties_extra: &str,
+    ) -> String {
+        format!(
+            r#"<xades:SignedProperties Id="xades-signed-props-001"><xades:SignedSignatureProperties><xades:SigningTime>2026-06-02T00:00:00Z</xades:SigningTime>{signed_signature_properties_extra}</xades:SignedSignatureProperties></xades:SignedProperties>"#
+        )
+    }
+
+    fn test_xades_signing_certificate_v2_xml(certificate: &str) -> String {
+        test_xades_signing_certificate_v2_xml_with_cert_extra(certificate, "")
+    }
+
+    fn test_xades_signing_certificate_v2_xml_with_cert_extra(
+        certificate: &str,
+        cert_extra: &str,
+    ) -> String {
+        let certificate_der = BASE64_STANDARD
+            .decode(certificate)
+            .expect("X.509 certificate fixture must decode");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(&certificate_der));
+        format!(
+            r#"<SigningCertificateV2><Cert><CertDigest><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></CertDigest>{cert_extra}</Cert></SigningCertificateV2>"#
+        )
+    }
+
+    fn test_xades_qualifying_properties_xml(signed_properties_xml: &str) -> String {
+        format!(
+            r##"<QualifyingProperties Target="#sig-001">{signed_properties_xml}</QualifyingProperties>"##
+        )
+    }
+
+    fn test_xades_object_xml(signed_properties_xml: &str) -> String {
+        format!(
+            "<Object>{}</Object>",
+            test_xades_qualifying_properties_xml(signed_properties_xml)
+        )
+    }
+
+    fn test_xades_namespaced_object_xml(signed_properties_xml: &str) -> String {
+        format!(
+            r##"<ds:Object><xades:QualifyingProperties Target="#sig-001">{signed_properties_xml}</xades:QualifyingProperties></ds:Object>"##
+        )
+    }
+
+    fn test_xades_signed_properties_reference_xml(
+        uri: &str,
+        reference_type: &str,
+        digest: &str,
+    ) -> String {
+        format!(
+            r#"<Reference URI="{uri}" Type="{reference_type}"><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference>"#
+        )
+    }
+
+    fn test_xades_default_signed_properties_reference_xml() -> String {
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        test_xades_signed_properties_reference_for_xml(&signed_properties_xml)
+    }
+
+    fn test_xades_signed_properties_reference_for_xml(signed_properties_xml: &str) -> String {
+        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
+        test_xades_signed_properties_reference_xml(
+            "#xades-signed-props-001",
+            XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
+            &digest,
+        )
+    }
+
+    fn test_xades_namespaced_signed_properties_reference_for_xml(
+        signed_properties_xml: &str,
+    ) -> String {
+        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
+        format!(
+            r##"<ds:Reference URI="#xades-signed-props-001" Type="{XADES_SIGNED_PROPERTIES_REFERENCE_TYPE}"><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"/><ds:DigestValue>{digest}</ds:DigestValue></ds:Reference>"##
         )
     }
 
@@ -5382,18 +6245,34 @@ mod tests {
 
     fn signed_pacs008_xml_with_x509_certificate_chain() -> String {
         let signing_key = test_x509_chain_leaf_signing_key();
-        signed_pacs008_xml_with_key_info(
-            &signing_key,
-            &format!(
-                concat!(
-                    "<KeyInfo><X509Data>",
-                    "<X509Certificate>{leaf}</X509Certificate>",
-                    "<X509Certificate>{root}</X509Certificate>",
-                    "</X509Data></KeyInfo>"
-                ),
-                leaf = TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
-                root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64
+        signed_pacs008_xml_with_key_info(&signing_key, &test_x509_chain_key_info())
+    }
+
+    fn test_x509_chain_key_info() -> String {
+        format!(
+            concat!(
+                "<KeyInfo><X509Data>",
+                "<X509Certificate>{leaf}</X509Certificate>",
+                "<X509Certificate>{root}</X509Certificate>",
+                "</X509Data></KeyInfo>"
             ),
+            leaf = TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+            root = TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64
+        )
+    }
+
+    fn signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+        signed_properties_xml: &str,
+    ) -> String {
+        let signing_key = test_x509_chain_leaf_signing_key();
+        let signed_properties_reference_xml =
+            test_xades_signed_properties_reference_for_xml(signed_properties_xml);
+        let xades_object_xml = test_xades_object_xml(signed_properties_xml);
+        signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_x509_chain_key_info(),
+            &signed_properties_reference_xml,
+            &xades_object_xml,
         )
     }
 
@@ -5489,6 +6368,33 @@ mod tests {
         )
     }
 
+    fn signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+        leaf_certificate: &str,
+        include_root: bool,
+    ) -> String {
+        let signing_key = test_x509_signer_key_usage_leaf_signing_key();
+        let root_xml = if include_root {
+            format!(
+                "<X509Certificate>{TEST_X509_SIGNER_KEY_USAGE_ROOT_CERTIFICATE_DER_B64}</X509Certificate>"
+            )
+        } else {
+            String::new()
+        };
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "{root_xml}",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf_certificate,
+                root_xml = root_xml
+            ),
+        )
+    }
+
     fn signed_pacs008_xml_with_aki_x509_certificate_chain(leaf_certificate: &str) -> String {
         let signing_key = test_x509_aki_leaf_signing_key();
         signed_pacs008_xml_with_key_info(
@@ -5502,6 +6408,79 @@ mod tests {
                 ),
                 leaf = leaf_certificate,
                 root = TEST_X509_AKI_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(root: &str) -> String {
+        let signing_key = test_x509_aki_issuer_serial_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_AKI_ISSUER_SERIAL_LEAF_CERTIFICATE_DER_B64,
+                root = root
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_noncritical_ca_root_x509_certificate_chain() -> String {
+        let signing_key = test_x509_noncritical_ca_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_NONCRITICAL_CA_LEAF_BY_ROOT_CERTIFICATE_DER_B64,
+                root = TEST_X509_NONCRITICAL_CA_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_noncritical_ca_intermediate_x509_certificate_chain() -> String {
+        let signing_key = test_x509_noncritical_ca_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{intermediate}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_NONCRITICAL_CA_LEAF_BY_INTERMEDIATE_CERTIFICATE_DER_B64,
+                intermediate = TEST_X509_NONCRITICAL_CA_INTERMEDIATE_CERTIFICATE_DER_B64,
+                root = TEST_X509_NONCRITICAL_CA_CRITICAL_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
+    fn signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
+        leaf: &str,
+        root: &str,
+    ) -> String {
+        let signing_key = test_x509_ca_key_usage_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf,
+                root = root
             ),
         )
     }
@@ -5618,6 +6597,26 @@ mod tests {
         )
     }
 
+    fn signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
+        leaf: &str,
+        root: &str,
+    ) -> String {
+        let signing_key = test_x509_name_constraints_criticality_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = leaf,
+                root = root
+            ),
+        )
+    }
+
     fn signed_pacs008_xml_with_ocsp_x509_certificate_chain(embedded_ocsp: Option<&str>) -> String {
         let signing_key = test_x509_ocsp_leaf_signing_key();
         let ocsp_xml = embedded_ocsp
@@ -5657,27 +6656,126 @@ mod tests {
         )
     }
 
+    fn signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain() -> String {
+        let signing_key = test_x509_ocsp_key_usage_leaf_signing_key();
+        signed_pacs008_xml_with_key_info(
+            &signing_key,
+            &format!(
+                concat!(
+                    "<KeyInfo><X509Data>",
+                    "<X509Certificate>{leaf}</X509Certificate>",
+                    "<X509Certificate>{root}</X509Certificate>",
+                    "</X509Data></KeyInfo>"
+                ),
+                leaf = TEST_X509_OCSP_KEY_USAGE_LEAF_CERTIFICATE_DER_B64,
+                root = TEST_X509_OCSP_KEY_USAGE_ROOT_CERTIFICATE_DER_B64
+            ),
+        )
+    }
+
     fn signed_pacs008_xml_with_key_info(signing_key: &P256SigningKey, key_info: &str) -> String {
+        let signed_properties_xml = test_xades_signed_properties_xml_for_key_info(key_info);
+        let signed_properties_reference_xml =
+            test_xades_signed_properties_reference_for_xml(&signed_properties_xml);
+        let xades_object_xml = test_xades_object_xml(&signed_properties_xml);
+        signed_pacs008_xml_with_key_info_and_xades_parts(
+            signing_key,
+            key_info,
+            &signed_properties_reference_xml,
+            &xades_object_xml,
+        )
+    }
+
+    fn signed_pacs008_xml_with_key_info_and_xades_parts(
+        signing_key: &P256SigningKey,
+        key_info: &str,
+        signed_properties_reference_xml: &str,
+        xades_object_xml: &str,
+    ) -> String {
         let unsigned = unsigned_pacs008_xml();
         let insertion = unsigned
             .find("</FIToFICstmrCdtTrf>")
             .expect("signature insertion point");
         let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
         let signed_info = format!(
-            r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/><SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/><Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/></Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/><DigestValue>{digest}</DigestValue></Reference></SignedInfo>"#
+            concat!(
+                r#"<SignedInfo><CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/>"#,
+                r#"<SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/>"#,
+                r#"<Reference URI=""><Transforms><Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>"#,
+                r#"</Transforms><DigestMethod Algorithm="{XMLDSIG_SHA256}"/>"#,
+                r#"<DigestValue>{digest}</DigestValue></Reference>"#,
+                "{signed_properties_reference_xml}</SignedInfo>"
+            ),
+            XML_C14N_1_0 = XML_C14N_1_0,
+            XMLDSIG_ECDSA_SHA256 = XMLDSIG_ECDSA_SHA256,
+            XMLDSIG_ENVELOPED_SIGNATURE = XMLDSIG_ENVELOPED_SIGNATURE,
+            XMLDSIG_SHA256 = XMLDSIG_SHA256,
+            digest = digest,
+            signed_properties_reference_xml = signed_properties_reference_xml
         );
         let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
         let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
         let signature_xml = format!(
             concat!(
-                "<Signature>{signed_info}<SignatureValue>{signature_value}</SignatureValue>",
+                r#"<Signature Id="sig-001">{signed_info}<SignatureValue>{signature_value}</SignatureValue>"#,
                 "{key_info}",
-                r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+                "{xades_object_xml}",
                 "</Signature>"
             ),
             signed_info = signed_info,
             signature_value = signature_value,
-            key_info = key_info
+            key_info = key_info,
+            xades_object_xml = xades_object_xml
+        );
+        format!(
+            "{}{}{}",
+            &unsigned[..insertion],
+            signature_xml,
+            &unsigned[insertion..]
+        )
+    }
+
+    fn signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
+        signing_key: &P256SigningKey,
+        key_info: &str,
+        signed_properties_reference_xml: &str,
+        xades_object_xml: &str,
+    ) -> String {
+        let unsigned = unsigned_pacs008_xml();
+        let insertion = unsigned
+            .find("</FIToFICstmrCdtTrf>")
+            .expect("signature insertion point");
+        let digest = BASE64_STANDARD.encode(Sha256::digest(unsigned.as_bytes()));
+        let signed_info = format!(
+            concat!(
+                r#"<ds:SignedInfo><ds:CanonicalizationMethod Algorithm="{XML_C14N_1_0}"/>"#,
+                r#"<ds:SignatureMethod Algorithm="{XMLDSIG_ECDSA_SHA256}"/>"#,
+                r#"<ds:Reference URI=""><ds:Transforms><ds:Transform Algorithm="{XMLDSIG_ENVELOPED_SIGNATURE}"/>"#,
+                r#"</ds:Transforms><ds:DigestMethod Algorithm="{XMLDSIG_SHA256}"/>"#,
+                r#"<ds:DigestValue>{digest}</ds:DigestValue></ds:Reference>"#,
+                "{signed_properties_reference_xml}</ds:SignedInfo>"
+            ),
+            XML_C14N_1_0 = XML_C14N_1_0,
+            XMLDSIG_ECDSA_SHA256 = XMLDSIG_ECDSA_SHA256,
+            XMLDSIG_ENVELOPED_SIGNATURE = XMLDSIG_ENVELOPED_SIGNATURE,
+            XMLDSIG_SHA256 = XMLDSIG_SHA256,
+            digest = digest,
+            signed_properties_reference_xml = signed_properties_reference_xml
+        );
+        let signature: P256Signature = signing_key.sign(signed_info.as_bytes());
+        let signature_value = BASE64_STANDARD.encode(signature.to_der().as_bytes());
+        let signature_xml = format!(
+            concat!(
+                r#"<ds:Signature xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:xades="http://uri.etsi.org/01903/v1.3.2#" Id="sig-001">"#,
+                "{signed_info}<ds:SignatureValue>{signature_value}</ds:SignatureValue>",
+                "{key_info}",
+                "{xades_object_xml}",
+                "</ds:Signature>"
+            ),
+            signed_info = signed_info,
+            signature_value = signature_value,
+            key_info = key_info,
+            xades_object_xml = xades_object_xml
         );
         format!(
             "{}{}{}",
@@ -5818,6 +6916,25 @@ mod tests {
       </CdtTrfTxInf>
     </FICdtTrf>
   </Document>
+</DataPDU>"#
+        )
+    }
+
+    fn data_pdu_with_app_header(
+        business_message_id: &str,
+        msg_def_id: &str,
+        business_service: &str,
+        document: &str,
+    ) -> String {
+        format!(
+            r#"<DataPDU>
+  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+    <BizMsgIdr>{business_message_id}</BizMsgIdr>
+    <MsgDefIdr>{msg_def_id}</MsgDefIdr>
+    <BizSvc>{business_service}</BizSvc>
+    <CreDt>2025-01-01T12:00:00Z</CreDt>
+  </AppHdr>
+{document}
 </DataPDU>"#
         )
     }
@@ -6091,6 +7208,655 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_namespaced_p256_xmldsig_xades() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_namespaced_signed_properties_xml();
+        let payload = signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_namespaced_key_info(&signing_key),
+            &test_xades_namespaced_signed_properties_reference_for_xml(&signed_properties_xml),
+            &test_xades_namespaced_object_xml(&signed_properties_xml),
+        );
+
+        let embedded_signature = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect("prefixed XMLDSig/XAdES payload should pass require-verified verification");
+
+        assert!(embedded_signature);
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_qualifying_properties_wrong_target() {
+        let payload =
+            signed_pacs008_xml().replace(r##"Target="#sig-001""##, r##"Target="#sig-002""##);
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("mis-targeted XAdES QualifyingProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_qualifying_properties_missing_target() {
+        let payload = signed_pacs008_xml().replace(r##" Target="#sig-001""##, "");
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES QualifyingProperties without Target must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_missing_signed_properties_reference() {
+        let signing_key = test_p256_signing_key();
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            "",
+            &test_xades_object_xml(&test_xades_signed_properties_xml()),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES QualifyingProperties must be backed by a SignedProperties reference");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_signed_properties_reference_wrong_uri() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_xml(
+                "#copied-signed-props",
+                XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
+                &digest,
+            ),
+            &test_xades_object_xml(&signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("SignedProperties reference URI must bind to the XAdES object Id");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_signed_properties_reference_wrong_type() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let digest = BASE64_STANDARD.encode(Sha256::digest(signed_properties_xml.as_bytes()));
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_xml(
+                "#xades-signed-props-001",
+                "urn:unsupported:signed-properties",
+                &digest,
+            ),
+            &test_xades_object_xml(&signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("SignedProperties references must carry the XAdES reference Type");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_signed_properties_digest_tampering() {
+        let signing_key = test_p256_signing_key();
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_xml(
+                "#xades-signed-props-001",
+                XADES_SIGNED_PROPERTIES_REFERENCE_TYPE,
+                &BASE64_STANDARD.encode([0_u8; 32]),
+            ),
+            &test_xades_object_xml(&test_xades_signed_properties_xml()),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("SignedProperties digest mismatch must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_signed_properties_content_tampering() {
+        let payload = signed_pacs008_xml().replace(
+            "<SigningTime>2026-06-02T00:00:00Z</SigningTime>",
+            "<SigningTime>2026-06-02T00:00:01Z</SigningTime>",
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("unsigned SignedProperties content tampering must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_missing_signed_properties_element() {
+        let signing_key = test_p256_signing_key();
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_default_signed_properties_reference_xml(),
+            r##"<Object><QualifyingProperties Target="#sig-001"/></Object>"##,
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("QualifyingProperties without SignedProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_missing_signed_signature_properties() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = r#"<SignedProperties Id="xades-signed-props-001"><SignedDataObjectProperties/></SignedProperties>"#;
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
+            &test_xades_object_xml(signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES SignedProperties must contain SignedSignatureProperties");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_duplicate_signed_signature_properties() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = concat!(
+            r#"<SignedProperties Id="xades-signed-props-001">"#,
+            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
+            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:01Z</SigningTime></SignedSignatureProperties>",
+            "</SignedProperties>"
+        );
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
+            &test_xades_object_xml(signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("duplicate XAdES SignedSignatureProperties blocks must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_missing_signing_time() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties/></SignedProperties>"#;
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
+            &test_xades_object_xml(signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES SignedSignatureProperties must contain SigningTime");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_duplicate_signing_time() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = concat!(
+            r#"<SignedProperties Id="xades-signed-props-001"><SignedSignatureProperties>"#,
+            "<SigningTime>2026-06-02T00:00:00Z</SigningTime>",
+            "<SigningTime>2026-06-02T00:00:01Z</SigningTime>",
+            "</SignedSignatureProperties></SignedProperties>"
+        );
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
+            &test_xades_object_xml(signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("duplicate XAdES SigningTime values must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_xades_canonical_leap_day_signing_time() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml =
+            test_xades_signed_properties_xml_with_signing_time("2024-02-29T23:59:59Z");
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
+            &test_xades_object_xml(&signed_properties_xml),
+        );
+
+        verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect("canonical UTC leap-day SigningTime must be accepted");
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_malformed_signing_time_values() {
+        let cases = [
+            "",
+            "2026-06-02 00:00:00Z",
+            "2026-06-02T00:00:00+00:00",
+            "2026-06-02T00:00:00.000Z",
+            "2026-6-02T00:00:00Z",
+            "2026-06-02T00:00:00z",
+            "2026-06-02T00:00:00 Z",
+            "２０２６-06-02T00:00:00Z",
+        ];
+
+        for signing_time in cases {
+            let signing_key = test_p256_signing_key();
+            let signed_properties_xml =
+                test_xades_signed_properties_xml_with_signing_time(signing_time);
+            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+                &signing_key,
+                &test_p256_key_info(&signing_key),
+                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
+                &test_xades_object_xml(&signed_properties_xml),
+            );
+
+            let err = verify_embedded_xml_signature(
+                payload.as_bytes(),
+                &[test_p256_public_key_pin()],
+                &[],
+                &[],
+                false,
+                &[],
+                false,
+                &[],
+            )
+            .expect_err("malformed XAdES SigningTime must fail closed");
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "unexpected error for SigningTime {signing_time:?}: {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_out_of_range_signing_time_values() {
+        let cases = [
+            "0000-06-02T00:00:00Z",
+            "2026-00-02T00:00:00Z",
+            "2026-13-02T00:00:00Z",
+            "2026-02-29T00:00:00Z",
+            "2024-02-30T00:00:00Z",
+            "2026-04-31T00:00:00Z",
+            "2026-06-02T24:00:00Z",
+            "2026-06-02T00:60:00Z",
+            "2026-06-02T00:00:60Z",
+        ];
+
+        for signing_time in cases {
+            let signing_key = test_p256_signing_key();
+            let signed_properties_xml =
+                test_xades_signed_properties_xml_with_signing_time(signing_time);
+            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+                &signing_key,
+                &test_p256_key_info(&signing_key),
+                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
+                &test_xades_object_xml(&signed_properties_xml),
+            );
+
+            let err = verify_embedded_xml_signature(
+                payload.as_bytes(),
+                &[test_p256_public_key_pin()],
+                &[],
+                &[],
+                false,
+                &[],
+                false,
+                &[],
+            )
+            .expect_err("out-of-range XAdES SigningTime must fail closed");
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "unexpected error for SigningTime {signing_time:?}: {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_signed_data_object_properties() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = concat!(
+            r#"<SignedProperties Id="xades-signed-props-001">"#,
+            "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
+            r#"<SignedDataObjectProperties><DataObjectFormat ObjectReference=""><MimeType>text/xml</MimeType></DataObjectFormat></SignedDataObjectProperties>"#,
+            "</SignedProperties>"
+        );
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(signed_properties_xml),
+            &test_xades_object_xml(signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("unsupported XAdES SignedDataObjectProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_unsupported_signed_signature_properties() {
+        let cases = [
+            "<SigningPolicyIdentifier/>",
+            "<SignatureProductionPlace><City>Jerusalem</City></SignatureProductionPlace>",
+            "<SignerRole><ClaimedRoles><ClaimedRole>approver</ClaimedRole></ClaimedRoles></SignerRole>",
+        ];
+
+        for unsupported_property in cases {
+            let signing_key = test_p256_signing_key();
+            let signed_properties_xml =
+                test_xades_signed_properties_xml_with_extra(unsupported_property);
+            let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+                &signing_key,
+                &test_p256_key_info(&signing_key),
+                &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
+                &test_xades_object_xml(&signed_properties_xml),
+            );
+
+            let err = verify_embedded_xml_signature(
+                payload.as_bytes(),
+                &[test_p256_public_key_pin()],
+                &[],
+                &[],
+                false,
+                &[],
+                false,
+                &[],
+            )
+            .expect_err("unsupported XAdES SignedSignatureProperties child must fail closed");
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "unexpected error for property {unsupported_property:?}: {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_namespaced_xades_unsupported_signed_signature_property() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_namespaced_signed_properties_xml_with_extra(
+            "<xades:SignerRole><xades:ClaimedRoles><xades:ClaimedRole>approver</xades:ClaimedRole></xades:ClaimedRoles></xades:SignerRole>",
+        );
+        let payload = signed_pacs008_xml_with_namespaced_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_namespaced_key_info(&signing_key),
+            &test_xades_namespaced_signed_properties_reference_for_xml(&signed_properties_xml),
+            &test_xades_namespaced_object_xml(&signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("prefixed unsupported XAdES property must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_unsigned_properties() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let xades_object_xml = format!(
+            concat!(
+                r##"<Object><QualifyingProperties Target="#sig-001">"##,
+                "{signed_properties_xml}",
+                "<UnsignedProperties><UnsignedSignatureProperties><SignatureTimeStamp/></UnsignedSignatureProperties></UnsignedProperties>",
+                "</QualifyingProperties></Object>"
+            ),
+            signed_properties_xml = signed_properties_xml,
+        );
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &test_xades_signed_properties_reference_for_xml(&signed_properties_xml),
+            &xades_object_xml,
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("unsupported XAdES UnsignedProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_qualifying_properties_missing_signature_id() {
+        let payload = signed_pacs008_xml().replace(r#"<Signature Id="sig-001">"#, "<Signature>");
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES target must bind to a Signature Id");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_duplicate_xades_qualifying_properties() {
+        let duplicate_object = test_xades_object_xml(&test_xades_signed_properties_xml());
+        let payload = signed_pacs008_xml()
+            .replace("</Signature>", &format!("{duplicate_object}</Signature>"));
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("duplicate XAdES QualifyingProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_xades_qualifying_properties_outside_object() {
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let payload = signed_pacs008_xml().replace(
+            &test_xades_object_xml(&signed_properties_xml),
+            &test_xades_qualifying_properties_xml(&signed_properties_xml),
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("XAdES QualifyingProperties outside Object must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_accepts_pinned_x509_certificate_key_info() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -6133,6 +7899,336 @@ mod tests {
             .expect("X.509 chain signed by a pinned trust anchor should pass");
 
         assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_missing_signing_certificate_v2() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml();
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("X.509 XAdES signatures must identify the signing certificate");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_digest() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_ROOT_CERTIFICATE_DER_B64,
+        );
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("XAdES SigningCertificateV2 digest must match the signer leaf");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_wrong_algorithm() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+        )
+        .replace(XMLDSIG_SHA256, "urn:unsupported:sha1");
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("XAdES SigningCertificateV2 must use SHA-256 cert digests");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_duplicate_signing_certificate_v2() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signing_certificate =
+            test_xades_signing_certificate_v2_xml(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64);
+        let signed_properties_xml = test_xades_signed_properties_xml_with_extra(&format!(
+            "{signing_certificate}{signing_certificate}"
+        ));
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("duplicate XAdES SigningCertificateV2 entries must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_issuer_serial_metadata() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+        let cases = [
+            "<IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerial>",
+            "<IssuerSerialV2><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></IssuerSerialV2>",
+            "<xades:IssuerSerialV2><ds:X509IssuerName>CN=Wrong Root</ds:X509IssuerName><ds:X509SerialNumber>999</ds:X509SerialNumber></xades:IssuerSerialV2>",
+            "<X509IssuerSerial><X509IssuerName>CN=Wrong Root</X509IssuerName><X509SerialNumber>999</X509SerialNumber></X509IssuerSerial>",
+        ];
+
+        for issuer_serial in cases {
+            let signing_certificate = test_xades_signing_certificate_v2_xml_with_cert_extra(
+                TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+                issuer_serial,
+            );
+            let signed_properties_xml =
+                test_xades_signed_properties_xml_with_extra(&signing_certificate);
+            let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+                &signed_properties_xml,
+            );
+            let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+
+            let err = runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .expect_err("unsupported SigningCertificateV2 issuer/serial metadata must fail");
+
+            assert!(
+                matches!(err, MsgError::ValidationFailed),
+                "unexpected error for issuer/serial {issuer_serial:?}: {err:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_xades_signing_certificate_v2_outside_signature_properties()
+     {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![test_x509_chain_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let signing_certificate =
+            test_xades_signing_certificate_v2_xml(TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64);
+        let signed_properties_xml = format!(
+            concat!(
+                r#"<SignedProperties Id="xades-signed-props-001">"#,
+                "<SignedSignatureProperties><SigningTime>2026-06-02T00:00:00Z</SigningTime></SignedSignatureProperties>",
+                "<SignedDataObjectProperties>{signing_certificate}</SignedDataObjectProperties>",
+                "</SignedProperties>"
+            ),
+            signing_certificate = signing_certificate
+        );
+        let payload = signed_pacs008_xml_with_x509_certificate_chain_and_signed_properties(
+            &signed_properties_xml,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("SigningCertificateV2 outside SignedSignatureProperties must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_public_key_xades_signing_certificate_v2() {
+        let signing_key = test_p256_signing_key();
+        let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
+            TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
+        );
+        let signed_properties_reference_xml =
+            test_xades_signed_properties_reference_for_xml(&signed_properties_xml);
+        let xades_object_xml = test_xades_object_xml(&signed_properties_xml);
+        let payload = signed_pacs008_xml_with_key_info_and_xades_parts(
+            &signing_key,
+            &test_p256_key_info(&signing_key),
+            &signed_properties_reference_xml,
+            &xades_object_xml,
+        );
+
+        let err = verify_embedded_xml_signature(
+            payload.as_bytes(),
+            &[test_p256_public_key_pin()],
+            &[],
+            &[],
+            false,
+            &[],
+            false,
+            &[],
+        )
+        .expect_err("SigningCertificateV2 cannot authorize raw public-key KeyInfo");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_directly_pinned_x509_critical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins =
+            vec![test_x509_signer_key_usage_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("directly pinned signer leaf with critical digitalSignature should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_directly_pinned_x509_noncritical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins =
+            vec![test_x509_signer_key_usage_leaf_public_key_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            false,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("direct public-key pins must not bypass non-critical signer KeyUsage");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_trust_anchor_x509_critical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_signer_key_usage_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("trust-anchor signer leaf with critical digitalSignature should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_trust_anchor_x509_noncritical_signer_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_signer_key_usage_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_signer_key_usage_x509_certificate_chain(
+            TEST_X509_SIGNER_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            true,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("trust-anchor chains must not bypass non-critical signer KeyUsage");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     #[test]
@@ -6406,6 +8502,160 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_x509_authority_issuer_serial_match() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_aki_issuer_serial_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(
+            TEST_X509_AKI_ISSUER_SERIAL_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("matching AKI issuer/serial trust-anchor chain should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_authority_issuer_serial_mismatch() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_aki_issuer_serial_mismatch_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_aki_issuer_serial_x509_certificate_chain(
+            TEST_X509_AKI_ISSUER_SERIAL_MISMATCH_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("issuer name/signature matching must not bypass AKI issuer serial drift");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_noncritical_basic_constraints_root_ca() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_noncritical_ca_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_noncritical_ca_root_x509_certificate_chain();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("trust anchors must carry critical CA BasicConstraints");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_noncritical_basic_constraints_intermediate_ca() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_noncritical_ca_critical_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_noncritical_ca_intermediate_x509_certificate_chain();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("intermediate CAs must carry critical CA BasicConstraints");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_ca_critical_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_ca_key_usage_critical_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
+            TEST_X509_CA_KEY_USAGE_CRITICAL_LEAF_CERTIFICATE_DER_B64,
+            TEST_X509_CA_KEY_USAGE_CRITICAL_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("trust anchors with critical CA KeyUsage should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_noncritical_ca_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_ca_key_usage_noncritical_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_ca_key_usage_x509_certificate_chain(
+            TEST_X509_CA_KEY_USAGE_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            TEST_X509_CA_KEY_USAGE_NONCRITICAL_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("CA KeyUsage must be critical before issuer admission");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn require_verified_profile_accepts_x509_path_length_allowed_intermediate() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
@@ -6605,6 +8855,60 @@ mod tests {
     }
 
     #[test]
+    fn require_verified_profile_accepts_x509_critical_name_constraints() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_name_constraints_criticality_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
+            TEST_X509_NAME_CONSTRAINTS_CRITICALITY_LEAF_CERTIFICATE_DER_B64,
+            TEST_X509_NAME_CONSTRAINTS_CRITICALITY_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("X.509 chain with critical NameConstraints should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_noncritical_name_constraints() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_name_constraints_noncritical_root_certificate_pin()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_name_constraints_criticality_x509_certificate_chain(
+            TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_LEAF_CERTIFICATE_DER_B64,
+            TEST_X509_NAME_CONSTRAINTS_NONCRITICAL_ROOT_CERTIFICATE_DER_B64,
+        );
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("X.509 chain with non-critical NameConstraints must fail closed");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
+    }
+
+    #[test]
     fn x509_name_constraint_matchers_cover_rfc822_uri_and_ip_forms() {
         assert!(rfc822_name_matches_constraint("ops@bank.test", "bank.test").expect("email"));
         assert!(
@@ -6707,6 +9011,60 @@ mod tests {
             );
 
         assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_accepts_x509_delegated_ocsp_critical_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_ocsp_key_usage_root_certificate_pin()];
+        profile.x509_require_ocsp_revocation_check = true;
+        profile.x509_ocsp_response_der_base64 =
+            vec![TEST_X509_OCSP_KEY_USAGE_CRITICAL_GOOD_RESPONSE_DER_B64.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("delegated OCSP responder with critical digitalSignature should pass");
+
+        assert!(metadata.embedded_signature_detected());
+    }
+
+    #[test]
+    fn require_verified_profile_rejects_x509_delegated_ocsp_noncritical_key_usage() {
+        let mut config = sample_config();
+        let mut profile = signed_message_profile("require-verified");
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins =
+            vec![test_x509_ocsp_key_usage_root_certificate_pin()];
+        profile.x509_require_ocsp_revocation_check = true;
+        profile.x509_ocsp_response_der_base64 =
+            vec![TEST_X509_OCSP_KEY_USAGE_NONCRITICAL_GOOD_RESPONSE_DER_B64.to_owned()];
+        config.profiles.push(profile);
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let payload = signed_pacs008_xml_with_ocsp_key_usage_x509_certificate_chain();
+        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
+        let profile = runtime
+            .resolve_profile(Some("signed-pacs008-test"))
+            .expect("signed profile");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("delegated OCSP responder KeyUsage must be critical");
+
+        assert!(matches!(err, MsgError::ValidationFailed));
     }
 
     #[test]
@@ -7402,7 +9760,7 @@ mod tests {
     #[test]
     fn require_verified_profile_rejects_duplicate_sgntr_blocks() {
         let payload = signed_pacs008_xml()
-            .replace("<Signature>", "<Sgntr>")
+            .replace(r#"<Signature Id="sig-001">"#, r#"<Sgntr Id="sig-001">"#)
             .replace("</Signature>", "</Sgntr>")
             .replace("</FIToFICstmrCdtTrf>", "<Sgntr/></FIToFICstmrCdtTrf>");
 
@@ -7726,6 +10084,153 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_securities_fixtures_validate_and_link_through_torii_profile() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let instruction_payload = data_pdu_with_app_header(
+            "SEC-INSTR-BAH-1",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            SESE023_FIXTURE_XML,
+        );
+        let instruction =
+            parse_message("sese.023", instruction_payload.as_bytes()).expect("sese.023 fixture");
+        let instruction_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.023",
+                &instruction,
+                instruction_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.023 fixture validates through Torii profile");
+        let instruction_id = Iso20022BridgeRuntime::lifecycle_message_id("sese.023", &instruction)
+            .expect("sese.023 durable id");
+        assert_eq!(instruction_id, "sese.023:DVP-FIXTURE-1");
+        assert_eq!(
+            instruction_metadata.business_message_id(),
+            Some("SEC-INSTR-BAH-1")
+        );
+        assert!(runtime.check_and_record_inbound(&instruction_id, instruction_metadata));
+        let instruction_outcome = runtime
+            .apply_inbound_lifecycle_message(&instruction_id, "sese.023", &instruction)
+            .expect("record BAH-wrapped sese.023 fixture");
+        assert_eq!(instruction_outcome.action(), "recorded");
+        let instruction_status = runtime
+            .message_status(&instruction_id)
+            .expect("instruction status");
+        assert_eq!(instruction_status.status_label(), "Accepted");
+        assert_eq!(instruction_status.settlement_quantity(), Some("500"));
+        assert_eq!(
+            instruction_status.security_instrument_id(),
+            Some("US0378331005")
+        );
+        assert_eq!(
+            instruction_status.plan_execution_order(),
+            Some("DELIVERY_THEN_PAYMENT")
+        );
+
+        let confirmation_payload = data_pdu_with_app_header(
+            "SEC-CONF-BAH-1",
+            "sese.025.001.11",
+            "securities.csd.cash",
+            SESE025_FIXTURE_XML,
+        );
+        let confirmation =
+            parse_message("sese.025", confirmation_payload.as_bytes()).expect("sese.025 fixture");
+        let confirmation_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.025",
+                &confirmation,
+                confirmation_payload.as_bytes(),
+            )
+            .expect("BAH-wrapped sese.025 fixture validates through Torii profile");
+        let confirmation_id =
+            Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &confirmation)
+                .expect("sese.025 durable id");
+        assert_eq!(confirmation_id, "sese.025:PVP-FIXTURE-1");
+        assert_eq!(
+            confirmation_metadata.business_message_id(),
+            Some("SEC-CONF-BAH-1")
+        );
+
+        record_original(&runtime, "sese.023:PVP-FIXTURE-1", "sese.023");
+        assert!(runtime.check_and_record_inbound(&confirmation_id, confirmation_metadata));
+        let confirmation_outcome = runtime
+            .apply_inbound_lifecycle_message(&confirmation_id, "sese.025", &confirmation)
+            .expect("apply BAH-wrapped sese.025 fixture");
+        assert_eq!(
+            confirmation_outcome.referenced_message_id(),
+            Some("sese.023:PVP-FIXTURE-1")
+        );
+        assert_eq!(confirmation_outcome.action(), "marked_settled");
+        let settled = runtime
+            .message_status("sese.023:PVP-FIXTURE-1")
+            .expect("referenced settlement status");
+        assert_eq!(settled.pacs002_code(), "ACSC");
+        let confirmation_status = runtime
+            .message_status(&confirmation_id)
+            .expect("confirmation status");
+        assert_eq!(confirmation_status.settlement_quantity(), Some("250000"));
+        assert_eq!(
+            confirmation_status.plan_atomicity(),
+            Some("COMMIT_SECOND_LEG")
+        );
+    }
+
+    #[test]
+    fn checked_in_securities_fixtures_reject_profile_version_and_root_drift() {
+        let (mut config, _reference_files) = sample_config_with_live_reference_data();
+        config.profiles.push(live_securities_lifecycle_profile());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("securities-csd-lifecycle-fixtures"))
+            .expect("securities lifecycle profile");
+
+        let wrong_version_payload = data_pdu_with_app_header(
+            "SEC-INSTR-BAD-VERSION",
+            "sese.023.999.99",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("sese.023.001.11", "sese.023.999.99"),
+        );
+        let wrong_version = parse_message("sese.023", wrong_version_payload.as_bytes())
+            .expect("version-drift fixture parses before profile validation");
+        let err = runtime
+            .validate_profile_submission(
+                profile,
+                "sese.023",
+                &wrong_version,
+                wrong_version_payload.as_bytes(),
+            )
+            .expect_err("securities profile must reject unsupported sese.023 version drift");
+        assert!(matches!(err, MsgError::UnknownMessageType));
+
+        let root_drift_payload = data_pdu_with_app_header(
+            "SEC-INSTR-ROOT-DRIFT",
+            "sese.023.001.11",
+            "securities.csd.cash",
+            &SESE023_FIXTURE_XML.replace("SctiesSttlmTxInstr", "SctiesSttlmTxConf"),
+        );
+        let err = parse_message("sese.023", root_drift_payload.as_bytes())
+            .expect_err("sese.023 parser must reject a sese.025-style document root");
+        assert!(matches!(err, MsgError::UnknownMessageType));
+
+        assert!(
+            runtime.message_status("sese.023:DVP-FIXTURE-1").is_none(),
+            "negative fixture drift must not create a securities settlement record"
+        );
+    }
+
+    #[test]
     fn live_rail_profile_xsd_fixtures_accept_supported_messages() {
         let (config, _reference_files) = sample_config_with_live_reference_data();
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -7914,6 +10419,176 @@ mod tests {
                 kind: InvalidValueKind::Amount
             } if field == "IntrBkSttlmAmt"
         ));
+    }
+
+    #[test]
+    fn live_rail_profile_rejects_malformed_uetr_values() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let cases = [
+            "123e4567e89b12d3a456426614174000",
+            "123e4567-e89b-12d3-a456-42661417400",
+            "123e4567-e89b-12d3-a456-4266141740000",
+            "123e4567_e89b_12d3_a456_426614174000",
+            "123e4567-e89b-12d3-a456-42661417400g",
+        ];
+
+        for (idx, bad_uetr) in cases.into_iter().enumerate() {
+            let payload = live_pacs008_xml(
+                &format!("SWIFT-BAD-UETR-{idx}"),
+                "pacs.008.001.08",
+                "swift.cbprplus.02",
+                "USD",
+                "10.00",
+                bad_uetr,
+            );
+            let parsed = parse_message("pacs.008", payload.as_bytes())
+                .unwrap_or_else(|err| panic!("bad UETR fixture {idx} parses: {err:?}"));
+            let err = runtime
+                .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+                .unwrap_err();
+
+            assert!(matches!(
+                err,
+                MsgError::InvalidValue {
+                    field,
+                    kind: InvalidValueKind::Enum
+                } if field == "UETR"
+            ));
+        }
+    }
+
+    #[test]
+    fn live_rail_profile_rejects_missing_required_uetr() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+        let payload = live_pacs008_xml(
+            "SWIFT-MISSING-UETR",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174510",
+        )
+        .replace(
+            "<PmtId><UETR>123e4567-e89b-12d3-a456-426614174510</UETR></PmtId>",
+            "<PmtId/>",
+        );
+        let parsed =
+            parse_message("pacs.008", payload.as_bytes()).expect("missing-UETR XML parses");
+
+        let err = runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect_err("live pacs.008 profiles require UETR");
+
+        assert!(matches!(err, MsgError::MissingField("UETR")));
+    }
+
+    #[test]
+    fn uetr_validator_rejects_malformed_and_padded_values() {
+        assert!(is_valid_uetr("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(is_valid_uetr("123E4567-E89B-12D3-A456-426614174000"));
+        for bad_uetr in [
+            "123e4567e89b12d3a456426614174000",
+            "123e4567-e89b-12d3-a456-42661417400",
+            "123e4567-e89b-12d3-a456-4266141740000",
+            "123e4567_e89b_12d3_a456_426614174000",
+            "123e4567-e89b-12d3-a456-42661417400g",
+            " 123e4567-e89b-12d3-a456-426614174000",
+            "123e4567-e89b-12d3-a456-426614174000 ",
+        ] {
+            assert!(!is_valid_uetr(bad_uetr), "{bad_uetr} must be invalid");
+        }
+    }
+
+    #[test]
+    fn live_profile_idempotency_rejects_validated_business_message_id_and_uetr_replays() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("swift-cbpr-plus"))
+            .expect("swift profile");
+
+        let first_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-1",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174500",
+        );
+        let first = parse_message("pacs.008", first_payload.as_bytes())
+            .expect("first replay fixture parses");
+        let first_metadata = runtime
+            .validate_profile_submission(profile, "pacs.008", &first, first_payload.as_bytes())
+            .expect("first live-profile message validates");
+        assert!(runtime.check_and_record_inbound("rail-msg-1", first_metadata));
+
+        let uetr_replay_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-2",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123E4567-E89B-12D3-A456-426614174500",
+        );
+        let uetr_replay = parse_message("pacs.008", uetr_replay_payload.as_bytes())
+            .expect("UETR replay fixture parses");
+        let uetr_replay_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "pacs.008",
+                &uetr_replay,
+                uetr_replay_payload.as_bytes(),
+            )
+            .expect("case-drifted UETR replay still validates before idempotency");
+        assert!(!runtime.check_and_record_inbound("rail-msg-2", uetr_replay_metadata));
+
+        let biz_replay_payload = live_pacs008_xml(
+            "SWIFT-REPLAY-1",
+            "pacs.008.001.08",
+            "swift.cbprplus.02",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174501",
+        );
+        let biz_replay = parse_message("pacs.008", biz_replay_payload.as_bytes())
+            .expect("BizMsgIdr replay fixture parses");
+        let biz_replay_metadata = runtime
+            .validate_profile_submission(
+                profile,
+                "pacs.008",
+                &biz_replay,
+                biz_replay_payload.as_bytes(),
+            )
+            .expect("business-message replay still validates before idempotency");
+        assert!(!runtime.check_and_record_inbound("rail-msg-3", biz_replay_metadata));
+        assert_eq!(
+            runtime
+                .uetr_index
+                .get(&normalise_uetr("123e4567-e89b-12d3-a456-426614174500"))
+                .map(|entry| entry.clone()),
+            Some("rail-msg-1".to_owned())
+        );
+        assert_eq!(
+            runtime
+                .business_message_id_index
+                .get("SWIFT-REPLAY-1")
+                .map(|entry| entry.value().clone()),
+            Some("rail-msg-1".to_owned())
+        );
     }
 
     #[test]
@@ -9139,6 +11814,38 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_pacs004_rejects_conflicting_original_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["orig-return-a", "orig-return-b"] {
+            record_original(&runtime, original_id, "pacs.008");
+            runtime.mark_accepted(original_id, &format!("tx-{original_id}"));
+        }
+        let parsed = parse_message(
+            "pacs.004",
+            b"MsgId=return-conflict\nCreDtTm=2025-01-01T00:00:00Z\nOrgnlGrpInf/OrgnlMsgId=orig-return-a\nTxInf[0]/OrgnlGrpInf/OrgnlMsgId=orig-return-b\nTxInf[0]/OrgnlInstrId=instr-1\nTxInf[0]/RtrdInstdAmt=10.00\nTxInf[0]/RtrdInstdAmtCcy=USD\nTxInf[0]/RtrdRsn/Cd=AC01",
+        )
+        .expect("conflicting pacs.004 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("pacs.004", &parsed)
+            .expect_err("conflicting pacs.004 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("return-conflict", "pacs.004", &parsed)
+            .expect_err("conflicting pacs.004 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["orig-return-a", "orig-return-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate original remains recorded");
+            assert_eq!(status.status_label(), "Accepted");
+            assert_eq!(status.pacs002_code(), "ACSP");
+            assert_eq!(status.rejection_reason_code(), None);
+        }
+    }
+
+    #[test]
     fn lifecycle_camt056_records_unknown_original_without_creating_it() {
         let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
             .expect("cfg")
@@ -9199,6 +11906,39 @@ mod tests {
         assert_eq!(original.pacs002_code(), "ACSP");
         assert_eq!(original.hold_reason_code(), None);
         assert!(original.change_reason_codes().is_empty());
+    }
+
+    #[test]
+    fn lifecycle_camt056_rejects_conflicting_original_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["orig-cancel-a", "orig-cancel-b"] {
+            record_original(&runtime, original_id, "pacs.008");
+            runtime.mark_accepted(original_id, &format!("tx-{original_id}"));
+        }
+        let parsed = parse_message(
+            "camt.056",
+            b"Assgnmt/Id=cancel-conflict\nAssgnmt/CreDtTm=2025-01-01T00:00:00Z\nUndrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId=orig-cancel-a\nUndrlyg/TxInf[1]/OrgnlGrpInf/OrgnlMsgId=orig-cancel-b\nUndrlyg/TxInf/CxlRsnInf/Rsn/Cd=CUST",
+        )
+        .expect("conflicting camt.056 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("camt.056", &parsed)
+            .expect_err("conflicting camt.056 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("cancel-conflict", "camt.056", &parsed)
+            .expect_err("conflicting camt.056 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["orig-cancel-a", "orig-cancel-b"] {
+            let status = runtime
+                .message_status(original_id)
+                .expect("candidate original remains recorded");
+            assert_eq!(status.status_label(), "Accepted");
+            assert_eq!(status.pacs002_code(), "ACSP");
+            assert_eq!(status.hold_reason_code(), None);
+            assert!(status.change_reason_codes().is_empty());
+        }
     }
 
     #[test]
@@ -9263,6 +12003,38 @@ mod tests {
                 .pacs002_code(),
             "ACSP"
         );
+    }
+
+    #[test]
+    fn lifecycle_sese025_rejects_conflicting_settlement_references() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        for original_id in ["sese.023:settle-a", "sese.023:settle-b"] {
+            record_original(&runtime, original_id, "sese.023");
+        }
+        let parsed = parse_message(
+            "sese.025",
+            b"TxId=settle-a\nSttlmTx/TxId=settle-b\nSttlmDt=2025-01-02\nSttlmTpAndAddtlParams/SctiesMvmntTp=DELI\nSttlmTpAndAddtlParams/Pmt=APMT\nConfSts=ACCP\nSttlmQty=100\nSttlmAmt=25.00\nSttlmCcy=USD\nPlan/ExecutionOrder=DELIVERY_THEN_PAYMENT\nPlan/Atomicity=ALL_OR_NOTHING",
+        )
+        .expect("conflicting sese.025 parsed");
+
+        let err = Iso20022BridgeRuntime::lifecycle_message_id("sese.025", &parsed)
+            .expect_err("conflicting sese.025 references must reject lifecycle id derivation");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = runtime
+            .apply_inbound_lifecycle_message("sese.025:settle-a", "sese.025", &parsed)
+            .expect_err("conflicting sese.025 references must not apply to either original");
+        assert!(matches!(err, MsgError::ValidationFailed));
+        for original_id in ["sese.023:settle-a", "sese.023:settle-b"] {
+            assert_eq!(
+                runtime
+                    .message_status(original_id)
+                    .expect("candidate settlement remains recorded")
+                    .pacs002_code(),
+                "ACTC"
+            );
+        }
     }
 
     #[test]

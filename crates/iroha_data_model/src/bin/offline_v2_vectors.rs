@@ -13,9 +13,9 @@ use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
     offline::{
-        OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
-        OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
-        OfflineNoteRedeemV2,
+        OfflineNoteAuditBundle, OfflineNoteAuditOutputClaim, OfflineNoteIssue,
+        OfflineNoteIssuedClaim, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof,
+        OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
     qr_stream::{QrPayloadKind, QrStreamEncoder, QrStreamFrameKind, QrStreamOptions},
@@ -99,28 +99,28 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let recipient_commitment = Hash::new(b"offline-v2-vector-recipient-output");
     let change_commitment = Hash::new(b"offline-v2-vector-change-output");
 
-    let issue = OfflineNoteIssueV2 {
+    let issue = OfflineNoteIssue {
         note_commitment: source_note_commitment,
         key_certificate: sender_certificate.model.clone(),
         asset: sender_asset_id.clone(),
         amount: Numeric::new(52, 0),
     };
-    let issue_claim = OfflineNoteIssuedClaimV2::from_issue(&issue)?;
+    let issue_claim = OfflineNoteIssuedClaim::from_issue(&issue)?;
     let audit_input_claims = vec![issue_claim.clone()];
-    let recipient_output_claim = OfflineNoteAuditOutputClaimV2 {
+    let recipient_output_claim = OfflineNoteAuditOutputClaim {
         note_commitment: recipient_commitment,
         key_certificate: recipient_certificate.model.clone(),
         asset: recipient_asset_id.clone(),
         amount: Numeric::new(5, 0),
     };
-    let change_output_claim = OfflineNoteAuditOutputClaimV2 {
+    let change_output_claim = OfflineNoteAuditOutputClaim {
         note_commitment: change_commitment,
         key_certificate: sender_certificate.model.clone(),
         asset: sender_asset_id.clone(),
         amount: Numeric::new(47, 0),
     };
     let audit_output_claims = vec![recipient_output_claim.clone(), change_output_claim.clone()];
-    let audit_proof = OfflineNoteRecursiveProofV2 {
+    let audit_proof = OfflineNoteRecursiveProof {
         verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
         public_inputs_hash: Hash::new(b"offline-v2-vector-audit-public-inputs-placeholder"),
         proof: ProofBox::new(
@@ -128,7 +128,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             b"offline-v2-vector-audit-proof".to_vec(),
         ),
     };
-    let audit_for_hash = OfflineNoteAuditBundleV2 {
+    let audit_for_hash = OfflineNoteAuditBundle {
         token_id,
         sender_key_certificate: sender_certificate.model.clone(),
         input_nullifiers: vec![input_nullifier],
@@ -138,14 +138,14 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         recursive_proof: audit_proof,
     };
     let audit_public_inputs_hash = audit_for_hash.public_inputs_hash()?;
-    let audit = OfflineNoteAuditBundleV2 {
+    let audit = OfflineNoteAuditBundle {
         token_id,
         sender_key_certificate: sender_certificate.model.clone(),
         input_nullifiers: vec![input_nullifier],
         input_claims: audit_input_claims.clone(),
         output_commitments: vec![recipient_commitment, change_commitment],
         output_claims: audit_output_claims.clone(),
-        recursive_proof: OfflineNoteRecursiveProofV2 {
+        recursive_proof: OfflineNoteRecursiveProof {
             verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
             public_inputs_hash: audit_public_inputs_hash,
             proof: ProofBox::new(
@@ -155,7 +155,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         },
     };
 
-    let redeem_proof = OfflineNoteRecursiveProofV2 {
+    let redeem_proof = OfflineNoteRecursiveProof {
         verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
         public_inputs_hash: Hash::new(b"offline-v2-vector-redeem-public-inputs-placeholder"),
         proof: ProofBox::new(
@@ -163,7 +163,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
             b"offline-v2-vector-redeem-proof".to_vec(),
         ),
     };
-    let redeem_for_hash = OfflineNoteRedeemV2 {
+    let redeem_for_hash = OfflineNoteRedeem {
         source_note_commitment: recipient_commitment,
         input_nullifiers: vec![redeem_nullifier],
         sender_key_certificate: recipient_certificate.model.clone(),
@@ -173,14 +173,14 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         recursive_proof: redeem_proof,
     };
     let redeem_public_inputs_hash = redeem_for_hash.public_inputs_hash()?;
-    let redeem = OfflineNoteRedeemV2 {
+    let redeem = OfflineNoteRedeem {
         source_note_commitment: recipient_commitment,
         input_nullifiers: vec![redeem_nullifier],
         sender_key_certificate: recipient_certificate.model.clone(),
         recipient: recipient_account_id.clone(),
         asset: recipient_asset_id.clone(),
         amount: Numeric::new(5, 0),
-        recursive_proof: OfflineNoteRecursiveProofV2 {
+        recursive_proof: OfflineNoteRecursiveProof {
             verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
             public_inputs_hash: redeem_public_inputs_hash,
             proof: ProofBox::new(
@@ -285,9 +285,9 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
     let fountain = fountain_qr_fixture(payment_token_payload.as_bytes())?;
     let audit_output_claim_hashes = audit_output_claims
         .iter()
-        .map(|claim| Ok(OfflineNoteIssuedClaimV2::from_audit_output(claim)?.claim_hash()?))
+        .map(|claim| Ok(OfflineNoteIssuedClaim::from_audit_output(claim)?.claim_hash()?))
         .collect::<Result<Vec<Hash>, norito::Error>>()?;
-    let redeem_claim = OfflineNoteIssuedClaimV2::from_redemption(&redeem)?;
+    let redeem_claim = OfflineNoteIssuedClaim::from_redemption(&redeem)?;
 
     Ok(object(vec![
         ("version", Value::from(2_u64)),
@@ -486,7 +486,7 @@ struct PaymentTokenJsonFields<'a> {
 
 #[derive(Clone)]
 struct VectorCertificate {
-    model: OfflineNoteKeyCertificateV2,
+    model: OfflineNoteKeyCertificate,
     version: u16,
     platform: String,
     key_id: String,
@@ -529,7 +529,7 @@ fn signed_certificate(
                 None,
             )
         };
-    let unsigned_certificate = OfflineNoteKeyCertificateV2 {
+    let unsigned_certificate = OfflineNoteKeyCertificate {
         version: 2,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
@@ -545,7 +545,7 @@ fn signed_certificate(
     };
     let signing_bytes = unsigned_certificate.signing_bytes()?;
     let issuer_signature = Signature::new(issuer_key_pair.private_key(), &signing_bytes);
-    let certificate = OfflineNoteKeyCertificateV2 {
+    let certificate = OfflineNoteKeyCertificate {
         version: 2,
         platform: platform.to_owned(),
         key_id: key_id.to_owned(),
@@ -675,7 +675,7 @@ fn mobile_output_claim_json(
     ]))
 }
 
-fn mobile_input_claim_json(claim: &OfflineNoteIssuedClaimV2) -> Result<Value, Box<dyn Error>> {
+fn mobile_input_claim_json(claim: &OfflineNoteIssuedClaim) -> Result<Value, Box<dyn Error>> {
     Ok(object(vec![
         ("domain", Value::from(claim.domain.clone())),
         (
@@ -763,7 +763,7 @@ fn fountain_qr_fixture(payload: &[u8]) -> Result<Value, Box<dyn Error>> {
     let options = QrStreamOptions {
         chunk_size: 360,
         parity_group: 3,
-        payload_kind: QrPayloadKind::OfflinePaymentTokenV2,
+        payload_kind: QrPayloadKind::OfflinePaymentToken,
         ..QrStreamOptions::default()
     };
     let (envelope, frames) = QrStreamEncoder::encode_frames(payload, options)?;

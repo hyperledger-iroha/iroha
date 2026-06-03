@@ -158,7 +158,11 @@ export function getCurveEntryByAlgorithm(algorithm) {
   if (algorithm === undefined || algorithm === null) {
     return null;
   }
-  return CURVE_NAME_TO_ENTRY.get(String(algorithm).trim().toLowerCase()) ?? null;
+  const normalized = String(algorithm).trim().toLowerCase();
+  if (!/^[\x20-\x7e]+$/.test(normalized)) {
+    return null;
+  }
+  return CURVE_NAME_TO_ENTRY.get(normalized) ?? null;
 }
 
 export function getCurveEntryByPublicKeyMulticodec(multicodec) {
