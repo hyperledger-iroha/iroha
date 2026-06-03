@@ -78,6 +78,98 @@ impl norito::json::JsonDeserialize for BackendTag {
     }
 }
 
+/// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenVerifyEnvelopeBounds {
+    /// Maximum public-input metadata bytes.
+    pub max_public_input_bytes: usize,
+    /// Maximum backend proof bytes.
+    pub max_proof_bytes: usize,
+    /// Maximum auxiliary metadata bytes.
+    pub max_aux_bytes: usize,
+    /// Whether auxiliary metadata is accepted for this caller.
+    pub allow_aux: bool,
+    /// Whether the verifier-key hash must be non-zero.
+    pub require_nonzero_vk_hash: bool,
+}
+
+impl Default for OpenVerifyEnvelopeBounds {
+    fn default() -> Self {
+        Self {
+            max_public_input_bytes: OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES,
+            max_proof_bytes: OPEN_VERIFY_DEFAULT_MAX_PROOF_BYTES,
+            max_aux_bytes: OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES,
+            allow_aux: false,
+            require_nonzero_vk_hash: true,
+        }
+    }
+}
+
+/// Validation failure for a generic [`OpenVerifyEnvelope`] admission check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenVerifyEnvelopeValidationError {
+    /// The envelope uses the explicit unsupported backend marker.
+    UnsupportedBackend,
+    /// The circuit identifier is empty after trimming.
+    EmptyCircuitId,
+    /// The verifier-key hash is all zeros.
+    ZeroVerifierKeyHash,
+    /// The public-input metadata is empty.
+    EmptyPublicInputs,
+    /// The public-input metadata exceeds the configured bound.
+    PublicInputsTooLarge {
+        /// Observed length.
+        len: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+    /// The backend proof bytes are empty.
+    EmptyProofBytes,
+    /// The backend proof bytes exceed the configured bound.
+    ProofBytesTooLarge {
+        /// Observed length.
+        len: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+    /// Auxiliary metadata is present where chain admission requires none.
+    NonEmptyAux,
+    /// Auxiliary metadata exceeds the configured bound.
+    AuxTooLarge {
+        /// Observed length.
+        len: usize,
+        /// Configured maximum.
+        max: usize,
+    },
+}
+
+impl core::fmt::Display for OpenVerifyEnvelopeValidationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnsupportedBackend => write!(f, "OpenVerifyEnvelope backend is unsupported"),
+            Self::EmptyCircuitId => write!(f, "OpenVerifyEnvelope circuit id is empty"),
+            Self::ZeroVerifierKeyHash => write!(f, "OpenVerifyEnvelope verifier-key hash is zero"),
+            Self::EmptyPublicInputs => write!(f, "OpenVerifyEnvelope public inputs are empty"),
+            Self::PublicInputsTooLarge { len, max } => write!(
+                f,
+                "OpenVerifyEnvelope public inputs length {len} exceeds maximum {max}"
+            ),
+            Self::EmptyProofBytes => write!(f, "OpenVerifyEnvelope proof bytes are empty"),
+            Self::ProofBytesTooLarge { len, max } => write!(
+                f,
+                "OpenVerifyEnvelope proof length {len} exceeds maximum {max}"
+            ),
+            Self::NonEmptyAux => write!(f, "OpenVerifyEnvelope auxiliary bytes must be empty"),
+            Self::AuxTooLarge { len, max } => write!(
+                f,
+                "OpenVerifyEnvelope auxiliary length {len} exceeds maximum {max}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for OpenVerifyEnvelopeValidationError {}
+
 /// Envelope for open-verify operations (canonical `SignedQuery` layout).
 ///
 /// This structure is serialized with Norito and used as the TLV payload for
@@ -131,6 +223,60 @@ impl OpenVerifyEnvelope {
             proof_bytes,
             aux: Vec::new(),
         }
+    }
+
+    /// Validate the shared fail-closed shape required for chain proof admission.
+    ///
+    /// Backend-specific verifiers must still validate circuit semantics,
+    /// public-input interpretation, verifier-key registry matching, and proof
+    /// verification. This method only enforces the generic envelope invariants
+    /// that all admitted proof paths rely on.
+    pub fn validate_for_admission(&self) -> Result<(), OpenVerifyEnvelopeValidationError> {
+        self.validate_with_bounds(OpenVerifyEnvelopeBounds::default())
+    }
+
+    /// Validate generic shape and size invariants with caller-provided bounds.
+    pub fn validate_with_bounds(
+        &self,
+        bounds: OpenVerifyEnvelopeBounds,
+    ) -> Result<(), OpenVerifyEnvelopeValidationError> {
+        if self.backend == BackendTag::Unsupported {
+            return Err(OpenVerifyEnvelopeValidationError::UnsupportedBackend);
+        }
+        if self.circuit_id.trim().is_empty() {
+            return Err(OpenVerifyEnvelopeValidationError::EmptyCircuitId);
+        }
+        if bounds.require_nonzero_vk_hash && self.vk_hash.iter().all(|byte| *byte == 0) {
+            return Err(OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash);
+        }
+        if self.public_inputs.is_empty() {
+            return Err(OpenVerifyEnvelopeValidationError::EmptyPublicInputs);
+        }
+        if self.public_inputs.len() > bounds.max_public_input_bytes {
+            return Err(OpenVerifyEnvelopeValidationError::PublicInputsTooLarge {
+                len: self.public_inputs.len(),
+                max: bounds.max_public_input_bytes,
+            });
+        }
+        if self.proof_bytes.is_empty() {
+            return Err(OpenVerifyEnvelopeValidationError::EmptyProofBytes);
+        }
+        if self.proof_bytes.len() > bounds.max_proof_bytes {
+            return Err(OpenVerifyEnvelopeValidationError::ProofBytesTooLarge {
+                len: self.proof_bytes.len(),
+                max: bounds.max_proof_bytes,
+            });
+        }
+        if !bounds.allow_aux && !self.aux.is_empty() {
+            return Err(OpenVerifyEnvelopeValidationError::NonEmptyAux);
+        }
+        if self.aux.len() > bounds.max_aux_bytes {
+            return Err(OpenVerifyEnvelopeValidationError::AuxTooLarge {
+                len: self.aux.len(),
+                max: bounds.max_aux_bytes,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -460,6 +606,16 @@ mod tests {
         )
     }
 
+    fn valid_open_verify_admission_envelope() -> OpenVerifyEnvelope {
+        OpenVerifyEnvelope::new(
+            BackendTag::Stark,
+            "stark/fri/test-circuit",
+            [0x11; 32],
+            vec![0x22],
+            vec![0x33],
+        )
+    }
+
     #[cfg(feature = "json")]
     fn assert_json_roundtrip<T>(value: &T)
     where
@@ -471,6 +627,106 @@ mod tests {
         let json = norito::json::to_json(value).expect("serialize to json");
         let decoded: T = norito::json::from_json(&json).expect("deserialize from json");
         assert_eq!(&decoded, value);
+    }
+
+    #[test]
+    fn open_verify_envelope_admission_validation_rejects_adversarial_shapes() {
+        use OpenVerifyEnvelopeValidationError::{
+            EmptyCircuitId, EmptyProofBytes, EmptyPublicInputs, NonEmptyAux, ProofBytesTooLarge,
+            PublicInputsTooLarge, UnsupportedBackend, ZeroVerifierKeyHash,
+        };
+
+        valid_open_verify_admission_envelope()
+            .validate_for_admission()
+            .expect("valid OpenVerifyEnvelope admission shape");
+
+        let cases: [(
+            &str,
+            fn(&mut OpenVerifyEnvelope),
+            OpenVerifyEnvelopeValidationError,
+        ); 8] = [
+            (
+                "unsupported backend",
+                |env| env.backend = BackendTag::Unsupported,
+                UnsupportedBackend,
+            ),
+            (
+                "empty circuit id",
+                |env| env.circuit_id.clear(),
+                EmptyCircuitId,
+            ),
+            (
+                "zero vk hash",
+                |env| env.vk_hash = [0; 32],
+                ZeroVerifierKeyHash,
+            ),
+            (
+                "empty public inputs",
+                |env| env.public_inputs.clear(),
+                EmptyPublicInputs,
+            ),
+            (
+                "oversized public inputs",
+                |env| env.public_inputs = vec![0x44; 4],
+                PublicInputsTooLarge { len: 4, max: 3 },
+            ),
+            (
+                "empty proof bytes",
+                |env| env.proof_bytes.clear(),
+                EmptyProofBytes,
+            ),
+            (
+                "oversized proof bytes",
+                |env| env.proof_bytes = vec![0x55; 5],
+                ProofBytesTooLarge { len: 5, max: 4 },
+            ),
+            ("non-empty aux", |env| env.aux = vec![0x66], NonEmptyAux),
+        ];
+
+        for (name, mutate, expected) in cases {
+            let mut envelope = valid_open_verify_admission_envelope();
+            mutate(&mut envelope);
+            let err = envelope
+                .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                    max_public_input_bytes: 3,
+                    max_proof_bytes: 4,
+                    ..OpenVerifyEnvelopeBounds::default()
+                })
+                .unwrap_err();
+            assert_eq!(err, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn open_verify_envelope_custom_bounds_can_allow_aux_and_zero_key() {
+        let mut envelope = valid_open_verify_admission_envelope();
+        envelope.vk_hash = [0; 32];
+        envelope.aux = b"bounded-aux".to_vec();
+
+        envelope
+            .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                allow_aux: true,
+                require_nonzero_vk_hash: false,
+                max_aux_bytes: envelope.aux.len(),
+                ..OpenVerifyEnvelopeBounds::default()
+            })
+            .expect("custom non-admission bounds can allow zero key and aux");
+
+        let err = envelope
+            .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                allow_aux: true,
+                require_nonzero_vk_hash: false,
+                max_aux_bytes: envelope.aux.len() - 1,
+                ..OpenVerifyEnvelopeBounds::default()
+            })
+            .unwrap_err();
+        assert_eq!(
+            err,
+            OpenVerifyEnvelopeValidationError::AuxTooLarge {
+                len: envelope.aux.len(),
+                max: envelope.aux.len() - 1,
+            }
+        );
     }
 
     #[test]

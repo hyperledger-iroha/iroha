@@ -86,7 +86,10 @@ pub mod isi {
         prelude::*,
         proof::{ProofId, VerifyingKeyId, VerifyingKeyRecord},
         query::error::FindError,
-        zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1},
+        zk::{
+            BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
+            OpenVerifyEnvelopeValidationError, StarkFriOpenProofV1,
+        },
     };
     use iroha_primitives::{
         json::Json,
@@ -765,11 +768,9 @@ pub mod isi {
         envelope: &ZkOpenVerifyEnvelope,
         vk_record: &VerifyingKeyRecord,
     ) -> Result<(), Error> {
-        if !envelope.aux.is_empty() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} envelope auxiliary bytes must be empty").into(),
-            ));
-        }
+        envelope
+            .validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
         if !circuit_id_matches(backend, &vk_record.circuit_id, &envelope.circuit_id) {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key circuit mismatch").into(),
@@ -783,17 +784,28 @@ pub mod isi {
                 ));
             }
         }
-        if envelope.vk_hash == [0u8; 32] {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero").into(),
-            ));
-        }
         if envelope.vk_hash != vk_record.commitment {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} verifying key commitment mismatch").into(),
             ));
         }
         Ok(())
+    }
+
+    fn open_verify_envelope_validation_error(
+        label: &str,
+        err: OpenVerifyEnvelopeValidationError,
+    ) -> InstructionExecutionError {
+        let msg = match err {
+            OpenVerifyEnvelopeValidationError::ZeroVerifierKeyHash => {
+                format!("{label} OpenVerifyEnvelope verifier-key hash must be non-zero")
+            }
+            OpenVerifyEnvelopeValidationError::NonEmptyAux => {
+                format!("{label} envelope auxiliary bytes must be empty")
+            }
+            _ => format!("{label} invalid OpenVerifyEnvelope: {err}"),
+        };
+        InstructionExecutionError::InvariantViolation(msg.into())
     }
 
     fn validate_confidential_v2_open_verify_envelope_metadata(
@@ -10360,6 +10372,8 @@ pub mod isi {
                     format!("{label} proof must use OpenVerifyEnvelope payload"),
                 ))
             })?;
+        env.validate_for_admission()
+            .map_err(|err| open_verify_envelope_validation_error(label, err))?;
         if env.backend != BackendTag::Stark {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!("{label} unexpected OpenVerifyEnvelope backend tag").into(),
@@ -10817,6 +10831,9 @@ pub mod isi {
                                 ),
                             )
                         })?;
+                    env.validate_for_admission().map_err(|err| {
+                        open_verify_envelope_validation_error("ZK-ACE authorization", err)
+                    })?;
                     env.public_inputs
                 })
                 .map_err(|_| {
@@ -17210,8 +17227,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:other-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata(
@@ -17229,8 +17246,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 bad_hash,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata(
@@ -17246,8 +17263,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 [0u8; 32],
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             let err = validate_open_verify_envelope_metadata(
                 "ballot",
@@ -17266,8 +17283,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             non_empty_aux.aux = b"ignored-hint".to_vec();
             assert!(
@@ -17284,8 +17301,8 @@ pub mod isi {
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:test-circuit",
                 commitment,
-                Vec::new(),
-                Vec::new(),
+                b"schema:voting:v1".to_vec(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
@@ -17315,7 +17332,7 @@ pub mod isi {
                 "halo2/ipa:test-circuit",
                 commitment,
                 schema.clone(),
-                Vec::new(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &ok, &vk_rec).is_ok()
@@ -17326,7 +17343,7 @@ pub mod isi {
                 "halo2/ipa:test-circuit",
                 commitment,
                 b"schema:voting:v2".to_vec(),
-                Vec::new(),
+                vec![0xAA],
             );
             assert!(
                 validate_open_verify_envelope_metadata("ballot", "halo2/ipa", &bad, &vk_rec)
