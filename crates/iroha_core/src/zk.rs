@@ -25852,6 +25852,12 @@ mod kagemusha_folded_real_prover_tests {
             .collect()
     }
 
+    fn recursive_spend_lineage_scalar_projection(seed: u8) -> [u8; 32] {
+        let mut bytes = [seed; 32];
+        bytes[31] &= 0x1f;
+        bytes
+    }
+
     fn attach_recursive_spend_halo2_envelope(
         bundle: &mut iroha_data_model::offline::KagemushaRecursiveSpendBundleV1,
         vk_hash: [u8; 32],
@@ -25923,6 +25929,35 @@ mod kagemusha_folded_real_prover_tests {
             ZK_BACKEND_HALO2_IPA.into(),
             norito::to_bytes(&envelope).expect("OpenVerifyEnvelope encode"),
         );
+    }
+
+    fn flip_first_recursive_spend_zk1_instance_byte(proof_bytes: &mut [u8]) {
+        assert!(
+            proof_bytes.starts_with(b"ZK1\0"),
+            "recursive spend test proof must be strict ZK1"
+        );
+        let mut cursor = 4usize;
+        while cursor + 8 <= proof_bytes.len() {
+            let tag = &proof_bytes[cursor..cursor + 4];
+            let len = u32::from_le_bytes(
+                proof_bytes[cursor + 4..cursor + 8]
+                    .try_into()
+                    .expect("ZK1 TLV length slice"),
+            ) as usize;
+            let payload_start = cursor + 8;
+            let payload_end = payload_start + len;
+            assert!(
+                payload_end <= proof_bytes.len(),
+                "ZK1 TLV payload stays in bounds"
+            );
+            if tag == b"I10P" {
+                assert!(len >= 8 + 32, "I10P payload has at least one scalar");
+                proof_bytes[payload_start + 8] ^= 0x01;
+                return;
+            }
+            cursor = payload_end;
+        }
+        panic!("recursive spend strict ZK1 proof did not contain an I10P TLV");
     }
 
     fn recursive_spend_accumulators(
@@ -26189,7 +26224,7 @@ mod kagemusha_folded_real_prover_tests {
             .recursive_proof
             .public_inputs
             .recursive_verifier_scalar_projection_digest =
-            fixed_bytes(b"kagemusha-lineage-scalar-projection");
+            recursive_spend_lineage_scalar_projection(0x11);
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&bundle)
             .expect_err("lineage profile with stale public-input hash must reject");
         assert!(err.contains("public-input hash mismatch"), "{err}");
@@ -26213,7 +26248,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect_err("lineage profile with semantic envelope circuit id must reject");
         assert!(err.contains("envelope circuit id"), "{err}");
 
-        attach_recursive_spend_halo2_envelope(
+        attach_recursive_spend_zk1_halo2_envelope(
             &mut bundle,
             fixed_bytes(b"kagemusha-lineage-envelope-vk"),
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
@@ -26242,11 +26277,7 @@ mod kagemusha_folded_real_prover_tests {
 
         let mut instance_splice = bundle.clone();
         mutate_open_verify_envelope(&mut instance_splice.recursive_proof.proof, |envelope| {
-            let mut inner = iroha_zkp_halo2::Halo2ProofEnvelope::from_bytes(&envelope.proof_bytes)
-                .expect("recursive spend lineage Halo2 envelope");
-            inner.public_inputs
-                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] ^= 0x01;
-            envelope.proof_bytes = inner.to_bytes();
+            flip_first_recursive_spend_zk1_instance_byte(&mut envelope.proof_bytes);
         });
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&instance_splice)
             .expect_err("lineage envelope public instance substitution must reject");
