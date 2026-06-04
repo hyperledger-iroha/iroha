@@ -3627,6 +3627,19 @@ def _ethereum_receipt_block_transaction_hash_inventory_errors(
     )
 
 
+def _ethereum_js_receipt_admission_guard_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for browser receipt-proof admission guards."""
+
+    if inventory is None:
+        inventory = ETHEREUM_JS_RECEIPT_ADMISSION_GUARD_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="Ethereum mainnet JS receipt admission",
+    )
+
+
 def _ethereum_noncanonical_chain_id_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
