@@ -337,17 +337,18 @@ pub struct RelayEndpointV2 {
 }
 
 impl RelayEndpointV2 {
-    fn encode(&self, encoder: &mut CborEncoder) {
+    fn encode(&self, encoder: &mut CborEncoder) -> Result<(), CertificateError> {
         encoder.write_map_header(3);
         encoder.write_unsigned(EndpointField::Url as u64);
-        encoder.write_text(&self.url);
+        encoder.write_text(&self.url, "endpoint.url")?;
         encoder.write_unsigned(EndpointField::Priority as u64);
         encoder.write_unsigned(self.priority.into());
         encoder.write_unsigned(EndpointField::Tags as u64);
-        encoder.write_array_header(self.tags.len() as u64);
+        encoder.write_array_header(self.tags.len(), "endpoint.tags")?;
         for tag in &self.tags {
-            encoder.write_text(tag);
+            encoder.write_text(tag, "endpoint.tags")?;
         }
+        Ok(())
     }
 
     fn decode(decoder: &mut CborDecoder) -> Result<Self, CertificateError> {
@@ -638,7 +639,11 @@ pub struct RelayCertificateV2 {
 
 impl RelayCertificateV2 {
     /// Serialize the certificate payload to canonical CBOR bytes.
-    pub fn to_cbor(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    /// Returns an error when vector or string lengths cannot be represented in
+    /// canonical CBOR on the current platform.
+    pub fn try_to_cbor(&self) -> Result<Vec<u8>, CertificateError> {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(19);
 
@@ -646,16 +651,16 @@ impl RelayCertificateV2 {
         encoder.write_unsigned(SRC_CERTIFICATE_VERSION.into());
 
         encoder.write_unsigned(Field::RelayId as u64);
-        encoder.write_bytes(&self.relay_id);
+        encoder.write_bytes(&self.relay_id, "certificate.relay_id")?;
 
         encoder.write_unsigned(Field::IdentityEd25519 as u64);
-        encoder.write_bytes(&self.identity_ed25519);
+        encoder.write_bytes(&self.identity_ed25519, "certificate.identity_ed25519")?;
 
         encoder.write_unsigned(Field::IdentityMlDsa65 as u64);
-        encoder.write_bytes(&self.identity_mldsa65);
+        encoder.write_bytes(&self.identity_mldsa65, "certificate.identity_mldsa65")?;
 
         encoder.write_unsigned(Field::DescriptorCommit as u64);
-        encoder.write_bytes(&self.descriptor_commit);
+        encoder.write_bytes(&self.descriptor_commit, "certificate.descriptor_commit")?;
 
         encoder.write_unsigned(Field::Roles as u64);
         encoder.write_unsigned(self.roles.to_bits().into());
@@ -670,9 +675,9 @@ impl RelayCertificateV2 {
         encoder.write_unsigned(self.reputation_weight.into());
 
         encoder.write_unsigned(Field::Endpoints as u64);
-        encoder.write_array_header(self.endpoints.len() as u64);
+        encoder.write_array_header(self.endpoints.len(), "certificate.endpoints")?;
         for endpoint in &self.endpoints {
-            endpoint.encode(&mut encoder);
+            endpoint.encode(&mut encoder)?;
         }
 
         encoder.write_unsigned(Field::CapabilityFlags as u64);
@@ -682,7 +687,7 @@ impl RelayCertificateV2 {
         self.kem_policy.encode(&mut encoder);
 
         encoder.write_unsigned(Field::HandshakeSuites as u64);
-        encoder.write_array_header(self.handshake_suites.len() as u64);
+        encoder.write_array_header(self.handshake_suites.len(), "certificate.handshake_suites")?;
         for suite in &self.handshake_suites {
             encoder.write_unsigned((*suite as u8).into());
         }
@@ -697,23 +702,38 @@ impl RelayCertificateV2 {
         encoder.write_i64(self.valid_until);
 
         encoder.write_unsigned(Field::DirectoryHash as u64);
-        encoder.write_bytes(&self.directory_hash);
+        encoder.write_bytes(&self.directory_hash, "certificate.directory_hash")?;
 
         encoder.write_unsigned(Field::IssuerFingerprint as u64);
-        encoder.write_bytes(&self.issuer_fingerprint);
+        encoder.write_bytes(&self.issuer_fingerprint, "certificate.issuer_fingerprint")?;
 
         encoder.write_unsigned(Field::PqKemPublic as u64);
-        encoder.write_bytes(&self.pq_kem_public);
+        encoder.write_bytes(&self.pq_kem_public, "certificate.pq_kem_public")?;
 
-        encoder.finish()
+        Ok(encoder.finish())
+    }
+
+    /// Serialize the certificate payload to canonical CBOR bytes.
+    pub fn to_cbor(&self) -> Vec<u8> {
+        self.try_to_cbor()
+            .expect("SRCv2 generated certificate should encode")
+    }
+
+    /// Compute the BLAKE3 digest of the certificate payload.
+    ///
+    /// # Errors
+    /// Returns an error when certificate serialization fails.
+    pub fn try_digest(&self) -> Result<[u8; 32], CertificateError> {
+        let mut hasher = Blake3::new();
+        hasher.update(SRC_V2_DOMAIN);
+        hasher.update(&self.try_to_cbor()?);
+        Ok(hasher.finalize().into())
     }
 
     /// Compute the BLAKE3 digest of the certificate payload.
     pub fn digest(&self) -> [u8; 32] {
-        let mut hasher = Blake3::new();
-        hasher.update(SRC_V2_DOMAIN);
-        hasher.update(&self.to_cbor());
-        hasher.finalize().into()
+        self.try_digest()
+            .expect("SRCv2 generated certificate should encode")
     }
 
     /// Issue a signed certificate bundle using the provided identity keys.
@@ -725,7 +745,7 @@ impl RelayCertificateV2 {
         ed25519_signing_key: &SigningKey,
         mldsa_secret_key: &[u8],
     ) -> Result<RelayCertificateBundleV2, CertificateError> {
-        let payload = self.to_cbor();
+        let payload = self.try_to_cbor()?;
         parse_certificate_payload(&payload)?;
         MlDsaSuite::MlDsa65
             .validate_secret_key(mldsa_secret_key)
@@ -751,12 +771,21 @@ impl RelayCertificateV2 {
         })
     }
 
+    /// Returns the checked length of the validity window.
+    ///
+    /// Returns `None` when the certificate carries an inverted or unrepresentable
+    /// timestamp range.
+    pub fn checked_validity_duration(&self) -> Option<Duration> {
+        let seconds = self.valid_until.checked_sub(self.valid_after)?;
+        let seconds = u64::try_from(seconds).ok()?;
+        Some(Duration::from_secs(seconds))
+    }
+
     /// Returns the length of the validity window.
+    ///
+    /// Invalid or unrepresentable ranges fail closed to `Duration::ZERO`.
     pub fn validity_duration(&self) -> Duration {
-        let seconds_i64 = (self.valid_until - self.valid_after).max(0);
-        let seconds =
-            u64::try_from(seconds_i64).expect("difference is clamped to a non-negative range");
-        Duration::from_secs(seconds)
+        self.checked_validity_duration().unwrap_or(Duration::ZERO)
     }
 }
 
@@ -770,15 +799,16 @@ pub struct RelayCertificateSignaturesV2 {
 }
 
 impl RelayCertificateSignaturesV2 {
-    fn encode(&self, encoder: &mut CborEncoder) {
+    fn encode(&self, encoder: &mut CborEncoder) -> Result<(), CertificateError> {
         encoder.write_map_header(2);
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
-        encoder.write_bytes(&self.ed25519);
+        encoder.write_bytes(&self.ed25519, "signatures.ed25519")?;
         encoder.write_unsigned(SignatureField::MlDsa65 as u64);
         match &self.mldsa65 {
-            Some(bytes) => encoder.write_bytes(bytes),
+            Some(bytes) => encoder.write_bytes(bytes, "signatures.mldsa65")?,
             None => encoder.write_null(),
         }
+        Ok(())
     }
 
     fn decode(decoder: &mut CborDecoder) -> Result<Self, CertificateError> {
@@ -850,14 +880,23 @@ pub struct RelayCertificateBundleV2 {
 
 impl RelayCertificateBundleV2 {
     /// Serialize the bundle to CBOR.
-    pub fn to_cbor(&self) -> Vec<u8> {
+    ///
+    /// # Errors
+    /// Returns an error when certificate or signature serialization fails.
+    pub fn try_to_cbor(&self) -> Result<Vec<u8>, CertificateError> {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(0);
-        encoder.write_bytes(&self.certificate.to_cbor());
+        encoder.write_bytes(&self.certificate.try_to_cbor()?, "bundle.certificate")?;
         encoder.write_unsigned(1);
-        self.signatures.encode(&mut encoder);
-        encoder.finish()
+        self.signatures.encode(&mut encoder)?;
+        Ok(encoder.finish())
+    }
+
+    /// Serialize the bundle to CBOR.
+    pub fn to_cbor(&self) -> Vec<u8> {
+        self.try_to_cbor()
+            .expect("SRCv2 generated bundle should encode")
     }
 
     /// Deserialize a bundle from CBOR.
@@ -919,7 +958,7 @@ impl RelayCertificateBundleV2 {
         mldsa_public: &[u8],
         phase: CertificateValidationPhase,
     ) -> Result<(), CertificateError> {
-        let payload = self.certificate.to_cbor();
+        let payload = self.certificate.try_to_cbor()?;
         parse_certificate_payload(&payload)?;
         let ed_digest = compute_signing_digest(SRC_V2_ED25519_DOMAIN, &payload);
         if ed25519_public.is_weak() {
@@ -1469,16 +1508,22 @@ impl CborEncoder {
         encode_i64(&mut self.buffer, value);
     }
 
-    fn write_bytes(&mut self, bytes: &[u8]) {
-        encode_bytes(&mut self.buffer, bytes);
+    fn write_bytes(&mut self, bytes: &[u8], field: &'static str) -> Result<(), CertificateError> {
+        encode_bytes(&mut self.buffer, bytes, field)
     }
 
-    fn write_text(&mut self, text: &str) {
-        encode_text(&mut self.buffer, text);
+    fn write_text(&mut self, text: &str, field: &'static str) -> Result<(), CertificateError> {
+        encode_text(&mut self.buffer, text, field)
     }
 
-    fn write_array_header(&mut self, len: u64) {
+    fn write_array_header(
+        &mut self,
+        len: usize,
+        field: &'static str,
+    ) -> Result<(), CertificateError> {
+        let len = encode_len(len, field)?;
         encode_major(&mut self.buffer, 4, len);
+        Ok(())
     }
 
     fn write_map_header(&mut self, len: u64) {
@@ -1492,28 +1537,21 @@ impl CborEncoder {
 
 fn encode_major(buf: &mut Vec<u8>, major: u8, value: u64) {
     debug_assert!(major <= 7);
+    let value_bytes = value.to_be_bytes();
     if value < 24 {
-        buf.push((major << 5) | u8::try_from(value).expect("values < 24 always fit in u8"));
+        buf.push((major << 5) | value_bytes[7]);
     } else if value <= 0xFF {
         buf.push((major << 5) | 24);
-        buf.push(u8::try_from(value).expect("values <= 0xFF fit in u8"));
+        buf.push(value_bytes[7]);
     } else if value <= 0xFFFF {
         buf.push((major << 5) | 25);
-        buf.extend_from_slice(
-            &u16::try_from(value)
-                .expect("values <= 0xFFFF fit in u16")
-                .to_be_bytes(),
-        );
+        buf.extend_from_slice(&value_bytes[6..]);
     } else if value <= 0xFFFF_FFFF {
         buf.push((major << 5) | 26);
-        buf.extend_from_slice(
-            &u32::try_from(value)
-                .expect("values <= 0xFFFF_FFFF fit in u32")
-                .to_be_bytes(),
-        );
+        buf.extend_from_slice(&value_bytes[4..]);
     } else {
         buf.push((major << 5) | 27);
-        buf.extend_from_slice(&value.to_be_bytes());
+        buf.extend_from_slice(&value_bytes);
     }
 }
 
@@ -1523,24 +1561,36 @@ fn encode_unsigned(buf: &mut Vec<u8>, value: u64) {
 
 fn encode_i64(buf: &mut Vec<u8>, value: i64) {
     if value >= 0 {
-        let magnitude = u64::try_from(value).expect("non-negative i64 fits in u64");
-        encode_major(buf, 0, magnitude);
+        encode_major(buf, 0, value.unsigned_abs());
     } else {
-        let magnitude = u64::try_from(-1 - value).expect("conversion preserves magnitude");
+        let magnitude = value.unsigned_abs() - 1;
         encode_major(buf, 1, magnitude);
     }
 }
 
-fn encode_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    let len = u64::try_from(bytes.len()).expect("slice length fits in u64");
-    encode_major(buf, 2, len);
-    buf.extend_from_slice(bytes);
+fn encode_len(len: usize, field: &'static str) -> Result<u64, CertificateError> {
+    u64::try_from(len).map_err(|_| CertificateError::InvalidFieldValue {
+        field,
+        reason: format!("length {len} exceeds u64::MAX"),
+    })
 }
 
-fn encode_text(buf: &mut Vec<u8>, text: &str) {
-    let len = u64::try_from(text.len()).expect("text length fits in u64");
+fn encode_bytes(
+    buf: &mut Vec<u8>,
+    bytes: &[u8],
+    field: &'static str,
+) -> Result<(), CertificateError> {
+    let len = encode_len(bytes.len(), field)?;
+    encode_major(buf, 2, len);
+    buf.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn encode_text(buf: &mut Vec<u8>, text: &str, field: &'static str) -> Result<(), CertificateError> {
+    let len = encode_len(text.len(), field)?;
     encode_major(buf, 3, len);
     buf.extend_from_slice(text.as_bytes());
+    Ok(())
 }
 
 /// Minimal CBOR decoder specialised for `SRCv2` structures.
@@ -1613,11 +1663,7 @@ impl<'a> CborDecoder<'a> {
         }
         let len = usize::try_from(len)
             .map_err(|_| CertificateError::InvalidCbor("byte string length exceeds usize"))?;
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("byte string truncated"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        let slice = self.read_slice(len, "byte string truncated")?;
         Ok(slice.to_vec())
     }
 
@@ -1630,11 +1676,7 @@ impl<'a> CborDecoder<'a> {
         }
         let len = usize::try_from(len)
             .map_err(|_| CertificateError::InvalidCbor("text string length exceeds usize"))?;
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("text string truncated"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        let slice = self.read_slice(len, "text string truncated")?;
         let text = core::str::from_utf8(slice)
             .map_err(|_| CertificateError::InvalidCbor("invalid UTF-8 in text string"))?;
         Ok(text.to_string())
@@ -1740,11 +1782,23 @@ impl<'a> CborDecoder<'a> {
     }
 
     fn read_exact(&mut self, len: usize) -> Result<&[u8], CertificateError> {
-        if self.pos + len > self.data.len() {
-            return Err(CertificateError::InvalidCbor("truncated CBOR payload"));
-        }
-        let slice = &self.data[self.pos..self.pos + len];
-        self.pos += len;
+        self.read_slice(len, "truncated CBOR payload")
+    }
+
+    fn read_slice(
+        &mut self,
+        len: usize,
+        truncated_message: &'static str,
+    ) -> Result<&[u8], CertificateError> {
+        let start = self.pos;
+        let end = start
+            .checked_add(len)
+            .ok_or(CertificateError::InvalidCbor(truncated_message))?;
+        let slice = self
+            .data
+            .get(start..end)
+            .ok_or(CertificateError::InvalidCbor(truncated_message))?;
+        self.pos = end;
         Ok(slice)
     }
 
@@ -1817,6 +1871,90 @@ mod tests {
     }
 
     #[test]
+    fn cbor_decoder_reads_byte_text_and_exact_slices() {
+        let mut byte_payload = CborDecoder::new(&[0x42, 0xAA, 0xBB]);
+        assert_eq!(byte_payload.read_bytes().unwrap(), vec![0xAA, 0xBB]);
+        byte_payload.ensure_finished().unwrap();
+
+        let mut text_payload = CborDecoder::new(&[0x62, b'o', b'k']);
+        assert_eq!(text_payload.read_text().unwrap(), "ok");
+        text_payload.ensure_finished().unwrap();
+
+        let mut exact_payload = CborDecoder::new(&[0xAA, 0xBB, 0xCC]);
+        assert_eq!(exact_payload.read_exact(2).unwrap(), &[0xAA, 0xBB]);
+        assert_eq!(exact_payload.pos, 2);
+    }
+
+    #[test]
+    fn cbor_decoder_rejects_truncated_slices_without_advancing() {
+        let mut byte_payload = CborDecoder::new(&[0x42, 0xAA]);
+        let err = byte_payload
+            .read_bytes()
+            .expect_err("truncated byte string should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("byte string truncated")
+        ));
+        assert_eq!(byte_payload.pos, 1);
+
+        let mut text_payload = CborDecoder::new(&[0x62, b'o']);
+        let err = text_payload
+            .read_text()
+            .expect_err("truncated text string should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("text string truncated")
+        ));
+        assert_eq!(text_payload.pos, 1);
+
+        let mut exact_payload = CborDecoder::new(&[0xAA]);
+        let err = exact_payload
+            .read_exact(2)
+            .expect_err("truncated exact read should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("truncated CBOR payload")
+        ));
+        assert_eq!(exact_payload.pos, 0);
+    }
+
+    #[test]
+    fn cbor_decoder_rejects_overflowed_slice_cursor_without_advancing() {
+        let mut decoder = CborDecoder::new(&[]);
+        decoder.pos = usize::MAX;
+        let err = decoder
+            .read_exact(1)
+            .expect_err("overflowed cursor should fail closed");
+        assert!(matches!(
+            err,
+            CertificateError::InvalidCbor("truncated CBOR payload")
+        ));
+        assert_eq!(decoder.pos, usize::MAX);
+    }
+
+    #[test]
+    fn validity_duration_handles_invalid_and_extreme_windows() {
+        let mut certificate = sample_certificate();
+        certificate.valid_after = 10;
+        certificate.valid_until = 15;
+        assert_eq!(
+            certificate.checked_validity_duration(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(certificate.validity_duration(), Duration::from_secs(5));
+
+        certificate.valid_after = 15;
+        certificate.valid_until = 10;
+        assert_eq!(certificate.checked_validity_duration(), None);
+        assert_eq!(certificate.validity_duration(), Duration::ZERO);
+
+        certificate.valid_after = i64::MIN;
+        certificate.valid_until = i64::MAX;
+        assert_eq!(certificate.checked_validity_duration(), None);
+        assert_eq!(certificate.validity_duration(), Duration::ZERO);
+    }
+
+    #[test]
     fn relay_capability_flags_roundtrip() {
         let flags = RelayCapabilityFlagsV1::new(
             CapabilityToggle::Enabled,
@@ -1842,6 +1980,83 @@ mod tests {
         if usize::BITS < 64 {
             assert!(capacity_from_len(u64::MAX, "test").is_err());
         }
+    }
+
+    #[test]
+    fn cbor_encoder_emits_canonical_integer_boundaries_without_panicking() {
+        let mut unsigned = Vec::new();
+        for value in [
+            0,
+            23,
+            24,
+            0xFF,
+            0x100,
+            0xFFFF,
+            0x1_0000,
+            0xFFFF_FFFF,
+            0x1_0000_0000,
+        ] {
+            encode_unsigned(&mut unsigned, value);
+        }
+
+        assert_eq!(
+            unsigned,
+            vec![
+                0x00, 0x17, 0x18, 0x18, 0x18, 0xFF, 0x19, 0x01, 0x00, 0x19, 0xFF, 0xFF, 0x1A, 0x00,
+                0x01, 0x00, 0x00, 0x1A, 0xFF, 0xFF, 0xFF, 0xFF, 0x1B, 0x00, 0x00, 0x00, 0x01, 0x00,
+                0x00, 0x00, 0x00,
+            ],
+        );
+
+        let mut signed = Vec::new();
+        for value in [0, -1, -24, -25, i64::MAX, i64::MIN] {
+            encode_i64(&mut signed, value);
+        }
+
+        let mut decoder = CborDecoder::new(&signed);
+        assert_eq!(decoder.read_i64().unwrap(), 0);
+        assert_eq!(decoder.read_i64().unwrap(), -1);
+        assert_eq!(decoder.read_i64().unwrap(), -24);
+        assert_eq!(decoder.read_i64().unwrap(), -25);
+        assert_eq!(decoder.read_i64().unwrap(), i64::MAX);
+        assert_eq!(decoder.read_i64().unwrap(), i64::MIN);
+        decoder.ensure_finished().unwrap();
+    }
+
+    #[test]
+    fn encode_len_handles_current_platform_width() {
+        let encoded = encode_len(usize::MAX, "test");
+        if usize::BITS <= 64 {
+            assert_eq!(encoded.unwrap(), usize::MAX as u64);
+        } else {
+            assert!(matches!(
+                encoded,
+                Err(CertificateError::InvalidFieldValue { field: "test", .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn checked_cbor_serialization_matches_compatibility_wrappers() {
+        let certificate = sample_certificate();
+        let checked_certificate = certificate
+            .try_to_cbor()
+            .expect("sample certificate should encode");
+        assert_eq!(checked_certificate, certificate.to_cbor());
+        assert_eq!(
+            certificate.try_digest().expect("sample digest"),
+            certificate.digest()
+        );
+
+        let bundle = RelayCertificateBundleV2 {
+            certificate,
+            signatures: RelayCertificateSignaturesV2 {
+                ed25519: [0xA5; 64],
+                mldsa65: Some(vec![0x5A; MlDsaSuite::MlDsa65.signature_len()]),
+            },
+        };
+        let checked_bundle = bundle.try_to_cbor().expect("sample bundle should encode");
+        assert_eq!(checked_bundle, bundle.to_cbor());
     }
 
     #[test]
@@ -1960,9 +2175,13 @@ mod tests {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(EndpointField::Url as u64);
-        encoder.write_text("soranet://first.example");
+        encoder
+            .write_text("soranet://first.example", "endpoint.url")
+            .expect("test endpoint URL encodes");
         encoder.write_unsigned(EndpointField::Url as u64);
-        encoder.write_text("soranet://second.example");
+        encoder
+            .write_text("soranet://second.example", "endpoint.url")
+            .expect("test endpoint URL encodes");
         let bytes = encoder.finish();
         let mut decoder = CborDecoder::new(&bytes);
         let err =
@@ -1977,9 +2196,13 @@ mod tests {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
-        encoder.write_bytes(&[0; 64]);
+        encoder
+            .write_bytes(&[0; 64], "signatures.ed25519")
+            .expect("test signature encodes");
         encoder.write_unsigned(SignatureField::Ed25519 as u64);
-        encoder.write_bytes(&[1; 64]);
+        encoder
+            .write_bytes(&[1; 64], "signatures.ed25519")
+            .expect("test signature encodes");
         let bytes = encoder.finish();
         let mut decoder = CborDecoder::new(&bytes);
         let err = RelayCertificateSignaturesV2::decode(&mut decoder)
@@ -1995,9 +2218,13 @@ mod tests {
         let mut encoder = CborEncoder::new();
         encoder.write_map_header(2);
         encoder.write_unsigned(0);
-        encoder.write_bytes(&certificate);
+        encoder
+            .write_bytes(&certificate, "bundle.certificate")
+            .expect("test certificate encodes");
         encoder.write_unsigned(0);
-        encoder.write_bytes(&certificate);
+        encoder
+            .write_bytes(&certificate, "bundle.certificate")
+            .expect("test certificate encodes");
         let bytes = encoder.finish();
         let err = RelayCertificateBundleV2::from_cbor(&bytes)
             .expect_err("duplicate bundle fields must fail");
@@ -2082,7 +2309,9 @@ mod tests {
         encoder.write_unsigned(u64::from(Field::Version as u8));
         encoder.write_unsigned(u64::from(SRC_CERTIFICATE_VERSION));
         encoder.write_unsigned(u64::from(Field::HandshakeSuites as u8));
-        encoder.write_array_header(1);
+        encoder
+            .write_array_header(1, "certificate.handshake_suites")
+            .expect("test suite list encodes");
         encoder.write_unsigned(0xFF);
         let bytes = encoder.finish();
 
@@ -2103,7 +2332,9 @@ mod tests {
         encoder.write_unsigned(u64::from(Field::Version as u8));
         encoder.write_unsigned(u64::from(SRC_CERTIFICATE_VERSION));
         encoder.write_unsigned(u64::from(Field::HandshakeSuites as u8));
-        encoder.write_array_header(0);
+        encoder
+            .write_array_header(0, "certificate.handshake_suites")
+            .expect("test suite list encodes");
         let bytes = encoder.finish();
         let err = parse_certificate_payload(&bytes).expect_err("empty suite list must fail");
         match err {
@@ -2118,7 +2349,9 @@ mod tests {
         encoder.write_unsigned(u64::from(Field::Version as u8));
         encoder.write_unsigned(u64::from(SRC_CERTIFICATE_VERSION));
         encoder.write_unsigned(u64::from(Field::HandshakeSuites as u8));
-        encoder.write_array_header(2);
+        encoder
+            .write_array_header(2, "certificate.handshake_suites")
+            .expect("test suite list encodes");
         encoder.write_unsigned(HandshakeSuite::Nk2Hybrid as u64);
         encoder.write_unsigned(HandshakeSuite::Nk2Hybrid as u64);
         let bytes = encoder.finish();

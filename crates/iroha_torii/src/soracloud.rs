@@ -13640,6 +13640,7 @@ mod tests {
                 entries: Vec::new(),
             },
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         }
     }

@@ -551,7 +551,10 @@ fn encode_alias_proof_bytes(
         PrivateKey::from_bytes(Algorithm::Ed25519, &[0x33; 32]).expect("seeded council key");
     let keypair = KeyPair::from_private_key(council_key).expect("derive council keypair");
     let signature = iroha_crypto::Signature::new(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair.public_key().to_bytes();
+    let (_, signer_bytes) = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture public key must be valid");
     let signer: [u8; 32] = signer_bytes.try_into().expect("ed25519 pk length");
     bundle.council_signatures.push(CouncilSignature {
         signer,

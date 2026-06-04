@@ -110,7 +110,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
    let report_json_value: Value = norito::json::from_slice(&payload_bytes)?;
    let digest = blake3::hash(&payload_bytes);
    let signature = Signature::new(key_pair.private_key(), &payload_bytes);
-   let (pk_alg, pk_bytes) = key_pair.public_key().to_bytes();
+   let (pk_alg, pk_bytes) = key_pair.public_key().try_to_bytes()?;
    let envelope = json!({
        "attestation": {
            "payload_hash": {

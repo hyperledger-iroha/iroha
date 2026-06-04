@@ -7111,18 +7111,20 @@ fn sccp_route_allowlist_matches_domain_profile(
 
     let evm_canary_fields_absent = sccp_route_allowlist_evm_canary_fields_absent(allowlist);
     let ton_canary_fields_absent = sccp_route_allowlist_ton_canary_fields_absent(allowlist);
-    let tron_canary_fields_absent = sccp_route_allowlist_tron_canary_fields_absent(allowlist);
+    let tron_specific_fields_absent = sccp_route_allowlist_tron_canary_fields_absent(allowlist);
     match domain {
-        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => ton_canary_fields_absent && tron_canary_fields_absent,
-        SCCP_DOMAIN_TON => evm_canary_fields_absent && tron_canary_fields_absent,
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            ton_canary_fields_absent && tron_specific_fields_absent
+        }
+        SCCP_DOMAIN_TON => evm_canary_fields_absent && tron_specific_fields_absent,
         SCCP_DOMAIN_TRON => evm_canary_fields_absent && ton_canary_fields_absent,
         SCCP_DOMAIN_SOL
         | SCCP_DOMAIN_SORA_KUSAMA
         | SCCP_DOMAIN_SORA_POLKADOT
         | SCCP_DOMAIN_SORA2 => {
-            evm_canary_fields_absent && ton_canary_fields_absent && tron_canary_fields_absent
+            evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent
         }
-        _ => evm_canary_fields_absent && ton_canary_fields_absent && tron_canary_fields_absent,
+        _ => evm_canary_fields_absent && ton_canary_fields_absent && tron_specific_fields_absent,
     }
 }
 
@@ -13105,12 +13107,13 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
         &consensus.adapter_proof,
     );
     let deployment_hash = sccp_source_adapter_engine_deployment_hash(deployment);
+    let verifier_vk_matches_deployment = env.vk_hash == deployment.adapter_verifier_vk_hash;
     proof.source_domain == deployment.source_domain
         && proof.target_domain == deployment.target_domain
         && proof.source_chain == deployment.source_chain
         && proof.source_proof_plan == deployment.source_proof_plan
         && proof.finality_model == deployment.finality_model
-        && env.vk_hash == deployment.adapter_verifier_vk_hash
+        && verifier_vk_matches_deployment
         && h256_is_nonzero(&deployment_hash)
         && h256_is_nonzero(&deployment.deployment_receipt_hash)
         && consensus.verifier_evidence.source_adapter_deployment_hash == deployment_hash
@@ -17091,7 +17094,10 @@ fn sccp_evm_attestation_digest(
 }
 
 fn sccp_evm_signer_public_key_bytes(signer: &KeyPair) -> Option<Vec<u8>> {
-    (signer.algorithm() == Algorithm::Secp256k1).then(|| signer.public_key().to_bytes().1.to_vec())
+    let Ok((Algorithm::Secp256k1, public_key)) = signer.public_key().try_to_bytes() else {
+        return None;
+    };
+    Some(public_key.to_vec())
 }
 
 fn sccp_evm_signer_address(signer: &KeyPair) -> Option<[u8; 20]> {
@@ -17101,7 +17107,7 @@ fn sccp_evm_signer_address(signer: &KeyPair) -> Option<[u8; 20]> {
 }
 
 fn sccp_evm_sign_digest(signer: &KeyPair, digest: &H256) -> Option<[u8; 65]> {
-    if signer.algorithm() != Algorithm::Secp256k1 {
+    if sccp_evm_signer_public_key_bytes(signer).is_none() {
         return None;
     }
     let secret_key_bytes = signer.private_key().to_bytes().1;
@@ -21454,12 +21460,25 @@ fn push_mpt_proof_nodes(out: &mut Vec<u8>, proof_nodes: &[Vec<u8>]) -> Option<()
 }
 
 fn sccp_eth_sync_committee_shape_is_bounded(proof: &SccpEthBeaconSyncCommitteeProofV1) -> bool {
-    proof.sync_committee_public_keys.len() <= SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-        && proof.sync_committee_weights.len() <= SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-        && proof.sync_committee_pops.len() <= SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
-        && proof.signers_bitmap.len() == proof.sync_committee_public_keys.len().div_ceil(8)
+    let roster_len = proof.sync_committee_public_keys.len();
+    roster_len != 0
+        && roster_len <= SCCP_ETH_MAX_SYNC_COMMITTEE_AUTHORITIES
+        && proof.total_weight != 0
+        && proof.signed_weight != 0
+        && proof.signed_weight <= proof.total_weight
+        && h256_is_nonzero(&proof.sync_committee_message_hash)
+        && proof.sync_committee_weights.len() == roster_len
+        && proof.sync_committee_pops.len() == roster_len
+        && proof.signers_bitmap.len() == roster_len.div_ceil(8)
+        && proof.signers_bitmap.iter().any(|byte| *byte != 0)
+        && signer_indices_from_bitmap(&proof.signers_bitmap, roster_len)
+            .is_some_and(|indices| !indices.is_empty())
         && proof.aggregate_signature.len() == SCCP_ETH_SYNC_COMMITTEE_SIGNATURE_BYTES
         && proof.aggregate_signature.iter().any(|byte| *byte != 0)
+        && proof
+            .sync_committee_weights
+            .iter()
+            .all(|weight| *weight != 0)
         && proof.sync_committee_public_keys.iter().all(|public_key| {
             public_key.len() == SCCP_ETH_SYNC_COMMITTEE_PUBLIC_KEY_BYTES
                 && public_key.iter().any(|byte| *byte != 0)
@@ -21472,13 +21491,40 @@ fn sccp_eth_sync_committee_shape_is_bounded(proof: &SccpEthBeaconSyncCommitteePr
 fn sccp_eth_sync_committee_transition_shape_is_bounded(
     transition: &SccpEthSyncCommitteeTransitionProofV1,
 ) -> bool {
-    !transition.next_sync_committee_payload.is_empty()
+    transition.version == 1
+        && transition.source_domain == SCCP_DOMAIN_ETH
+        && transition.from_sync_period.checked_add(1) == Some(transition.to_sync_period)
+        && transition.transition_slot != 0
+        && sccp_eth_mainnet_sync_committee_period_for_slot(transition.transition_slot)
+            == transition.from_sync_period
+        && h256_is_nonzero(&transition.finalized_beacon_root)
+        && h256_is_nonzero(&transition.parent_sync_committee_hash)
+        && h256_is_nonzero(&transition.next_sync_committee_hash)
+        && !transition.next_sync_committee_payload.is_empty()
         && transition.next_sync_committee_payload.len() <= SCCP_ETH_MAX_SYNC_COMMITTEE_PAYLOAD_BYTES
+        && h256_is_nonzero(&transition.next_sync_committee_payload_hash)
+        && h256_is_nonzero(&transition.next_sync_committee_branch_hash)
+        && h256_is_nonzero(&transition.transition_message_hash)
+        && h256_is_nonzero(&transition.transition_signature_hash)
         && sccp_eth_sync_committee_shape_is_bounded(&transition.sync_committee_proof)
 }
 
 fn sccp_eth_source_adapter_shape_is_bounded(adapter: &SccpEvmBeaconSourceProofV1) -> bool {
-    adapter.execution_header_rlp.len() <= SCCP_EVM_MAX_HEADER_RLP_BYTES
+    adapter.version == 1
+        && adapter.source_domain == SCCP_DOMAIN_ETH
+        && adapter.beacon_slot != 0
+        && adapter.execution_block_number != 0
+        && h256_is_nonzero(&adapter.execution_block_hash)
+        && h256_is_nonzero(&adapter.execution_receipts_root)
+        && h256_is_nonzero(&adapter.beacon_finalized_root)
+        && h256_is_nonzero(&adapter.beacon_parent_root)
+        && h256_is_nonzero(&adapter.beacon_state_root)
+        && h256_is_nonzero(&adapter.beacon_body_root)
+        && h256_is_nonzero(&adapter.sync_committee_root)
+        && h256_is_nonzero(&adapter.sync_committee_signature_hash)
+        && h256_is_nonzero(&adapter.receipt_trie_proof_hash)
+        && !adapter.execution_header_rlp.is_empty()
+        && adapter.execution_header_rlp.len() <= SCCP_EVM_MAX_HEADER_RLP_BYTES
         && h256_merkle_branch_siblings_are_bounded(&adapter.execution_payload_branch)
         && mpt_proof_nodes_are_bounded(&adapter.receipt_trie_proof_nodes)
         && sccp_eth_sync_committee_shape_is_bounded(&adapter.sync_committee_proof)
@@ -21578,6 +21624,10 @@ fn sccp_solana_fixed_width_vectors_are_bounded(fields: &[Vec<u8>], max_fields: u
     fields.len() <= max_fields && fields.iter().all(|field| field.len() <= 32)
 }
 
+fn sccp_solana_tower_vote_stack_depth_usize() -> Option<usize> {
+    usize::try_from(SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH).ok()
+}
+
 fn sccp_solana_account_opening_shape_is_bounded(opening: &SccpSolanaAccountOpeningV1) -> bool {
     opening.address.len() <= 32 && opening.owner.len() <= 32
 }
@@ -21591,13 +21641,16 @@ fn sccp_solana_account_inclusion_branch_shape_is_bounded(
 fn sccp_solana_vote_account_data_shape_is_bounded(
     account_data: &SccpSolanaVoteAccountDataV1,
 ) -> bool {
+    let Some(tower_vote_stack_depth) = sccp_solana_tower_vote_stack_depth_usize() else {
+        return false;
+    };
     account_data.node_pubkey.len() <= 32
         && account_data.authorized_voter.len() <= 32
         && account_data.authorized_withdrawer.len() <= 32
         && account_data.inflation_rewards_collector.len() <= 32
         && account_data.block_revenue_collector.len() <= 32
         && account_data.bls_pubkey_compressed.len() <= SCCP_SOLANA_BLS_PUBLIC_KEY_COMPRESSED_LEN
-        && account_data.tower_vote_slots.len() <= SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize
+        && account_data.tower_vote_slots.len() <= tower_vote_stack_depth
 }
 
 fn sccp_solana_stake_account_data_shape_is_bounded(
@@ -21725,7 +21778,10 @@ fn sccp_solana_vote_proof_shape_is_bounded(proof: &SccpSolanaFinalizedVoteProofV
 }
 
 fn sccp_solana_finality_context_shape_is_bounded(context: &SccpSolanaFinalityContextV1) -> bool {
-    context.tower_vote_slots.len() <= SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize
+    let Some(tower_vote_stack_depth) = sccp_solana_tower_vote_stack_depth_usize() else {
+        return false;
+    };
+    context.tower_vote_slots.len() <= tower_vote_stack_depth
         && context.bank_hash_hard_fork_data.len() <= SCCP_SOLANA_MAX_BANK_HARD_FORK_HASH_DATA_BYTES
 }
 
@@ -22103,6 +22159,9 @@ fn verify_sccp_mpt_inclusion(
 }
 
 pub fn canonical_sccp_evm_receipt_root_mpt_value(receipt_root: H256) -> Option<Vec<u8>> {
+    if !h256_is_nonzero(&receipt_root) {
+        return None;
+    }
     let value = rlp_encode_list(&[
         rlp_encode_bytes(SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1)?,
         rlp_encode_bytes(&receipt_root)?,
@@ -22124,7 +22183,8 @@ fn sccp_evm_receipt_root_from_mpt_value(value: &[u8]) -> Option<H256> {
     if marker != SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1 {
         return None;
     }
-    <[u8; 32]>::try_from(receipt_root).ok()
+    let receipt_root = <[u8; 32]>::try_from(receipt_root).ok()?;
+    h256_is_nonzero(&receipt_root).then_some(receipt_root)
 }
 
 fn sccp_evm_source_event_topic_v1() -> H256 {
@@ -27404,10 +27464,10 @@ impl SccpSolanaFullLightClientAuditRoleV1 {
         }
     }
 
-    fn proof<'a>(
+    fn proof(
         self,
-        adapter: &'a SccpSolanaFinalizedSourceProofV1,
-    ) -> &'a SccpSourceStateVerificationProofV1 {
+        adapter: &SccpSolanaFinalizedSourceProofV1,
+    ) -> &SccpSourceStateVerificationProofV1 {
         match self {
             Self::TowerReplay => &adapter.vote_proof.tower_replay_verification_proof,
             Self::FullAccountsDbLattice => {
@@ -28448,10 +28508,10 @@ impl SccpTonFullLightClientAuditRoleV1 {
         }
     }
 
-    fn proof<'a>(
+    fn proof(
         self,
-        adapter: &'a SccpTonMasterchainSourceProofV1,
-    ) -> &'a SccpSourceStateVerificationProofV1 {
+        adapter: &SccpTonMasterchainSourceProofV1,
+    ) -> &SccpSourceStateVerificationProofV1 {
         match self {
             Self::MasterchainConfig => &adapter.masterchain_config_verification_proof,
             Self::ValidatorSetTransition => &adapter.validator_set_transition_verification_proof,
@@ -31531,7 +31591,10 @@ fn verify_nexus_commit_qc_bls_aggregate(proof: &NexusBridgeFinalityProofV1) -> b
         Err(_) => return false,
     };
     for (public_key, pop) in public_keys.iter().zip(qc.validator_set_pops.iter()) {
-        if public_key.algorithm() != Algorithm::BlsNormal {
+        if !public_key
+            .try_algorithm()
+            .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
+        {
             return false;
         }
         if iroha_crypto::bls_normal_pop_verify(public_key, pop).is_err() {
@@ -34243,6 +34306,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let execution_block_matches_finality_height =
+                adapter.execution_block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_ETH
                 && proof.source_proof_plan == SccpSourceProofPlanV1::EthereumBeaconReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::EthereumBeaconExecution
@@ -34250,7 +34315,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && sccp_eth_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
                 && adapter.beacon_slot != 0
-                && adapter.execution_block_number == proof.finality_height
+                && execution_block_matches_finality_height
                 && adapter.execution_block_hash == proof.finality_block_hash
                 && verify_sccp_eth_beacon_execution_header_root_binding(adapter)
                 && h256_is_nonzero(&adapter.beacon_finalized_root)
@@ -34290,6 +34355,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let block_number_matches_finality_height =
+                adapter.block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_BSC
                 && proof.source_proof_plan == SccpSourceProofPlanV1::BscValidatorSetReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::BscValidatorSet
@@ -34298,7 +34365,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && adapter.source_domain == proof.source_domain
                 && adapter.validator_epoch != 0
                 && verify_sccp_bsc_block_epoch_window(adapter.block_number, adapter.validator_epoch)
-                && adapter.block_number == proof.finality_height
+                && block_number_matches_finality_height
                 && adapter.block_hash == proof.finality_block_hash
                 && receipt_value_binds_source
                 && h256_is_nonzero(&adapter.validator_set_hash)
@@ -34323,13 +34390,15 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let finalized_slot_matches_finality_height =
+                adapter.finalized_slot == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_SOL
                 && proof.source_proof_plan == SccpSourceProofPlanV1::SolanaFinalizedTransactionProof
                 && proof.finality_model == SccpProofFinalityModelV1::SolanaFinalizedSlot
                 && adapter.version == 1
                 && sccp_solana_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.finalized_slot == proof.finality_height
+                && finalized_slot_matches_finality_height
                 && adapter.blockhash == proof.finality_block_hash
                 && adapter.transaction_status_root == proof.receipt_or_message_root
                 && proof.receipt_or_message_root == expected_transaction_status_root
@@ -34365,13 +34434,15 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let masterchain_seqno_matches_finality_height =
+                adapter.masterchain_seqno == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_TON
                 && proof.source_proof_plan == SccpSourceProofPlanV1::TonMasterchainShardProof
                 && proof.finality_model == SccpProofFinalityModelV1::TonMasterchain
                 && adapter.version == 1
                 && sccp_ton_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.masterchain_seqno == proof.finality_height
+                && masterchain_seqno_matches_finality_height
                 && adapter.masterchain_workchain_id == SCCP_TON_MASTERCHAIN_WORKCHAIN_ID
                 && adapter.masterchain_shard == SCCP_TON_MASTERCHAIN_SHARD
                 && adapter.masterchain_block_hash == proof.finality_block_hash
@@ -34442,13 +34513,15 @@ fn verify_sccp_source_adapter_proof_binding(
                 };
                 expected_receipt_proof_hash = hash;
             }
+            let solid_block_matches_finality_height =
+                adapter.solid_block_number == proof.finality_height;
             proof.source_domain == SCCP_DOMAIN_TRON
                 && proof.source_proof_plan == SccpSourceProofPlanV1::TronDposReceiptProof
                 && proof.finality_model == SccpProofFinalityModelV1::TronDpos
                 && adapter.version == 1
                 && sccp_tron_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.solid_block_number == proof.finality_height
+                && solid_block_matches_finality_height
                 && adapter.block_hash == proof.finality_block_hash
                 && adapter.receipt_root == proof.receipt_or_message_root
                 && h256_is_nonzero(&adapter.witness_schedule_hash)
@@ -34479,6 +34552,8 @@ fn verify_sccp_source_adapter_proof_binding(
             ) else {
                 return false;
             };
+            let finalized_block_matches_finality_height =
+                adapter.finalized_block_number == proof.finality_height;
             matches!(
                 proof.source_domain,
                 SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2
@@ -34487,7 +34562,7 @@ fn verify_sccp_source_adapter_proof_binding(
                 && adapter.version == 1
                 && sccp_substrate_source_adapter_shape_is_bounded(adapter)
                 && adapter.source_domain == proof.source_domain
-                && adapter.finalized_block_number == proof.finality_height
+                && finalized_block_matches_finality_height
                 && adapter.grandpa_set_id != 0
                 && adapter.block_hash == proof.finality_block_hash
                 && adapter.events_root == proof.receipt_or_message_root
@@ -35383,7 +35458,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid BSC test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 bytes.to_vec()
             })
@@ -36357,7 +36435,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid ETH test key");
                 assert_eq!(algorithm, Algorithm::BlsNormal);
                 bytes.to_vec()
             })
@@ -36567,7 +36648,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid TON test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -36824,7 +36908,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid TRON test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 let public_key =
                     EcdsaSecp256k1Sha256::parse_public_key(&bytes).expect("secp256k1 public key");
@@ -37241,7 +37328,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Substrate test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -37404,7 +37494,10 @@ mod tests {
         signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Solana test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -37830,7 +37923,10 @@ mod tests {
         let validator_public_keys = signers
             .iter()
             .map(|signer| {
-                let (algorithm, bytes) = signer.public_key().to_bytes();
+                let (algorithm, bytes) = signer
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("valid Solana test key");
                 assert_eq!(algorithm, Algorithm::Ed25519);
                 bytes.to_vec()
             })
@@ -38194,6 +38290,24 @@ mod tests {
     fn sample_tron_source_bridge_owner_address() -> [u8; 20] {
         sccp_evm_signer_address(&sample_tron_transaction_signer())
             .expect("sample TRON transaction signer address")
+    }
+
+    #[test]
+    fn evm_signer_public_key_bytes_require_checked_secp256k1_payload() {
+        let signer = sample_tron_transaction_signer();
+        let public_key = sccp_evm_signer_public_key_bytes(&signer)
+            .expect("sample TRON signer exposes Secp256k1 public key bytes");
+        assert_eq!(public_key.len(), 33);
+        assert!(sccp_evm_signer_address(&signer).is_some());
+        assert!(sccp_evm_sign_digest(&signer, &[0xA5; 32]).is_some());
+
+        let ed25519_signer = KeyPair::from_seed(
+            b"iroha:sccp:test:wrong-evm-signer".to_vec(),
+            Algorithm::Ed25519,
+        );
+        assert!(sccp_evm_signer_public_key_bytes(&ed25519_signer).is_none());
+        assert!(sccp_evm_signer_address(&ed25519_signer).is_none());
+        assert!(sccp_evm_sign_digest(&ed25519_signer, &[0xA5; 32]).is_none());
     }
 
     fn sample_tron_source_bridge_config_hash() -> H256 {
@@ -45277,6 +45391,19 @@ mod tests {
             adapter.sync_committee_transition_proofs[0].next_sync_committee_payload_hash,
             sccp_eth_sync_committee_payload_hash(&active_sync_committee_payload)
         );
+        assert!(sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(adapter.clone()),
+        ));
+        let mut zero_transition_hash = adapter.clone();
+        zero_transition_hash.sync_committee_transition_proofs[0].next_sync_committee_hash = [0; 32];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(zero_transition_hash),
+        ));
+        let mut non_adjacent_transition = adapter.clone();
+        non_adjacent_transition.sync_committee_transition_proofs[0].to_sync_period += 1;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(non_adjacent_transition),
+        ));
         replace_source_adapter_proof_with_material(
             &mut valid,
             SccpSourceAdapterProofV1::EthereumBeaconReceipt(adapter.clone()),
@@ -50023,6 +50150,15 @@ mod tests {
             Some(receipt_root),
         );
         assert_eq!(sccp_evm_receipt_root_from_mpt_value(&receipt_root), None,);
+        assert_eq!(canonical_sccp_evm_receipt_root_mpt_value([0; 32]), None);
+        let zero_receipt_root = sample_eth_rlp_list(&[
+            sample_eth_rlp_string(SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1),
+            sample_eth_rlp_string(&[0; 32]),
+        ]);
+        assert_eq!(
+            sccp_evm_receipt_root_from_mpt_value(&zero_receipt_root),
+            None
+        );
         assert!(verify_sccp_evm_receipt_mpt_value(
             receipt_trie_root,
             receipt_root_index,
@@ -51858,6 +51994,155 @@ mod tests {
         assert!(verify_sccp_source_adapter_proof_binding(
             &SccpSourceAdapterProofV1::EthereumBeaconReceipt(eth_adapter.clone()),
             &eth_valid,
+        ));
+
+        let mut wrong_eth_domain = eth_adapter.clone();
+        wrong_eth_domain.source_domain = SCCP_DOMAIN_BSC;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(wrong_eth_domain),
+        ));
+
+        let mut wrong_eth_version = eth_adapter.clone();
+        wrong_eth_version.version = 2;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(wrong_eth_version),
+        ));
+
+        let mut missing_eth_finality = eth_adapter.clone();
+        missing_eth_finality.beacon_slot = 0;
+        missing_eth_finality.beacon_finalized_root = [0; 32];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_finality.clone()),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_finality),
+            &eth_valid,
+        ));
+
+        let mut missing_eth_execution = eth_adapter.clone();
+        missing_eth_execution.execution_block_number = 0;
+        missing_eth_execution.execution_block_hash = [0; 32];
+        missing_eth_execution.execution_receipts_root = [0; 32];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_execution.clone()),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_execution),
+            &eth_valid,
+        ));
+
+        let mut missing_eth_receipt_proof_hash = eth_adapter.clone();
+        missing_eth_receipt_proof_hash.receipt_trie_proof_hash = [0; 32];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(
+                missing_eth_receipt_proof_hash.clone(),
+            ),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_receipt_proof_hash),
+            &eth_valid,
+        ));
+
+        let mut missing_eth_header = eth_adapter.clone();
+        missing_eth_header.execution_header_rlp.clear();
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_header.clone()),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(missing_eth_header),
+            &eth_valid,
+        ));
+
+        let mut empty_eth_roster = eth_adapter.clone();
+        empty_eth_roster
+            .sync_committee_proof
+            .sync_committee_public_keys
+            .clear();
+        empty_eth_roster
+            .sync_committee_proof
+            .sync_committee_weights
+            .clear();
+        empty_eth_roster
+            .sync_committee_proof
+            .sync_committee_pops
+            .clear();
+        empty_eth_roster.sync_committee_proof.signers_bitmap.clear();
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(empty_eth_roster.clone()),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(empty_eth_roster),
+            &eth_valid,
+        ));
+
+        let mut mismatched_eth_roster = eth_adapter.clone();
+        mismatched_eth_roster
+            .sync_committee_proof
+            .sync_committee_weights
+            .pop();
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(mismatched_eth_roster),
+        ));
+
+        let mut zero_sync_message = eth_adapter.clone();
+        zero_sync_message
+            .sync_committee_proof
+            .sync_committee_message_hash = [0; 32];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(zero_sync_message),
+        ));
+
+        let mut zero_total_weight = eth_adapter.clone();
+        zero_total_weight.sync_committee_proof.total_weight = 0;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(zero_total_weight),
+        ));
+
+        let mut zero_validator_weight = eth_adapter.clone();
+        zero_validator_weight
+            .sync_committee_proof
+            .sync_committee_weights[0] = 0;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(zero_validator_weight),
+        ));
+
+        let mut unsigned_eth_roster = eth_adapter.clone();
+        unsigned_eth_roster.sync_committee_proof.signed_weight = 0;
+        unsigned_eth_roster
+            .sync_committee_proof
+            .signers_bitmap
+            .fill(0);
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(unsigned_eth_roster.clone()),
+        ));
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(unsigned_eth_roster),
+            &eth_valid,
+        ));
+
+        let mut overweight_eth_roster = eth_adapter.clone();
+        overweight_eth_roster.sync_committee_proof.signed_weight =
+            overweight_eth_roster.sync_committee_proof.total_weight + 1;
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(overweight_eth_roster),
+        ));
+
+        let mut trailing_signer_bit = eth_adapter.clone();
+        trailing_signer_bit
+            .sync_committee_proof
+            .sync_committee_public_keys
+            .truncate(3);
+        trailing_signer_bit
+            .sync_committee_proof
+            .sync_committee_weights
+            .truncate(3);
+        trailing_signer_bit
+            .sync_committee_proof
+            .sync_committee_pops
+            .truncate(3);
+        trailing_signer_bit.sync_committee_proof.signers_bitmap = vec![0b0000_1000];
+        assert!(!sccp_source_adapter_proof_shape_is_bounded(
+            &SccpSourceAdapterProofV1::EthereumBeaconReceipt(trailing_signer_bit),
         ));
 
         let mut oversized_eth_receipt_proof = eth_adapter.clone();
@@ -55147,6 +55432,7 @@ mod tests {
         );
         assert!(!policy.per_message_human_approval_required);
         assert!(!sccp_all_lanes_launch_ready_v1());
+        assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_BSC));
         assert!(!sccp_lane_production_ready_for_domain(SCCP_DOMAIN_ETH));
     }
 
@@ -58380,6 +58666,96 @@ mod tests {
             &deployment_bound_proof,
             &deployment,
         ));
+
+        let legacy_receipt_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 8803);
+        assert!(
+            verified_sccp_message_source_chain_proof_envelope(&legacy_receipt_bundle).is_some(),
+            "placeholder ETH structure still accepts historical receipt-root fixture proofs"
+        );
+        let mut material_tagged_legacy_receipt_proof =
+            decode_sccp_source_chain_proof_envelope(&legacy_receipt_bundle.finality_proof)
+                .expect("decode legacy ETH receipt-root source proof");
+        let mut material_tagged_legacy_receipt_consensus = decode_sccp_source_consensus_proof(
+            &material_tagged_legacy_receipt_proof.consensus_proof,
+        )
+        .expect("decode legacy ETH receipt-root consensus proof");
+        let SccpSourceAdapterProofV1::EthereumBeaconReceipt(legacy_receipt_adapter) =
+            &material_tagged_legacy_receipt_consensus.adapter_proof
+        else {
+            panic!("expected ETH beacon source adapter proof");
+        };
+        assert!(verify_sccp_source_adapter_proof_binding(
+            &material_tagged_legacy_receipt_consensus.adapter_proof,
+            &material_tagged_legacy_receipt_proof,
+        ));
+        assert!(
+            !verify_sccp_evm_receipt_mpt_source_value(
+                legacy_receipt_adapter.execution_receipts_root,
+                legacy_receipt_adapter.receipt_root_index,
+                &legacy_receipt_adapter.receipt_trie_proof_nodes,
+                material_tagged_legacy_receipt_proof.receipt_or_message_root,
+                material_tagged_legacy_receipt_proof.source_event_digest,
+                &material,
+            ),
+            "configured ETH material must reject legacy receipt-root-only source proofs"
+        );
+        let legacy_receipt_transcript_hash = sccp_source_adapter_transcript_hash(
+            material_tagged_legacy_receipt_proof.source_domain,
+            material_tagged_legacy_receipt_proof.target_domain,
+            material_tagged_legacy_receipt_proof.source_proof_plan,
+            material_tagged_legacy_receipt_proof.finality_model,
+            material_tagged_legacy_receipt_proof.finality_height,
+            material_tagged_legacy_receipt_proof.finality_block_hash,
+            material_tagged_legacy_receipt_proof.receipt_or_message_root,
+            material_tagged_legacy_receipt_proof.source_event_digest,
+            &material_tagged_legacy_receipt_consensus.adapter_proof,
+        );
+        material_tagged_legacy_receipt_consensus.adapter_transcript_hash =
+            legacy_receipt_transcript_hash;
+        material_tagged_legacy_receipt_consensus.verifier_evidence =
+            build_sccp_source_verifier_evidence_with_material_and_deployment(
+                &material_tagged_legacy_receipt_proof,
+                &material_tagged_legacy_receipt_consensus.adapter_proof,
+                legacy_receipt_transcript_hash,
+                &material,
+                &deployment,
+            )
+            .expect("material-tagged ETH legacy verifier evidence");
+        material_tagged_legacy_receipt_consensus.adapter_verification_proof =
+            build_sccp_source_adapter_verification_proof_with_material_and_deployment(
+                &material_tagged_legacy_receipt_proof,
+                &material_tagged_legacy_receipt_consensus.adapter_proof,
+                legacy_receipt_transcript_hash,
+                &material,
+                &deployment,
+            )
+            .expect("material-tagged ETH legacy adapter verification proof");
+        material_tagged_legacy_receipt_proof.consensus_proof =
+            to_bytes(&material_tagged_legacy_receipt_consensus)
+                .expect("encode material-tagged legacy ETH consensus proof");
+        assert!(
+            sccp_source_chain_proof_matches_adapter_deployment(
+                &material_tagged_legacy_receipt_proof,
+                &deployment,
+            ),
+            "negative fixture must isolate rejection to the ETH source-proof engine, not deployment evidence"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &material_tagged_legacy_receipt_proof,
+                &material,
+                &deployment,
+            ),
+            "deployment-tagged ETH legacy receipt-root-only proofs must fail configured verification"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                &material_tagged_legacy_receipt_proof,
+                &material,
+                &deployment,
+            ),
+            "ETH production admission must not reopen the legacy receipt-root-only source path"
+        );
 
         let mut replayed = deployment.clone();
         replayed.consensus_verifier_hash = [0xEE; 32];
@@ -63684,6 +64060,16 @@ mod tests {
         assert!(!verify_nexus_bridge_finality_proof_cryptographic(
             &tampered_signature
         ));
+
+        let mut non_bls_validator = proof;
+        let ed25519 = iroha_crypto::KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
+        non_bls_validator.commit_qc.validator_public_keys[0] = ed25519.public_key().to_string();
+        assert!(verify_nexus_bridge_finality_proof_structure(
+            &non_bls_validator
+        ));
+        assert!(!verify_nexus_bridge_finality_proof_cryptographic(
+            &non_bls_validator
+        ));
     }
 
     #[cfg(feature = "bls")]
@@ -65342,6 +65728,17 @@ mod tests {
         assert_eq!(
             result.destination_binding_hash,
             deployment_binding.binding_hash
+        );
+
+        let mut forged_binding_hash_request = request.clone();
+        forged_binding_hash_request.destination_binding_hash = [0x99; 32];
+        assert!(
+            wrap_sccp_bsc_mainnet_groth16_bn254_proof_result(
+                &proof_bytes,
+                &forged_binding_hash_request,
+            )
+            .is_none(),
+            "BSC mainnet proof-result wrapper must reject forged destination binding hashes"
         );
 
         let wrong_network_binding =

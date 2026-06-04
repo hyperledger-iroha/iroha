@@ -196,7 +196,7 @@ fn has_trusted_setup_kagemusha_backend_segment(backend: &str) -> bool {
 fn has_trusted_setup_kagemusha_backend_compact_label(backend: &str) -> bool {
     let compact = backend
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
     [
         "groth16",
@@ -225,7 +225,7 @@ fn is_developer_only_kagemusha_backend(backend: &str) -> bool {
     }
     let compact = backend
         .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
+        .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
     compact.contains("debug") || compact.contains("mock")
 }
@@ -643,6 +643,7 @@ pub enum KagemushaFoldError {
 }
 
 impl core::fmt::Display for KagemushaFoldError {
+    #[allow(clippy::too_many_lines)]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidPublicInputDomain { expected, actual } => write!(
@@ -2746,7 +2747,7 @@ pub fn kagemusha_proof_public_inputs_statement_digest(
     if statement.envelope_backend != expected_tag {
         return Err(KagemushaFoldError::ProofStatementBackendTagMismatch {
             proof_backend: statement.proof_backend.clone(),
-            envelope_backend: statement.envelope_backend.clone(),
+            envelope_backend: statement.envelope_backend,
         });
     }
     if statement.vk_hash == [0u8; Hash::LENGTH] {
@@ -2865,16 +2866,10 @@ fn validate_kagemusha_step_shape_and_sets(
             output_count: output_commitments.len(),
         });
     }
-    if input_nullifiers
-        .iter()
-        .any(|nullifier| *nullifier == [0u8; Hash::LENGTH])
-    {
+    if input_nullifiers.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::ZeroInputNullifier { hop_index });
     }
-    if output_commitments
-        .iter()
-        .any(|commitment| *commitment == [0u8; Hash::LENGTH])
-    {
+    if output_commitments.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::ZeroOutputCommitment { hop_index });
     }
     Ok(())
@@ -3451,10 +3446,7 @@ fn validate_kagemusha_recursive_spend_topup_anchor_nullifiers(
             field: "topup_anchor_nullifiers",
         });
     }
-    if nullifiers
-        .iter()
-        .any(|nullifier| *nullifier == [0u8; Hash::LENGTH])
-    {
+    if nullifiers.contains(&[0u8; Hash::LENGTH]) {
         return Err(KagemushaFoldError::InvalidRecursiveSpendTopupAnchor {
             field: "topup_anchor_nullifiers",
         });
@@ -3728,12 +3720,7 @@ fn kagemusha_recursive_spend_proof_chain_digest(
                 previous_recursive_proof,
             )?)
         }
-        (Some(_), None) => {
-            return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
-                field: "previous_recursive_proof",
-            });
-        }
-        (None, Some(_)) => {
+        (Some(_), None) | (None, Some(_)) => {
             return Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "previous_recursive_proof",
             });
@@ -3820,6 +3807,7 @@ fn ensure_recursive_spend_verifier_context_matches(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn kagemusha_recursive_spend_accumulator_from_parts(
     previous: Option<&KagemushaRecursiveSpendAccumulatorV1>,
     previous_recursive_proof: Option<&KagemushaRecursiveAggregationProof>,
@@ -3963,9 +3951,10 @@ fn kagemusha_recursive_spend_accumulator_from_parts(
     let mut current_input_nullifiers = step.input_nullifiers.clone();
     current_input_nullifiers.sort_unstable();
     validate_kagemusha_recursive_spend_topup_anchor_nullifiers(&current_input_nullifiers)?;
-    let topup_anchor_nullifiers = previous
-        .map(|accumulator| accumulator.topup_anchor_nullifiers.clone())
-        .unwrap_or_else(|| current_input_nullifiers.clone());
+    let topup_anchor_nullifiers = previous.map_or_else(
+        || current_input_nullifiers.clone(),
+        |accumulator| accumulator.topup_anchor_nullifiers.clone(),
+    );
     let nullifier_values = previous
         .map(|accumulator| vec![hash_bytes_from_hash(accumulator.nullifier_digest)])
         .unwrap_or_default()
@@ -4010,9 +3999,7 @@ fn kagemusha_recursive_spend_accumulator_from_parts(
         asset: asset.clone(),
         step_digests,
     })?;
-    let hop_count = previous
-        .map(|accumulator| accumulator.hop_count.saturating_add(1))
-        .unwrap_or(1);
+    let hop_count = previous.map_or(1, |accumulator| accumulator.hop_count.saturating_add(1));
     let hop_count_usize = usize::try_from(hop_count).unwrap_or(usize::MAX);
     if hop_count_usize > KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS {
         return Err(KagemushaFoldError::TooManyHops {
@@ -4239,8 +4226,8 @@ impl KagemushaRecursiveSpendBundleV1 {
         ensure_field!(recursive_proof_chain_digest);
         ensure_field!(recursive_verifier_scalar_projection_digest);
         ensure_field!(verifier_opening_len);
-        ensure_field!(verifier_witness_count);
         ensure_field!(hop_count);
+        ensure_field!(verifier_witness_count);
         Ok(())
     }
 
@@ -4473,6 +4460,7 @@ fn validate_kagemusha_recursive_spend_proof_attachment(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_kagemusha_recursive_spend_lineage_witness(
     bundle: &KagemushaRecursiveSpendBundleV1,
     witness: &KagemushaRecursiveSpendLineageWitnessV1,
@@ -4557,7 +4545,12 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
             });
         }
         let expected_hop_count = proof_index.saturating_add(1);
-        if previous_proof.public_inputs.hop_count != expected_hop_count as u32 {
+        let expected_hop_count_u32 =
+            u32::try_from(expected_hop_count).map_err(|_| KagemushaFoldError::TooManyHops {
+                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+                actual: expected_hop_count,
+            })?;
+        if previous_proof.public_inputs.hop_count != expected_hop_count_u32 {
             return Err(KagemushaFoldError::HopCountMismatch {
                 expected: expected_hop_count,
                 actual: previous_proof.public_inputs.hop_count,
@@ -4700,6 +4693,7 @@ struct KagemushaCanonicalFoldParts {
     aggregation_statement: KagemushaPoseidonAggregationTranscriptStatement,
 }
 
+#[allow(clippy::too_many_lines)]
 fn kagemusha_canonical_fold_parts(
     chain_id: &ChainId,
     asset: &AssetDefinitionId,
@@ -4867,6 +4861,7 @@ pub fn kagemusha_poseidon_aggregation_transcript_statement(
 /// the verifier parameter fingerprint is all-zero, the fixed-window table
 /// schedule, shared-table manifest, or table-base digest is all-zero, or the
 /// verifier-witness batch digest is all-zero.
+#[allow(clippy::too_many_arguments)]
 pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     chain_id: &ChainId,
     asset: &AssetDefinitionId,
@@ -4896,6 +4891,7 @@ pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     Ok(evidence)
 }
 
+#[allow(clippy::struct_field_names)]
 struct KagemushaFoldDigestParts {
     nullifier_digest: Hash,
     output_commitment_digest: Hash,
@@ -5221,6 +5217,8 @@ pub fn derive_offline_note_payment_token_id(
 
 #[cfg(test)]
 mod offline_note_tests {
+    #![allow(clippy::too_many_lines)]
+
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 
     use super::*;
@@ -5513,7 +5511,10 @@ mod offline_note_tests {
         );
         let asset = AssetId::new(definition, account_id.clone());
         let note_public_key = sample_public_key(0xA8);
-        let (_algorithm, note_key) = note_public_key.to_bytes();
+        let (algorithm, note_key) = note_public_key
+            .try_to_bytes()
+            .expect("fixture note public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::Ed25519);
         let certificate = OfflineNoteKeyCertificate {
             version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -8307,19 +8308,21 @@ mod offline_note_tests {
                 step,
                 format!("recursive-spend-size-witness-{hop_index}").as_bytes(),
             );
-            let accumulator = match previous.as_ref() {
-                Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                    previous,
-                    previous_proof.as_ref().expect("previous recursive proof"),
-                    &evidence,
-                    &note,
-                )
-                .expect("append size accumulator"),
-                None => {
+            let accumulator = previous.as_ref().map_or_else(
+                || {
                     kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
                         .expect("initial size accumulator")
-                }
-            };
+                },
+                |previous| {
+                    kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof.as_ref().expect("previous recursive proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append size accumulator")
+                },
+            );
             let hop_count = usize::try_from(accumulator.hop_count).expect("hop count fits");
             if target_hops.contains(&hop_count) {
                 let bundle = kagemusha_recursive_spend_bundle(accumulator.clone());
@@ -8403,19 +8406,21 @@ mod offline_note_tests {
                 step,
                 format!("recursive-spend-cap-witness-{hop_index}").as_bytes(),
             );
-            let accumulator = match previous.as_ref() {
-                Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                    previous,
-                    previous_proof.as_ref().expect("previous recursive proof"),
-                    &evidence,
-                    &note,
-                )
-                .expect("append capped accumulator"),
-                None => {
+            let accumulator = previous.as_ref().map_or_else(
+                || {
                     kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
                         .expect("initial capped accumulator")
-                }
-            };
+                },
+                |previous| {
+                    kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof.as_ref().expect("previous recursive proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append capped accumulator")
+                },
+            );
             previous_proof = Some(kagemusha_recursive_spend_proof(&accumulator));
             previous = Some(accumulator);
         }
@@ -9178,11 +9183,10 @@ mod offline_note_tests {
         record.vk_len = u32::try_from(verifier_key.bytes.len()).expect("vk length fits");
         record.max_proof_bytes = 4096;
         record.key = Some(verifier_key);
-        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+        KagemushaVerifiedFoldRecordBundle {
             bundle,
             verifier_records: vec![KagemushaVerifiedFoldVerifierRecord { id: vk_id, record }],
-        };
-        record_bundle
+        }
     }
 
     #[test]
@@ -9319,6 +9323,16 @@ mod offline_note_tests {
                 step.verifier_key_poseidon_digest =
                     kagemusha_verifier_key_poseidon_digest("halo2/ipa", proof_label.as_bytes())
                         .expect("size verifier-key digest");
+                step.input_nullifiers = vec![
+                    fixed_hash(format!("{proof_label}:input-a").as_bytes()),
+                    fixed_hash(format!("{proof_label}:input-b").as_bytes()),
+                ];
+                step.input_nullifiers.sort_unstable();
+                step.output_commitments = vec![
+                    fixed_hash(format!("{proof_label}:output-a").as_bytes()),
+                    fixed_hash(format!("{proof_label}:output-b").as_bytes()),
+                ];
+                step.output_commitments.sort_unstable();
                 step
             })
             .collect::<Vec<_>>();

@@ -23,12 +23,14 @@ use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
-const BODY_DOMAIN: &[u8] = b"soranet.token.body.v1";
+const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
 const ID_DOMAIN: &[u8] = b"soranet.token.id.v1";
 const ISSUER_DOMAIN: &[u8] = b"soranet.token.issuer.v1";
 
-/// Length of the serialized token body (excluding magic, version, and signature).
+/// Length of the version-prefixed token body (excluding magic and signature).
 const BODY_LEN: usize = 1 + 1 + 8 + 8 + 32 + 32 + 16 + 32;
+/// Length of the domain-separated body signed by the issuer.
+const SIGNING_BODY_LEN: usize = BODY_DOMAIN.len() + BODY_LEN - 1;
 /// Minimum envelope length (magic + version + body + signature length prefix).
 const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + 1 + BODY_LEN + 2;
 /// Flags defined for v1 tokens (all bits reserved).
@@ -84,17 +86,23 @@ impl AdmissionToken {
         let nonce = read_token_field::<16>(bytes, &mut cursor)?;
         let issuer_fingerprint = read_token_field::<32>(bytes, &mut cursor)?;
         let sig_len = u16::from_be_bytes(read_token_field::<2>(bytes, &mut cursor)?) as usize;
-        if cursor + sig_len != bytes.len() {
-            return Err(DecodeError::SignatureLength {
-                expected: sig_len,
-                actual: bytes.len() - cursor,
-            });
-        }
+        let signature = read_token_signature(bytes, &mut cursor, sig_len)?;
         if issued_at >= expires_at {
             return Err(DecodeError::InvalidTemporalBounds);
         }
+        if unix_time_from_secs(issued_at).is_none() {
+            return Err(DecodeError::TimestampOutOfRange {
+                field: "issued_at",
+                value: issued_at,
+            });
+        }
+        if unix_time_from_secs(expires_at).is_none() {
+            return Err(DecodeError::TimestampOutOfRange {
+                field: "expires_at",
+                value: expires_at,
+            });
+        }
 
-        let signature = bytes[cursor..].to_vec();
         Ok(Self {
             flags,
             issued_at,
@@ -107,9 +115,12 @@ impl AdmissionToken {
         })
     }
 
-    /// Serialize the token frame.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
+    /// Try to serialize the token frame.
+    ///
+    /// # Errors
+    /// Returns [`EncodeError`] when directly constructed token state cannot fit
+    /// the v1 fixed-width frame.
+    pub fn try_encode(&self) -> Result<Vec<u8>, EncodeError> {
         let mut out = Vec::with_capacity(MIN_FRAME_LEN + self.signature.len());
         out.extend_from_slice(TOKEN_MAGIC);
         out.push(Self::VERSION);
@@ -120,10 +131,20 @@ impl AdmissionToken {
         out.extend_from_slice(&self.transcript_hash);
         out.extend_from_slice(&self.nonce);
         out.extend_from_slice(&self.issuer_fingerprint);
-        let sig_len = u16::try_from(self.signature.len()).expect("signature length fits in u16");
+        let sig_len =
+            u16::try_from(self.signature.len()).map_err(|_| EncodeError::SignatureTooLong {
+                max: usize::from(u16::MAX),
+                actual: self.signature.len(),
+            })?;
         out.extend_from_slice(&sig_len.to_be_bytes());
         out.extend_from_slice(&self.signature);
-        out
+        Ok(out)
+    }
+
+    /// Serialize the token frame.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        self.try_encode().unwrap_or_else(|_| TOKEN_MAGIC.to_vec())
     }
 
     /// Flags embedded in the token body.
@@ -139,10 +160,24 @@ impl AdmissionToken {
         self.issued_at
     }
 
+    /// UNIX timestamp when the token becomes valid, if representable by
+    /// [`SystemTime`].
+    #[must_use]
+    pub fn checked_issued_at(&self) -> Option<SystemTime> {
+        unix_time_from_secs(self.issued_at)
+    }
+
     /// UNIX timestamp (seconds) when the token expires.
     #[must_use]
     pub fn expires_at(&self) -> u64 {
         self.expires_at
+    }
+
+    /// UNIX timestamp when the token expires, if representable by
+    /// [`SystemTime`].
+    #[must_use]
+    pub fn checked_expires_at(&self) -> Option<SystemTime> {
+        unix_time_from_secs(self.expires_at)
     }
 
     /// Relay identifier bound into the token.
@@ -173,8 +208,9 @@ impl AdmissionToken {
     #[must_use]
     pub fn token_id(&self) -> [u8; 32] {
         let mut hasher = Hasher::new();
+        let body = self.body_bytes();
         hasher.update(ID_DOMAIN);
-        hasher.update(&self.body_bytes());
+        hasher.update(&body);
         hasher.update(self.signature());
         hasher.finalize().into()
     }
@@ -241,7 +277,7 @@ impl AdmissionToken {
         })
     }
 
-    fn body_bytes(&self) -> Vec<u8> {
+    fn body_bytes(&self) -> [u8; SIGNING_BODY_LEN] {
         encode_body(
             self.flags,
             self.issued_at,
@@ -275,6 +311,31 @@ fn read_token_field<const N: usize>(
     Ok(out)
 }
 
+fn read_token_signature(
+    bytes: &[u8],
+    cursor: &mut usize,
+    len: usize,
+) -> Result<Vec<u8>, DecodeError> {
+    let start = *cursor;
+    let actual = bytes.len().saturating_sub(start);
+    let end = start.checked_add(len).ok_or(DecodeError::SignatureLength {
+        expected: len,
+        actual,
+    })?;
+    if end != bytes.len() {
+        return Err(DecodeError::SignatureLength {
+            expected: len,
+            actual,
+        });
+    }
+    let signature = bytes.get(start..end).ok_or(DecodeError::SignatureLength {
+        expected: len,
+        actual,
+    })?;
+    *cursor = end;
+    Ok(signature.to_vec())
+}
+
 /// Admission token verifier configured with an issuer key.
 #[derive(Clone, Debug)]
 pub struct AdmissionTokenVerifier {
@@ -287,21 +348,28 @@ pub struct AdmissionTokenVerifier {
 }
 
 impl AdmissionTokenVerifier {
-    /// Construct a new verifier, panicking when the issuer public key is invalid.
+    /// Construct a new verifier.
     ///
-    /// # Panics
-    /// Panics if the configured issuer public key does not match the selected
-    /// ML-DSA suite. Runtime configuration loaders should prefer
-    /// [`AdmissionTokenVerifier::try_new`] so invalid key material can fail
-    /// closed without unwinding.
+    /// Runtime configuration loaders should prefer
+    /// [`AdmissionTokenVerifier::try_new`] so invalid key material can fail at
+    /// configuration load time. This compatibility constructor keeps malformed
+    /// issuer keys as fail-closed verifier state; verification preflights reject
+    /// them before backend signature checks or replay-store mutation.
     pub fn new(
         suite: MlDsaSuite,
         public_key: Vec<u8>,
         max_ttl: Duration,
         clock_skew: Duration,
     ) -> Self {
-        Self::try_new(suite, public_key, max_ttl, clock_skew)
-            .expect("admission token verifier public key must match the selected ML-DSA suite")
+        let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
+        Self {
+            suite,
+            public_key,
+            issuer_fingerprint,
+            max_ttl,
+            clock_skew,
+            replay_store: None,
+        }
     }
 
     /// Construct a new verifier.
@@ -398,14 +466,9 @@ impl AdmissionTokenVerifier {
 
         self.preflight_crypto_material(token)?;
 
-        verify_mldsa(
-            self.suite,
-            &self.public_key,
-            &[],
-            &token.body_bytes(),
-            token.signature(),
-        )
-        .map_err(VerifyError::Signature)?;
+        let body = token.body_bytes();
+        verify_mldsa(self.suite, &self.public_key, &[], &body, token.signature())
+            .map_err(VerifyError::Signature)?;
 
         if let Some(store) = &self.replay_store {
             let token_id = token.token_id();
@@ -896,17 +959,33 @@ fn encode_body(
     transcript_hash: &[u8; 32],
     nonce: &[u8; 16],
     issuer_fingerprint: &[u8; 32],
-) -> Vec<u8> {
-    let mut body = Vec::with_capacity(BODY_DOMAIN.len() + BODY_LEN);
-    body.extend_from_slice(BODY_DOMAIN);
-    body.push(flags);
-    body.extend_from_slice(&issued_at.to_be_bytes());
-    body.extend_from_slice(&expires_at.to_be_bytes());
-    body.extend_from_slice(relay_id);
-    body.extend_from_slice(transcript_hash);
-    body.extend_from_slice(nonce);
-    body.extend_from_slice(issuer_fingerprint);
+) -> [u8; SIGNING_BODY_LEN] {
+    let mut body = [0u8; SIGNING_BODY_LEN];
+    let mut cursor = 0;
+
+    body[cursor..cursor + BODY_DOMAIN.len()].copy_from_slice(BODY_DOMAIN);
+    cursor += BODY_DOMAIN.len();
+    body[cursor] = flags;
+    cursor += 1;
+    body[cursor..cursor + 8].copy_from_slice(&issued_at.to_be_bytes());
+    cursor += 8;
+    body[cursor..cursor + 8].copy_from_slice(&expires_at.to_be_bytes());
+    cursor += 8;
+    body[cursor..cursor + relay_id.len()].copy_from_slice(relay_id);
+    cursor += relay_id.len();
+    body[cursor..cursor + transcript_hash.len()].copy_from_slice(transcript_hash);
+    cursor += transcript_hash.len();
+    body[cursor..cursor + nonce.len()].copy_from_slice(nonce);
+    cursor += nonce.len();
+    body[cursor..cursor + issuer_fingerprint.len()].copy_from_slice(issuer_fingerprint);
+    cursor += issuer_fingerprint.len();
+    debug_assert_eq!(cursor, SIGNING_BODY_LEN);
+
     body
+}
+
+fn unix_time_from_secs(secs: u64) -> Option<SystemTime> {
+    UNIX_EPOCH.checked_add(Duration::from_secs(secs))
 }
 
 /// Errors surfaced while decoding a token frame.
@@ -940,6 +1019,27 @@ pub enum DecodeError {
     /// `issued_at` was not earlier than `expires_at`.
     #[error("token issued_at must be earlier than expires_at")]
     InvalidTemporalBounds,
+    /// Timestamp could not be represented as `SystemTime`.
+    #[error("{field} timestamp {value} is out of range for system time")]
+    TimestampOutOfRange {
+        /// Timestamp field name.
+        field: &'static str,
+        /// UNIX-second timestamp carried by the frame.
+        value: u64,
+    },
+}
+
+/// Errors surfaced while serializing token frames.
+#[derive(Debug, Error, PartialEq, Eq, Copy, Clone)]
+pub enum EncodeError {
+    /// Signature bytes exceeded the v1 length prefix range.
+    #[error("signature too long to encode: max {max} bytes, got {actual}")]
+    SignatureTooLong {
+        /// Maximum signature size encodable by the v1 frame.
+        max: usize,
+        /// Actual signature size observed.
+        actual: usize,
+    },
 }
 
 /// Errors raised while minting a token.
@@ -1054,6 +1154,40 @@ mod tests {
     }
 
     #[test]
+    fn signing_body_matches_legacy_contiguous_layout() {
+        let token = AdmissionToken {
+            flags: 0,
+            issued_at: 1_700_000_000,
+            expires_at: 1_700_000_600,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAB; 16],
+            issuer_fingerprint: [0xEF; 32],
+            signature: vec![0x55; 128],
+        };
+
+        let mut legacy = Vec::with_capacity(BODY_DOMAIN.len() + BODY_LEN);
+        legacy.extend_from_slice(BODY_DOMAIN);
+        legacy.push(token.flags);
+        legacy.extend_from_slice(&token.issued_at.to_be_bytes());
+        legacy.extend_from_slice(&token.expires_at.to_be_bytes());
+        legacy.extend_from_slice(&token.relay_id);
+        legacy.extend_from_slice(&token.transcript_hash);
+        legacy.extend_from_slice(&token.nonce);
+        legacy.extend_from_slice(&token.issuer_fingerprint);
+
+        assert_eq!(legacy.len(), SIGNING_BODY_LEN);
+        assert_eq!(token.body_bytes().as_slice(), legacy.as_slice());
+
+        let mut legacy_id = Hasher::new();
+        legacy_id.update(ID_DOMAIN);
+        legacy_id.update(&legacy);
+        legacy_id.update(token.signature());
+        let expected_id: [u8; 32] = legacy_id.finalize().into();
+        assert_eq!(token.token_id(), expected_id);
+    }
+
+    #[test]
     fn encode_decode_round_trip() {
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44)
             .expect("ML-DSA keypair generation should succeed");
@@ -1107,6 +1241,125 @@ mod tests {
                 "truncated prefix of length {len} must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn decode_rejects_unrepresentable_timestamps() {
+        let issued_overflow = AdmissionToken {
+            flags: 0,
+            issued_at: u64::MAX - 1,
+            expires_at: u64::MAX,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAA; 16],
+            issuer_fingerprint: [0xBB; 32],
+            signature: vec![0xCC],
+        };
+        assert!(issued_overflow.checked_issued_at().is_none());
+        let err = AdmissionToken::decode(&issued_overflow.encode())
+            .expect_err("unrepresentable issued_at should fail closed");
+        assert!(matches!(
+            err,
+            DecodeError::TimestampOutOfRange {
+                field: "issued_at",
+                value
+            } if value == u64::MAX - 1
+        ));
+
+        let expires_overflow = AdmissionToken {
+            flags: 0,
+            issued_at: 10,
+            expires_at: u64::MAX,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAA; 16],
+            issuer_fingerprint: [0xBB; 32],
+            signature: vec![0xCC],
+        };
+        assert!(expires_overflow.checked_expires_at().is_none());
+        let err = AdmissionToken::decode(&expires_overflow.encode())
+            .expect_err("unrepresentable expires_at should fail closed");
+        assert!(matches!(
+            err,
+            DecodeError::TimestampOutOfRange {
+                field: "expires_at",
+                value
+            } if value == u64::MAX
+        ));
+    }
+
+    #[test]
+    fn token_signature_reader_rejects_mismatch_and_overflow_without_advancing() {
+        let mut valid_cursor = 1;
+        let signature =
+            read_token_signature(&[0xAA, 0xBB, 0xCC], &mut valid_cursor, 2).expect("signature");
+        assert_eq!(signature, vec![0xBB, 0xCC]);
+        assert_eq!(valid_cursor, 3);
+
+        let mut extra_cursor = 1;
+        let err = read_token_signature(&[0xAA, 0xBB, 0xCC], &mut extra_cursor, 1)
+            .expect_err("extra tail bytes must fail closed");
+        assert!(matches!(
+            err,
+            DecodeError::SignatureLength {
+                expected: 1,
+                actual: 2
+            }
+        ));
+        assert_eq!(extra_cursor, 1);
+
+        let mut truncated_cursor = 1;
+        let err = read_token_signature(&[0xAA, 0xBB], &mut truncated_cursor, 2)
+            .expect_err("truncated tail bytes must fail closed");
+        assert!(matches!(
+            err,
+            DecodeError::SignatureLength {
+                expected: 2,
+                actual: 1
+            }
+        ));
+        assert_eq!(truncated_cursor, 1);
+
+        let mut overflowed_cursor = usize::MAX;
+        let err = read_token_signature(&[], &mut overflowed_cursor, 1)
+            .expect_err("overflowed signature cursor must fail closed");
+        assert!(matches!(
+            err,
+            DecodeError::SignatureLength {
+                expected: 1,
+                actual: 0
+            }
+        ));
+        assert_eq!(overflowed_cursor, usize::MAX);
+    }
+
+    #[test]
+    fn try_encode_rejects_oversized_direct_signature_without_panic() {
+        let token = AdmissionToken {
+            flags: 0,
+            issued_at: 10,
+            expires_at: 20,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAA; 16],
+            issuer_fingerprint: [0xBB; 32],
+            signature: vec![0xCC; usize::from(u16::MAX) + 1],
+        };
+
+        let err = token
+            .try_encode()
+            .expect_err("oversized direct signature should not encode");
+        assert!(matches!(
+            err,
+            EncodeError::SignatureTooLong {
+                max,
+                actual
+            } if max == usize::from(u16::MAX) && actual == usize::from(u16::MAX) + 1
+        ));
+        assert!(matches!(
+            AdmissionToken::decode(&token.encode()),
+            Err(DecodeError::Truncated { .. })
+        ));
     }
 
     #[test]
@@ -1539,6 +1792,49 @@ mod tests {
             }
             other => panic!("expected ML-DSA public-key config error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn verifier_new_with_invalid_public_key_fails_closed_during_verify() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let fingerprint = compute_issuer_fingerprint(keypair.public_key());
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = issued + Duration::from_secs(300);
+        let mut rng = StdRng::seed_from_u64(0x0BAD_5EED);
+        let mut token = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            fingerprint,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect("mint");
+
+        let mut bad_public_key = keypair.public_key().to_vec();
+        bad_public_key.pop();
+        let limits = TokenStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
+        let store: Arc<Mutex<dyn TokenStore + Send>> =
+            Arc::new(Mutex::new(InMemoryTokenStore::new(limits)));
+        let verifier = AdmissionTokenVerifier::new(
+            suite,
+            bad_public_key,
+            Duration::from_secs(900),
+            Duration::from_secs(5),
+        )
+        .with_replay_store(store.clone());
+        token.issuer_fingerprint = *verifier.issuer_fingerprint();
+
+        let now = issued + Duration::from_secs(5);
+        let err = verifier
+            .verify(&token, &RELAY_ID, &TRANSCRIPT, now)
+            .expect_err("malformed verifier public key must fail closed");
+        assert_mldsa_bad_encoding(err, "public key");
+        assert_eq!(store.lock().expect("store lock").len(now), 0);
     }
 
     #[test]

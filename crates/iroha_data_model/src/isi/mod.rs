@@ -3851,6 +3851,8 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::too_many_lines)]
+
     use iroha_primitives::const_vec::ConstVec;
     use iroha_primitives::numeric::Numeric;
 

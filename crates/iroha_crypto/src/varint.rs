@@ -32,18 +32,31 @@ macro_rules! try_from_var_uint(
 
                 fn try_from(source: VarUint) -> Result<Self, Self::Error> {
                     let VarUint { payload } = source;
-                    if core::mem::size_of::<Self>() * 8 < payload.len() * 7 {
-                        return Err(Self::Error::new(String::from(
-                            concat!("Number too large for ", stringify!($ty))
-                        )));
+                    let overflow = || {
+                        Self::Error::new(String::from(
+                            concat!("Number too large for ", stringify!($ty)),
+                        ))
+                    };
+
+                    let mut number = 0_u128;
+                    for (idx, byte) in payload.into_iter().enumerate() {
+                        let offset = idx.checked_mul(7).ok_or_else(overflow)?;
+                        let offset = u32::try_from(offset).map_err(|_| overflow())?;
+                        let part = u128::from(byte & 0b0111_1111);
+                        let Some(max_part) = u128::MAX.checked_shr(offset) else {
+                            if part == 0 {
+                                continue;
+                            }
+                            return Err(overflow());
+                        };
+                        if part > max_part {
+                            return Err(overflow());
+                        }
+                        let shifted = part << offset;
+                        number = number.checked_add(shifted).ok_or_else(overflow)?;
                     }
-                    let offsets = (0..payload.len()).map(|i| i * 7);
-                    let bytes = payload.into_iter().map(|byte| byte & 0b0111_1111);
-                    let number = bytes
-                        .zip(offsets)
-                        .map(|(byte, offset)| Self::from(byte) << offset)
-                        .fold(0, |number, part| number + part);
-                    Ok(number)
+
+                    Self::try_from(number).map_err(|_| overflow())
                 }
             }
         )*
@@ -75,13 +88,20 @@ macro_rules! from_uint(
                     }
                     let zeros = n.leading_zeros();
                     let end = core::mem::size_of::<$ty>() * 8 - zeros as usize;
+                    let chunk_count = end.div_ceil(7);
 
                     #[allow(clippy::cast_possible_truncation)]
-                    let mut payload = (0..end)
-                        .step_by(7)
-                        .map(|offset| (((n >> offset) as u8) | 0b1000_0000))
+                    let payload = (0..chunk_count)
+                        .map(|idx| {
+                            let offset = idx * 7;
+                            let byte = ((n >> offset) as u8) & 0b0111_1111;
+                            if idx + 1 == chunk_count {
+                                byte
+                            } else {
+                                byte | 0b1000_0000
+                            }
+                        })
                         .collect::<Vec<_>>();
-                    *payload.last_mut().unwrap() &= 0b0111_1111;
 
                     Self { payload }
                 }
@@ -205,5 +225,66 @@ mod tests {
         let value = u16::from(u8::MAX) + 1;
         let varuint: VarUint = value.into();
         assert!(<u8 as core::convert::TryFrom<VarUint>>::try_from(varuint).is_err());
+    }
+
+    #[test]
+    fn max_values_roundtrip_for_all_integer_widths() {
+        let value: u8 = VarUint::from(u8::MAX).try_into().unwrap();
+        assert_eq!(value, u8::MAX);
+
+        let value: u16 = VarUint::from(u16::MAX).try_into().unwrap();
+        assert_eq!(value, u16::MAX);
+
+        let value: u32 = VarUint::from(u32::MAX).try_into().unwrap();
+        assert_eq!(value, u32::MAX);
+
+        let value: u64 = VarUint::from(u64::MAX).try_into().unwrap();
+        assert_eq!(value, u64::MAX);
+
+        let value: u128 = VarUint::from(u128::MAX).try_into().unwrap();
+        assert_eq!(value, u128::MAX);
+    }
+
+    #[test]
+    fn varuint_decode_rejects_values_above_u128_without_panicking() {
+        let mut bytes = vec![0x80; 19];
+        bytes.push(0x01);
+        let varuint = VarUint::new(bytes).unwrap();
+
+        assert!(u128::try_from(varuint).is_err());
+    }
+
+    #[test]
+    fn varuint_decode_rejects_high_bits_above_u128_without_truncating() {
+        let mut bytes = vec![0xFF; 18];
+        bytes.push(0x04);
+        let varuint = VarUint::new(bytes).unwrap();
+
+        assert!(u128::try_from(varuint).is_err());
+    }
+
+    #[test]
+    fn varuint_from_integer_types_sets_only_required_continuation_bits() {
+        for bytes in [
+            VarUint::from(u8::MAX).payload,
+            VarUint::from(u16::MAX).payload,
+            VarUint::from(u32::MAX).payload,
+            VarUint::from(u64::MAX).payload,
+            VarUint::from(u128::MAX).payload,
+        ] {
+            assert!(!bytes.is_empty());
+            assert_eq!(
+                bytes[bytes.len() - 1] & 0b1000_0000,
+                0,
+                "final byte must not carry a continuation bit",
+            );
+            for byte in &bytes[..bytes.len() - 1] {
+                assert_ne!(
+                    byte & 0b1000_0000,
+                    0,
+                    "non-final byte must carry a continuation bit",
+                );
+            }
+        }
     }
 }

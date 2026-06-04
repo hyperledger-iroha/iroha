@@ -2591,7 +2591,13 @@ fn torii_receipt_signer_parses() {
     )
     .expect("receipt public key");
     assert_eq!(signer.public_key(), &expected);
-    assert_eq!(signer.public_key().algorithm(), Algorithm::Ed25519);
+    assert_eq!(
+        signer
+            .public_key()
+            .try_algorithm()
+            .expect("fixture receipt public key must be well-formed"),
+        Algorithm::Ed25519
+    );
 }
 
 #[test]

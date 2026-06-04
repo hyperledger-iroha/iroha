@@ -1230,6 +1230,9 @@ public func canonicalEvmSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainE
                                               receiptRootIndex: UInt64,
                                               receiptTrieProofNodes: [Data],
                                               inclusionBranch: [Data]) throws -> Data {
+    guard sourceDomain == sccpDomainEthereum else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
     try sourceProofValidateTronMptProofNodes(receiptTrieProofNodes)
     var out = Data()
     out.append(1)
@@ -1246,7 +1249,7 @@ public func canonicalEvmSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainE
     for node in receiptTrieProofNodes {
         sourceProofAppendDataVector(node, to: &out)
     }
-    try sourceProofAppendBranch(inclusionBranch, to: &out)
+    try sourceProofAppendBranch(inclusionBranch, to: &out, requireNonEmpty: true)
     return out
 }
 
@@ -1667,6 +1670,9 @@ public func canonicalBscSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainB
                                               receiptRootIndex: UInt64,
                                               receiptTrieProofNodes: [Data],
                                               inclusionBranch: [Data]) throws -> Data {
+    guard sourceDomain == sccpDomainBsc else {
+        throw SccpSourceProofHashError.invalidValidatorSet("sourceDomain")
+    }
     try sourceProofValidateTronMptProofNodes(receiptTrieProofNodes)
     var out = Data()
     out.append(1)
@@ -1683,7 +1689,7 @@ public func canonicalBscSccpReceiptProofBytes(sourceDomain: UInt32 = sccpDomainB
     for node in receiptTrieProofNodes {
         sourceProofAppendDataVector(node, to: &out)
     }
-    try sourceProofAppendBranch(inclusionBranch, to: &out)
+    try sourceProofAppendBranch(inclusionBranch, to: &out, requireNonEmpty: true)
     return out
 }
 
@@ -2140,7 +2146,7 @@ public func ethBeaconBlockHeaderRoot(beaconSlot: UInt64,
 
 /// Typed EVM-family MPT value envelope carrying an SCCP receipt root.
 public func canonicalEvmReceiptRootMptValue(receiptRoot: String) throws -> Data {
-    let root = try sourceProofBytesFromHex32(receiptRoot, field: "receiptRoot")
+    let root = try sourceProofNonZeroBytesFromHex32(receiptRoot, field: "receiptRoot")
     let value = sourceProofRlpList([
         sourceProofRlpString(sccpEvmReceiptRootValueMarker),
         sourceProofRlpString(root),
@@ -6373,6 +6379,7 @@ public func buildEvmReceiptTrieProofFromReceipts(
     )
     var items: [SourceProofEvmTrieItem] = []
     items.reserveCapacity(receipts.count)
+    var seenTransactionHashes = Set<Data>()
     var targetReceiptRlp: Data?
     for (index, receipt) in receipts.enumerated() {
         let receiptIndex = try sourceProofEthereumRpcQuantity(
@@ -6381,6 +6388,14 @@ public func buildEvmReceiptTrieProofFromReceipts(
         )
         guard receiptIndex == UInt64(index) else {
             throw SccpSourceProofHashError.invalidRlp("blockReceipts[\(index)].transactionIndex")
+        }
+        let transactionHash = try sourceProofEthereumRpcHexBytes(
+            sourceProofFirstPresent(receipt, "transactionHash", "transaction_hash"),
+            field: "blockReceipts[\(index)].transactionHash",
+            byteLength: 32
+        )
+        guard seenTransactionHashes.insert(transactionHash).inserted else {
+            throw SccpSourceProofHashError.invalidRlp("blockReceipts.transactionHash")
         }
         let encodedReceipt = try canonicalEvmReceiptRlp(receipt)
         if receiptIndex == targetIndex {
@@ -6449,7 +6464,8 @@ private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws ->
                 sourceProofEthereumRpcHexBytes(
                     topic,
                     field: "receipt.logs[\(index)].topics[\(topicIndex)]",
-                    byteLength: 32
+                    byteLength: 32,
+                    nonzero: false
                 )
             )
         }
@@ -6458,7 +6474,8 @@ private func sourceProofEvmReceiptLogsForRlp(_ receipt: [String: Any]) throws ->
                 sourceProofEthereumRpcHexBytes(
                     log["address"],
                     field: "receipt.logs[\(index)].address",
-                    byteLength: 20
+                    byteLength: 20,
+                    nonzero: false
                 )
             ),
             sourceProofRlpList(encodedTopics),

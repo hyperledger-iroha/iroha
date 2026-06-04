@@ -58,6 +58,12 @@ pub enum GuardDirectoryError {
         expected: String,
         found: String,
     },
+    #[error("invalid expected guard directory hash for `{path}`: {source}")]
+    InvalidExpectedDirectoryHash {
+        path: PathBuf,
+        #[source]
+        source: ConfigError,
+    },
     #[error("relay entry not found in `{path}` for identity {identity_hex}")]
     RelayEntryMissing { path: PathBuf, identity_hex: String },
     #[error("relay certificate references issuer {fingerprint} that is not present in `{path}`")]
@@ -180,8 +186,12 @@ pub fn load_guard_entry(
         }
     })?;
 
-    if let Some(expected_hash) = config.expected_directory_hash()
-        && snapshot.directory_hash != expected_hash
+    if let Some(expected_hash) = config.try_expected_directory_hash().map_err(|source| {
+        GuardDirectoryError::InvalidExpectedDirectoryHash {
+            path: path.clone(),
+            source,
+        }
+    })? && snapshot.directory_hash != expected_hash
     {
         return Err(GuardDirectoryError::DirectoryHashMismatch {
             path: path.clone(),
@@ -625,6 +635,25 @@ mod tests {
     }
 
     #[test]
+    fn load_guard_entry_rejects_invalid_expected_hash_without_panic() {
+        let mut fixture = snapshot_fixture();
+        fixture.config.expected_directory_hash_hex = Some("zz".repeat(32));
+        match load_guard_entry(
+            &fixture.config,
+            &fixture.relay_id,
+            &fixture.descriptor_commit,
+        ) {
+            Err(GuardDirectoryError::InvalidExpectedDirectoryHash { source, .. }) => {
+                assert!(
+                    matches!(source, ConfigError::GuardDirectory(ref message) if message.contains("expected_directory_hash_hex")),
+                    "unexpected expected-hash error: {source}"
+                );
+            }
+            other => panic!("expected invalid expected-hash error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn persist_guard_pinning_proof_serializes_metadata() {
         use std::{fs, time::Duration};
 
@@ -778,7 +807,8 @@ mod tests {
         let issuer_public = issuer_signing.verifying_key().to_bytes();
         let issuer_mldsa = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("issuer keypair");
         let issuer_fingerprint =
-            compute_issuer_fingerprint(&issuer_public, issuer_mldsa.public_key());
+            compute_issuer_fingerprint(&issuer_public, issuer_mldsa.public_key())
+                .expect("sample issuer fingerprint should compute");
 
         let relay_id = issuer_public;
         let descriptor_commit = [0xAB; 32];

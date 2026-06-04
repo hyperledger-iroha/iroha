@@ -2,7 +2,7 @@ use std::{
     collections::BTreeSet,
     fs, io,
     path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
@@ -81,9 +81,19 @@ pub struct TokenBundle {
 
 impl TokenBundle {
     /// Create a bundle from a freshly minted or decoded token.
-    fn new(token: AdmissionToken) -> Self {
-        let issued_at = UNIX_EPOCH + Duration::from_secs(token.issued_at());
-        let expires_at = UNIX_EPOCH + Duration::from_secs(token.expires_at());
+    fn new(token: AdmissionToken) -> Result<Self, TokenToolError> {
+        let issued_at = token
+            .checked_issued_at()
+            .ok_or(TokenToolError::TimestampOutOfRange {
+                field: "issued_at",
+                value: token.issued_at(),
+            })?;
+        let expires_at = token
+            .checked_expires_at()
+            .ok_or(TokenToolError::TimestampOutOfRange {
+                field: "expires_at",
+                value: token.expires_at(),
+            })?;
         let metadata = TokenMetadata {
             token_id: token.token_id(),
             issuer_fingerprint: *token.issuer_fingerprint(),
@@ -94,7 +104,7 @@ impl TokenBundle {
             flags: token.flags(),
             signature_len: token.signature().len(),
         };
-        Self { token, metadata }
+        Ok(Self { token, metadata })
     }
 
     /// Serialise bundle details into a JSON value using Norito helpers.
@@ -237,6 +247,8 @@ pub enum TokenToolError {
     Decode(#[from] token::DecodeError),
     #[error("issued_at must be earlier than expires_at")]
     InvalidTemporalBounds,
+    #[error("{field} timestamp {value} is out of range for system time")]
+    TimestampOutOfRange { field: &'static str, value: u64 },
     #[error("expected {expected} bytes for {field}, got {actual}")]
     InvalidLength {
         field: &'static str,
@@ -266,13 +278,13 @@ pub fn mint_token<R: RngCore + CryptoRng>(
         request.flags,
         rng,
     )?;
-    Ok(TokenBundle::new(token))
+    TokenBundle::new(token)
 }
 
 /// Decode a token frame and collect metadata.
 pub fn inspect_token(bytes: &[u8]) -> Result<TokenBundle, TokenToolError> {
     let token = AdmissionToken::decode(bytes)?;
-    Ok(TokenBundle::new(token))
+    TokenBundle::new(token)
 }
 
 /// Decode a base64 or hexadecimal token string.
@@ -344,6 +356,8 @@ pub fn parse_hex_bytes(value: &str, field: &'static str) -> Result<Vec<u8>, Toke
 
 #[cfg(test)]
 mod tests {
+    use std::time::UNIX_EPOCH;
+
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
@@ -352,6 +366,22 @@ mod tests {
 
     const RELAY_ID: [u8; 32] = [0x45; 32];
     const TRANSCRIPT: [u8; 32] = [0xAB; 32];
+
+    fn encoded_token_with_times(issued_at: u64, expires_at: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"SNTK");
+        bytes.push(AdmissionToken::VERSION);
+        bytes.push(0);
+        bytes.extend_from_slice(&issued_at.to_be_bytes());
+        bytes.extend_from_slice(&expires_at.to_be_bytes());
+        bytes.extend_from_slice(&RELAY_ID);
+        bytes.extend_from_slice(&TRANSCRIPT);
+        bytes.extend_from_slice(&[0xAA; 16]);
+        bytes.extend_from_slice(&[0xBB; 32]);
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.push(0xCC);
+        bytes
+    }
 
     #[test]
     fn mint_and_inspect_round_trip() {
@@ -378,6 +408,19 @@ mod tests {
         let encoded = bundle.token.encode();
         let decoded = inspect_token(&encoded).expect("inspect");
         assert_eq!(bundle.metadata, decoded.metadata);
+    }
+
+    #[test]
+    fn inspect_rejects_unrepresentable_token_timestamps_without_panic() {
+        let err = inspect_token(&encoded_token_with_times(10, u64::MAX))
+            .expect_err("unrepresentable expires_at should fail closed");
+        match err {
+            TokenToolError::Decode(token::DecodeError::TimestampOutOfRange { field, value }) => {
+                assert_eq!(field, "expires_at");
+                assert_eq!(value, u64::MAX);
+            }
+            other => panic!("expected timestamp decode error, got {other:?}"),
+        }
     }
 
     #[test]

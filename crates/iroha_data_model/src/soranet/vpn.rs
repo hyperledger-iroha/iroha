@@ -1065,9 +1065,16 @@ pub struct VpnHelperTicketV1 {
 }
 
 impl VpnHelperTicketV1 {
-    /// Serialize the helper ticket into its fixed-length on-wire representation.
-    #[must_use]
-    pub fn to_bytes(&self, secret: &[u8; 32]) -> [u8; VPN_HELPER_TICKET_LEN] {
+    /// Fallibly serialize the helper ticket into its fixed-length on-wire representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VpnHelperTicketError::InvalidMeteringPublicKey`] when the
+    /// metering key cannot be exposed as a valid Ed25519 payload.
+    pub fn try_to_bytes(
+        &self,
+        secret: &[u8; 32],
+    ) -> Result<[u8; VPN_HELPER_TICKET_LEN], VpnHelperTicketError> {
         let mut bytes = [0u8; VPN_HELPER_TICKET_LEN];
         bytes[..VPN_HELPER_TICKET_MAGIC.len()].copy_from_slice(VPN_HELPER_TICKET_MAGIC);
         let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
@@ -1081,17 +1088,13 @@ impl VpnHelperTicketV1 {
         cursor += self.relay_id.len();
         bytes[cursor..cursor + self.payment_tx_hash.len()].copy_from_slice(&self.payment_tx_hash);
         cursor += self.payment_tx_hash.len();
-        let (algorithm, metering_payload) = self.metering_public_key.to_bytes();
-        assert_eq!(
-            algorithm,
-            Algorithm::Ed25519,
-            "VPN helper tickets require Ed25519 metering keys"
-        );
-        assert_eq!(
-            metering_payload.len(),
-            32,
-            "Ed25519 public keys must be 32-byte payloads"
-        );
+        let (algorithm, metering_payload) = self
+            .metering_public_key
+            .try_to_bytes()
+            .map_err(|_| VpnHelperTicketError::InvalidMeteringPublicKey)?;
+        if algorithm != Algorithm::Ed25519 || metering_payload.len() != 32 {
+            return Err(VpnHelperTicketError::InvalidMeteringPublicKey);
+        }
         bytes[cursor..cursor + 32].copy_from_slice(metering_payload);
         cursor += 32;
         bytes[cursor..cursor + 8].copy_from_slice(&self.tariff.lease_fee_nanos.to_be_bytes());
@@ -1110,13 +1113,31 @@ impl VpnHelperTicketV1 {
         let mac = helper_ticket_mac(secret, &bytes[..cursor]);
         let mac_bytes = mac.as_bytes();
         bytes[cursor..cursor + mac_bytes.len()].copy_from_slice(mac_bytes);
-        bytes
+        Ok(bytes)
+    }
+
+    /// Serialize the helper ticket into its fixed-length on-wire representation.
+    #[must_use]
+    pub fn to_bytes(&self, secret: &[u8; 32]) -> [u8; VPN_HELPER_TICKET_LEN] {
+        self.try_to_bytes(secret)
+            .expect("invalid VPN helper ticket metering public key")
+    }
+
+    /// Fallibly serialize the helper ticket as hex for transport through JSON control-plane payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VpnHelperTicketError::InvalidMeteringPublicKey`] when ticket
+    /// bytes cannot be constructed from the metering key.
+    pub fn try_to_hex(&self, secret: &[u8; 32]) -> Result<String, VpnHelperTicketError> {
+        Ok(hex::encode(self.try_to_bytes(secret)?))
     }
 
     /// Serialize the helper ticket as hex for transport through JSON control-plane payloads.
     #[must_use]
     pub fn to_hex(&self, secret: &[u8; 32]) -> String {
-        hex::encode(self.to_bytes(secret))
+        self.try_to_hex(secret)
+            .expect("invalid VPN helper ticket metering public key")
     }
 
     /// Return `true` when the supplied bytes look like a helper-auth ticket.
@@ -1543,17 +1564,49 @@ mod tests {
     fn helper_ticket_roundtrips_and_verifies_mac() {
         let secret = [0x42; 32];
         let ticket = sample_helper_ticket(1_700_000_000_000);
+        let checked_bytes = ticket
+            .try_to_bytes(&secret)
+            .expect("checked helper ticket serialization");
         let bytes = ticket.to_bytes(&secret);
+        assert_eq!(checked_bytes, bytes);
         assert!(VpnHelperTicketV1::looks_like(&bytes));
 
         let parsed = VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000)
             .expect("helper ticket should verify");
         assert_eq!(ticket, parsed);
 
+        let checked_hex = ticket
+            .try_to_hex(&secret)
+            .expect("checked helper ticket hex serialization");
         let hex = ticket.to_hex(&secret);
+        assert_eq!(checked_hex, hex);
         let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, &secret, 1_699_999_999_000)
             .expect("helper ticket hex should verify");
         assert_eq!(ticket, parsed_hex);
+    }
+
+    #[test]
+    fn helper_ticket_try_to_bytes_rejects_non_ed25519_metering_key() {
+        let secret = [0x42; 32];
+        let mut ticket = sample_helper_ticket(1_700_000_000_000);
+        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        assert_eq!(
+            secp_key_pair
+                .public_key()
+                .try_algorithm()
+                .expect("checked public-key algorithm"),
+            Algorithm::Secp256k1
+        );
+        ticket.metering_public_key = secp_key_pair.public_key().clone();
+
+        assert_eq!(
+            ticket.try_to_bytes(&secret),
+            Err(VpnHelperTicketError::InvalidMeteringPublicKey)
+        );
+        assert_eq!(
+            ticket.try_to_hex(&secret),
+            Err(VpnHelperTicketError::InvalidMeteringPublicKey)
+        );
     }
 
     #[test]

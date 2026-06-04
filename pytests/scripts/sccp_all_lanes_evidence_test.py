@@ -611,13 +611,27 @@ def fake_evm_live_opener(module, *, domain):
                 }
             )
         if method == "eth_getBlockByNumber":
+            if params == ["finalized", False]:
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": payload["id"],
+                        "result": {
+                            "hash": "0x" + route_canary_receipt_block_hash.hex(),
+                            "number": "0x1234",
+                            "receiptsRoot": (
+                                "0x" + route_canary_block_receipts_root.hex()
+                            ),
+                        },
+                    }
+                )
             assert params == ["0x1234", False]
             return FakeResponse(
                 {
                     "jsonrpc": "2.0",
                     "id": payload["id"],
                     "result": {
-                        "hash": "0x" + "aa" * 32,
+                        "hash": "0x" + route_canary_receipt_block_hash.hex(),
                         "number": "0x1234",
                         "receiptsRoot": "0x" + route_canary_block_receipts_root.hex(),
                     },
@@ -938,6 +952,9 @@ def source_material(module, profile, seed):
             record["_comment_evm_source_rpc_chain_id"] = str(
                 module.EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
             )
+            record["_comment_evm_source_block_tag"] = (
+                "finalized" if profile.chain == "eth" else "latest"
+            )
             record["_comment_evm_source_bridge_address"] = record[
                 "source_bridge_emitter_address"
             ]
@@ -1071,6 +1088,9 @@ def destination_rollout(module, profile, material, seed):
         )
         record["_comment_evm_rpc_chain_id"] = str(
             module.EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
+        )
+        record["_comment_evm_block_tag"] = (
+            "finalized" if profile.chain == "eth" else "latest"
         )
         record["_comment_evm_bridge_code_hash"] = (
             "0x" + evm_module.runtime_bytecode_hash(bridge_runtime).hex()
@@ -1366,6 +1386,7 @@ def route_allowlist(
             module.SCCP_DOMAIN_SORA
         )
         route["_comment_evm_route_canary_used_message_proof"] = "true"
+        route["_comment_evm_route_canary_receipt_block_finalized"] = "true"
     elif profile.chain == "tron" and destination is not None:
         tron_module = module._load_sibling_module("sccp_tron_source_bridge_evidence.py")
         live_module = module._load_sibling_module("sccp_tron_live_evidence.py")
@@ -1747,6 +1768,8 @@ def destination_comment_lines(entry):
         return [
             "# sccp_evm_rpc_chain_id = "
             + toml_value(entry["_comment_evm_rpc_chain_id"]),
+            "# sccp_evm_block_tag = "
+            + toml_value(entry["_comment_evm_block_tag"]),
             "# sccp_evm_bridge_runtime_code_hash = "
             + toml_value(entry["_comment_evm_bridge_code_hash"]),
             "# sccp_evm_bridge_runtime_bytecode_hex = "
@@ -1917,6 +1940,8 @@ def source_material_comment_lines(entry):
         [
         "# sccp_evm_source_rpc_chain_id = "
         + toml_value(entry["_comment_evm_source_rpc_chain_id"]),
+        "# sccp_evm_source_block_tag = "
+        + toml_value(entry["_comment_evm_source_block_tag"]),
         "# sccp_evm_source_bridge_address = "
         + toml_value(entry["_comment_evm_source_bridge_address"]),
         "# sccp_evm_source_bridge_runtime_code_hash = "
@@ -2041,6 +2066,10 @@ def route_comment_lines(entry):
         (
             "sccp_evm_route_canary_used_message_proof",
             "_comment_evm_route_canary_used_message_proof",
+        ),
+        (
+            "sccp_evm_route_canary_receipt_block_finalized",
+            "_comment_evm_route_canary_receipt_block_finalized",
         ),
         (
             "sccp_tron_route_canary_transaction_id",
@@ -2339,6 +2368,34 @@ def test_all_lanes_evidence_bundle_is_ready():
                 "gate_hash": "",
                 "audit_hashes": {},
                 "blockers": [],
+            }
+        evm_live_metadata = lane["evm_live_metadata"]
+        if lane["chain"] == "eth":
+            assert evm_live_metadata == {
+                "required": True,
+                "ready": True,
+                "source_rpc_chain_id": "1",
+                "source_block_tag": "finalized",
+                "destination_rpc_chain_id": "1",
+                "destination_block_tag": "finalized",
+            }
+        elif lane["chain"] == "bsc":
+            assert evm_live_metadata == {
+                "required": True,
+                "ready": True,
+                "source_rpc_chain_id": "56",
+                "source_block_tag": "latest",
+                "destination_rpc_chain_id": "56",
+                "destination_block_tag": "latest",
+            }
+        else:
+            assert evm_live_metadata == {
+                "required": False,
+                "ready": True,
+                "source_rpc_chain_id": "",
+                "source_block_tag": "",
+                "destination_rpc_chain_id": "",
+                "destination_block_tag": "",
             }
         binding = lane["destination_binding"]
         assert binding["destination_binding_hash"].startswith("0x")
@@ -2804,6 +2861,7 @@ def test_all_lanes_accepts_verified_evm_live_toml(tmp_path):
         opener=fake.opener,
     )
     evm_toml = live_module.render_offline_toml(live_summary)
+    assert '# sccp_evm_block_tag = "finalized"' in evm_toml
     assert '# sccp_evm_rpc_chain_id = "1"' in evm_toml
     assert (
         '# sccp_evm_bridge_runtime_code_hash = "0x'
@@ -2933,12 +2991,14 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
             route["_comment_evm_route_canary_proof_source_domain"]
         ),
         route_canary_used_message_proof=True,
+        route_canary_receipt_block_finalized=True,
     )
     evm_toml = evm_module.render_toml(
         args,
         raw_hex(destination["destination_binding_hash"]),
     )
     assert '# sccp_evm_rpc_chain_id = "1"' in evm_toml
+    assert '# sccp_evm_block_tag = "finalized"' in evm_toml
     assert "# sccp_evm_bridge_runtime_code_hash" in evm_toml
     assert "# sccp_evm_bridge_runtime_bytecode_hex" in evm_toml
     assert "# sccp_evm_verifier_runtime_code_hash" in evm_toml
@@ -2948,9 +3008,11 @@ def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata(tmp
     assert "# sccp_evm_route_canary_transaction_block_number" in evm_toml
     assert "# sccp_evm_route_canary_transaction_block_hash" in evm_toml
     assert "# sccp_evm_route_canary_receipt_block_hash" in evm_toml
+    assert "# sccp_evm_route_canary_receipt_block_finalized" in evm_toml
     assert "evm_route_canary_transaction_hash = " in evm_toml
     assert "evm_route_canary_transaction_block_hash = " in evm_toml
     assert "evm_route_canary_block_receipts_root = " in evm_toml
+    assert "evm_route_canary_receipt_block_finalized = true" in evm_toml
     evm_path = tmp_path / "eth-direct.toml"
     evm_path.write_text(evm_toml, encoding="utf-8")
     evm_records = module.load_evidence_bundle([evm_path])
@@ -2977,6 +3039,7 @@ def test_all_lanes_rejects_evm_destination_without_live_bridge_metadata():
     records = complete_bundle(module)
     eth_destination = records["sccp_destination_rollouts"][0]
     eth_destination.pop("_comment_evm_rpc_chain_id")
+    eth_destination.pop("_comment_evm_block_tag")
     eth_destination.pop("_comment_evm_bridge_code_hash")
     eth_destination.pop("_comment_evm_bridge_runtime_bytecode_hex")
     eth_destination.pop("_comment_evm_verifier_code_hash")
@@ -2990,6 +3053,7 @@ def test_all_lanes_rejects_evm_destination_without_live_bridge_metadata():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "EVM live RPC chain-id metadata is required" in blockers
+    assert "Ethereum destination live block-tag metadata must be finalized" in blockers
     assert "EVM bridge runtime code hash metadata must be a non-zero" in blockers
     assert "EVM bridge runtime bytecode metadata must be present" in blockers
     assert "EVM verifier runtime code hash metadata must be a non-zero" in blockers
@@ -3052,6 +3116,7 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     records = complete_bundle(module)
     eth_material = records["sccp_source_verifier_materials"][0]
     eth_material.pop("_comment_evm_source_rpc_chain_id")
+    eth_material.pop("_comment_evm_source_block_tag")
     eth_material.pop("_comment_evm_source_bridge_address")
     eth_material.pop("_comment_evm_source_bridge_code_hash")
     eth_material.pop("_comment_evm_source_bridge_runtime_bytecode_hex")
@@ -3070,6 +3135,7 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     assert summary["production_ready"] is False
     blockers = "\n".join(summary["blockers"])
     assert "EVM source live RPC chain-id metadata is required" in blockers
+    assert "Ethereum source live block-tag metadata must be finalized" in blockers
     assert "EVM source bridge address metadata must be a non-zero" in blockers
     assert "EVM source bridge runtime code hash metadata must be a non-zero" in blockers
     assert "EVM source bridge runtime bytecode metadata must be present" in blockers
@@ -3091,6 +3157,47 @@ def test_all_lanes_rejects_evm_source_without_live_bridge_metadata():
     assert "EVM source deployment block hash metadata must be a non-zero" in blockers
     assert "EVM source deployment block number metadata must be a positive" in blockers
     assert "EVM source deployment block receiptsRoot metadata must be a non-zero" in blockers
+
+
+def test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_destination = records["sccp_destination_rollouts"][0]
+    eth_material = records["sccp_source_verifier_materials"][0]
+    eth_destination["_comment_evm_block_tag"] = "latest"
+    eth_material["_comment_evm_source_block_tag"] = "latest"
+
+    summary = module.validate_evidence_bundle(records)
+    blockers = "\n".join(summary["blockers"])
+
+    assert summary["production_ready"] is False
+    assert "Ethereum destination live block-tag metadata must be finalized" in blockers
+    assert "Ethereum source live block-tag metadata must be finalized" in blockers
+
+
+def test_all_lanes_rejects_ethereum_evm_live_rpc_chain_id_drift():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_destination = records["sccp_destination_rollouts"][0]
+    eth_material = records["sccp_source_verifier_materials"][0]
+    eth_destination["_comment_evm_rpc_chain_id"] = "2"
+    eth_material["_comment_evm_source_rpc_chain_id"] = "2"
+
+    summary = module.validate_evidence_bundle(records)
+    eth_lane = next(
+        lane for lane in summary["lanes"] if lane["domain"] == module.SCCP_DOMAIN_ETH
+    )
+    blockers = "\n".join(summary["blockers"])
+
+    assert summary["production_ready"] is False
+    assert eth_lane["evm_live_metadata"]["source_rpc_chain_id"] == "2"
+    assert eth_lane["evm_live_metadata"]["destination_rpc_chain_id"] == "2"
+    assert eth_lane["evm_live_metadata"]["ready"] is False
+    assert "EVM live RPC chain-id must be canonical for eth: expected 1" in blockers
+    assert (
+        "EVM source live RPC chain-id must be canonical for eth: expected 1"
+        in blockers
+    )
 
 
 def test_all_lanes_rejects_evm_source_deployment_transaction_readback_drift():
@@ -3214,6 +3321,7 @@ def test_all_lanes_accepts_verified_evm_source_live_toml(tmp_path):
         opener=fake.opener,
     )
     source_toml = live_module.render_offline_toml(live_summary)
+    assert '# sccp_evm_source_block_tag = "finalized"' in source_toml
     assert '# sccp_evm_source_rpc_chain_id = "1"' in source_toml
     assert (
         '# sccp_evm_source_bridge_runtime_code_hash = "0x'
@@ -3396,6 +3504,7 @@ def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata(tmp_path
 
     source_toml = eth_module.render_toml(args)
     assert '# sccp_evm_source_rpc_chain_id = "1"' in source_toml
+    assert '# sccp_evm_source_block_tag = "finalized"' in source_toml
     assert "# sccp_evm_source_bridge_runtime_code_hash" in source_toml
     assert "# sccp_evm_source_bridge_runtime_bytecode_hex" in source_toml
     assert "# sccp_evm_source_deployment_transaction_hash" in source_toml
@@ -4148,6 +4257,22 @@ def test_all_lanes_rejects_evm_route_canary_missing_used_message_state():
     assert summary["production_ready"] is False
     assert "EVM route canary usedMessageProofs metadata must be true" in "\n".join(
         summary["blockers"]
+    )
+
+
+def test_all_lanes_rejects_evm_route_canary_missing_finalized_receipt_state():
+    module = load_evidence_module()
+    records = complete_bundle(module)
+    eth_index = list(module.SCCP_CORE_REMOTE_DOMAINS).index(module.SCCP_DOMAIN_ETH)
+    route = records["sccp_route_allowlists"][eth_index]
+    del route["_comment_evm_route_canary_receipt_block_finalized"]
+
+    summary = module.validate_evidence_bundle(records)
+
+    assert summary["production_ready"] is False
+    assert (
+        "EVM route canary receipt block finalized metadata must be true"
+        in "\n".join(summary["blockers"])
     )
 
 

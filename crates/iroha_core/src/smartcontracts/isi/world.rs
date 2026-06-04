@@ -490,7 +490,11 @@ pub mod isi {
         allowed_algorithms.sort();
         allowed_algorithms.dedup();
 
-        let algo = record.public_key.algorithm();
+        let algo = record.public_key.try_algorithm().map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("consensus key public key is malformed: {err}"),
+            ))
+        })?;
         if !sumeragi.key_allowed_algorithms.contains(&algo) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(format!(
@@ -12631,7 +12635,7 @@ pub mod isi {
             }
             let peer_id = self.peer.clone();
             // Enforce BLS-normal only for consensus peers.
-            if peer_id.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+            if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
                 crate::sumeragi::status::record_peer_key_policy_reject(
                     PeerKeyPolicyRejectReason::DisallowedAlgorithm,
                 );
@@ -16141,10 +16145,12 @@ pub mod isi {
                 &configured_rollout,
                 &configured_allowlist,
             )
-            .expect("ETH lane should launch with complete ETH material only");
+            .expect("Ethereum lane should launch with complete ETH material only");
 
             let all_lanes_err = super::validate_configured_sccp_all_lanes_launch_ready(&zk)
-                .expect_err("single ETH lane must not satisfy the all-lanes diagnostic helper");
+                .expect_err(
+                    "single Ethereum lane must not satisfy the all-lanes diagnostic helper",
+                );
             assert!(
                 format!("{all_lanes_err:?}").contains("all-lanes launch policy"),
                 "unexpected all-lanes diagnostic error: {all_lanes_err:?}",
@@ -16464,8 +16470,8 @@ pub mod isi {
                         &zk,
                         iroha_sccp::SCCP_DOMAIN_BSC,
                     )
-                    .expect("configured BSC source material")
-                    .expect("BSC source material");
+                    .expect("configured Ethereum source material")
+                    .expect("Ethereum source material");
                     (
                         iroha_sccp::sccp_source_verifier_material_hash(&material),
                         "source verifier material",

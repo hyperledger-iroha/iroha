@@ -10,7 +10,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_data_model::soranet::{
@@ -29,17 +29,20 @@ use tokio::{
 };
 
 use crate::{
-    config::VpnConfig,
+    config::{ConfigError, VpnConfig},
     metrics::Metrics,
     vpn_adapter::{VpnAdapter, VpnBridge},
 };
 
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock should be after unix epoch")
+fn unix_time_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64
+}
+
+fn unix_now_ms() -> u64 {
+    unix_time_ms(SystemTime::now())
 }
 
 /// Padded cell with the computed payload length retained for accounting.
@@ -118,24 +121,32 @@ pub struct VpnOverlay {
 }
 
 impl VpnOverlay {
-    /// Build an overlay from validated VPN configuration.
-    pub fn from_config(config: VpnConfig) -> Self {
-        let exit_class = VpnExitClassV1::try_from_label(&config.exit_class)
-            .expect("vpn config should validate exit_class");
-        let meter_hash = config.meter_hash_bytes();
-        let routes = config
-            .parse_route_push()
-            .expect("vpn config should validate route_push");
-        let dns_overrides = config
-            .parse_dns_overrides()
-            .expect("vpn config should validate dns_overrides");
-        Self {
+    /// Build an overlay from VPN configuration without panicking on malformed fields.
+    pub fn try_from_config(mut config: VpnConfig) -> Result<Self, ConfigError> {
+        config.validate()?;
+        let exit_class = VpnExitClassV1::try_from_label(&config.exit_class).map_err(|error| {
+            ConfigError::Vpn(format!(
+                "vpn.exit_class must be standard|low-latency|high-security: {error}"
+            ))
+        })?;
+        let meter_hash = config.try_meter_hash_bytes()?;
+        let routes = config.parse_route_push()?;
+        let dns_overrides = config.parse_dns_overrides()?;
+        let _ = config.try_helper_ticket_secret_bytes()?;
+        let _ = config.try_backend_endpoint()?;
+        let _ = config.try_backend_bootstrap_secret_bytes()?;
+        Ok(Self {
             config,
             exit_class,
             meter_hash,
             routes,
             dns_overrides,
-        }
+        })
+    }
+
+    /// Build an overlay from validated VPN configuration.
+    pub fn from_config(config: VpnConfig) -> Self {
+        Self::try_from_config(config).expect("vpn config should validate before overlay creation")
     }
 
     /// Access the raw VPN configuration.
@@ -862,11 +873,20 @@ impl VpnSessionHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::Arc,
+        time::{Duration, UNIX_EPOCH},
+    };
 
     use crate::metrics::Metrics;
 
     use super::*;
+
+    #[test]
+    fn unix_time_ms_saturates_pre_epoch_clock() {
+        assert_eq!(unix_time_ms(UNIX_EPOCH - Duration::from_secs(1)), 0);
+        assert_eq!(unix_time_ms(UNIX_EPOCH + Duration::from_millis(42)), 42);
+    }
 
     #[test]
     fn cover_plan_allows_full_ratio() {

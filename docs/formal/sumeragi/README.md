@@ -7750,19 +7750,26 @@ Invariants:
 - `CommitImpliesDelivered`
 - `CommitImpliesRbcEvidence`
 - `FinalityCertificateStackComplete`
+- `FinalityCertificateStackMatchesFinality`
 - `CommitDisablesProgressActions`
 - `CommittedPhaseMatchesFinality`
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `ViewEvidenceMatchesActiveView`
 - `NewViewPhaseBelowQuorum`
+- `LiveNewViewVotesStayInHandoff`
+- `NewViewVoteGateMatchesFreshViewEvidence`
 - `ViewEvidenceIsCompleteOrEmpty`
 - `PreCommitPhasesHaveNoCommitVotes`
 - `PrePreparePhasesHaveNoPrepareVotes`
+- `LivePrepareVotesStayInHandoff`
 - `CommitImpliesViewQuorumEvidence`
 - `CommitVotePhaseRequiresPrepareQuorum`
+- `LiveCommitVotesRequirePrepareQuorum`
+- `LiveCommitVotesStayInCommitHandoff`
 - `CommitImpliesPrepareQuorum`
 - `CommitEvidenceMatchesVoteCounters`
+- `CommitEvidenceIsCompleteOrEmpty`
 - `CommitEvidenceIsBounded`
 - `VoteCountersRespectRosterBudgets`
 - `StakeSignedMatchesVoteCounters`
@@ -7770,6 +7777,12 @@ Invariants:
 - `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
 - `RbcProgressEvidenceMatchesState`
+- `RbcChunkGateMatchesHeaderDigestEvidence`
+- `RbcReadyGateMatchesChunkEvidence`
+- `RbcDeliverGateMatchesCompleteEvidence`
+- `LiveHeaderDigestEvidenceStayInRbcHandoff`
+- `LiveChunkEvidenceStayInRbcHandoff`
+- `LiveReadyVotesStayInRbcHandoff`
 
 Fork-safety invariants:
 - `TypeInvariant`
@@ -8675,6 +8688,14 @@ Temporal properties:
 - `NewViewQuorumHandoffNeverStalls` proves that a quorum-satisfied `NewView`
   phase immediately hands off to proposal-ready state instead of remaining in a
   view-change phase with enough votes already collected.
+- `LiveNewViewVotesNeverLeakPastHandoff` proves that live NewView vote counters
+  remain confined to the NewView collection phase or the immediate proposal
+  handoff with quorum evidence, and never leak into prepare, commit-vote, or
+  committed execution.
+- `NewViewVoteGateNeverBypassesFreshViewEvidence` proves that the live NewView
+  vote gate is enabled exactly while a nonzero view is collecting fresh
+  view-change votes with no installed view evidence, below quorum and roster
+  budgets, and with prepare/commit vote state reset before the next proposal.
 - `ViewEvidenceNeverPartial` proves that the latched view-change witness is
   either absent or quorum-complete, never a partial vote count.
 - `PreCommitVotesNeverCarryAcrossViews` proves that `NewView`, proposal, and
@@ -8683,14 +8704,32 @@ Temporal properties:
 - `PrePrepareVotesNeverCarryAcrossViews` proves that `NewView` and proposal
   phases cannot carry stale prepare-vote counters from an earlier view into the
   next prepare or commit path.
+- `LivePrepareVotesNeverBypassPrepareHandoff` proves that live prepare-vote
+  counters remain confined to prepare, commit-vote, or committed phases, and
+  any handoff beyond prepare is backed by prepare quorum rather than partial
+  prepare evidence.
+- `CommitEvidenceNeverPartial` proves that latched commit-certificate
+  vote/stake evidence is either absent or quorum-complete, never a partial
+  certificate artifact.
 - `CommitPhasesNeverBypassPrepareQuorum` proves that execution never reaches
   commit-vote or committed phases without prepare-quorum evidence.
+- `LiveCommitVotesNeverBypassPrepareQuorum` proves that any live commit-vote
+  counter or signed-stake evidence can only appear in commit-vote or committed
+  phases after prepare quorum, ruling out stale live commit votes leaking across
+  view changes or earlier phases.
+- `LiveCommitVotesNeverBypassCommitHandoff` proves that live commit-vote and
+  signed-stake evidence stays confined to commit-vote or committed phases, and
+  cannot cross into finality unless both vote and stake quorum are already met.
 - `PreFinalityCommitArtifactsNeverAppear` proves that commit-certificate
   votes/stake and the commit-view witness stay absent until finality is reached.
 - `FinalityCertificateStackNeverIncomplete` proves that every finalized state
   carries the complete certificate stack: terminal phase, prepare quorum, live
   and latched commit vote/stake evidence, honest support, RBC delivery evidence,
   and the required view-change witness for nonzero commit views.
+- `FinalityCertificateStackAlwaysMatchesFinality` proves that the complete
+  finality certificate stack is exact: it appears if and only if the abstract
+  finality latch is set, so a latent full certificate stack cannot exist before
+  finality.
 - `CommitViewQuorumEvidenceNeverLost` proves that finalized nonzero views keep
   their view-change quorum witness after commit.
 - `PrepareQuorumNeverLostAfterCommit` proves that the prepare quorum required
@@ -8724,6 +8763,35 @@ Temporal properties:
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
   coverage, and ready/delivered states keep ready quorum.
+- `RbcChunkGateNeverBypassesHeaderDigestEvidence` proves that the live RBC
+  CHUNK transition is enabled exactly when the session is in an INIT,
+  CHUNKING, or post-GST withheld recovery state carrying header evidence,
+  validated digest evidence for non-withheld paths, and incomplete chunk
+  progress while chunking, so CHUNK cannot bypass header/digest causality.
+- `RbcReadyGateNeverBypassesChunkEvidence` proves that the live RBC READY
+  transition is enabled exactly when the session is chunk-complete or already
+  in a READY handoff state with full chunk coverage, header evidence, a valid
+  digest, and remaining READY vote capacity, so READY cannot bypass chunk
+  completion.
+- `RbcDeliverGateNeverBypassesCompleteEvidence` proves that the live RBC
+  DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
+  with READY quorum, full chunk coverage, header evidence, and a valid digest,
+  so DELIVER cannot bypass complete RBC evidence.
+- `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
+  and digest evidence remains confined to initialized, withheld, corrupted, or
+  delivered handoff states; digest evidence always implies a seen header and an
+  initialized-or-later RBC state; and corrupted or withheld retained header
+  evidence is explicitly marked by an invalid digest flag.
+- `LiveChunkEvidenceNeverBypassRbcHandoff` proves that live RBC chunk counters
+  stay confined to chunking, chunk-complete, ready, or delivered handoff states;
+  chunking remains below full chunk coverage; chunk-complete, ready, and
+  delivered states keep full chunk coverage; and corrupted retained chunk
+  counters are explicitly invalidated by the digest flag.
+- `LiveReadyVotesNeverBypassRbcHandoff` proves that valid live RBC READY
+  counters stay confined to partial-ready, ready-quorum, or delivered handoff
+  states, partial READY evidence stays below commit quorum, ready-quorum and
+  delivered states keep commit-quorum READY evidence, and corrupted retained
+  READY counters are explicitly invalidated by the digest flag.
 
 Frontier recovery invariants:
 - `TypeInvariant`

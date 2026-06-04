@@ -15,6 +15,7 @@ import {
   buildEvmReceiptTrieProofFromReceipts,
   buildEthereumMainnetSccpLocalAdmissionSubmission,
   canonicalEvmReceiptRlp,
+  canonicalEvmSccpReceiptProofBytes,
   ethereumMainnetSccpDestinationBinding,
   evmReceiptTrieKey,
   evmSccpReceiptProofHash,
@@ -27,6 +28,14 @@ const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const SOURCE_EVENT_DIGEST = hex32("34");
 const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
+const SAMPLE_SYNC_COMMITTEE_BITS = `0x01${"00".repeat(63)}`;
+const SAMPLE_SYNC_COMMITTEE_SIGNATURE = `0x${"34".repeat(96)}`;
+const sampleFinalityUpdateFields = () => ({
+  syncCommitteeBits: SAMPLE_SYNC_COMMITTEE_BITS,
+  syncCommitteeSignature: SAMPLE_SYNC_COMMITTEE_SIGNATURE,
+  syncCommitteeParticipation: "1",
+  syncSignatureSlot: "65",
+});
 const sampleReceiptProof = {
   sourceDomain: SCCP_DOMAIN_ETH,
   sourceEventDigest: SOURCE_EVENT_DIGEST,
@@ -251,6 +260,44 @@ test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
     receiptTrieProof.receiptRlp,
     `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
   );
+  const zeroTopicReceiptTrieProof = buildEvmReceiptTrieProofFromReceipts(
+    [
+      receipt,
+      fullReceipt(1, {
+        logs: [
+          {
+            address: `0x${"12".repeat(20)}`,
+            topics: [hex32("00")],
+            data: "0x",
+          },
+        ],
+      }),
+    ],
+    { transactionIndex: 0 },
+  );
+  assert.equal(
+    zeroTopicReceiptTrieProof.receiptRlp,
+    `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
+  );
+  const zeroAddressReceiptTrieProof = buildEvmReceiptTrieProofFromReceipts(
+    [
+      receipt,
+      fullReceipt(1, {
+        logs: [
+          {
+            address: `0x${"00".repeat(20)}`,
+            topics: [hex32("44")],
+            data: "0x",
+          },
+        ],
+      }),
+    ],
+    { transactionIndex: 0 },
+  );
+  assert.equal(
+    zeroAddressReceiptTrieProof.receiptRlp,
+    `0x${Buffer.from(canonicalEvmReceiptRlp(receipt)).toString("hex")}`,
+  );
   assert.match(receiptTrieProof.receiptsRoot, /^0x[0-9a-f]{64}$/u);
   assert.ok(receiptTrieProof.receiptTrieProofNodes.length > 0);
   assert.throws(
@@ -259,6 +306,13 @@ test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
         transactionIndex: 0,
       }),
     /transactionIndex/u,
+  );
+  assert.throws(
+    () =>
+      buildEvmReceiptTrieProofFromReceipts([receipt, fullReceipt(1, { transactionHash: TX_HASH })], {
+        transactionIndex: 0,
+      }),
+    /transactionHash values must be unique/u,
   );
   assert.throws(
     () => buildEvmReceiptTrieProofFromReceipts([receipt], { transactionIndex: 1 }),
@@ -303,6 +357,33 @@ test("Ethereum receipt trie helper uses RLP transaction-index keys", () => {
         }),
       ),
     /topics/u,
+  );
+});
+
+test("Ethereum receipt-proof transcript rejects empty trie and finality branches", () => {
+  assert.throws(
+    () =>
+      canonicalEvmSccpReceiptProofBytes({
+        ...sampleReceiptProof,
+        receiptTrieProofNodes: [],
+      }),
+    /receiptTrieProofNodes must not be empty/u,
+  );
+  assert.throws(
+    () =>
+      evmSccpReceiptProofHash({
+        ...sampleReceiptProof,
+        inclusionBranch: [],
+      }),
+    /inclusionBranch must not be empty/u,
+  );
+  assert.throws(
+    () =>
+      evmSccpReceiptProofHash({
+        ...sampleReceiptProof,
+        sourceDomain: SCCP_DOMAIN_BSC,
+      }),
+    /sourceDomain must be ETH/u,
   );
 });
 
@@ -467,7 +548,40 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   const fetchCalls = [];
   const beaconFetch = async (url, init) => {
     fetchCalls.push([url, init]);
+    if (url === "https://beacon.example/eth/v1/beacon/genesis") {
+      return {
+        ok: true,
+        async json() {
+          return { data: { genesis_time: "0" } };
+        },
+      };
+    }
     if (url === "https://beacon.example/eth/v1/beacon/headers/finalized") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            finalized: true,
+            data: {
+              root: hex32("ff"),
+              canonical: true,
+              header: {
+                message: {
+                  slot: "96",
+                  proposer_index: "1",
+                  parent_root: hex32("01"),
+                  state_root: hex32("02"),
+                  body_root: hex32("03"),
+                },
+                signature: `0x${"12".repeat(96)}`,
+              },
+            },
+          };
+        },
+      };
+    }
+    if (url === "https://beacon.example/eth/v1/beacon/headers/64") {
       return {
         ok: true,
         async json() {
@@ -492,6 +606,41 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
         },
       };
     }
+    if (url === "https://beacon.example/eth/v1/beacon/blocks/64/root") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            finalized: true,
+            data: { root: hex32("dd") },
+          };
+        },
+      };
+    }
+    if (url === "https://beacon.example/eth/v2/beacon/blocks/64") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            finalized: true,
+            data: {
+              message: {
+                slot: "64",
+                body: {
+                  execution_payload: {
+                    block_hash: BLOCK_HASH,
+                    block_number: "4660",
+                    receipts_root: hex32("cc"),
+                  },
+                },
+              },
+            },
+          };
+        },
+      };
+    }
     if (url === "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints") {
       return {
         ok: true,
@@ -500,7 +649,33 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              finalized: { root: hex32("dd"), epoch: "2" },
+              finalized: { root: hex32("ff"), epoch: "3" },
+            },
+          };
+        },
+      };
+    }
+    if (url === "https://beacon.example/eth/v1/beacon/light_client/finality_update") {
+      return {
+        ok: true,
+        async json() {
+          return {
+            execution_optimistic: false,
+            data: {
+              finalized_header: {
+                beacon: {
+                  slot: "96",
+                  proposer_index: "1",
+                  parent_root: hex32("01"),
+                  state_root: hex32("02"),
+                  body_root: hex32("03"),
+                },
+              },
+              sync_aggregate: {
+                sync_committee_bits: `0x01${"00".repeat(63)}`,
+                sync_committee_signature: `0x${"34".repeat(96)}`,
+              },
+              signature_slot: "97",
             },
           };
         },
@@ -521,7 +696,12 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
       }
       if (method === "eth_getBlockByHash") {
         assert.deepEqual(params, [BLOCK_HASH, false]);
-        return { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") };
+        return {
+          hash: BLOCK_HASH,
+          number: "0x1234",
+          receiptsRoot: hex32("cc"),
+          timestamp: "0x300",
+        };
       }
       throw new Error(`unexpected RPC method ${method}`);
     },
@@ -542,11 +722,20 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   assert.equal(evidence.beaconFinality.finalizedHeaderRoot, hex32("dd"));
   assert.equal(evidence.beaconFinality.syncCommitteeRoot, hex32("ee"));
   assert.equal(evidence.beaconFinality.beaconSlot, "64");
+  assert.equal(evidence.beaconFinality.syncCommitteeBits, `0x01${"00".repeat(63)}`);
+  assert.equal(evidence.beaconFinality.syncCommitteeSignature, `0x${"34".repeat(96)}`);
+  assert.equal(evidence.beaconFinality.syncCommitteeParticipation, "1");
+  assert.equal(evidence.beaconFinality.syncSignatureSlot, "97");
   assert.deepEqual(
     fetchCalls.map(([url]) => url),
     [
+      "https://beacon.example/eth/v1/beacon/genesis",
       "https://beacon.example/eth/v1/beacon/headers/finalized",
+      "https://beacon.example/eth/v1/beacon/headers/64",
+      "https://beacon.example/eth/v1/beacon/blocks/64/root",
+      "https://beacon.example/eth/v2/beacon/blocks/64",
       "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
+      "https://beacon.example/eth/v1/beacon/light_client/finality_update",
     ],
   );
   for (const [, init] of fetchCalls) {
@@ -556,7 +745,12 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
 });
 
 test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Beacon REST data", async () => {
-  const block = { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") };
+  const block = {
+    hash: BLOCK_HASH,
+    number: "0x1234",
+    receiptsRoot: hex32("cc"),
+    beaconSlot: "64",
+  };
   const validHeader = () => ({
     execution_optimistic: false,
     finalized: true,
@@ -580,28 +774,213 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     finalized: true,
     data: { finalized: { root: hex32("dd"), epoch: "2" } },
   });
+  const validBlockRoot = () => ({
+    execution_optimistic: false,
+    finalized: true,
+    data: { root: hex32("dd") },
+  });
+  const validBlock = () => ({
+    execution_optimistic: false,
+    finalized: true,
+    data: {
+      message: {
+        slot: "64",
+        body: {
+          execution_payload: {
+            block_hash: BLOCK_HASH,
+            block_number: "4660",
+            receipts_root: hex32("cc"),
+          },
+        },
+      },
+    },
+  });
+  const validFinalityUpdate = () => ({
+    execution_optimistic: false,
+    data: {
+      finalized_header: {
+        beacon: {
+          slot: "64",
+          proposer_index: "1",
+          parent_root: hex32("01"),
+          state_root: hex32("02"),
+          body_root: hex32("03"),
+        },
+      },
+      sync_aggregate: {
+        sync_committee_bits: `0x01${"00".repeat(63)}`,
+        sync_committee_signature: `0x${"34".repeat(96)}`,
+      },
+      signature_slot: "65",
+    },
+  });
   const syncCommitteePayload = {
     syncCommitteePublicKeys: [`0x${"11".repeat(48)}`],
     syncCommitteeWeights: ["1"],
     syncCommitteePops: [`0x${"22".repeat(96)}`],
   };
-  const providerFor = (headerResponse, checkpointResponse = validCheckpoint(), extra = {}) =>
+  const providerFor = (
+    headerResponse,
+    checkpointResponse = { ok: true, json: async () => validCheckpoint() },
+    extra = {},
+    blockResponse = { ok: true, json: async () => validBlock() },
+    blockRootResponse = { ok: true, json: async () => validBlockRoot() },
+    targetHeaderResponse = headerResponse,
+    finalityUpdateResponse = { ok: true, json: async () => validFinalityUpdate() },
+  ) =>
     new EthereumMainnetBeaconRestConsensusProvider({
       endpoint: "https://beacon.example",
       syncCommitteeRoot: hex32("ee"),
       fetch: async (url) => {
         if (url.endsWith("/eth/v1/beacon/headers/finalized")) return headerResponse;
+        if (url.endsWith("/eth/v1/beacon/headers/64")) return targetHeaderResponse;
+        if (url.endsWith("/eth/v1/beacon/blocks/64/root")) return blockRootResponse;
+        if (url.endsWith("/eth/v2/beacon/blocks/64")) return blockResponse;
         if (url.endsWith("/eth/v1/beacon/states/finalized/finality_checkpoints")) {
           return checkpointResponse;
+        }
+        if (url.endsWith("/eth/v1/beacon/light_client/finality_update")) {
+          return finalityUpdateResponse;
         }
         throw new Error(`unexpected Beacon REST URL ${url}`);
       },
       ...extra,
     });
+  const streamResponse = (chunks, extra = {}) => ({
+    ok: true,
+    body: {
+      getReader() {
+        let index = 0;
+        return {
+          async read() {
+            if (index >= chunks.length) return { done: true };
+            const value = chunks[index];
+            index += 1;
+            return { done: false, value };
+          },
+          async cancel() {},
+          releaseLock() {},
+        };
+      },
+    },
+    ...extra,
+  });
+
+  assert.throws(
+    () =>
+      new EthereumMainnetBeaconRestConsensusProvider({
+        endpoint: "https://beacon.example",
+        verifyFinalityCheckpoint: 0,
+      }),
+    /verifyFinalityCheckpoint must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence(
+        { block },
+        { verify_finality_checkpoint: "false" },
+      ),
+    /verifyFinalityCheckpoint must be a boolean/u,
+  );
+
+  const unchecked = await providerFor(
+    { ok: true, json: async () => validHeader() },
+    {
+      ok: true,
+      json: async () => ({
+        ...validCheckpoint(),
+        data: { finalized: { root: hex32("99"), epoch: "2" } },
+      }),
+    },
+  ).collectFinalityEvidence({ block }, { verifyFinalityCheckpoint: false });
+  assert.equal(unchecked.finalizedHeaderRoot, hex32("dd"));
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => {
+          const header = validHeader();
+          header.data.root = hex32("00");
+          return header;
+        },
+      }).collectFinalityEvidence({ block }),
+    /finalizedHeaderRoot must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        {
+          ok: true,
+          json: async () => ({
+            ...validBlockRoot(),
+            data: { root: hex32("00") },
+          }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalizedBlockRoot must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        {
+          ok: true,
+          json: async () => ({
+            ...validCheckpoint(),
+            data: { finalized: { root: hex32("00"), epoch: "2" } },
+          }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalizedCheckpointRoot must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        { syncCommitteeRoot: hex32("00") },
+      ).collectFinalityEvidence({ block }),
+    /syncCommitteeRoot must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        {
+          ok: true,
+          json: async () => ({
+            ...validBlockRoot(),
+            data: { root: hex32("99") },
+          }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized block root must match finalized header root/u,
+  );
 
   await assert.rejects(
     () => providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence({}),
     /requires block/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => validHeader() }).collectFinalityEvidence({
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+      }),
+    /requires beaconSlot, beaconBlockRoot, or block\.timestamp/u,
   );
 
   await assert.rejects(
@@ -613,6 +992,67 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
 
   await assert.rejects(
     () =>
+      providerFor({ ok: "false", status: 200, json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /response ok must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ status: "503", json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /response status must be an integer/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ status: 503, statusText: "Unavailable", json: async () => validHeader() })
+        .collectFinalityEvidence({ block }),
+    /request failed 503 Unavailable/u,
+  );
+
+  const textEvidence = await providerFor(
+    { ok: true, text: async () => JSON.stringify(validHeader()) },
+    { ok: true, text: async () => JSON.stringify(validCheckpoint()) },
+  ).collectFinalityEvidence({ block });
+  assert.equal(textEvidence.finalizedHeaderRoot, hex32("dd"));
+
+  const streamEvidence = await providerFor(
+    streamResponse([Buffer.from(JSON.stringify(validHeader()))]),
+    streamResponse([Buffer.from(JSON.stringify(validCheckpoint()))]),
+  ).collectFinalityEvidence({ block });
+  assert.equal(streamEvidence.finalizedHeaderRoot, hex32("dd"));
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, text: async () => "x".repeat(1024 * 1024 + 1) })
+        .collectFinalityEvidence({ block }),
+    /response body must be at most/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(streamResponse([Buffer.alloc(1024 * 1024), Buffer.from("x")]))
+        .collectFinalityEvidence({ block }),
+    /response body must be at most/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(streamResponse(["not bytes"]))
+        .collectFinalityEvidence({ block }),
+    /response body chunks must be bytes/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, text: async () => JSON.stringify([]) })
+        .collectFinalityEvidence({ block }),
+    /response JSON must be an object/u,
+  );
+
+  await assert.rejects(
+    () =>
       providerFor({ ok: true, json: async () => ({ ...validHeader(), execution_optimistic: true }) })
         .collectFinalityEvidence({ block }),
     /must not be execution optimistic/u,
@@ -620,9 +1060,202 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
 
   await assert.rejects(
     () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), execution_optimistic: "false" }) })
+        .collectFinalityEvidence({ block }),
+    /execution_optimistic must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), executionOptimistic: 0 }) })
+        .collectFinalityEvidence({ block }),
+    /executionOptimistic must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
       providerFor({ ok: true, json: async () => ({ ...validHeader(), finalized: false }) })
         .collectFinalityEvidence({ block }),
     /must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        { ok: true, json: async () => validBlockRoot() },
+        {
+          ok: true,
+          json: async () => ({ ...validHeader(), finalized: false }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized target header must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => ({ ...validBlock(), finalized: false }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized block must be finalized/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({ ok: true, json: async () => ({ ...validHeader(), finalized: "true" }) })
+        .collectFinalityEvidence({ block }),
+    /finalized must be a boolean/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => ({
+          ...validHeader(),
+          data: { ...validHeader().data, canonical: "true" },
+        }),
+      }).collectFinalityEvidence({ block }),
+    /canonical must be a boolean/u,
+  );
+
+  for (const field of ["parent_root", "state_root", "body_root"]) {
+    await assert.rejects(
+      () =>
+        providerFor({
+          ok: true,
+          json: async () => {
+            const header = validHeader();
+            delete header.data.header.message[field];
+            return header;
+          },
+        }).collectFinalityEvidence({ block }),
+      new RegExp(`${field} is required`, "u"),
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => {
+          const header = validHeader();
+          header.data.header.message.body_root = `0x${"03".repeat(31)}`;
+          return header;
+        },
+      }).collectFinalityEvidence({ block }),
+    /body_root must be 32 bytes/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => {
+          const header = validHeader();
+          delete header.data.header.signature;
+          return header;
+        },
+      }).collectFinalityEvidence({ block }),
+    /signature is required/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor({
+        ok: true,
+        json: async () => {
+          const header = validHeader();
+          header.data.header.signature = `0x${"12".repeat(95)}`;
+          return header;
+        },
+      }).collectFinalityEvidence({ block }),
+    /signature must be 96 bytes/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => ({
+            ...validBlock(),
+            data: {
+              message: {
+                ...validBlock().data.message,
+                slot: "65",
+              },
+            },
+          }),
+        },
+      ).collectFinalityEvidence({ block }),
+    /finalized block slot must match finalized header slot/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => {
+            const payload = validBlock();
+            payload.data.message.body.execution_payload.block_hash = hex32("99");
+            return payload;
+          },
+        },
+      ).collectFinalityEvidence({ block }),
+    /execution payload block_hash must match block.hash/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => {
+            const payload = validBlock();
+            payload.data.message.body.execution_payload.block_number = "4661";
+            return payload;
+          },
+        },
+      ).collectFinalityEvidence({ block }),
+    /execution payload block_number must match block.number/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        {
+          ok: true,
+          json: async () => {
+            const payload = validBlock();
+            payload.data.message.body.execution_payload.receipts_root = hex32("99");
+            return payload;
+          },
+        },
+      ).collectFinalityEvidence({ block }),
+    /execution payload receipts_root must match block.receiptsRoot/u,
   );
 
   await assert.rejects(
@@ -638,6 +1271,27 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
         },
       ).collectFinalityEvidence({ block }),
     /checkpoint root must match finalized header root/u,
+  );
+
+  await assert.rejects(
+    () =>
+      providerFor(
+        { ok: true, json: async () => validHeader() },
+        { ok: true, json: async () => validCheckpoint() },
+        {},
+        { ok: true, json: async () => validBlock() },
+        { ok: true, json: async () => validBlockRoot() },
+        { ok: true, json: async () => validHeader() },
+        {
+          ok: true,
+          json: async () => {
+            const update = validFinalityUpdate();
+            update.data.sync_aggregate.sync_committee_bits = `0x${"00".repeat(64)}`;
+            return update;
+          },
+        },
+      ).collectFinalityEvidence({ block }),
+    /sync_committee_bits must contain at least one participant/u,
   );
 
   await assert.rejects(
@@ -692,6 +1346,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           executionBlockNumber: "0x1234",
           executionBlockHash: BLOCK_HASH,
           executionReceiptsRoot: hex32("cc"),
+          ...sampleFinalityUpdateFields(),
         };
       },
     },
@@ -725,6 +1380,131 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("00"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.finalizedHeaderRoot must not be zero/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: hex32("00"),
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.executionBlockHash must not be zero/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("00"),
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.executionReceiptsRoot must not be zero/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("00"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.syncCommitteeRoot must not be zero/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -757,6 +1537,42 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
     receiptProofHash,
   });
   assert.equal(receiptProofEvidence.receiptProofHash, receiptProofHash);
+  const receiptProofHashOnlyEvidence = await new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+    receipt_proof_hash: receiptProofHash,
+  });
+  assert.equal(receiptProofHashOnlyEvidence.receiptProofHash, receiptProofHash);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        receiptProofHash: hex32("00"),
+      }),
+    /receiptProofHash must not be zero/u,
+  );
+
+  for (const [field, pattern] of [
+    ["sourceEventDigest", /sourceEventDigest must not be zero/u],
+    ["executionBlockHash", /executionBlockHash must not be zero/u],
+    ["executionReceiptsRoot", /executionReceiptsRoot must not be zero/u],
+    ["beaconFinalizedRoot", /beaconFinalizedRoot must not be zero/u],
+    ["syncCommitteeRoot", /syncCommitteeRoot must not be zero/u],
+  ]) {
+    await assert.rejects(
+      () =>
+        new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+          receiptProof: { ...sampleReceiptProof, [field]: hex32("00") },
+        }),
+      pattern,
+    );
+  }
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        receipt_proof_hash: `${receiptProofHash} `,
+      }),
+    /receiptProofHash must be canonical hex/u,
+  );
 
   await assert.rejects(
     () =>
@@ -777,6 +1593,29 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
   );
 
   await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+        },
+        receiptProof: sampleReceiptProof,
+        receiptProofHash,
+      }),
+    /requires receipt source event validation/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
     () => new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
     /executionProvider is required/u,
   );
@@ -794,6 +1633,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
       }),
@@ -814,6 +1654,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -841,6 +1682,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -850,6 +1692,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           beaconSlot: "0x40",
         },
         receiptProof: { ...sampleReceiptProof, executionReceiptsRoot: hex32("99") },
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
       }),
     /receiptProof\.executionReceiptsRoot/u,
   );
@@ -958,6 +1801,41 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
+        },
+        block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
+        beaconFinality: {
+          finalizedHeaderRoot: hex32("dd"),
+          syncCommitteeRoot: hex32("ee"),
+          beaconSlot: "0x40",
+          executionBlockNumber: "0x1234",
+          executionBlockHash: BLOCK_HASH,
+          executionReceiptsRoot: hex32("cc"),
+          syncCommitteeSignature: SAMPLE_SYNC_COMMITTEE_SIGNATURE,
+          syncCommitteeParticipation: "1",
+          syncSignatureSlot: "65",
+        },
+        receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+      }),
+    /beaconFinality\.syncCommitteeBits/u,
+  );
+  assert.equal(proveCalls, 1);
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        proveInbound() {
+          proveCalls += 1;
+          return [1, 2, 3];
+        },
+      }).proveInboundToSora({
+        receipt: {
+          transactionHash: TX_HASH,
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -969,6 +1847,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           executionReceiptsRoot: hex32("cc"),
         },
         receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
       }),
     /receiptProof\.beaconFinalizedRoot/u,
   );
@@ -987,6 +1866,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -998,6 +1878,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           executionReceiptsRoot: hex32("cc"),
         },
         receiptProof: sampleReceiptProof,
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
       }),
     /receiptProof\.syncCommitteeRoot/u,
   );
@@ -1016,6 +1897,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           blockHash: BLOCK_HASH,
           blockNumber: "0x1234",
           status: "0x1",
+          logs: [sourceEventLog()],
         },
         block: { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("cc") },
         beaconFinality: {
@@ -1027,6 +1909,7 @@ test("EthereumMainnetSccp proves only after collecting finality-bound evidence",
           executionReceiptsRoot: hex32("cc"),
         },
         receiptProof: { ...sampleReceiptProof, beaconSlot: "65" },
+        sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
       }),
     /receiptProof\.beaconSlot/u,
   );
@@ -1153,6 +2036,81 @@ test("EthereumMainnetSccp rejects failed or drifted receipt evidence before prov
         }),
       }).collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
     /canonical lowercase/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        transactionHash: hex32("00"),
+      }),
+    /transactionHash must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp().collectInboundEvidenceFromReceipt({
+        blockHash: hex32("00"),
+        receiptProofHash: evmSccpReceiptProofHash(sampleReceiptProof),
+      }),
+    /blockHash must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        executionProvider: providerForReceipt({
+          transactionHash: hex32("00"),
+          blockHash: BLOCK_HASH,
+          blockNumber: "0x1234",
+          status: "0x1",
+        }),
+      }).collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
+    /receipt\.transactionHash must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        executionProvider: providerForReceipt({
+          transactionHash: TX_HASH,
+          blockHash: hex32("00"),
+          blockNumber: "0x1234",
+          status: "0x1",
+        }),
+      }).collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
+    /receipt\.blockHash must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        executionProvider: providerForReceipt(
+          {
+            transactionHash: TX_HASH,
+            blockHash: BLOCK_HASH,
+            blockNumber: "0x1234",
+            status: "0x1",
+          },
+          { hash: hex32("00"), number: "0x1234", receiptsRoot: hex32("cc") },
+        ),
+      }).collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
+    /block\.hash must not be zero/u,
+  );
+
+  await assert.rejects(
+    () =>
+      new EthereumMainnetSccp({
+        executionProvider: providerForReceipt(
+          {
+            transactionHash: TX_HASH,
+            blockHash: BLOCK_HASH,
+            blockNumber: "0x1234",
+            status: "0x1",
+          },
+          { hash: BLOCK_HASH, number: "0x1234", receiptsRoot: hex32("00") },
+        ),
+      }).collectInboundEvidenceFromReceipt({ transactionHash: TX_HASH }),
+    /block\.receiptsRoot must not be zero/u,
   );
 
   await assert.rejects(
@@ -1358,6 +2316,19 @@ test("EthereumMainnetSccp validates source bridge logs in receipt evidence", asy
     /receipt\.logs\[0\]\.data is required/u,
   );
 
+  for (const missingField of ["transactionHash", "blockHash", "blockNumber"]) {
+    const log = sourceEventLog();
+    delete log[missingField];
+    await assert.rejects(
+      () =>
+        sdk.collectInboundEvidenceFromReceipt({
+          receipt: { ...receipt, logs: [log] },
+          block,
+        }),
+      new RegExp(`receipt\\.logs\\[0\\]\\.${missingField}`, "u"),
+    );
+  }
+
   await assert.rejects(
     () =>
       sdk.collectInboundEvidenceFromReceipt({
@@ -1406,6 +2377,57 @@ test("EthereumMainnetSccp keeps the easy outbound path Ethereum-only", () => {
       }),
     /SORA/u,
   );
+});
+
+test("Ethereum outbound prover callback must not see BSC requests", async () => {
+  let outboundProverCalled = false;
+  const sdk = new EthereumMainnetSccp({
+    outboundProver: {
+      async prove(request) {
+        outboundProverCalled = true;
+        return wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, request);
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => sdk.proveOutboundToEthereum(sampleOutboundInput(SCCP_DOMAIN_BSC)),
+    /request route|targetDomain|Ethereum mainnet/u,
+  );
+  assert.equal(outboundProverCalled, false);
+});
+
+test("EthereumMainnetSccp requires linked local prover functions", async () => {
+  let executionRequests = 0;
+  const sdk = new EthereumMainnetSccp({
+    executionProvider: {
+      async request() {
+        executionRequests += 1;
+        throw new Error("unexpected execution-provider fallback");
+      },
+    },
+    sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+  });
+
+  await assert.rejects(
+    () => sdk.proveInboundToSora({ transactionHash: TX_HASH, receiptProof: sampleReceiptProof }),
+    (error) => {
+      assert.equal(error.code, "ERR_SCCP_ETH_INBOUND_PROVER_UNAVAILABLE");
+      assert.match(error.message, /local JS\/native proveInbound/u);
+      return true;
+    },
+  );
+  assert.equal(executionRequests, 0);
+
+  await assert.rejects(
+    () => sdk.proveOutboundToEthereum(sampleOutboundInput()),
+    (error) => {
+      assert.equal(error.code, "ERR_SCCP_ETH_OUTBOUND_PROVER_UNAVAILABLE");
+      assert.match(error.message, /local JS\/native EVM prover/u);
+      return true;
+    },
+  );
+  assert.equal(executionRequests, 0);
 });
 
 test("EthereumMainnetSccp calldata requires a wrapped Ethereum mainnet proof result", () => {
@@ -1504,6 +2526,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
   assert.equal(await sdk.submitOutboundToEthereum({ proofResult }), "0xeth1");
   assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
   assert.equal(submittedTxs[0].data, sdk.buildEthereumCalldata({ proofResult }).callDataHex);
+  assert.equal(submittedTxs[0].chainId, "0x1");
 
   const { destinationBinding, ...proofResultWithoutBinding } = proofResult;
   const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = destinationBinding;
@@ -1516,6 +2539,7 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
   };
   assert.equal(await sdk.submitOutboundToEthereum({ proof_result: snakeProofResult }), "0xeth2");
   assert.equal(submittedTxs[1].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[1].chainId, "0x1");
 
   assert.equal(
     await sdk.submitOutboundToEthereum({
@@ -1525,12 +2549,29 @@ test("EthereumMainnetSccp outbound provider path derives target from wrapped pro
     "0xeth3",
   );
   assert.equal(submittedTxs[2].to, request.destinationBinding.bridgeAddress);
+  assert.equal(submittedTxs[2].chainId, "0x1");
+
+  assert.equal(
+    await sdk.submitOutboundToEthereum({
+      proofResult,
+      from: `0x${"AA".repeat(20)}`,
+    }),
+    "0xeth4",
+  );
+  assert.equal(submittedTxs[3].from, `0x${"aa".repeat(20)}`);
+  assert.equal(submittedTxs[3].chainId, "0x1");
+
+  await assert.rejects(
+    () => sdk.submitOutboundToEthereum({ proofResult, from: `0x${"00".repeat(20)}` }),
+    /Ethereum mainnet SCCP outbound from must not be zero/u,
+  );
+  assert.equal(submittedTxs.length, 4);
 
   await assert.rejects(
     () => sdk.submitOutboundToEthereum({ proofResult, to: `0x${"77".repeat(20)}` }),
     /to address must match proofResult\.destinationBinding\.bridgeAddress/u,
   );
-  assert.equal(submittedTxs.length, 3);
+  assert.equal(submittedTxs.length, 4);
 
   let guardedSubmitterCalled = false;
   const guardedSdk = new EthereumMainnetSccp({

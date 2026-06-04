@@ -2518,7 +2518,7 @@ pub fn release_directory(options: DirectoryReleaseOptions) -> Result<(), Box<dyn
         prev_root.as_ref(),
         proof_manifest_cid.as_ref(),
         &builder_public_key,
-    );
+    )?;
     let signing_bytes = serde_json::to_vec(&signing_payload)?;
     let builder_signature = Signature::new(builder_keypair.private_key(), &signing_bytes);
 
@@ -2897,9 +2897,18 @@ impl SigningPayload {
         previous_root: Option<&[u8; 32]>,
         proof_manifest_cid: &str,
         builder_public_key: &iroha_crypto::PublicKey,
-    ) -> Self {
-        let (_, pk_bytes) = builder_public_key.to_bytes();
-        SigningPayload {
+    ) -> Result<Self, Box<dyn Error>> {
+        let (algorithm, pk_bytes) = builder_public_key
+            .try_to_bytes()
+            .map_err(|err| format!("builder public key is malformed: {err}"))?;
+        if algorithm != Algorithm::Ed25519 {
+            return Err(format!(
+                "builder public key must be Ed25519, got {}",
+                algorithm.as_static_str()
+            )
+            .into());
+        }
+        Ok(SigningPayload {
             record_version,
             created_at_ms,
             rad_count,
@@ -2908,7 +2917,7 @@ impl SigningPayload {
             previous_root_hex: previous_root.map(hex_encode),
             proof_manifest_cid: proof_manifest_cid.to_string(),
             builder_public_key_hex: hex_encode(pk_bytes),
-        }
+        })
     }
 }
 
@@ -3215,6 +3224,31 @@ mod tests {
             Some(digest_lower.as_str()),
             "manifest digest should be normalised to lowercase"
         );
+    }
+
+    #[test]
+    fn signing_payload_uses_checked_builder_public_key_payload() {
+        let key_pair = KeyPair::from_seed(b"xtask-soradns-release".to_vec(), Algorithm::Ed25519);
+        let (_, expected_payload) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key is well-formed");
+        let root_hash = [0x11; 32];
+        let directory_json_sha256 = [0x22; 32];
+        let previous_root = [0x33; 32];
+        let payload = SigningPayload::new(
+            1,
+            42,
+            7,
+            &root_hash,
+            &directory_json_sha256,
+            Some(&previous_root),
+            "/ipfs/bafyrelease",
+            key_pair.public_key(),
+        )
+        .expect("signing payload builds");
+
+        assert_eq!(payload.builder_public_key_hex, hex_encode(expected_payload));
     }
 
     #[test]

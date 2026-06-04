@@ -7385,7 +7385,10 @@ mod state {
                 connection.transport_binding.as_ref(),
             );
             let signature = Signature::new(key_pair.private_key(), &payload);
-            let (alg, pk_bytes) = key_pair.public_key().to_bytes();
+            let (alg, pk_bytes) = key_pair
+                .public_key()
+                .try_to_bytes()
+                .map_err(crate::Error::HandshakePublicKeyMalformed)?;
             let hello = HandshakeHelloV1 {
                 algorithm: alg,
                 public_key: pk_bytes.to_vec(),
@@ -8129,7 +8132,10 @@ mod tests {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
         let key_pair = KeyPair::random();
-        let (alg, pk_bytes) = key_pair.public_key().to_bytes();
+        let (alg, pk_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1337".parse().unwrap();
         let hello = HandshakeHelloV1 {
             algorithm: alg,
@@ -8173,7 +8179,10 @@ mod tests {
         let cryptographer =
             Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[11u8; 32]).unwrap();
         let key_pair = KeyPair::random();
-        let (alg, pk_bytes) = key_pair.public_key().to_bytes();
+        let (alg, pk_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
         let hello = HandshakeHelloV1 {
             algorithm: alg,

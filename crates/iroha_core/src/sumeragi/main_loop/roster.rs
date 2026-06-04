@@ -106,7 +106,7 @@ pub(super) fn compute_roster_indices_from_topology(
 
 pub(super) fn roster_member_allowed_bls(peer: &PeerId) -> bool {
     let pk = peer.public_key();
-    if pk.algorithm() != iroha_crypto::Algorithm::BlsNormal {
+    if !crate::sumeragi::is_bls_normal_public_key(pk) {
         iroha_logger::warn!(
             ?pk,
             "excluding peer from active topology: validator identity must be BLS-normal"

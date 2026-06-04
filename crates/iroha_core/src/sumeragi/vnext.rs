@@ -1048,6 +1048,8 @@ pub enum VNextSignatureError {
         /// Unsupported public-key algorithm.
         algorithm: Algorithm,
     },
+    /// Aggregate verification saw a malformed public-key envelope.
+    MalformedAggregatePublicKey,
     /// Signers selected by the bitmap did not satisfy the quorum policy.
     QuorumNotMet {
         /// Number of signers selected by the bitmap.
@@ -1150,7 +1152,10 @@ fn verify_preaggregated_vnext_signature(
         });
     }
     for signer in &signers {
-        let algorithm = signer.public_key().algorithm();
+        let algorithm = signer
+            .public_key()
+            .try_algorithm()
+            .map_err(|_| VNextSignatureError::MalformedAggregatePublicKey)?;
         if algorithm != Algorithm::BlsNormal {
             return Err(VNextSignatureError::UnsupportedAggregateKeyAlgorithm { algorithm });
         }
@@ -1751,6 +1756,31 @@ mod tests {
                 index: 3,
                 roster_len: 3,
             })
+        );
+    }
+
+    #[test]
+    fn preaggregated_vnext_signature_rejects_non_bls_signer_after_checked_algorithm() {
+        let keypair = KeyPair::from_seed(b"vnext-non-bls-signer".to_vec(), Algorithm::Ed25519);
+        let signer_roster = vec![PeerId::new(keypair.public_key().clone())];
+        let pops = [Vec::new()];
+        let pop_refs = pops.iter().map(Vec::as_slice).collect::<Vec<_>>();
+
+        let err = verify_preaggregated_vnext_signature(
+            b"vnext-preimage".to_vec(),
+            &[0b0000_0001],
+            &[0xA5; 96],
+            &signer_roster,
+            &pop_refs,
+            &QuorumPolicy::Count { required: 1 },
+        )
+        .expect_err("non-BLS signer must be rejected before aggregate verification");
+
+        assert_eq!(
+            err,
+            VNextSignatureError::UnsupportedAggregateKeyAlgorithm {
+                algorithm: Algorithm::Ed25519
+            }
         );
     }
 

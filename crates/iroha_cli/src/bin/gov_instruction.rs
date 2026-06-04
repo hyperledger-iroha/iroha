@@ -1,6 +1,9 @@
 //! Encode governance instructions and proof-gated governance helper transactions.
 
-use std::{path::PathBuf, str::FromStr};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
@@ -31,8 +34,8 @@ const DEFAULT_LEDGER_GAS_LIMIT: u64 = 2_000_000;
 const DEFAULT_IVM_GAS_LIMIT: u64 = 50_000_000;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const LITERAL_DATA_START: i16 = 16;
-const WIDE_IMM_MIN: i64 = -128;
-const WIDE_IMM_MAX: i64 = 127;
+const WIDE_IMM_MIN: i8 = -128;
+const WIDE_IMM_MAX: i8 = 127;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -190,20 +193,22 @@ fn print_json_value(value: &norito::json::Value) -> Result<()> {
     Ok(())
 }
 
-fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
+fn make_tlv(type_id: u16, payload: &[u8]) -> Result<Vec<u8>> {
+    let payload_len =
+        u32::try_from(payload.len()).map_err(|_| eyre!("TLV payload length exceeds u32::MAX"))?;
     let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
     out.extend_from_slice(&type_id.to_be_bytes());
     out.push(1);
-    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&payload_len.to_be_bytes());
     out.extend_from_slice(payload);
     let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
     out.extend_from_slice(&h);
-    out
+    Ok(out)
 }
 
 fn norito_tlv<T: norito::NoritoSerialize>(value: &T) -> Result<Vec<u8>> {
     let payload = norito::to_bytes(value)?;
-    Ok(make_tlv(ivm::PointerType::NoritoBytes as u16, &payload))
+    make_tlv(ivm::PointerType::NoritoBytes as u16, &payload)
 }
 
 fn push_word(code: &mut Vec<u8>, word: u32) {
@@ -211,13 +216,8 @@ fn push_word(code: &mut Vec<u8>, word: u32) {
 }
 
 fn chunk_immediate(value: i64) -> i8 {
-    if value > WIDE_IMM_MAX {
-        WIDE_IMM_MAX as i8
-    } else if value < WIDE_IMM_MIN {
-        WIDE_IMM_MIN as i8
-    } else {
-        value as i8
-    }
+    let clamped = value.clamp(i64::from(WIDE_IMM_MIN), i64::from(WIDE_IMM_MAX));
+    i8::try_from(clamped).expect("clamped immediate must fit in i8")
 }
 
 fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
@@ -233,7 +233,7 @@ fn emit_addi(code: &mut Vec<u8>, rd: u8, rs1: u8, mut value: i64) {
             code,
             ivm::encoding::wide::encode_ri(ivm::instruction::wide::arithmetic::ADDI, rd, rd, chunk),
         );
-        value -= chunk as i64;
+        value -= i64::from(chunk);
     }
 }
 
@@ -248,7 +248,11 @@ fn push_syscall(code: &mut Vec<u8>, syscall: u32) -> Result<()> {
     Ok(())
 }
 
-fn assemble_program_with_literals(code: &[u8], literal_data: &[u8], max_cycles: u64) -> Vec<u8> {
+fn assemble_program_with_literals(
+    code: &[u8],
+    literal_data: &[u8],
+    max_cycles: u64,
+) -> Result<Vec<u8>> {
     let metadata = ivm::ProgramMetadata {
         max_cycles,
         mode: ivm::ivm_mode::ZK,
@@ -257,17 +261,23 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8], max_cycles: 
     };
     let mut program = metadata.encode();
     if !literal_data.is_empty() {
-        let unpadded_literal_len = 16 + literal_data.len();
+        let literal_data_len = u32::try_from(literal_data.len())
+            .map_err(|_| eyre!("literal table data length exceeds u32::MAX"))?;
+        let unpadded_literal_len = literal_data
+            .len()
+            .checked_add(16)
+            .ok_or_else(|| eyre!("literal table length overflow"))?;
         let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
+        let post_pad_u32 = u32::try_from(post_pad).expect("post-padding is at most three bytes");
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
-        program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
+        program.extend_from_slice(&post_pad_u32.to_le_bytes());
+        program.extend_from_slice(&literal_data_len.to_le_bytes());
         program.extend_from_slice(literal_data);
         program.extend(std::iter::repeat_n(0u8, post_pad));
     }
     program.extend_from_slice(code);
-    program
+    Ok(program)
 }
 
 fn build_record_instruction_program(
@@ -283,7 +293,7 @@ fn build_record_instruction_program(
         ivm::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
     )?;
     code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-    Ok(assemble_program_with_literals(&code, &tlv, max_cycles))
+    assemble_program_with_literals(&code, &tlv, max_cycles)
 }
 
 fn insert_string_metadata(
@@ -304,8 +314,8 @@ fn tx_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     Ok(metadata)
 }
 
-fn load_config(path: &PathBuf) -> Result<Config> {
-    Config::load(LoadPath::Explicit(path.clone())).map_err(|report| {
+fn load_config(path: &Path) -> Result<Config> {
+    Config::load(LoadPath::Explicit(path.to_path_buf())).map_err(|report| {
         eyre!(
             "failed to load client config `{}`: {report}",
             path.display()
@@ -376,7 +386,7 @@ fn ivm_request_value(
     Ok(norito::json::Value::Object(object))
 }
 
-fn proved_from_derive_response(value: norito::json::Value) -> Result<IvmProved> {
+fn proved_from_derive_response(value: &norito::json::Value) -> Result<IvmProved> {
     let proved = value
         .as_object()
         .and_then(|object| object.get("proved"))
@@ -419,6 +429,7 @@ fn prove_ivm_execution_attachment(
     ))
 }
 
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn submit_sccp_transfer_ivm_proved(
     config_path: PathBuf,
     vk_name: String,
@@ -468,11 +479,10 @@ fn submit_sccp_transfer_ivm_proved(
     let bytecode = IvmBytecode::from_compiled(program);
     let metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
     let request = ivm_request_value(&vk_ref, &config, &metadata, &bytecode)?;
-    let proved = proved_from_derive_response(
-        client
-            .post_zk_ivm_derive_json(&request)
-            .wrap_err("failed to derive IVM proved payload via Torii")?,
-    )?;
+    let derive_response = client
+        .post_zk_ivm_derive_json(&request)
+        .wrap_err("failed to derive IVM proved payload via Torii")?;
+    let proved = proved_from_derive_response(&derive_response)?;
     let attachment = prove_ivm_execution_attachment(vk_ref, &proved)?;
     let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
         .with_metadata(metadata)
@@ -490,7 +500,7 @@ fn submit_sccp_transfer_ivm_proved(
     print_json_value(&norito::json::Value::Object(output))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn build_sccp_transfer_ivm_derive_request(
     config_path: PathBuf,
     vk_name: String,
@@ -582,6 +592,7 @@ fn record_sccp_transfer_payload_bytes(
     Ok((message_id, payload_bytes))
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {

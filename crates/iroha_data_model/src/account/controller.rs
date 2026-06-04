@@ -145,8 +145,8 @@ impl MultisigPolicy {
 
         let mut keyed: Vec<(Vec<u8>, MultisigMember)> = members
             .into_iter()
-            .map(|member| (member.canonical_sort_key(), member))
-            .collect();
+            .map(|member| member.canonical_sort_key().map(|key| (key, member)))
+            .collect::<Result<_, _>>()?;
         keyed.sort_by(|left, right| left.0.cmp(&right.0));
 
         let mut deduped = Vec::with_capacity(keyed.len());
@@ -206,10 +206,14 @@ impl MultisigPolicy {
             .sum()
     }
 
-    /// Encode the policy into the CTAP2-style canonical CBOR map used for
-    /// multisignature fixtures.
-    #[must_use]
-    pub fn encode_ctap2(&self) -> Vec<u8> {
+    /// Fallibly encode the policy into the CTAP2-style canonical CBOR map used
+    /// for multisignature fixtures.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MultisigPolicyError::MalformedPublicKey`] if a member key
+    /// cannot expose a well-formed compact payload.
+    pub fn try_encode_ctap2(&self) -> Result<Vec<u8>, MultisigPolicyError> {
         let mut buffer = Vec::with_capacity(128);
         cbor_write_map_len(&mut buffer, CTAP2_POLICY_FIELD_COUNT);
         cbor_write_unsigned(&mut buffer, u64::from(CTAP2_POLICY_KEY_VERSION));
@@ -222,7 +226,10 @@ impl MultisigPolicy {
         for member in self.members() {
             cbor_write_map_len(&mut buffer, CTAP2_MEMBER_FIELD_COUNT);
             cbor_write_unsigned(&mut buffer, u64::from(CTAP2_MEMBER_KEY_CURVE));
-            let (algorithm, payload) = member.public_key().to_bytes();
+            let (algorithm, payload) = member
+                .public_key()
+                .try_to_bytes()
+                .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
             let curve_id = CurveId::try_from_algorithm(algorithm)
                 .expect("multisig members validate curve support at construction");
             cbor_write_unsigned(&mut buffer, u64::from(curve_id.as_u8()));
@@ -232,14 +239,28 @@ impl MultisigPolicy {
             cbor_write_bytes(&mut buffer, payload);
         }
 
-        buffer
+        Ok(buffer)
     }
 
-    /// Compute the canonical Blake2b-256 digest (personalised) over the
-    /// CTAP2-encoded policy.
+    /// Encode the policy into the CTAP2-style canonical CBOR map used for
+    /// multisignature fixtures.
     #[must_use]
-    pub fn digest_blake2b256(&self) -> [u8; CTAP2_POLICY_DIGEST_LEN] {
-        let encoded = self.encode_ctap2();
+    pub fn encode_ctap2(&self) -> Vec<u8> {
+        self.try_encode_ctap2()
+            .expect("multisig policy members validate public-key shape at construction")
+    }
+
+    /// Fallibly compute the canonical Blake2b-256 digest (personalised) over
+    /// the CTAP2-encoded policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MultisigPolicyError::MalformedPublicKey`] if CTAP2 encoding
+    /// cannot extract a member's compact public-key payload.
+    pub fn try_digest_blake2b256(
+        &self,
+    ) -> Result<[u8; CTAP2_POLICY_DIGEST_LEN], MultisigPolicyError> {
+        let encoded = self.try_encode_ctap2()?;
         let mut hasher =
             Blake2bMac::<U32>::new_with_salt_and_personal(&[], &[], CTAP2_POLICY_PERSONALISATION)
                 .expect("personalised Blake2b parameters must be valid");
@@ -247,7 +268,15 @@ impl MultisigPolicy {
         let mut output = [0u8; CTAP2_POLICY_DIGEST_LEN];
         let tag = hasher.finalize().into_bytes();
         output.copy_from_slice(&tag);
-        output
+        Ok(output)
+    }
+
+    /// Compute the canonical Blake2b-256 digest (personalised) over the
+    /// CTAP2-encoded policy.
+    #[must_use]
+    pub fn digest_blake2b256(&self) -> [u8; CTAP2_POLICY_DIGEST_LEN] {
+        self.try_digest_blake2b256()
+            .expect("multisig policy members validate public-key shape at construction")
     }
 }
 
@@ -273,7 +302,9 @@ impl MultisigMember {
         if weight == 0 {
             return Err(MultisigPolicyError::MemberWeightZero);
         }
-        let algorithm = public_key.algorithm();
+        let algorithm = public_key
+            .try_algorithm()
+            .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
         CurveId::try_from_algorithm(algorithm)
             .map_err(|_| MultisigPolicyError::UnsupportedCurve(algorithm))?;
         Ok(Self { public_key, weight })
@@ -291,19 +322,35 @@ impl MultisigMember {
         self.weight
     }
 
+    /// Try to return the signing algorithm used by the member.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MultisigPolicyError::MalformedPublicKey`] if the stored
+    /// public key payload is malformed.
+    pub fn try_algorithm(&self) -> Result<Algorithm, MultisigPolicyError> {
+        self.public_key
+            .try_algorithm()
+            .map_err(|_| MultisigPolicyError::MalformedPublicKey)
+    }
+
     /// Signing algorithm used by the member.
     #[must_use]
     pub fn algorithm(&self) -> Algorithm {
-        self.public_key.algorithm()
+        self.try_algorithm()
+            .expect("validated multisig member public key must remain well-formed")
     }
 
-    fn canonical_sort_key(&self) -> Vec<u8> {
-        let (algorithm, payload) = self.public_key.to_bytes();
+    fn canonical_sort_key(&self) -> Result<Vec<u8>, MultisigPolicyError> {
+        let (algorithm, payload) = self
+            .public_key
+            .try_to_bytes()
+            .map_err(|_| MultisigPolicyError::MalformedPublicKey)?;
         let mut key = Vec::with_capacity(algorithm.as_static_str().len() + 1 + payload.len());
         key.extend_from_slice(algorithm.as_static_str().as_bytes());
         key.push(0);
         key.extend_from_slice(payload);
-        key
+        Ok(key)
     }
 }
 
@@ -339,6 +386,9 @@ pub enum MultisigPolicyError {
     /// Multisig member uses an unsupported signing curve.
     #[error("multisig member uses unsupported curve: {0}")]
     UnsupportedCurve(Algorithm),
+    /// Multisig member public key is malformed.
+    #[error("multisig member public key is malformed")]
+    MalformedPublicKey,
     /// Duplicate member encountered.
     #[error("duplicate multisig member public key")]
     DuplicateMember,
@@ -453,6 +503,13 @@ mod tests {
         let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::Secp256k1).into_parts();
         let member = MultisigMember::new(public_key.clone(), 1).expect("member must be valid");
         assert_eq!(member.public_key(), &public_key);
+        assert_eq!(
+            member
+                .try_algorithm()
+                .expect("member public key must be valid"),
+            Algorithm::Secp256k1
+        );
+        assert_eq!(member.algorithm(), Algorithm::Secp256k1);
     }
 
     #[test]
@@ -515,7 +572,8 @@ mod tests {
             .collect();
         let policy = MultisigPolicy::new(3, members).expect("policy");
 
-        let encoded = policy.encode_ctap2();
+        let encoded = policy.try_encode_ctap2().expect("fallible CTAP2 encoding");
+        assert_eq!(encoded, policy.encode_ctap2());
         assert!(
             !encoded.is_empty(),
             "CTAP2 encoding must produce a non-empty payload"
@@ -525,7 +583,9 @@ mod tests {
             "CTAP2 encoding should begin with a 3-field map header"
         );
 
-        let digest = policy.digest_blake2b256();
+        let digest = policy
+            .try_digest_blake2b256()
+            .expect("fallible CTAP2 digest");
         assert_ne!(
             digest, [0u8; CTAP2_POLICY_DIGEST_LEN],
             "digest must not be zeroed"

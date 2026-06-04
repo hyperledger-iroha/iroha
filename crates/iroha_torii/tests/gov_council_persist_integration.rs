@@ -99,7 +99,8 @@ async fn persist_vrf_council_and_get_current_matches() {
     let mut candidates = Vec::new();
     for i in 0..5u8 {
         let (pk, sk) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]));
+            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]))
+                .expect("deterministic BLS normal keypair");
         let pk_bytes = KeyPair::from((pk.clone(), sk.clone()))
             .public_key()
             .to_bytes()
@@ -111,7 +112,8 @@ async fn persist_vrf_council_and_get_current_matches() {
         let account_id = account.to_string();
         let input = parliament::build_input(&seed, &account);
         let (_y, pi) =
-            iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id_str.as_bytes(), &input);
+            iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_id_str.as_bytes(), &input)
+                .expect("normal VRF proof");
         let pr_b64 = base64::engine::general_purpose::STANDARD.encode(match pi {
             iroha_crypto::vrf::VrfProof::SigInG2(arr) => arr.to_vec(),
             _ => unreachable!(),

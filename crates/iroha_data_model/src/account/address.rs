@@ -801,7 +801,9 @@ impl ControllerPayload {
     ) -> Result<(AddressClass, Self), AccountAddressError> {
         match controller {
             AccountController::Single(key) => {
-                let (algorithm, _) = key.to_bytes();
+                let (algorithm, _) = key
+                    .try_to_bytes()
+                    .map_err(|_| AccountAddressError::InvalidPublicKey)?;
                 let curve =
                     CurveId::try_from_algorithm(algorithm).map_err(AccountAddressError::from)?;
                 Ok((
@@ -820,7 +822,10 @@ impl ControllerPayload {
                 }
                 let mut members = Vec::with_capacity(policy.members().len());
                 for member in policy.members() {
-                    let (algorithm, _) = member.public_key().to_bytes();
+                    let (algorithm, _) = member
+                        .public_key()
+                        .try_to_bytes()
+                        .map_err(|_| AccountAddressError::InvalidPublicKey)?;
                     let curve = CurveId::try_from_algorithm(algorithm)
                         .map_err(AccountAddressError::from)?;
                     members.push(MultisigMemberPayload {
@@ -844,7 +849,9 @@ impl ControllerPayload {
     fn encode_into(&self, out: &mut Vec<u8>) -> Result<(), AccountAddressError> {
         match self {
             Self::SingleKey { curve, public_key } => {
-                let (_alg, payload) = public_key.to_bytes();
+                let (_alg, payload) = public_key
+                    .try_to_bytes()
+                    .map_err(|_| AccountAddressError::InvalidPublicKey)?;
                 if let Ok(length) = u8::try_from(payload.len()) {
                     out.push(CONTROLLER_SINGLE_KEY_TAG);
                     out.push(curve.as_u8());
@@ -870,7 +877,10 @@ impl ControllerPayload {
                 for member in &payload.members {
                     out.push(member.curve.as_u8());
                     out.extend_from_slice(&member.weight.to_be_bytes());
-                    let (_alg, key_bytes) = member.public_key.to_bytes();
+                    let (_alg, key_bytes) = member
+                        .public_key
+                        .try_to_bytes()
+                        .map_err(|_| AccountAddressError::InvalidPublicKey)?;
                     let length = u16::try_from(key_bytes.len())
                         .map_err(|_| AccountAddressError::KeyPayloadTooLong(u16::MAX))?;
                     out.extend_from_slice(&length.to_be_bytes());
@@ -2143,7 +2153,9 @@ mod tests {
     #[test]
     fn account_address_encodes_mldsa_controller_with_extended_length() {
         let (public_key, _) = KeyPair::random_with_algorithm(Algorithm::MlDsa).into_parts();
-        let (_algorithm, key_payload) = public_key.to_bytes();
+        let (_algorithm, key_payload) = public_key
+            .try_to_bytes()
+            .expect("fixture ML-DSA public key must be well-formed");
         assert!(
             key_payload.len() > u8::MAX as usize,
             "ML-DSA public keys must exercise extended single-key encoding"

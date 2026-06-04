@@ -12514,6 +12514,11 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
         GROTH16_PROOF_BYTES,
         request,
     )
+    with pytest.raises(TypeError, match="canonical|destinationBinding"):
+        wrap_bsc_mainnet_sccp_destination_proof_result(
+            GROTH16_PROOF_BYTES,
+            {**request, "destination_binding_hash": "0x" + "99" * 32},
+        )
     submission = build_bsc_mainnet_sccp_destination_submission(
         {"proof_result": proof_result}
     )
@@ -12537,6 +12542,15 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
     async_result = asyncio.run(BscMainnetSccpProver(prove=prove).prove(input_value))
     assert async_result["destination_binding_hash"] == binding["binding_hash"]
 
+    async def zero_prove(
+        _callback_request: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        return {"proof_bytes": bytes(len(GROTH16_PROOF_BYTES))}
+
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(BscMainnetSccpProver(prove=zero_prove).prove(input_value))
+
     facade = BscMainnetSccp(prove=prove)
     facade_request = asyncio.run(facade.build_outbound_proof_request(input_value))
     facade_result = asyncio.run(facade.prove_outbound_to_bsc(input_value))
@@ -12547,6 +12561,9 @@ def test_bsc_mainnet_sccp_facade_requires_chain_id_56_and_bsc_target() -> None:
     assert facade_request["target_domain"] == SCCP_DOMAIN_BSC
     assert facade_result["destination_binding_hash"] == binding["binding_hash"]
     assert facade_submission["target_domain"] == SCCP_DOMAIN_BSC
+
+    with pytest.raises(TypeError, match="proofBytes must not be all zero"):
+        asyncio.run(BscMainnetSccp(prove=zero_prove).prove_outbound_to_bsc(input_value))
 
     async def submit_outbound(
         callback_submission: Mapping[str, Any],
@@ -12663,6 +12680,7 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
                     "blockHash": HEX32_B,
                     "blockNumber": "0x1234",
                     "status": "0x1",
+                    "logs": [source_event_log()],
                 }
             if method == "eth_getBlockByHash":
                 assert params == [HEX32_B, False]
@@ -12697,6 +12715,9 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
         assert evidence["source_domain"] == SCCP_DOMAIN_BSC
         assert evidence["target_domain"] == SCCP_DOMAIN_SORA
         assert evidence["parlia_finality"]["commit_seal_hash"] == HEX32_D
+        assert evidence["receipt_proof"]["block_hash"] == HEX32_B
+        assert evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
+        assert evidence["source_bridge_emitter_address"] == SOURCE_BRIDGE_ADDRESS
         return b"\x01\x02\x03"
 
     submitted: list[bytes] = []
@@ -12711,6 +12732,7 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
         consensus_provider=ConsensusProvider(),
         prove_inbound=prove_inbound,
         submit_inbound_to_iroha=submit_inbound,
+        source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS,
     )
 
     evidence = asyncio.run(
@@ -12723,9 +12745,162 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
     assert evidence["parlia_finality"]["execution_block_hash"] == HEX32_B
     assert evidence["parlia_finality"]["execution_receipts_root"] == HEX32_C
     assert evidence["parlia_finality"]["validator_epoch"] == "0x24"
+    assert evidence["source_event_digest"] == SOURCE_EVENT_DIGEST
+    assert evidence["source_bridge_emitter_address"] == SOURCE_BRIDGE_ADDRESS
 
-    proof = asyncio.run(sdk.prove_inbound_to_sora({"transaction_hash": HEX32_A}))
+    receipt_proof = {
+        "source_domain": SCCP_DOMAIN_BSC,
+        "source_event_digest": "0x" + "34" * 32,
+        "validator_epoch": "36",
+        "block_number": "4660",
+        "block_hash": HEX32_B,
+        "receipts_root": HEX32_C,
+        "validator_set_hash": HEX32_E,
+        "commit_seal_hash": HEX32_D,
+        "receipt_root_index": "0",
+        "receipt_trie_proof_nodes": [EVM_RECEIPT_STATE_MPT_NODE_HEX],
+        "inclusion_branch": [HEX32_E],
+    }
+    receipt_proof_hash = bsc_sccp_receipt_proof_hash(receipt_proof)
+    proof = asyncio.run(
+        sdk.prove_inbound_to_sora(
+            {"transaction_hash": HEX32_A, "receipt_proof": receipt_proof}
+        )
+    )
     assert proof == b"\x01\x02\x03"
+    receipt_proof_evidence = asyncio.run(
+        BscMainnetSccp().collect_inbound_evidence_from_receipt(
+            {
+                "receipt_proof": receipt_proof,
+                "receipt_proof_hash": receipt_proof_hash,
+                "parlia_finality": {
+                    "execution_block_number": "0x1234",
+                    "execution_block_hash": HEX32_B,
+                    "execution_receipts_root": HEX32_C,
+                },
+            }
+        )
+    )
+    assert receipt_proof_evidence["receipt_proof"]["block_hash"] == HEX32_B
+    assert receipt_proof_evidence["receipt_proof_hash"] == receipt_proof_hash
+
+    called_without_source_event = False
+
+    async def prove_without_source_event(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal called_without_source_event
+        called_without_source_event = True
+        return b"\x01"
+
+    with pytest.raises(TypeError, match="requires receipt source event validation"):
+        asyncio.run(
+            BscMainnetSccp(prove_inbound=prove_without_source_event).prove_inbound_to_sora(
+                {
+                    "receipt_proof": receipt_proof,
+                    "receipt_proof_hash": receipt_proof_hash,
+                    "parlia_finality": {
+                        "execution_block_number": "0x1234",
+                        "execution_block_hash": HEX32_B,
+                        "execution_receipts_root": HEX32_C,
+                    },
+                }
+            )
+        )
+    assert called_without_source_event is False
+
+    with pytest.raises(ValueError, match="receiptProof.sourceEventDigest"):
+        asyncio.run(
+            BscMainnetSccp().collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        "transactionHash": HEX32_A,
+                        "blockHash": HEX32_B,
+                        "blockNumber": "0x1234",
+                        "status": "0x1",
+                        "logs": [
+                            source_event_log(
+                                topics=[evm_sccp_source_event_topic(), HEX32_D]
+                            )
+                        ],
+                    },
+                    "block": {
+                        "hash": HEX32_B,
+                        "number": "0x1234",
+                        "receiptsRoot": HEX32_C,
+                    },
+                    "source_bridge_emitter_address": SOURCE_BRIDGE_ADDRESS,
+                    "receipt_proof": receipt_proof,
+                    "receipt_proof_hash": receipt_proof_hash,
+                    "parlia_finality": {
+                        "execution_block_number": "0x1234",
+                        "execution_block_hash": HEX32_B,
+                        "execution_receipts_root": HEX32_C,
+                    },
+                }
+            )
+        )
+
+    malformed_source_log_cases = (
+        (
+            [source_event_log(topics=[evm_sccp_source_event_topic(), SOURCE_EVENT_DIGEST, HEX32_F])],
+            "exactly 2 topics",
+        ),
+        ([source_event_log(data="0x01")], "data must be 0x"),
+        (
+            [source_event_log(topics=[evm_sccp_source_event_topic(), "0x" + "00" * 32])],
+            "digest must not be zero",
+        ),
+        ([source_event_log(), source_event_log()], "exactly one matching"),
+        ([source_event_log(removed=True)], "removed logs"),
+    )
+    for logs, message in malformed_source_log_cases:
+        with pytest.raises((TypeError, ValueError), match=message):
+            asyncio.run(
+                BscMainnetSccp(
+                    source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+                ).collect_inbound_evidence_from_receipt(
+                    {
+                        "receipt": {
+                            "transactionHash": HEX32_A,
+                            "blockHash": HEX32_B,
+                            "blockNumber": "0x1234",
+                            "status": "0x1",
+                            "logs": logs,
+                        },
+                        "block": {
+                            "hash": HEX32_B,
+                            "number": "0x1234",
+                            "receiptsRoot": HEX32_C,
+                        },
+                    }
+                )
+            )
+
+    missing_transaction_hash_log = source_event_log()
+    del missing_transaction_hash_log["transactionHash"]
+    with pytest.raises(TypeError, match=r"receipt\.logs\[0\]\.transactionHash"):
+        asyncio.run(
+            BscMainnetSccp(
+                source_bridge_emitter_address=SOURCE_BRIDGE_ADDRESS
+            ).collect_inbound_evidence_from_receipt(
+                {
+                    "receipt": {
+                        "transactionHash": HEX32_A,
+                        "blockHash": HEX32_B,
+                        "blockNumber": "0x1234",
+                        "status": "0x1",
+                        "logs": [missing_transaction_hash_log],
+                    },
+                    "block": {
+                        "hash": HEX32_B,
+                        "number": "0x1234",
+                        "receiptsRoot": HEX32_C,
+                    },
+                }
+            )
+        )
 
     called_without_finality = False
 
@@ -12749,6 +12924,31 @@ def test_bsc_mainnet_sccp_facade_collects_inbound_receipts_and_copies_proofs() -
             )
         )
     assert called_without_finality is False
+
+    called_with_hash_only = False
+
+    async def prove_hash_only(
+        _evidence: Mapping[str, Any],
+        _options: Mapping[str, Any],
+    ) -> bytes:
+        nonlocal called_with_hash_only
+        called_with_hash_only = True
+        return b"\x01"
+
+    with pytest.raises(TypeError, match="requires receiptProof"):
+        asyncio.run(
+            BscMainnetSccp(prove_inbound=prove_hash_only).prove_inbound_to_sora(
+                {
+                    "receipt_proof_hash": HEX32_A,
+                    "parlia_finality": {
+                        "execution_block_number": "0x1234",
+                        "execution_block_hash": HEX32_B,
+                        "execution_receipts_root": HEX32_C,
+                    },
+                }
+            )
+        )
+    assert called_with_hash_only is False
 
     mutable_proof = bytearray(b"\x04\x05\x06")
     assert asyncio.run(sdk.submit_inbound_to_iroha(mutable_proof)) == "submitted"

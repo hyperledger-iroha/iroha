@@ -59,6 +59,15 @@ pub enum GatewayAuthorizationError {
         /// Algorithm encountered.
         algorithm: Algorithm,
     },
+    /// The registered key could not expose a well-formed algorithm tag.
+    #[error("gateway key `{key_id}` is malformed")]
+    MalformedPublicKey {
+        /// Key identifier.
+        key_id: String,
+        /// Underlying compact-key parse error.
+        #[source]
+        source: iroha_crypto::error::ParseError,
+    },
     /// Signature length didn't match the Ed25519 encoding.
     #[error("invalid signature length: expected 64 bytes, got {found}")]
     InvalidSignatureLength {
@@ -428,10 +437,16 @@ impl GatewayAuthorizationVerifier {
             .keys
             .get(&key_id)
             .ok_or_else(|| GatewayAuthorizationError::UnknownKeyId(key_id.clone()))?;
-        if public_key.algorithm() != Algorithm::Ed25519 {
+        let key_algorithm = public_key.try_algorithm().map_err(|source| {
+            GatewayAuthorizationError::MalformedPublicKey {
+                key_id: key_id.clone(),
+                source,
+            }
+        })?;
+        if key_algorithm != Algorithm::Ed25519 {
             return Err(GatewayAuthorizationError::InvalidKeyAlgorithm {
                 key_id: key_id.clone(),
-                algorithm: public_key.algorithm(),
+                algorithm: key_algorithm,
             });
         }
         signature
@@ -1083,6 +1098,28 @@ mod tests {
         let jws = build_jws(&signing_key, &payload);
         let err = verifier.verify(&jws).expect_err("unknown key");
         assert!(matches!(err, GatewayAuthorizationError::UnknownKeyId(_)));
+    }
+
+    #[test]
+    fn verify_rejects_registered_non_ed25519_key_before_signature_verification() {
+        let (_, signing_key) = build_test_verifier();
+        let secp_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let mut verifier = GatewayAuthorizationVerifier::default();
+        verifier.insert("council-key-1", secp_keypair.public_key().clone());
+        let payload = base_payload();
+        let jws = build_jws(&signing_key, &payload);
+
+        let err = verifier
+            .verify(&jws)
+            .expect_err("non-Ed25519 gateway key must fail before signature verification");
+
+        assert!(matches!(
+            err,
+            GatewayAuthorizationError::InvalidKeyAlgorithm {
+                key_id,
+                algorithm: Algorithm::Secp256k1,
+            } if key_id == "council-key-1"
+        ));
     }
 
     #[test]

@@ -8,7 +8,9 @@ use std::{
     vec::Vec,
 };
 
-use blake2::Blake2bVar;
+use blake2::{Blake2b, digest::consts::U32};
+use hkdf::HkdfExtract;
+use sha2::Digest as _;
 use sha2::Sha256;
 use w3f_bls::{
     EngineBLS, PublicKey, SecretKey as W3fSecretKey, SecretKeyVT, SerializableToBytes as _,
@@ -83,16 +85,12 @@ impl VerifyOkCache {
 }
 
 fn verify_ok_cache_key(pk_bytes: &[u8], message: &[u8], signature: &[u8]) -> [u8; 32] {
-    let mut h = <Blake2bVar as blake2::digest::VariableOutput>::new(32)
-        .expect("blake2b init for signature verify cache");
-    blake2::digest::Update::update(&mut h, b"iroha:bls:verify_ok_cache:v1");
-    blake2::digest::Update::update(&mut h, pk_bytes);
-    blake2::digest::Update::update(&mut h, message);
-    blake2::digest::Update::update(&mut h, signature);
-    let mut out = [0u8; 32];
-    blake2::digest::VariableOutput::finalize_variable(h, &mut out)
-        .expect("blake2b output length must match");
-    out
+    let mut h = Blake2b::<U32>::new();
+    h.update(b"iroha:bls:verify_ok_cache:v1");
+    h.update(pk_bytes);
+    h.update(message);
+    h.update(signature);
+    h.finalize().into()
 }
 
 #[doc(hidden)]
@@ -156,9 +154,9 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         }
     }
 
-    fn load_secret(&self) -> W3fSecretKey<C::Engine> {
+    fn try_load_secret(&self) -> Result<W3fSecretKey<C::Engine>, ParseError> {
         W3fSecretKey::<C::Engine>::from_bytes(&self.bytes)
-            .expect("stored BLS secret key must decode")
+            .map_err(|err| ParseError(err.to_string()))
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -171,8 +169,12 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         arr
     }
 
-    pub fn public_key(&self) -> PublicKey<C::Engine> {
-        self.load_secret().into_public()
+    pub fn public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
+        self.try_public_key()
+    }
+
+    pub fn try_public_key(&self) -> Result<PublicKey<C::Engine>, ParseError> {
+        Ok(self.try_load_secret()?.into_public())
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
@@ -181,16 +183,30 @@ impl<C: BlsConfiguration + ?Sized> ManagedSecretKey<C> {
         Ok(Self::new(&secret))
     }
 
-    fn sign_bytes(&self, message: &[u8]) -> Vec<u8> {
-        let mut guard = self.load_secret();
+    fn sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        self.try_sign_bytes(message)
+    }
+
+    fn try_sign_bytes(&self, message: &[u8]) -> Result<Vec<u8>, Error> {
+        let mut guard = self
+            .try_load_secret()
+            .map_err(|err| Error::Signing(err.to_string()))?;
         let msg = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
         #[cfg(feature = "rand")]
         {
-            guard.sign(&msg, os_rng()).to_bytes()
+            Ok(guard.sign(&msg, os_rng()).to_bytes())
         }
         #[cfg(not(feature = "rand"))]
         {
-            guard.sign_once(&msg).to_bytes()
+            Ok(guard.sign_once(&msg).to_bytes())
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_unchecked_bytes_for_test(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            _marker: PhantomData,
         }
     }
 }
@@ -229,8 +245,15 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     // the names are from an RFC, not a good idea to change them
     #[allow(clippy::similar_names)]
     pub fn keypair(
+        option: KeyGenOption<ManagedSecretKey<C>>,
+    ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
+        Self::try_keypair(option)
+    }
+
+    #[allow(clippy::similar_names)]
+    pub fn try_keypair(
         mut option: KeyGenOption<ManagedSecretKey<C>>,
-    ) -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
+    ) -> Result<(PublicKey<C::Engine>, ManagedSecretKey<C>), Error> {
         let private_key = match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
@@ -241,15 +264,17 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             KeyGenOption::UseSeed(ref mut seed) => {
                 let salt = b"BLS-SIG-KEYGEN-SALT-";
-                let info = [0u8, C::Engine::SECRET_KEY_SIZE.try_into().unwrap()];
-                let mut ikm = vec![0u8; seed.len() + 1];
-                ikm[..seed.len()].copy_from_slice(seed);
+                let secret_key_size = u8::try_from(C::Engine::SECRET_KEY_SIZE)
+                    .map_err(|_| Error::KeyGen("BLS secret-key size overflow".into()))?;
+                let info = [0u8, secret_key_size];
+                let mut extract = HkdfExtract::<Sha256>::new(Some(&salt[..]));
+                extract.input_ikm(seed);
+                extract.input_ikm(&[0]);
                 seed.zeroize();
                 let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
-                let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
+                let h = extract.finalize().1;
                 h.expand(&info[..], &mut okm)
-                    .expect("`okm` has the correct length");
-                ikm.zeroize();
+                    .map_err(|_| Error::KeyGen("BLS HKDF seed expansion failed".into()))?;
 
                 let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
                 let secret =
@@ -259,12 +284,22 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
-        let public_key = private_key.public_key();
-        (public_key, private_key)
+        let public_key = private_key
+            .try_public_key()
+            .map_err(|err| Error::KeyGen(err.to_string()))?;
+        Ok((public_key, private_key))
     }
 
-    pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Vec<u8> {
+    pub fn sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
         sk.sign_bytes(message)
+    }
+
+    pub fn try_sign(message: &[u8], sk: &ManagedSecretKey<C>) -> Result<Vec<u8>, Error> {
+        Self::sign(message, sk)
+    }
+
+    pub fn derive_public_key(sk: &ManagedSecretKey<C>) -> Result<PublicKey<C::Engine>, ParseError> {
+        sk.try_public_key()
     }
 
     pub fn verify(
@@ -358,17 +393,17 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
 
         // Parse and aggregate public keys; enforce unique signers.
-        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
+        let mut seen_pks = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
         let first_pk = Self::parse_public_key(first_pk_bytes)?;
-        if !seen_pks.insert(first_pk.to_bytes()) {
+        if !seen_pks.insert(*first_pk_bytes) {
             return Err(Error::BadSignature);
         }
         let mut agg_pk_group = first_pk.0;
-        for pk in pk_it {
-            let pk = Self::parse_public_key(pk)?;
-            if !seen_pks.insert(pk.to_bytes()) {
+        for pk_bytes in pk_it {
+            let pk = Self::parse_public_key(pk_bytes)?;
+            if !seen_pks.insert(*pk_bytes) {
                 return Err(Error::BadSignature);
             }
             agg_pk_group.add_assign(&pk.0);
@@ -446,17 +481,17 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
         // Aggregate public keys; enforce unique signers.
-        let mut seen_pks: BTreeSet<Vec<u8>> = BTreeSet::new();
+        let mut seen_pks = BTreeSet::new();
         let mut pk_it = public_keys.iter();
         let first_pk_bytes = pk_it.next().ok_or(Error::BadSignature)?;
         let first_pk = Self::parse_public_key(first_pk_bytes)?;
-        if !seen_pks.insert(first_pk.to_bytes()) {
+        if !seen_pks.insert(*first_pk_bytes) {
             return Err(Error::BadSignature);
         }
         let mut agg_pk_group = first_pk.0;
-        for pk in pk_it {
-            let pk = Self::parse_public_key(pk)?;
-            if !seen_pks.insert(pk.to_bytes()) {
+        for pk_bytes in pk_it {
+            let pk = Self::parse_public_key(pk_bytes)?;
+            if !seen_pks.insert(*pk_bytes) {
                 return Err(Error::BadSignature);
             }
             agg_pk_group.add_assign(&pk.0);
@@ -490,7 +525,7 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
     pub fn parse_private_key(payload: &[u8]) -> Result<ManagedSecretKey<C>, ParseError> {
         let key = ManagedSecretKey::from_bytes(payload)?;
         let identity = PublicKey::<C::Engine>(Default::default());
-        if key.public_key().to_bytes() == identity.to_bytes() {
+        if key.try_public_key()?.to_bytes() == identity.to_bytes() {
             return Err(ParseError("BLS secret key is zero".to_string()));
         }
         Ok(key)
@@ -558,6 +593,51 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         } else {
             Err(Error::BadSignature)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEEDED_KEYGEN_COMPAT_SEED: &[u8] = b"iroha-bls-seeded-keygen-compat";
+
+    fn legacy_seeded_keypair<C: BlsConfiguration>() -> (PublicKey<C::Engine>, ManagedSecretKey<C>) {
+        let salt = b"BLS-SIG-KEYGEN-SALT-";
+        let secret_key_size =
+            u8::try_from(C::Engine::SECRET_KEY_SIZE).expect("BLS secret-key size fits u8");
+        let info = [0u8, secret_key_size];
+        let mut seed = SEEDED_KEYGEN_COMPAT_SEED.to_vec();
+        let mut ikm = vec![0u8; seed.len() + 1];
+        ikm[..seed.len()].copy_from_slice(&seed);
+        seed.zeroize();
+        let mut okm = vec![0u8; C::Engine::SECRET_KEY_SIZE];
+        let h = hkdf::Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
+        h.expand(&info, &mut okm).expect("legacy BLS HKDF expands");
+        ikm.zeroize();
+
+        let deterministic_rng = crate::rng::rng_from_seed(okm.clone());
+        let secret = SecretKeyVT::<C::Engine>::from_seed(&okm).into_split(deterministic_rng);
+        okm.zeroize();
+        let private = ManagedSecretKey::new(&secret);
+        let public = private.try_public_key().expect("legacy public key derives");
+        (public, private)
+    }
+
+    fn assert_seeded_keypair_matches_legacy_ikm<C: BlsConfiguration>() {
+        let (public, private) =
+            BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEEDED_KEYGEN_COMPAT_SEED.to_vec()))
+                .expect("streaming BLS keypair derives");
+        let (legacy_public, legacy_private) = legacy_seeded_keypair::<C>();
+
+        assert_eq!(public.to_bytes(), legacy_public.to_bytes());
+        assert_eq!(private.to_bytes(), legacy_private.to_bytes());
+    }
+
+    #[test]
+    fn seeded_keygen_hkdf_extract_streaming_matches_legacy_ikm() {
+        assert_seeded_keypair_matches_legacy_ikm::<NormalConfiguration>();
+        assert_seeded_keypair_matches_legacy_ikm::<SmallConfiguration>();
     }
 }
 

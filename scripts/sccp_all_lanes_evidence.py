@@ -271,6 +271,7 @@ TRON_DPOS_SOURCE_GATE_FIELDS = ("tron_dpos_source_gate_hash",)
 SUBSTRATE_RUNTIME_STORAGE_GATE_FIELDS = ("substrate_runtime_storage_gate_hash",)
 EVM_SOURCE_BRIDGE_LIVE_COMMENT_FIELDS = (
     "_comment_evm_source_rpc_chain_id",
+    "_comment_evm_source_block_tag",
     "_comment_evm_source_bridge_address",
     "_comment_evm_source_bridge_code_hash",
     "_comment_evm_source_bridge_runtime_bytecode_hex",
@@ -302,6 +303,7 @@ EVM_TRON_DESTINATION_NETWORK_BINDING_FIELDS = (
 )
 EVM_DESTINATION_VERIFIER_LIVE_COMMENT_FIELDS = (
     "_comment_evm_rpc_chain_id",
+    "_comment_evm_block_tag",
     "_comment_evm_bridge_code_hash",
     "_comment_evm_bridge_runtime_bytecode_hex",
     "_comment_evm_verifier_code_hash",
@@ -430,6 +432,7 @@ SOURCE_MATERIAL_FIELDS = frozenset(
         "source_bridge_config_hash",
         "_comment_source_verifier_material_hash",
         "_comment_evm_source_rpc_chain_id",
+        "_comment_evm_source_block_tag",
         "_comment_evm_source_bridge_address",
         "_comment_evm_source_bridge_code_hash",
         "_comment_evm_source_bridge_runtime_bytecode_hex",
@@ -514,6 +517,7 @@ DESTINATION_ROLLOUT_FIELDS = frozenset(
         "_comment_destination_binding_key",
         "_comment_destination_binding_hash",
         "_comment_evm_rpc_chain_id",
+        "_comment_evm_block_tag",
         "_comment_evm_bridge_code_hash",
         "_comment_evm_bridge_runtime_bytecode_hex",
         "_comment_evm_verifier_code_hash",
@@ -588,6 +592,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "evm_route_canary_proof_version",
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
+        "evm_route_canary_receipt_block_finalized",
         "tron_route_canary_transaction_id",
         "tron_route_canary_transaction_owner_address",
         "tron_route_canary_block_number",
@@ -635,6 +640,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "_comment_evm_route_canary_proof_version",
         "_comment_evm_route_canary_proof_source_domain",
         "_comment_evm_route_canary_used_message_proof",
+        "_comment_evm_route_canary_receipt_block_finalized",
         "_comment_ton_route_canary_account_state_hash",
         "_comment_ton_route_canary_last_transaction_lt",
         "_comment_ton_route_canary_last_transaction_hash",
@@ -662,6 +668,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
 )
 
 DESTINATION_ROLLOUT_COMMENT_KEYS = {
+    "sccp_evm_block_tag": "_comment_evm_block_tag",
     "sccp_evm_destination_network_id": "_comment_destination_network_id",
     "sccp_evm_destination_bridge_address": "_comment_destination_bridge_address",
     "sccp_evm_destination_binding_key": "_comment_destination_binding_key",
@@ -763,6 +770,7 @@ SOURCE_RECORD_COMMENT_KEYS = {
         "_comment_source_verifier_material_hash"
     ),
     "sccp_evm_source_rpc_chain_id": "_comment_evm_source_rpc_chain_id",
+    "sccp_evm_source_block_tag": "_comment_evm_source_block_tag",
     "sccp_evm_source_bridge_address": "_comment_evm_source_bridge_address",
     "sccp_evm_source_bridge_runtime_code_hash": (
         "_comment_evm_source_bridge_code_hash"
@@ -888,6 +896,9 @@ ROUTE_ALLOWLIST_COMMENT_KEYS = {
     ),
     "sccp_evm_route_canary_used_message_proof": (
         "_comment_evm_route_canary_used_message_proof"
+    ),
+    "sccp_evm_route_canary_receipt_block_finalized": (
+        "_comment_evm_route_canary_receipt_block_finalized"
     ),
     "sccp_ton_route_canary_account_state_hash": (
         "_comment_ton_route_canary_account_state_hash"
@@ -1739,6 +1750,11 @@ def _check_evm_live_source_bridge_evidence(
             f"EVM source live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
+    if (
+        profile.domain == SCCP_DOMAIN_ETH
+        and record.get("_comment_evm_source_block_tag") != "finalized"
+    ):
+        errors.append("Ethereum source live block-tag metadata must be finalized")
 
     bridge_address = _hex_bytes(
         record.get("_comment_evm_source_bridge_address"),
@@ -3423,6 +3439,11 @@ def _check_evm_live_bridge_evidence(
             f"EVM live RPC chain-id must be canonical for {profile.chain}: "
             f"expected {expected_chain_id}"
         )
+    if (
+        profile.domain == SCCP_DOMAIN_ETH
+        and record.get("_comment_evm_block_tag") != "finalized"
+    ):
+        errors.append("Ethereum destination live block-tag metadata must be finalized")
 
     bridge_code_hash = _hex_bytes(
         record.get("_comment_evm_bridge_code_hash"),
@@ -4509,6 +4530,13 @@ def _check_evm_route_canary_transaction_evidence(
         "_comment_evm_route_canary_used_message_proof",
         label="EVM route canary usedMessageProofs",
     )
+    _check_route_canary_bool_comment_matches_record(
+        errors,
+        record,
+        "evm_route_canary_receipt_block_finalized",
+        "_comment_evm_route_canary_receipt_block_finalized",
+        label="EVM route canary receipt block finalized",
+    )
     transaction_hash = _exact_hex_bytes(
         _first_record_value(
             record,
@@ -4727,6 +4755,15 @@ def _check_evm_route_canary_transaction_evidence(
     )
     if used_message_proof is not True:
         errors.append("EVM route canary usedMessageProofs metadata must be true")
+    receipt_block_finalized = _route_canary_used_message_proof_value(
+        _first_record_value(
+            record,
+            "evm_route_canary_receipt_block_finalized",
+            "_comment_evm_route_canary_receipt_block_finalized",
+        )
+    )
+    if receipt_block_finalized is not True:
+        errors.append("EVM route canary receipt block finalized metadata must be true")
     _expect_distinct_byte_values(
         errors,
         (
@@ -4895,6 +4932,7 @@ def _check_evm_route_canary_transaction_evidence(
         canary["proof_version"] = proof_version
         canary["proof_source_domain"] = proof_source_domain
         canary["message_proof_used"] = True
+        canary["receipt_block_finalized"] = True
     return errors
 
 
@@ -6602,6 +6640,76 @@ def _release_checklist(
     }
 
 
+def _evm_live_metadata_summary(
+    profile: LaneProfile,
+    material: dict[str, Any] | None,
+    destination: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return public EVM live-read metadata carried by lane evidence."""
+
+    if profile.chain not in ("eth", "bsc"):
+        return {
+            "required": False,
+            "ready": True,
+            "source_rpc_chain_id": "",
+            "source_block_tag": "",
+            "destination_rpc_chain_id": "",
+            "destination_block_tag": "",
+        }
+    source_rpc_chain_id = (
+        str(material.get("_comment_evm_source_rpc_chain_id"))
+        if material is not None
+        and material.get("_comment_evm_source_rpc_chain_id") is not None
+        else ""
+    )
+    source_block_tag = (
+        str(material.get("_comment_evm_source_block_tag"))
+        if material is not None and material.get("_comment_evm_source_block_tag") is not None
+        else ""
+    )
+    destination_rpc_chain_id = (
+        str(destination.get("_comment_evm_rpc_chain_id"))
+        if destination is not None
+        and destination.get("_comment_evm_rpc_chain_id") is not None
+        else ""
+    )
+    destination_block_tag = (
+        str(destination.get("_comment_evm_block_tag"))
+        if destination is not None and destination.get("_comment_evm_block_tag") is not None
+        else ""
+    )
+    expected_chain_id = EVM_EXPECTED_RPC_CHAIN_IDS[profile.domain]
+    source_chain_id_ready = (
+        _is_canonical_decimal_text(source_rpc_chain_id, positive=True)
+        and int(source_rpc_chain_id, 10) == expected_chain_id
+    )
+    destination_chain_id_ready = (
+        _is_canonical_decimal_text(destination_rpc_chain_id, positive=True)
+        and int(destination_rpc_chain_id, 10) == expected_chain_id
+    )
+    if profile.domain == SCCP_DOMAIN_ETH:
+        ready = (
+            source_chain_id_ready
+            and destination_chain_id_ready
+            and source_block_tag == "finalized"
+            and destination_block_tag == "finalized"
+        )
+    else:
+        ready = (
+            source_chain_id_ready
+            and destination_chain_id_ready
+            and bool(source_block_tag and destination_block_tag)
+        )
+    return {
+        "required": True,
+        "ready": ready,
+        "source_rpc_chain_id": source_rpc_chain_id,
+        "source_block_tag": source_block_tag,
+        "destination_rpc_chain_id": destination_rpc_chain_id,
+        "destination_block_tag": destination_block_tag,
+    }
+
+
 def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """Return a production-readiness summary for a merged SCCP evidence bundle."""
 
@@ -6709,6 +6817,11 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
             destination_binding,
             route_allowlist_summary,
         )
+        evm_live_metadata = _evm_live_metadata_summary(
+            profile,
+            material,
+            destination,
+        )
         if source_adapter_gate.get("required") is True:
             for gate_blocker in source_adapter_gate.get("blockers", []):
                 if gate_blocker not in blockers:
@@ -6726,6 +6839,7 @@ def validate_evidence_bundle(records: dict[str, list[dict[str, Any]]]) -> dict[s
                 },
                 "source_record_hashes": source_record_hashes,
                 "source_adapter_gate": source_adapter_gate,
+                "evm_live_metadata": evm_live_metadata,
                 "destination_binding": destination_binding,
                 "route_allowlist": route_allowlist_summary,
                 "blockers": blockers,

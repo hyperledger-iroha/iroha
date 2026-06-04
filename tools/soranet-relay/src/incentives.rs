@@ -27,10 +27,10 @@ struct RelayEpochAccumulator {
 
 impl RelayEpochAccumulator {
     fn update_uptime(&mut self, uptime_seconds: u64, scheduled_uptime_seconds: u64) {
-        self.uptime_seconds = self.uptime_seconds.strict_add(uptime_seconds);
+        self.uptime_seconds = self.uptime_seconds.saturating_add(uptime_seconds);
         self.scheduled_uptime_seconds = self
             .scheduled_uptime_seconds
-            .strict_add(scheduled_uptime_seconds);
+            .saturating_add(scheduled_uptime_seconds);
     }
 
     fn ingest_proof(&mut self, proof: &RelayBandwidthProofV1) -> bool {
@@ -39,7 +39,7 @@ impl RelayEpochAccumulator {
         }
         self.verified_bandwidth_bytes = self
             .verified_bandwidth_bytes
-            .strict_add(proof.verified_bytes);
+            .saturating_add(proof.verified_bytes);
         self.confidence_floor_per_mille = if self.measurement_ids.len() == 1 {
             proof.confidence.confidence_per_mille
         } else {
@@ -257,18 +257,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn uptime_overflow_panics() {
+    fn uptime_overflow_saturates() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
-        accumulator.record_uptime(7, u64::MAX, 0);
-        accumulator.record_uptime(7, 1, 0);
+        accumulator.record_uptime(7, u64::MAX, u64::MAX - 1);
+        accumulator.record_uptime(7, 1, 2);
+
+        let metrics =
+            accumulator.finalize_epoch(7, RelayComplianceStatusV1::Clean, 0, Metadata::default());
+        assert_eq!(metrics.uptime_seconds, u64::MAX);
+        assert_eq!(metrics.scheduled_uptime_seconds, u64::MAX);
     }
 
     #[test]
-    #[should_panic]
-    fn bandwidth_overflow_panics() {
+    fn bandwidth_overflow_saturates() {
         let mut accumulator = RelayPerformanceAccumulator::new(RELAY);
         assert!(accumulator.ingest_bandwidth_proof(&proof([1; 32], 9, u128::MAX, 900,)));
-        accumulator.ingest_bandwidth_proof(&proof([2; 32], 9, 1, 850));
+        assert!(accumulator.ingest_bandwidth_proof(&proof([2; 32], 9, 1, 850)));
+
+        let metrics =
+            accumulator.finalize_epoch(9, RelayComplianceStatusV1::Clean, 0, Metadata::default());
+        assert_eq!(metrics.verified_bandwidth_bytes, u128::MAX);
+        assert_eq!(metrics.confidence_floor_per_mille, 850);
     }
 }

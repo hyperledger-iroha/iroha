@@ -2301,6 +2301,8 @@ public final class SourceSccpProofsTests {
             .equals(evmReceiptRootMptValueHex)
         : "EVM receipt-root MPT value must match Rust verifier";
     expectThrows(() -> SourceSccpProofs.canonicalEvmReceiptRootMptValue("1234"));
+    final String zeroHash = repeat("00", 32);
+    expectThrows(() -> SourceSccpProofs.canonicalEvmReceiptRootMptValue(zeroHash));
 
     assert bytesToHex(SourceSccpProofs.canonicalTronReceiptRootMptValue(repeat("bb", 32)))
         .equals(
@@ -2308,7 +2310,6 @@ public final class SourceSccpProofsTests {
                 + repeat("bb", 32))
         : "TRON receipt-root MPT value must match Rust verifier";
     expectThrows(() -> SourceSccpProofs.canonicalTronReceiptRootMptValue("1234"));
-    final String zeroHash = repeat("00", 32);
     expectThrows(() -> SourceSccpProofs.canonicalTronReceiptRootMptValue(zeroHash));
 
     assert SourceSccpProofs.canonicalTronReceiptProofBytes(

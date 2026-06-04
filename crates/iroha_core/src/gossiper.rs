@@ -1183,8 +1183,23 @@ impl TransactionGossiper {
 
     /// Stable score for a peer keyed by the gossip seed.
     fn peer_target_score(peer_id: &PeerId, seed: u64) -> u64 {
-        let (algorithm, payload) = peer_id.public_key().to_bytes();
-        let mut state = seed ^ u64::from(algorithm as u8);
+        let mut state = seed;
+        let payload = match peer_id.public_key().try_to_bytes() {
+            Ok((algorithm, payload)) => {
+                state ^= u64::from(algorithm as u8);
+                payload
+            }
+            Err(_) => {
+                state ^= u64::from(u8::MAX);
+                let marker = peer_id.public_key().to_string();
+                for chunk in marker.as_bytes().chunks(8) {
+                    let mut buf = [0u8; 8];
+                    buf[..chunk.len()].copy_from_slice(chunk);
+                    state = splitmix64(state ^ u64::from_le_bytes(buf));
+                }
+                return splitmix64(state);
+            }
+        };
         for chunk in payload.chunks(8) {
             let mut buf = [0u8; 8];
             buf[..chunk.len()].copy_from_slice(chunk);
@@ -3381,6 +3396,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let programmed_public_parameters = bfv_programmed_public_parameters_with_program(

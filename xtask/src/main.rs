@@ -10174,7 +10174,10 @@ fn sign_manifest_payload(
     })?;
     let key_pair: KeyPair = private_key.clone().into();
     let signature = Signature::new(key_pair.private_key(), payload);
-    let (algorithm, public_bytes) = key_pair.public_key().to_bytes();
+    let (algorithm, public_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| format!("signing public key is malformed: {err}"))?;
     if algorithm != Algorithm::Ed25519 {
         return Err("--sign currently supports Ed25519 keys only".into());
     }

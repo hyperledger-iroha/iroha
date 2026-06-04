@@ -476,7 +476,11 @@ fn seed_commit_votes_for_block(
     view_idx: u64,
     count: usize,
 ) -> usize {
-    let roster = actor.effective_commit_topology();
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let roster = super::roster::canonicalize_roster_for_mode(
+        actor.effective_commit_topology(),
+        consensus_mode,
+    );
     seed_commit_votes_for_block_with_roster(
         actor, keypairs, block_hash, height, view_idx, &roster, count,
     )
@@ -491,9 +495,10 @@ fn seed_commit_votes_for_block_with_roster(
     roster: &[PeerId],
     count: usize,
 ) -> usize {
-    let topology = super::network_topology::Topology::new(roster.to_vec());
     let epoch = actor.epoch_for_height(height);
     let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let roster = super::roster::canonicalize_roster_for_mode(roster.to_vec(), consensus_mode);
+    let topology = super::network_topology::Topology::new(roster.clone());
     let signature_topology =
         super::topology_for_view(&topology, height, view_idx, mode_tag, prf_seed);
     let (chain_order_hash, rechain_seq) = actor.vnext_chain_order_binding_for_signature_topology(
@@ -503,6 +508,7 @@ fn seed_commit_votes_for_block_with_roster(
         &signature_topology,
     );
 
+    let mut seeded = 0usize;
     for peer in signature_topology
         .as_ref()
         .iter()
@@ -536,10 +542,11 @@ fn seed_commit_votes_for_block_with_roster(
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
-        actor.handle_vote(vote);
+        insert_test_vote_with_roster(actor, vote, &roster);
+        seeded = seeded.saturating_add(1);
     }
 
-    count.min(signature_topology.as_ref().len())
+    seeded
 }
 
 fn seed_verified_commit_votes_for_block_with_roster(
@@ -597,7 +604,7 @@ fn seed_verified_commit_votes_for_block_with_roster(
         let preimage = super::vote_preimage(&actor.common_config.chain, mode_tag, &vote);
         let signature = Signature::new(keypair.private_key(), &preimage);
         vote.bls_sig = signature.payload().to_vec();
-        actor.vote_log.insert(vote_log_key_for_vote(&vote), vote);
+        insert_test_vote_with_roster(actor, vote, &roster);
         seeded = seeded.saturating_add(1);
     }
 
@@ -611,7 +618,12 @@ fn seed_near_quorum_commit_votes_for_block(
     height: u64,
     view_idx: u64,
 ) -> usize {
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(height);
+    let topology =
+        super::network_topology::Topology::new(super::roster::canonicalize_roster_for_mode(
+            actor.effective_commit_topology(),
+            consensus_mode,
+        ));
     let required = topology.min_votes_for_commit().max(1);
     assert!(required >= 2, "test requires at least two validators");
     let seeded = seed_commit_votes_for_block(
@@ -31125,6 +31137,16 @@ async fn rbc_ready_rebroadcast_is_rate_limited_per_session() {
     assert_eq!(ready_posts, expected_ready_posts);
 
     let readies = Actor::rbc_ready_bundle(key, &session, roster_hash).expect("readies");
+    // Keep the second call inside the cooldown window even on slow full-suite runs.
+    if expected_ready_posts > 0 {
+        harness
+            .actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .ready_rebroadcast_last_sent
+            .insert(key, Instant::now());
+    }
     harness.actor.rebroadcast_rbc_ready_bundle(key, readies);
     if expected_ready_posts > 0 {
         let entries = take_background_log(&background_log);
@@ -55580,6 +55602,7 @@ async fn consensus_params_expectation_uses_on_chain_values() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn consensus_params_membership_mismatch_records_and_clears_peer() {
+    let _membership_guard = super::status::membership_status_test_guard();
     let harness = test_actor_harness(3).await;
     super::status::reset_membership_snapshot_for_tests();
     super::status::reset_membership_mismatch_for_tests();
@@ -55632,6 +55655,7 @@ async fn consensus_params_membership_mismatch_records_and_clears_peer() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn consensus_params_membership_mismatch_ignores_unmatched_context_and_unknown_sender() {
+    let _membership_guard = super::status::membership_status_test_guard();
     let harness = test_actor_harness(3).await;
     super::status::reset_membership_snapshot_for_tests();
     super::status::reset_membership_mismatch_for_tests();
@@ -160801,7 +160825,10 @@ fn heartbeat_block_for_state(
     };
     let start_ms = height.saturating_sub(1);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(start_ms));
-    let (_, signer_public_key_bytes) = signer_kp.public_key().to_bytes();
+    let (_, signer_public_key_bytes) = signer_kp
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture public key must be valid");
     // Include the elected signer so helper-produced heartbeat blocks stay distinct across test
     // harnesses that share the same height/view/parent inputs.
     let mut seed = Vec::with_capacity(24 + Hash::LENGTH + signer_public_key_bytes.len());
@@ -161052,6 +161079,7 @@ fn sample_ram_lfe_policy_transaction(note_len: usize) -> SignedTransaction {
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
+        galois_keys: Vec::new(),
         bootstrap_key: None,
     };
     let programmed_public_parameters = bfv_programmed_public_parameters_with_program(

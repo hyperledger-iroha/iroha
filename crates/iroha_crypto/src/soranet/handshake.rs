@@ -12,10 +12,12 @@ use std::{
     str::FromStr,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as Base64};
+use base64::{
+    Engine as _, encoded_len as base64_encoded_len, engine::general_purpose::STANDARD as Base64,
+};
 use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
-use hkdf::Hkdf;
+use hkdf::{Hkdf, HkdfExtract};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
@@ -225,6 +227,9 @@ pub enum HarnessError {
     /// HKDF expansion failed while deriving confirmation or session material.
     #[error("hkdf expansion failed")]
     Kdf,
+    /// Signature witness encoding failed while rendering fixture telemetry.
+    #[error("signature encoding failed: {0}")]
+    SignatureEncoding(String),
 }
 
 /// Parse a capability vector into structured TLVs.
@@ -237,18 +242,8 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
     let mut seen_singletons = std::collections::BTreeSet::new();
 
     while offset < buf.len() {
-        if offset + 4 > buf.len() {
-            return Err(HarnessError::TlvTruncated(offset));
-        }
-        let ty = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
-        let len = u16::from_be_bytes([buf[offset + 2], buf[offset + 3]]) as usize;
-        offset += 4;
-
-        if offset + len > buf.len() {
-            return Err(HarnessError::TlvLengthExceeded(offset));
-        }
-        let mut value = buf[offset..offset + len].to_vec();
-        offset += len;
+        let (ty, len) = read_capability_header(buf, &mut offset)?;
+        let mut value = read_capability_value(buf, &mut offset, len)?;
 
         let grease = (GREASE_RANGE_START..=GREASE_RANGE_END).contains(&ty);
         if !grease && !capability_is_known(ty) {
@@ -275,6 +270,37 @@ pub fn parse_capabilities(buf: &[u8]) -> Result<Vec<CapabilityTlv>, HarnessError
     }
 
     Ok(out)
+}
+
+fn read_capability_header(buf: &[u8], offset: &mut usize) -> Result<(u16, usize), HarnessError> {
+    let start = *offset;
+    let end = start
+        .checked_add(4)
+        .ok_or(HarnessError::TlvTruncated(start))?;
+    let header = buf
+        .get(start..end)
+        .ok_or(HarnessError::TlvTruncated(start))?;
+    *offset = end;
+    Ok((
+        u16::from_be_bytes([header[0], header[1]]),
+        u16::from_be_bytes([header[2], header[3]]) as usize,
+    ))
+}
+
+fn read_capability_value(
+    buf: &[u8],
+    offset: &mut usize,
+    len: usize,
+) -> Result<Vec<u8>, HarnessError> {
+    let start = *offset;
+    let end = start
+        .checked_add(len)
+        .ok_or(HarnessError::TlvLengthExceeded(start))?;
+    let value = buf
+        .get(start..end)
+        .ok_or(HarnessError::TlvLengthExceeded(start))?;
+    *offset = end;
+    Ok(value.to_vec())
 }
 
 /// Helper to decode hex strings supplied on the CLI.
@@ -611,15 +637,20 @@ fn negotiate_handshake_suite_with_telemetry(
     })
 }
 
-fn encode_signature(prefix: &str, bytes: &[u8]) -> String {
-    let encoded_len = 4 * bytes.len().div_ceil(3);
+fn encode_signature(prefix: &str, bytes: &[u8]) -> Result<String, HarnessError> {
+    let Some(encoded_len) = base64_encoded_len(bytes.len(), true) else {
+        return Err(HarnessError::SignatureEncoding(
+            "base64 output length overflow".to_string(),
+        ));
+    };
     let mut buffer = vec![0u8; encoded_len];
-    let written = Base64
-        .encode_slice(bytes, &mut buffer)
-        .expect("base64 buffer length must be sufficient");
+    let written = Base64.encode_slice(bytes, &mut buffer).map_err(|err| {
+        HarnessError::SignatureEncoding(format!("base64 encode buffer rejected: {err}"))
+    })?;
     buffer.truncate(written);
-    let encoded = String::from_utf8(buffer).expect("base64 encoding produced invalid UTF-8");
-    format!("{prefix}:{encoded}")
+    let encoded = String::from_utf8(buffer)
+        .map_err(|err| HarnessError::SignatureEncoding(err.to_string()))?;
+    Ok(format!("{prefix}:{encoded}"))
 }
 
 fn signature_pair_from_static(
@@ -635,8 +666,8 @@ fn signature_pair_from_static(
     );
     let ed = derive_ed25519_signature(ed25519_label, static_key, &[payload])?;
     Ok((
-        encode_signature(SIGNATURE_PREFIX_DILITHIUM, &dilithium),
-        encode_signature(SIGNATURE_PREFIX_ED25519, ed.as_ref()),
+        encode_signature(SIGNATURE_PREFIX_DILITHIUM, &dilithium)?,
+        encode_signature(SIGNATURE_PREFIX_ED25519, ed.as_ref())?,
     ))
 }
 
@@ -3122,7 +3153,8 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
         HedgedRngSeed::from_entropy(kem_seed),
         b"soranet-handshake:client-kem",
     );
-    let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng);
+    let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng)
+        .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let client_kem_public = kem_keys.public_key.clone();
     let client_kem_secret = {
         let secret = kem_keys.secret_key;
@@ -4711,12 +4743,9 @@ fn derive_session_key_and_confirmation(
         ),
     };
 
-    let key_material = match suite {
+    let hk = match suite {
         HandshakeSuite::Nk2Hybrid => {
-            let mut material = Vec::with_capacity(primary_shared.len() + transcript_hash.len());
-            material.extend_from_slice(primary_shared);
-            material.extend_from_slice(transcript_hash);
-            material
+            hkdf_sha3_256_from_ikm_parts(Some(transcript_hash), &[primary_shared, transcript_hash])
         }
         HandshakeSuite::Nk3PqForwardSecure => {
             let forward = forward_shared.ok_or(HarnessError::NotImplemented(
@@ -4727,18 +4756,18 @@ fn derive_session_key_and_confirmation(
                 &[primary_shared, forward, transcript_hash],
                 forward.len(),
             );
-            let mut material = Vec::with_capacity(
-                dual_mix.len() + primary_shared.len() + forward.len() + transcript_hash.len(),
-            );
-            material.extend_from_slice(&dual_mix);
-            material.extend_from_slice(primary_shared);
-            material.extend_from_slice(forward);
-            material.extend_from_slice(transcript_hash);
-            material
+            hkdf_sha3_256_from_ikm_parts(
+                Some(transcript_hash),
+                &[
+                    dual_mix.as_slice(),
+                    primary_shared,
+                    forward,
+                    transcript_hash,
+                ],
+            )
         }
     };
 
-    let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), &key_material);
     let mut session_key = vec![0u8; 32];
     hk.expand(session_label, &mut session_key)
         .map_err(|_| HarnessError::Kdf)?;
@@ -4758,6 +4787,14 @@ fn derive_session_key_and_confirmation(
     };
 
     Ok((session_key, confirmation))
+}
+
+fn hkdf_sha3_256_from_ikm_parts(salt: Option<&[u8]>, ikm_parts: &[&[u8]]) -> Hkdf<Sha3_256> {
+    let mut extract = HkdfExtract::<Sha3_256>::new(salt);
+    for part in ikm_parts {
+        extract.input_ikm(part);
+    }
+    extract.finalize().1
 }
 
 fn compute_kem_confirmation(
@@ -4824,15 +4861,24 @@ impl<'a> MessageCursor<'a> {
     }
 
     fn read_exact(&mut self, len: usize) -> Result<&'a [u8], HarnessError> {
-        if self.pos + len > self.buf.len() {
+        let end = match self.pos.checked_add(len) {
+            Some(end) if end <= self.buf.len() => end,
+            _ => {
+                let remaining = self.buf.len().saturating_sub(self.pos);
+                return Err(HarnessError::Validation(format!(
+                    "handshake message truncated (offset={}, need={}, remaining={remaining})",
+                    self.pos, len
+                )));
+            }
+        };
+        let Some(slice) = self.buf.get(self.pos..end) else {
             let remaining = self.buf.len().saturating_sub(self.pos);
             return Err(HarnessError::Validation(format!(
                 "handshake message truncated (offset={}, need={}, remaining={remaining})",
                 self.pos, len
             )));
-        }
-        let slice = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
+        };
+        self.pos = end;
         Ok(slice)
     }
 
@@ -4847,7 +4893,7 @@ impl<'a> MessageCursor<'a> {
     }
 
     fn remaining_slice(&self) -> &[u8] {
-        &self.buf[self.pos..]
+        self.buf.get(self.pos..).unwrap_or(&[])
     }
 }
 
@@ -4876,6 +4922,55 @@ mod tests {
     }
 
     impl CryptoRng for PanicRng {}
+
+    #[test]
+    fn encode_signature_returns_prefixed_base64() {
+        let encoded = encode_signature("ed25519", &[0x00, 0x01]).expect("signature encoding");
+        assert_eq!(encoded, "ed25519:AAE=");
+    }
+
+    #[test]
+    fn message_cursor_reads_exact_len_prefixed_and_remaining_bytes() {
+        let frame = [0xAA, 0, 2, 0xBB, 0xCC, 0xDD];
+        let mut cursor = MessageCursor::new(&frame);
+
+        assert_eq!(cursor.read_u8().unwrap(), 0xAA);
+        assert_eq!(cursor.read_len_prefixed().unwrap(), &[0xBB, 0xCC]);
+        assert_eq!(cursor.remaining_slice(), &[0xDD]);
+    }
+
+    #[test]
+    fn message_cursor_rejects_truncated_or_overflowed_reads_without_advancing() {
+        let mut truncated = MessageCursor::new(&[0xAA]);
+        let err = truncated
+            .read_exact(2)
+            .expect_err("truncated read should fail closed");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("handshake message truncated"));
+                assert!(message.contains("offset=0"));
+                assert!(message.contains("need=2"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+        assert_eq!(truncated.pos, 0);
+
+        let mut overflowed = MessageCursor::new(&[]);
+        overflowed.pos = usize::MAX;
+        let err = overflowed
+            .read_exact(1)
+            .expect_err("overflowed read should fail closed");
+        match err {
+            HarnessError::Validation(message) => {
+                assert!(message.contains("handshake message truncated"));
+                assert!(message.contains(&format!("offset={}", usize::MAX)));
+                assert!(message.contains("need=1"));
+            }
+            other => panic!("expected validation error, got {other:?}"),
+        }
+        assert_eq!(overflowed.pos, usize::MAX);
+        assert!(overflowed.remaining_slice().is_empty());
+    }
 
     #[test]
     fn update_suite_list_sets_required_flag() {
@@ -4944,6 +5039,44 @@ mod tests {
         buf.push(0);
         let err = parse_capabilities(&buf).expect_err("unknown capability should fail");
         assert!(matches!(err, HarnessError::CapabilityType(_)));
+    }
+
+    #[test]
+    fn parse_capabilities_rejects_truncated_header_prefixes() {
+        let mut header = [0u8; 4];
+        header[..2].copy_from_slice(&CAPABILITY_ROLE.to_be_bytes());
+        header[3] = 1;
+        for len in 1..4 {
+            let err = parse_capabilities(&header[..len])
+                .expect_err("truncated TLV header should fail closed");
+            assert!(matches!(err, HarnessError::TlvTruncated(0)));
+        }
+    }
+
+    #[test]
+    fn parse_capabilities_rejects_overlong_value_without_panic() {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&CAPABILITY_ROLE.to_be_bytes());
+        buf.extend_from_slice(&2u16.to_be_bytes());
+        buf.push(0x01);
+
+        let err = parse_capabilities(&buf).expect_err("overlong value should fail closed");
+        assert!(matches!(err, HarnessError::TlvLengthExceeded(4)));
+    }
+
+    #[test]
+    fn capability_tlv_readers_reject_overflowed_offsets_without_advancing() {
+        let mut header_offset = usize::MAX;
+        let err = read_capability_header(&[], &mut header_offset)
+            .expect_err("overflowed header cursor should fail closed");
+        assert!(matches!(err, HarnessError::TlvTruncated(usize::MAX)));
+        assert_eq!(header_offset, usize::MAX);
+
+        let mut value_offset = usize::MAX;
+        let err = read_capability_value(&[], &mut value_offset, 1)
+            .expect_err("overflowed value cursor should fail closed");
+        assert!(matches!(err, HarnessError::TlvLengthExceeded(usize::MAX)));
+        assert_eq!(value_offset, usize::MAX);
     }
 
     #[test]
@@ -6736,7 +6869,7 @@ mod tests {
     fn build_client_hello_rejects_oversized_capabilities_before_rng() {
         let defaults = RuntimeParams::soranet_defaults();
         let mut oversized_client_capabilities = defaults.client_capabilities.to_vec();
-        while oversized_client_capabilities.len() <= usize::from(u16::MAX) {
+        while u16::try_from(oversized_client_capabilities.len()).is_ok() {
             oversized_client_capabilities.extend_from_slice(&CAPABILITY_PQSIG.to_be_bytes());
             oversized_client_capabilities.extend_from_slice(&2_u16.to_be_bytes());
             oversized_client_capabilities.extend_from_slice(&[0x01, 0x00]);
@@ -7296,6 +7429,103 @@ mod tests {
 
         assert_ne!(nk2_session, nk3_session);
         assert_ne!(nk2_confirm, nk3_confirm);
+    }
+
+    fn legacy_derive_session_key_and_confirmation(
+        inputs: SessionKeyInputs<'_>,
+    ) -> Result<(Vec<u8>, Vec<u8>), HarnessError> {
+        let SessionKeyInputs {
+            suite,
+            transcript_hash,
+            primary_shared,
+            forward_shared,
+        } = inputs;
+
+        let (session_label, confirm_label) = match suite {
+            HandshakeSuite::Nk2Hybrid => (
+                b"soranet.handshake.nk2.session",
+                b"soranet.handshake.nk2.confirm",
+            ),
+            HandshakeSuite::Nk3PqForwardSecure => (
+                b"soranet.handshake.nk3.session",
+                b"soranet.handshake.nk3.confirm",
+            ),
+        };
+
+        let key_material = match suite {
+            HandshakeSuite::Nk2Hybrid => {
+                let mut material = Vec::with_capacity(primary_shared.len() + transcript_hash.len());
+                material.extend_from_slice(primary_shared);
+                material.extend_from_slice(transcript_hash);
+                material
+            }
+            HandshakeSuite::Nk3PqForwardSecure => {
+                let forward = forward_shared.ok_or(HarnessError::NotImplemented(
+                    "nk3 forward-secure key schedule requires dual ML-KEM secret",
+                ))?;
+                let dual_mix = expand_material(
+                    b"soranet.kem.dual.mix",
+                    &[primary_shared, forward, transcript_hash],
+                    forward.len(),
+                );
+                let mut material = Vec::with_capacity(
+                    dual_mix.len() + primary_shared.len() + forward.len() + transcript_hash.len(),
+                );
+                material.extend_from_slice(&dual_mix);
+                material.extend_from_slice(primary_shared);
+                material.extend_from_slice(forward);
+                material.extend_from_slice(transcript_hash);
+                material
+            }
+        };
+
+        let hk = Hkdf::<Sha3_256>::new(Some(transcript_hash), &key_material);
+        let mut session_key = vec![0u8; 32];
+        hk.expand(session_label, &mut session_key)
+            .map_err(|_| HarnessError::Kdf)?;
+
+        let confirmation = if suite == HandshakeSuite::Nk2Hybrid {
+            let mut confirm = vec![0u8; 32];
+            let hk_confirm = Hkdf::<Sha3_256>::new(Some(transcript_hash), primary_shared);
+            hk_confirm
+                .expand(NK2_CONFIRM_LABEL, &mut confirm)
+                .map_err(|_| HarnessError::Kdf)?;
+            confirm
+        } else {
+            let mut confirm = vec![0u8; 32];
+            hk.expand(confirm_label, &mut confirm)
+                .map_err(|_| HarnessError::Kdf)?;
+            confirm
+        };
+
+        Ok((session_key, confirmation))
+    }
+
+    #[test]
+    fn session_key_schedule_streaming_matches_legacy_contiguous_ikm() {
+        let transcript = [0xA5; 32];
+        let primary = [0x5A; 32];
+        let forward = [0xC3; 32];
+
+        for inputs in [
+            SessionKeyInputs {
+                suite: HandshakeSuite::Nk2Hybrid,
+                transcript_hash: &transcript,
+                primary_shared: &primary,
+                forward_shared: None,
+            },
+            SessionKeyInputs {
+                suite: HandshakeSuite::Nk3PqForwardSecure,
+                transcript_hash: &transcript,
+                primary_shared: &primary,
+                forward_shared: Some(&forward),
+            },
+        ] {
+            assert_eq!(
+                derive_session_key_and_confirmation(inputs).expect("streaming key schedule"),
+                legacy_derive_session_key_and_confirmation(inputs).expect("legacy key schedule")
+            );
+        }
     }
 
     #[test]

@@ -1244,7 +1244,11 @@ fn encode_alias_proof_bytes(
     )
     .expect("derive keypair");
     let signature = iroha_crypto::Signature::new(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair.public_key().to_bytes();
+    let (algorithm, signer_bytes) = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture signer public key must be well-formed");
+    assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
     let signer: [u8; 32] = signer_bytes
         .try_into()
         .expect("ed25519 public key must be 32 bytes");

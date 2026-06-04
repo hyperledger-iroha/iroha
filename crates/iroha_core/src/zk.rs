@@ -13195,7 +13195,10 @@ mod offline_note_instance_guardrail_tests {
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = note_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -25280,7 +25283,10 @@ mod offline_note_real_prover_tests {
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = note_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -26141,7 +26147,7 @@ mod kagemusha_folded_real_prover_tests {
             .expect_err("lineage profile with semantic envelope circuit id must reject");
         assert!(err.contains("envelope circuit id"), "{err}");
 
-        attach_recursive_spend_halo2_envelope(
+        attach_recursive_spend_zk1_halo2_envelope(
             &mut bundle,
             fixed_bytes(b"kagemusha-lineage-envelope-vk"),
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
@@ -26170,11 +26176,11 @@ mod kagemusha_folded_real_prover_tests {
 
         let mut instance_splice = bundle.clone();
         mutate_open_verify_envelope(&mut instance_splice.recursive_proof.proof, |envelope| {
-            let mut inner = iroha_zkp_halo2::Halo2ProofEnvelope::from_bytes(&envelope.proof_bytes)
-                .expect("recursive spend lineage Halo2 envelope");
-            inner.public_inputs
-                [KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] ^= 0x01;
-            envelope.proof_bytes = inner.to_bytes();
+            let mut columns = extract_pasta_fp_instances(&envelope.proof_bytes)
+                .expect("recursive spend lineage ZK1 public instances");
+            columns[KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX][0] +=
+                halo2_proofs::halo2curves::pasta::Fp::from(1);
+            rewrite_zk1_open_verify_envelope_instances(envelope, columns);
         });
         let err = ensure_kagemusha_recursive_spend_chain_admission_proves_lineage(&instance_splice)
             .expect_err("lineage envelope public instance substitution must reject");

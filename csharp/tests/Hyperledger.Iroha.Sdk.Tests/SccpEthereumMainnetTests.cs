@@ -1,4 +1,7 @@
 using System.Buffers.Binary;
+using System.IO;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using Hyperledger.Iroha.Sccp;
 
@@ -204,6 +207,30 @@ public sealed class SccpEthereumMainnetTests
         }
     }
 
+    private sealed class BeaconRestHttpHandlerStub(Func<HttpRequestMessage, HttpResponseMessage> handler)
+        : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(handler(request));
+    }
+
+    private sealed class UnknownLengthContent(byte[] body) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(body, 0, body.Length);
+
+        protected override Task<Stream> CreateContentReadStreamAsync() =>
+            Task.FromResult<Stream>(new MemoryStream(body, writable: false));
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
     private sealed class InboundSubmitterStub : IEthereumMainnetInboundSubmitter
     {
         public ValueTask<object?> SubmitAsync(
@@ -390,13 +417,38 @@ public sealed class SccpEthereumMainnetTests
     private static EthereumMainnetBeaconRestConsensusProvider BeaconRestProvider(
         EthereumMainnetBeaconRestResponse header,
         EthereumMainnetBeaconRestResponse checkpoint)
+        => BeaconRestProvider(header, BeaconResponse(BeaconBlockRootJson()), BeaconResponse(BeaconBlockJson()), checkpoint);
+
+    private static EthereumMainnetBeaconRestConsensusProvider BeaconRestProvider(
+        EthereumMainnetBeaconRestResponse header,
+        EthereumMainnetBeaconRestResponse finalizedBlockRoot,
+        EthereumMainnetBeaconRestResponse finalizedBlock,
+        EthereumMainnetBeaconRestResponse checkpoint)
+        => BeaconRestProvider(
+            header,
+            finalizedBlockRoot,
+            finalizedBlock,
+            checkpoint,
+            BeaconResponse(BeaconFinalityUpdateJson()));
+
+    private static EthereumMainnetBeaconRestConsensusProvider BeaconRestProvider(
+        EthereumMainnetBeaconRestResponse header,
+        EthereumMainnetBeaconRestResponse finalizedBlockRoot,
+        EthereumMainnetBeaconRestResponse finalizedBlock,
+        EthereumMainnetBeaconRestResponse checkpoint,
+        EthereumMainnetBeaconRestResponse finalityUpdate)
     {
         var transport = new BeaconRestTransportStub((url, _) => url switch
         {
             var value when value.EndsWith("/eth/v1/beacon/headers/finalized", StringComparison.Ordinal) => header,
+            var value when value.EndsWith("/eth/v1/beacon/blocks/finalized/root", StringComparison.Ordinal) => finalizedBlockRoot,
+            var value when value.EndsWith("/eth/v2/beacon/blocks/finalized", StringComparison.Ordinal) => finalizedBlock,
             var value when value.EndsWith(
                 "/eth/v1/beacon/states/finalized/finality_checkpoints",
                 StringComparison.Ordinal) => checkpoint,
+            var value when value.EndsWith(
+                "/eth/v1/beacon/light_client/finality_update",
+                StringComparison.Ordinal) => finalityUpdate,
             _ => throw new InvalidOperationException($"unexpected Beacon REST URL {url}"),
         });
         return new EthereumMainnetBeaconRestConsensusProvider(
@@ -405,25 +457,57 @@ public sealed class SccpEthereumMainnetTests
             transport: transport);
     }
 
+    private static EthereumMainnetBeaconRestConsensusProvider BeaconRestProvider(
+        EthereumMainnetBeaconRestResponse header,
+        EthereumMainnetBeaconRestResponse finalizedBlock,
+        EthereumMainnetBeaconRestResponse checkpoint)
+        => BeaconRestProvider(header, BeaconResponse(BeaconBlockRootJson()), finalizedBlock, checkpoint);
+
     private static string BeaconHeaderJson(
         bool executionOptimistic = false,
-        bool finalized = true)
+        bool finalized = true,
+        char rootNibble = 'd',
+        string slot = "64")
         => $$"""
         {
           "execution_optimistic": {{executionOptimistic.ToString().ToLowerInvariant()}},
           "finalized": {{finalized.ToString().ToLowerInvariant()}},
           "data": {
-            "root": "0x{{new string('d', 64)}}",
+            "root": "0x{{new string(rootNibble, 64)}}",
             "canonical": true,
             "header": {
               "message": {
-                "slot": "64",
+                "slot": "{{slot}}",
                 "proposer_index": "1",
                 "parent_root": "0x{{string.Concat(Enumerable.Repeat("01", 32))}}",
                 "state_root": "0x{{string.Concat(Enumerable.Repeat("02", 32))}}",
                 "body_root": "0x{{string.Concat(Enumerable.Repeat("03", 32))}}"
               },
               "signature": "0x{{string.Concat(Enumerable.Repeat("12", 96))}}"
+            }
+          }
+        }
+        """;
+
+    private static string BeaconBlockJson(
+        string slot = "64",
+        string? blockHash = null,
+        string blockNumber = "4660",
+        string? receiptsRoot = null)
+        => $$"""
+        {
+          "execution_optimistic": false,
+          "finalized": true,
+          "data": {
+            "message": {
+              "slot": "{{slot}}",
+              "body": {
+                "execution_payload": {
+                  "block_hash": "{{blockHash ?? ("0x" + new string('b', 64))}}",
+                  "block_number": "{{blockNumber}}",
+                  "receipts_root": "{{receiptsRoot ?? ("0x" + new string('c', 64))}}"
+                }
+              }
             }
           }
         }
@@ -439,6 +523,55 @@ public sealed class SccpEthereumMainnetTests
               "root": "0x{{new string(rootNibble, 64)}}",
               "epoch": "2"
             }
+          }
+        }
+        """;
+
+    private static string BeaconGenesisJson(string genesisTime = "100")
+        => $$"""
+        {
+          "data": {
+            "genesis_time": "{{genesisTime}}",
+            "genesis_validators_root": "0x{{new string('a', 64)}}",
+            "genesis_fork_version": "0x00000000"
+          }
+        }
+        """;
+
+    private static string BeaconFinalityUpdateJson(
+        string slot = "64",
+        string signatureSlot = "65",
+        string? syncCommitteeBits = null,
+        string? syncCommitteeSignature = null)
+        => $$"""
+        {
+          "execution_optimistic": false,
+          "data": {
+            "finalized_header": {
+              "beacon": {
+                "slot": "{{slot}}",
+                "proposer_index": "1",
+                "parent_root": "0x{{string.Concat(Enumerable.Repeat("01", 32))}}",
+                "state_root": "0x{{string.Concat(Enumerable.Repeat("02", 32))}}",
+                "body_root": "0x{{string.Concat(Enumerable.Repeat("03", 32))}}"
+              }
+            },
+            "sync_aggregate": {
+              "sync_committee_bits": "{{syncCommitteeBits ?? ("0x01" + new string('0', 126))}}",
+              "sync_committee_signature": "{{syncCommitteeSignature ?? ("0x" + string.Concat(Enumerable.Repeat("34", 96)))}}"
+            },
+            "signature_slot": "{{signatureSlot}}"
+          }
+        }
+        """;
+
+    private static string BeaconBlockRootJson(char rootNibble = 'd')
+        => $$"""
+        {
+          "execution_optimistic": false,
+          "finalized": true,
+          "data": {
+            "root": "0x{{new string(rootNibble, 64)}}"
           }
         }
         """;
@@ -615,6 +748,10 @@ public sealed class SccpEthereumMainnetTests
 
         byte[] BuildBytes(
             string? digest = null,
+            string? executionBlockHash = null,
+            string? executionReceiptsRoot = null,
+            string? beaconFinalizedRoot = null,
+            string? syncCommitteeRoot = null,
             IReadOnlyList<byte[]>? nodes = null,
             IReadOnlyList<byte[]>? inclusionBranch = null,
             int sourceDomain = EthereumMainnetSccp.DomainEthereum)
@@ -622,10 +759,10 @@ public sealed class SccpEthereumMainnetTests
                 digest ?? sourceEventDigest,
                 beaconSlot: 32,
                 executionBlockNumber: 0x1234,
-                executionBlockHash: "0x" + new string('b', 64),
-                executionReceiptsRoot: "0x" + new string('c', 64),
-                beaconFinalizedRoot: "0x" + new string('d', 64),
-                syncCommitteeRoot: "0x" + new string('a', 64),
+                executionBlockHash: executionBlockHash ?? "0x" + new string('b', 64),
+                executionReceiptsRoot: executionReceiptsRoot ?? "0x" + new string('c', 64),
+                beaconFinalizedRoot: beaconFinalizedRoot ?? "0x" + new string('d', 64),
+                syncCommitteeRoot: syncCommitteeRoot ?? "0x" + new string('a', 64),
                 receiptRootIndex: 3,
                 receiptTrieProofNodes: nodes ?? proofNodes,
                 inclusionBranch: inclusionBranch ?? branch,
@@ -650,6 +787,11 @@ public sealed class SccpEthereumMainnetTests
 
         Assert.Throws<ArgumentException>(() => BuildBytes(sourceDomain: 2));
         Assert.Throws<ArgumentException>(() => BuildBytes(digest: "0x" + new string('0', 64)));
+        var zeroRoot = "0x" + new string('0', 64);
+        Assert.Throws<ArgumentException>(() => BuildBytes(executionBlockHash: zeroRoot));
+        Assert.Throws<ArgumentException>(() => BuildBytes(executionReceiptsRoot: zeroRoot));
+        Assert.Throws<ArgumentException>(() => BuildBytes(beaconFinalizedRoot: zeroRoot));
+        Assert.Throws<ArgumentException>(() => BuildBytes(syncCommitteeRoot: zeroRoot));
         Assert.Throws<ArgumentException>(() => BuildBytes(nodes: Array.Empty<byte[]>()));
         Assert.Throws<ArgumentException>(() => BuildBytes(nodes: [new byte[0]]));
         Assert.Throws<ArgumentException>(() => BuildBytes(inclusionBranch: Array.Empty<byte[]>()));
@@ -704,6 +846,39 @@ public sealed class SccpEthereumMainnetTests
             [typedReceipt, legacyReceipt],
             "0x1");
         Assert.Equal("0x01", secondProof.ReceiptTrieKey);
+        var zeroTopicReceipt = new Dictionary<string, object?>(legacyReceipt)
+        {
+            ["logs"] = new object?[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["address"] = "0x" + string.Concat(Enumerable.Repeat("12", 20)),
+                    ["topics"] = new object?[] { "0x" + new string('0', 64) },
+                    ["data"] = "0x",
+                },
+            },
+        };
+        var zeroTopicProof = EthereumMainnetSccp.BuildEvmReceiptTrieProofFromReceipts(
+            [typedReceipt, zeroTopicReceipt],
+            "0x0");
+        Assert.Equal(proof.ReceiptRlp, zeroTopicProof.ReceiptRlp);
+        var zeroAddressReceipt = new Dictionary<string, object?>(legacyReceipt)
+        {
+            ["transactionHash"] = "0x" + string.Concat(Enumerable.Repeat("ac", 32)),
+            ["logs"] = new object?[]
+            {
+                new Dictionary<string, object?>
+                {
+                    ["address"] = "0x" + new string('0', 40),
+                    ["topics"] = new object?[] { "0x" + string.Concat(Enumerable.Repeat("44", 32)) },
+                    ["data"] = "0x",
+                },
+            },
+        };
+        var zeroAddressProof = EthereumMainnetSccp.BuildEvmReceiptTrieProofFromReceipts(
+            [typedReceipt, zeroAddressReceipt],
+            "0x0");
+        Assert.Equal(proof.ReceiptRlp, zeroAddressProof.ReceiptRlp);
         var wrongReceiptIndex = new Dictionary<string, object?>(typedReceipt)
         {
             ["transactionIndex"] = "0x1",
@@ -813,7 +988,11 @@ public sealed class SccpEthereumMainnetTests
             "0x1234",
             blockHash,
             "0x" + new string('c', 64),
-            "0x20");
+            BeaconSlot: "0x20",
+            SyncCommitteeBits: "0x01" + new string('0', 126),
+            SyncCommitteeSignature: "0x" + string.Concat(Enumerable.Repeat("34", 96)),
+            SyncCommitteeParticipation: "1",
+            SyncSignatureSlot: "65");
         var beaconFinality = beaconFinalityEvidence.ToDictionary(
             [
                 new KeyValuePair<string, object?>("finalizedHeaderRoot", "0x" + new string('d', 64)),
@@ -862,6 +1041,10 @@ public sealed class SccpEthereumMainnetTests
             ["finalizedHeaderRoot"] = "0x" + new string('d', 64),
             ["syncCommitteeRoot"] = "0x" + new string('a', 64),
             ["beaconSlot"] = "0x20",
+            ["syncCommitteeBits"] = "0x01" + new string('0', 126),
+            ["syncCommitteeSignature"] = "0x" + string.Concat(Enumerable.Repeat("34", 96)),
+            ["syncCommitteeParticipation"] = "1",
+            ["syncSignatureSlot"] = "65",
         };
         var autoReceiptInclusionBranch = new[] { RepeatByte(0x44, 32) };
         var autoReceiptProvider = new ExecutionProviderStub(
@@ -953,6 +1136,15 @@ public sealed class SccpEthereumMainnetTests
                     SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 }).AsTask());
         Assert.Contains("blockReceipts.transactionHash", wrongTransactionHash.Message);
+        var duplicateTransactionHashReceipt = new Dictionary<string, object?>(otherReceipt)
+        {
+            ["transactionHash"] = rlpSourceReceipt["transactionHash"],
+        };
+        var duplicateTransactionHash = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEvmReceiptTrieProofFromReceipts(
+                [rlpSourceReceipt, duplicateTransactionHashReceipt],
+                "0x0"));
+        Assert.Contains("transactionHash values must be unique", duplicateTransactionHash.Message);
         var mismatchedIndexedReceipt = new Dictionary<string, object?>(rlpSourceReceipt)
         {
             ["logs"] = Array.Empty<object?>(),
@@ -1105,6 +1297,57 @@ public sealed class SccpEthereumMainnetTests
                 sourceBridgeEmitterAddress: sourceBridgeEmitterAddress).AsTask());
         Assert.Contains("sourceBridgeEmitterAddress", configuredBridgeDrift.Message);
 
+        var missingSyncBitsFinality = new Dictionary<string, object?>(sourceEventEvidence.BeaconFinality!);
+        missingSyncBitsFinality.Remove("syncCommitteeBits");
+        var missingSyncBits = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ProveInboundToSoraAsync(
+                sourceEventEvidence with
+                {
+                    BeaconFinality = missingSyncBitsFinality,
+                    ReceiptProof = receiptProof,
+                    ReceiptProofHash = ExpectedReceiptProofHash,
+                },
+                new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest)).AsTask());
+        Assert.Contains("beaconFinality.syncCommitteeBits", missingSyncBits.Message);
+
+        var conflictingSyncBitsFinality = new Dictionary<string, object?>(sourceEventEvidence.BeaconFinality!)
+        {
+            ["sync_committee_bits"] = "0x02" + string.Concat(Enumerable.Repeat("00", 63)),
+        };
+        var conflictingSyncBits = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ProveInboundToSoraAsync(
+                sourceEventEvidence with
+                {
+                    BeaconFinality = conflictingSyncBitsFinality,
+                    ReceiptProof = receiptProof,
+                    ReceiptProofHash = ExpectedReceiptProofHash,
+                },
+                new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest)).AsTask());
+        Assert.Contains("beaconFinality.syncCommitteeBits", conflictingSyncBits.Message);
+
+        foreach (var (alias, value, label) in new (string, object?, string)[]
+        {
+            ("finalized_header_root", "0x" + string.Concat(Enumerable.Repeat("13", 32)), "beaconFinality.finalizedHeaderRoot"),
+            ("sync_committee_root", "0x" + string.Concat(Enumerable.Repeat("14", 32)), "beaconFinality.syncCommitteeRoot"),
+            ("beacon_slot", "33", "beaconFinality.beaconSlot"),
+        })
+        {
+            var conflictingFinality = new Dictionary<string, object?>(sourceEventEvidence.BeaconFinality!)
+            {
+                [alias] = value,
+            };
+            var conflictingAlias = await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.ProveInboundToSoraAsync(
+                    sourceEventEvidence with
+                    {
+                        BeaconFinality = conflictingFinality,
+                        ReceiptProof = receiptProof,
+                        ReceiptProofHash = ExpectedReceiptProofHash,
+                    },
+                    new InboundProverStub(txHash, ExpectedReceiptProofHash, sourceEventDigest)).AsTask());
+            Assert.Contains(label, conflictingAlias.Message);
+        }
+
         var proofBytes = await EthereumMainnetSccp.ProveInboundToSoraAsync(
             sourceEventEvidence with
             {
@@ -1133,6 +1376,29 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal(RepeatByte(0x11, 32), receiptProofEvidence.ReceiptProof.InclusionBranch[0]);
         mutableReceiptProofNode[0] = 0x01;
         mutableReceiptProofBranch[0] = 0x11;
+        var receiptProofHashOnlyEvidence = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new EthereumMainnetInboundEvidence
+            {
+                ReceiptProofHash = ExpectedReceiptProofHash,
+            });
+        Assert.Equal(ExpectedReceiptProofHash, receiptProofHashOnlyEvidence.ReceiptProofHash);
+        Assert.Null(receiptProofHashOnlyEvidence.ReceiptProof);
+        var zeroReceiptProofHash = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    ReceiptProofHash = "0x" + new string('0', 64),
+                }).AsTask());
+        Assert.Contains("ReceiptProofHash must not be zero", zeroReceiptProofHash.Message);
+        var noncanonicalReceiptProofHash = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    ReceiptProofHash = ExpectedReceiptProofHash + " ",
+                }).AsTask());
+        Assert.Contains(
+            "ReceiptProofHash must be canonical lowercase 0x hex",
+            noncanonicalReceiptProofHash.Message);
         await Assert.ThrowsAsync<ArgumentException>(
             () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
                 new EthereumMainnetInboundEvidence
@@ -1185,18 +1451,32 @@ public sealed class SccpEthereumMainnetTests
         Assert.Contains("receiptProof", missingReceiptProof.Message);
         Assert.Equal(0, missingReceiptProofProver.Calls);
 
+        var unanchoredReceiptProofProver = new CountingInboundProver();
+        var unanchoredReceiptProof = await Assert.ThrowsAsync<ArgumentException>(
+            () => EthereumMainnetSccp.ProveInboundToSoraAsync(
+                new EthereumMainnetInboundEvidence
+                {
+                    BeaconFinality = beaconFinality,
+                    ReceiptProof = receiptProof,
+                    ReceiptProofHash = ExpectedReceiptProofHash,
+                },
+                unanchoredReceiptProofProver).AsTask());
+        Assert.Contains("receipt source event validation", unanchoredReceiptProof.Message);
+        Assert.Equal(0, unanchoredReceiptProofProver.Calls);
+
         var driftedReceiptProofProver = new CountingInboundProver();
         var driftedReceiptProof = await Assert.ThrowsAsync<ArgumentException>(
             () => EthereumMainnetSccp.ProveInboundToSoraAsync(
                 new EthereumMainnetInboundEvidence
                 {
-                    Receipt = receipt,
+                    Receipt = receiptWithSourceEvent,
                     Block = block,
                     BeaconFinality = beaconFinality,
                     ReceiptProof = receiptProof with
                     {
                         ExecutionReceiptsRoot = "0x" + new string('9', 64),
                     },
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 },
                 driftedReceiptProofProver).AsTask());
         Assert.Contains("receiptProof.executionReceiptsRoot", driftedReceiptProof.Message);
@@ -1276,13 +1556,14 @@ public sealed class SccpEthereumMainnetTests
             () => EthereumMainnetSccp.ProveInboundToSoraAsync(
                 new EthereumMainnetInboundEvidence
                 {
-                    Receipt = receipt,
+                    Receipt = receiptWithSourceEvent,
                     Block = block,
                     BeaconFinality = beaconFinality,
                     ReceiptProof = receiptProof with
                     {
                         BeaconFinalizedRoot = "0x" + new string('9', 64),
                     },
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 },
                 driftedFinalizedRootProofProver).AsTask());
         Assert.Contains("receiptProof.beaconFinalizedRoot", driftedFinalizedRootProof.Message);
@@ -1293,13 +1574,14 @@ public sealed class SccpEthereumMainnetTests
             () => EthereumMainnetSccp.ProveInboundToSoraAsync(
                 new EthereumMainnetInboundEvidence
                 {
-                    Receipt = receipt,
+                    Receipt = receiptWithSourceEvent,
                     Block = block,
                     BeaconFinality = beaconFinality,
                     ReceiptProof = receiptProof with
                     {
                         SyncCommitteeRoot = "0x" + new string('9', 64),
                     },
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 },
                 driftedSyncCommitteeRootProofProver).AsTask());
         Assert.Contains("receiptProof.syncCommitteeRoot", driftedSyncCommitteeRootProof.Message);
@@ -1310,13 +1592,14 @@ public sealed class SccpEthereumMainnetTests
             () => EthereumMainnetSccp.ProveInboundToSoraAsync(
                 new EthereumMainnetInboundEvidence
                 {
-                    Receipt = receipt,
+                    Receipt = receiptWithSourceEvent,
                     Block = block,
                     BeaconFinality = beaconFinality,
                     ReceiptProof = receiptProof with
                     {
                         BeaconSlot = receiptProof.BeaconSlot + 1,
                     },
+                    SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
                 },
                 driftedBeaconSlotProofProver).AsTask());
         Assert.Contains("receiptProof.beaconSlot", driftedBeaconSlotProof.Message);
@@ -1641,6 +1924,53 @@ public sealed class SccpEthereumMainnetTests
                 }).AsTask());
         Assert.Contains("receipt.logs[0].data", missingData.Message);
 
+        foreach (var missingField in new[] { "transactionHash", "blockHash", "blockNumber" })
+        {
+            var missingContextLog = new Dictionary<string, object?>(sourceEventLog);
+            missingContextLog.Remove(missingField);
+            var missingContextReceipt = new Dictionary<string, object?>(receipt)
+            {
+                ["logs"] = new object?[] { missingContextLog },
+            };
+            var missingContext = await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                    new EthereumMainnetInboundEvidence
+                    {
+                        Receipt = missingContextReceipt,
+                        Block = block,
+                        BeaconFinality = beaconFinality,
+                        SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    }).AsTask());
+            Assert.Contains($"receipt.logs[0].{missingField}", missingContext.Message);
+        }
+
+        foreach (var (alias, value, label) in new (string, object?, string)[]
+        {
+            ("transaction_hash", "0x" + new string('d', 64), "receipt.logs[0].transactionHash"),
+            ("block_hash", "0x" + new string('a', 64), "receipt.logs[0].blockHash"),
+            ("block_number", "0x1235", "receipt.logs[0].blockNumber"),
+        })
+        {
+            var conflictingContextLog = new Dictionary<string, object?>(sourceEventLog)
+            {
+                [alias] = value,
+            };
+            var conflictingContextReceipt = new Dictionary<string, object?>(receipt)
+            {
+                ["logs"] = new object?[] { conflictingContextLog },
+            };
+            var conflictingContext = await Assert.ThrowsAsync<ArgumentException>(
+                () => EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+                    new EthereumMainnetInboundEvidence
+                    {
+                        Receipt = conflictingContextReceipt,
+                        Block = block,
+                        BeaconFinality = beaconFinality,
+                        SourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
+                    }).AsTask());
+            Assert.Contains(label, conflictingContext.Message);
+        }
+
         var driftedLogTransaction = new Dictionary<string, object?>(sourceEventLog)
         {
             ["transactionHash"] = "0x" + new string('d', 64),
@@ -1705,7 +2035,7 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
-    public async Task BeaconRestConsensusProviderCollectsFinalizedEvidence()
+    public async Task BeaconRestConsensusProviderCollectsFinalizedTargetEvidence()
     {
         var txHash = "0x" + new string('a', 64);
         var blockHash = "0x" + new string('b', 64);
@@ -1721,13 +2051,22 @@ public sealed class SccpEthereumMainnetTests
             ["hash"] = blockHash,
             ["number"] = "0x1234",
             ["receiptsRoot"] = "0x" + new string('c', 64),
+            ["beaconSlot"] = "32",
         };
         var transport = new BeaconRestTransportStub((url, _) => url switch
         {
             "https://beacon.example/eth/v1/beacon/headers/finalized" =>
                 BeaconResponse(BeaconHeaderJson()),
+            "https://beacon.example/eth/v1/beacon/headers/32" =>
+                BeaconResponse(BeaconHeaderJson(rootNibble: 'a', slot: "32")),
+            "https://beacon.example/eth/v1/beacon/blocks/32/root" =>
+                BeaconResponse(BeaconBlockRootJson('a')),
+            "https://beacon.example/eth/v2/beacon/blocks/32" =>
+                BeaconResponse(BeaconBlockJson(slot: "32", blockHash: blockHash)),
             "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" =>
                 BeaconResponse(BeaconCheckpointJson()),
+            "https://beacon.example/eth/v1/beacon/light_client/finality_update" =>
+                BeaconResponse(BeaconFinalityUpdateJson()),
             _ => throw new InvalidOperationException($"unexpected Beacon REST URL {url}"),
         });
         var syncCommitteePayload = SampleSyncCommitteePayload();
@@ -1748,16 +2087,109 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal("4660", evidence.BeaconFinality?["executionBlockNumber"]);
         Assert.Equal(blockHash, evidence.BeaconFinality?["executionBlockHash"]);
         Assert.Equal("0x" + new string('c', 64), evidence.BeaconFinality?["executionReceiptsRoot"]);
-        Assert.Equal("0x" + new string('d', 64), evidence.BeaconFinality?["finalizedHeaderRoot"]);
+        Assert.Equal("0x" + new string('a', 64), evidence.BeaconFinality?["finalizedHeaderRoot"]);
         Assert.Equal(ExpectedSyncCommitteeRoot, evidence.BeaconFinality?["syncCommitteeRoot"]);
-        Assert.Equal("64", evidence.BeaconFinality?["beaconSlot"]);
+        Assert.Equal("32", evidence.BeaconFinality?["beaconSlot"]);
+        Assert.Equal("0x01" + new string('0', 126), evidence.BeaconFinality?["syncCommitteeBits"]);
+        Assert.Equal("0x" + string.Concat(Enumerable.Repeat("34", 96)), evidence.BeaconFinality?["syncCommitteeSignature"]);
+        Assert.Equal("1", evidence.BeaconFinality?["syncCommitteeParticipation"]);
+        Assert.Equal("65", evidence.BeaconFinality?["syncSignatureSlot"]);
         Assert.Equal(
             [
                 "https://beacon.example/eth/v1/beacon/headers/finalized",
+                "https://beacon.example/eth/v1/beacon/headers/32",
+                "https://beacon.example/eth/v1/beacon/blocks/32/root",
+                "https://beacon.example/eth/v2/beacon/blocks/32",
                 "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
+                "https://beacon.example/eth/v1/beacon/light_client/finality_update",
             ],
             transport.Calls);
         Assert.Equal("Bearer local", transport.HeaderCalls[0]["Authorization"]);
+    }
+
+    [Fact]
+    public async Task BeaconRestConsensusProviderDerivesTargetSlotFromTimestamp()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var receipt = new Dictionary<string, object?>
+        {
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["status"] = "0x1",
+        };
+        var block = new Dictionary<string, object?>
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = "0x" + new string('c', 64),
+            ["timestamp"] = "0x1e4",
+        };
+        var transport = new BeaconRestTransportStub((url, _) => url switch
+        {
+            "https://beacon.example/eth/v1/beacon/genesis" =>
+                BeaconResponse(BeaconGenesisJson("100")),
+            "https://beacon.example/eth/v1/beacon/headers/finalized" =>
+                BeaconResponse(BeaconHeaderJson()),
+            "https://beacon.example/eth/v1/beacon/headers/32" =>
+                BeaconResponse(BeaconHeaderJson(rootNibble: 'a', slot: "32")),
+            "https://beacon.example/eth/v1/beacon/blocks/32/root" =>
+                BeaconResponse(BeaconBlockRootJson('a')),
+            "https://beacon.example/eth/v2/beacon/blocks/32" =>
+                BeaconResponse(BeaconBlockJson(slot: "32", blockHash: blockHash)),
+            "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints" =>
+                BeaconResponse(BeaconCheckpointJson()),
+            "https://beacon.example/eth/v1/beacon/light_client/finality_update" =>
+                BeaconResponse(BeaconFinalityUpdateJson()),
+            _ => throw new InvalidOperationException($"unexpected Beacon REST URL {url}"),
+        });
+        var provider = new EthereumMainnetBeaconRestConsensusProvider(
+            "https://beacon.example/eth/v1",
+            "0x" + new string('e', 64),
+            transport: transport);
+
+        var evidence = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new EthereumMainnetInboundEvidence { Receipt = receipt, Block = block },
+            consensusProvider: provider);
+
+        Assert.Equal("0x" + new string('a', 64), evidence.BeaconFinality?["finalizedHeaderRoot"]);
+        Assert.Equal("32", evidence.BeaconFinality?["beaconSlot"]);
+        Assert.Equal(
+            [
+                "https://beacon.example/eth/v1/beacon/genesis",
+                "https://beacon.example/eth/v1/beacon/headers/finalized",
+                "https://beacon.example/eth/v1/beacon/headers/32",
+                "https://beacon.example/eth/v1/beacon/blocks/32/root",
+                "https://beacon.example/eth/v2/beacon/blocks/32",
+                "https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints",
+                "https://beacon.example/eth/v1/beacon/light_client/finality_update",
+            ],
+            transport.Calls);
+    }
+
+    [Fact]
+    public async Task BeaconRestHttpTransportRejectsOversizedBodies()
+    {
+        using var client = new HttpClient(new BeaconRestHttpHandlerStub(request =>
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.True(request.Headers.TryGetValues("Authorization", out var values));
+            Assert.Contains("Bearer local", values);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new UnknownLengthContent(new byte[1024 * 1024 + 1]),
+            };
+        }));
+        var transport = new EthereumMainnetBeaconRestHttpTransport(client);
+
+        var oversized = await Assert.ThrowsAsync<ArgumentException>(
+            () => transport.GetAsync(
+                    "https://beacon.example/oversized",
+                    new Dictionary<string, string> { ["Authorization"] = "Bearer local" })
+                .AsTask());
+
+        Assert.Contains("response body must be at most", oversized.Message);
     }
 
     [Fact]
@@ -1785,12 +2217,139 @@ public sealed class SccpEthereumMainnetTests
                 .CollectFinalityEvidenceAsync(null, block, null).AsTask());
         Assert.Contains("request failed 503 Unavailable", failedHeader.Message);
 
+        var oversizedHeader = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    new EthereumMainnetBeaconRestResponse(
+                        200,
+                        new byte[1024 * 1024 + 1]),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("response body must be at most", oversizedHeader.Message);
+
+        var nonObjectHeader = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse("[]"),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("response JSON must be an object", nonObjectHeader.Message);
+
         var optimisticHeader = await Assert.ThrowsAsync<ArgumentException>(
             () => BeaconRestProvider(
                     BeaconResponse(BeaconHeaderJson(executionOptimistic: true)),
                     BeaconResponse(BeaconCheckpointJson()))
                 .CollectFinalityEvidenceAsync(null, block, null).AsTask());
         Assert.Contains("must not be execution optimistic", optimisticHeader.Message);
+
+        var malformedOptimisticHeader = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(
+                        BeaconHeaderJson()
+                            .Replace(
+                                "\"execution_optimistic\": false",
+                                "\"execution_optimistic\": \"false\"",
+                                StringComparison.Ordinal)),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("execution_optimistic must be a boolean", malformedOptimisticHeader.Message);
+
+        var malformedFinalizedHeader = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(
+                        BeaconHeaderJson()
+                            .Replace(
+                                "\"finalized\": true",
+                                "\"finalized\": \"true\"",
+                                StringComparison.Ordinal)),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("finalized must be a boolean", malformedFinalizedHeader.Message);
+
+        var malformedCanonicalHeader = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(
+                        BeaconHeaderJson()
+                            .Replace(
+                                "\"canonical\": true",
+                                "\"canonical\": \"true\"",
+                                StringComparison.Ordinal)),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("canonical must be a boolean", malformedCanonicalHeader.Message);
+
+        foreach (var (field, bytePair) in new[]
+        {
+            ("parent_root", "01"),
+            ("state_root", "02"),
+            ("body_root", "03"),
+        })
+        {
+            var malformedRoot = await Assert.ThrowsAsync<ArgumentException>(
+                () => BeaconRestProvider(
+                        BeaconResponse(
+                            BeaconHeaderJson()
+                                .Replace(
+                                    $"\"{field}\": \"0x{string.Concat(Enumerable.Repeat(bytePair, 32))}\"",
+                                    $"\"{field}\": \"0x\"",
+                                    StringComparison.Ordinal)),
+                        BeaconResponse(BeaconCheckpointJson()))
+                    .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+            Assert.Contains(field, malformedRoot.Message);
+        }
+
+        var malformedSignature = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(
+                        BeaconHeaderJson()
+                            .Replace(
+                                $"\"signature\": \"0x{string.Concat(Enumerable.Repeat("12", 96))}\"",
+                                $"\"signature\": \"0x{string.Concat(Enumerable.Repeat("12", 95))}\"",
+                                StringComparison.Ordinal)),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("signature", malformedSignature.Message);
+
+        var driftedBlockRoot = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockRootJson('9')),
+                    BeaconResponse(BeaconBlockJson()),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("finalized block root must match finalized header root", driftedBlockRoot.Message);
+
+        var driftedPayloadSlot = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockJson(slot: "65")),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("finalized block slot must match finalized header slot", driftedPayloadSlot.Message);
+
+        var driftedPayloadBlockHash = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockJson(blockHash: "0x" + new string('9', 64))),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("execution payload block_hash must match block.hash", driftedPayloadBlockHash.Message);
+
+        var driftedPayloadBlockNumber = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockJson(blockNumber: "4661")),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("execution payload block_number must match block.number", driftedPayloadBlockNumber.Message);
+
+        var driftedPayloadReceiptsRoot = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockJson(receiptsRoot: "0x" + new string('9', 64))),
+                    BeaconResponse(BeaconCheckpointJson()))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains(
+            "execution payload receipts_root must match block.receiptsRoot",
+            driftedPayloadReceiptsRoot.Message);
 
         var unfinalizedHeader = await Assert.ThrowsAsync<ArgumentException>(
             () => BeaconRestProvider(
@@ -1805,6 +2364,16 @@ public sealed class SccpEthereumMainnetTests
                     BeaconResponse(BeaconCheckpointJson('9')))
                 .CollectFinalityEvidenceAsync(null, block, null).AsTask());
         Assert.Contains("checkpoint root must match", checkpointMismatch.Message);
+
+        var emptySyncAggregate = await Assert.ThrowsAsync<ArgumentException>(
+            () => BeaconRestProvider(
+                    BeaconResponse(BeaconHeaderJson()),
+                    BeaconResponse(BeaconBlockRootJson()),
+                    BeaconResponse(BeaconBlockJson()),
+                    BeaconResponse(BeaconCheckpointJson()),
+                    BeaconResponse(BeaconFinalityUpdateJson(syncCommitteeBits: "0x" + new string('0', 128))))
+                .CollectFinalityEvidenceAsync(null, block, null).AsTask());
+        Assert.Contains("sync_committee_bits must contain at least one participant", emptySyncAggregate.Message);
 
         var missingSyncRoot = Assert.Throws<ArgumentException>(
             () => new EthereumMainnetBeaconRestConsensusProvider(
@@ -1984,7 +2553,7 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
-    public void OutboundProofPathRejectsCrossLaneAndMalformedProofs()
+    public async Task OutboundProofPathRejectsCrossLaneAndMalformedProofs()
     {
         var binding = SampleDestinationBinding();
         var publicInputs = SamplePublicInputs();
@@ -1997,6 +2566,15 @@ public sealed class SccpEthereumMainnetTests
                 SampleOutboundInput(
                     binding,
                     publicInputs with { TargetDomain = 2 })));
+        var guardedProver = new OutboundProverStub(Groth16ProofBytes());
+        await Assert.ThrowsAsync<ArgumentException>(
+            async () => await EthereumMainnetSccp.ProveOutboundToEthereumAsync(
+                SampleOutboundInput(
+                    binding,
+                    publicInputs with { TargetDomain = BscMainnetSccp.DomainBsc }),
+                guardedProver));
+        // Ethereum outbound prover callback must not see BSC requests.
+        Assert.Null(guardedProver.Request);
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.BuildOutboundProofRequest(
                 input with
@@ -2034,6 +2612,10 @@ public sealed class SccpEthereumMainnetTests
 
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.WrapOutboundProofResult([1, 2, 3], request));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.WrapOutboundProofResult(
+                Groth16ProofBytes(),
+                request with { DestinationBindingHash = "0x" + new string('9', 64) }));
         Assert.Throws<ArgumentException>(
             () => EthereumMainnetSccp.WrapOutboundProofResult(new byte[384], request));
 

@@ -13,12 +13,14 @@ use std::{
 };
 
 use argon2::{Algorithm, Argon2, Params, Version};
+use blake3::Hasher;
 use rand::{CryptoRng, RngCore};
 use thiserror::Error;
 
 use crate::soranet::pow::{CHALLENGE_DOMAIN, SOLUTION_DOMAIN, Ticket};
 
 const OUTPUT_LEN: usize = 32;
+const SOLUTION_SALT_LEN: usize = SOLUTION_DOMAIN.len() + OUTPUT_LEN;
 const TTL_GRACE: Duration = Duration::from_secs(1);
 const BINDING_FIELD_LEN: usize = 32;
 
@@ -82,13 +84,12 @@ pub enum ParameterError {
 }
 
 impl Parameters {
-    /// Construct a new parameter set, panicking when bounds are invalid.
+    /// Construct a new parameter set.
     ///
-    /// # Panics
-    /// Panics when `min_ticket_ttl` is zero or when `max_future_skew` is
-    /// shorter than the minimum TTL. Runtime configuration loaders should
-    /// prefer [`Parameters::try_new`] so invalid policy input can fail closed
-    /// without unwinding.
+    /// Invalid timing bounds produce a fail-closed policy that rejects all
+    /// minted and verified tickets. Runtime configuration loaders should prefer
+    /// [`Parameters::try_new`] so invalid policy input can be surfaced as a
+    /// configuration error.
     #[must_use]
     pub fn new(
         memory_kib: NonZeroU32,
@@ -106,14 +107,23 @@ impl Parameters {
             max_future_skew,
             min_ticket_ttl,
         )
-        .unwrap_or_else(|err| match err {
-            ParameterError::MinTicketTtlZero => {
-                panic!("min_ticket_ttl must be greater than zero")
-            }
-            ParameterError::MaxFutureSkewTooShort { .. } => {
-                panic!("max_future_skew must be at least min_ticket_ttl")
-            }
-        })
+        .unwrap_or_else(|_| Self::fail_closed(memory_kib, time_cost, lanes, difficulty))
+    }
+
+    fn fail_closed(
+        memory_kib: NonZeroU32,
+        time_cost: NonZeroU32,
+        lanes: NonZeroU32,
+        difficulty: u8,
+    ) -> Self {
+        Self {
+            memory_kib,
+            time_cost,
+            lanes,
+            difficulty,
+            max_future_skew: Duration::ZERO,
+            min_ticket_ttl: Duration::MAX,
+        }
     }
 
     /// Construct a new parameter set.
@@ -250,6 +260,9 @@ pub enum MintError {
         /// Maximum future skew derived from policy.
         max_skew: Duration,
     },
+    /// Requested TTL cannot be represented as a `SystemTime` expiry.
+    #[error("requested ttl {0:?} overflows system time")]
+    ExpiryTimestampOverflow(Duration),
     /// System clock could not be queried.
     #[error("system clock error: {0}")]
     Clock(#[from] std::time::SystemTimeError),
@@ -356,7 +369,9 @@ pub fn mint_ticket<R: RngCore + CryptoRng>(
     }
 
     let now = SystemTime::now();
-    let expires_at = now + ttl;
+    let expires_at = now
+        .checked_add(ttl)
+        .ok_or(MintError::ExpiryTimestampOverflow(ttl))?;
     let expires_at_secs = expires_at.duration_since(UNIX_EPOCH)?.as_secs();
     let mut client_nonce = [0u8; 32];
     rng.fill_bytes(&mut client_nonce);
@@ -411,24 +426,16 @@ fn derive_challenge(
     client_nonce: [u8; 32],
     expires_at: u64,
 ) -> blake3::Hash {
-    let relay_len = binding.relay_id.len();
-    let mut input = Vec::with_capacity(
-        CHALLENGE_DOMAIN.len()
-            + binding.descriptor_commit.len()
-            + relay_len
-            + binding.transcript_hash.map_or(0, <[u8]>::len)
-            + client_nonce.len()
-            + 8,
-    );
-    input.extend_from_slice(CHALLENGE_DOMAIN);
-    input.extend_from_slice(binding.descriptor_commit);
-    input.extend_from_slice(binding.relay_id);
+    let mut hasher = Hasher::new();
+    hasher.update(CHALLENGE_DOMAIN);
+    hasher.update(binding.descriptor_commit);
+    hasher.update(binding.relay_id);
     if let Some(transcript) = binding.transcript_hash {
-        input.extend_from_slice(transcript);
+        hasher.update(transcript);
     }
-    input.extend_from_slice(&client_nonce);
-    input.extend_from_slice(&expires_at.to_be_bytes());
-    blake3::hash(&input)
+    hasher.update(&client_nonce);
+    hasher.update(&expires_at.to_be_bytes());
+    hasher.finalize()
 }
 
 fn derive_solution_digest(
@@ -445,15 +452,21 @@ fn derive_solution_digest(
     .map_err(|err| DigestError::Parameters(err.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
 
-    let mut input = Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
-    input.extend_from_slice(SOLUTION_DOMAIN);
-    input.extend_from_slice(challenge.as_bytes());
+    let salt = derive_solution_salt(challenge);
 
     let mut output = [0u8; OUTPUT_LEN];
     argon2
-        .hash_password_into(solution, &input, &mut output)
+        .hash_password_into(solution, &salt, &mut output)
         .map_err(|err| DigestError::Hash(err.to_string()))?;
     Ok(output)
+}
+
+fn derive_solution_salt(challenge: &blake3::Hash) -> [u8; SOLUTION_SALT_LEN] {
+    let mut salt = [0u8; SOLUTION_SALT_LEN];
+    let (domain, challenge_bytes) = salt.split_at_mut(SOLUTION_DOMAIN.len());
+    domain.copy_from_slice(SOLUTION_DOMAIN);
+    challenge_bytes.copy_from_slice(challenge.as_bytes());
+    salt
 }
 
 fn leading_zero_bits_at_least(bytes: &[u8], bits: u8) -> bool {
@@ -561,8 +574,131 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn parameters_new_invalid_bounds_fail_closed_without_panic() {
+        let memory = NonZeroU32::new(8 * 1024).expect("non-zero memory");
+        let time = NonZeroU32::new(2).expect("non-zero time");
+        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
+
+        let zero_ttl = Parameters::new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(30),
+            Duration::ZERO,
+        );
+        assert_eq!(zero_ttl.max_future_skew(), Duration::ZERO);
+        assert_eq!(zero_ttl.min_ticket_ttl(), Duration::MAX);
+
+        let inverted = Parameters::new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(4),
+            Duration::from_secs(5),
+        );
+        assert_eq!(inverted.max_future_skew(), Duration::ZERO);
+        assert_eq!(inverted.min_ticket_ttl(), Duration::MAX);
+
+        let mut rng = ChaCha20Rng::seed_from_u64(99);
+        let mint_err = mint_ticket(&zero_ttl, &binding(), Duration::from_secs(5), &mut rng)
+            .expect_err("fail-closed params must reject minting");
+        assert!(matches!(
+            mint_err,
+            MintError::TtlTooShort {
+                required: Duration::MAX,
+                ..
+            }
+        ));
+
+        let ticket = Ticket {
+            version: 1,
+            difficulty: 0,
+            expires_at: 1_120,
+            client_nonce: [0u8; 32],
+            solution: [0u8; 32],
+        };
+        let verify_err = verify_at(
+            &ticket,
+            &binding(),
+            &inverted,
+            UNIX_EPOCH + Duration::from_secs(1_000),
+        )
+        .expect_err("fail-closed params must reject verification");
+        assert!(matches!(
+            verify_err,
+            Error::ExpiryWindowTooSmall(Duration::MAX)
+        ));
+    }
+
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
+    }
+
+    #[test]
+    fn transcript_hashes_match_legacy_contiguous_layout() {
+        let transcript = [0x33; 32];
+        let client_nonce = [0x44; 32];
+        let expires_at = 1_700_000_123_u64;
+
+        for transcript_hash in [None, Some(transcript.as_slice())] {
+            let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, transcript_hash);
+            let mut legacy = Vec::with_capacity(
+                CHALLENGE_DOMAIN.len()
+                    + DESCRIPTOR.len()
+                    + RELAY.len()
+                    + transcript_hash.map_or(0, <[u8]>::len)
+                    + client_nonce.len()
+                    + 8,
+            );
+            legacy.extend_from_slice(CHALLENGE_DOMAIN);
+            legacy.extend_from_slice(&DESCRIPTOR);
+            legacy.extend_from_slice(&RELAY);
+            if let Some(transcript_hash) = transcript_hash {
+                legacy.extend_from_slice(transcript_hash);
+            }
+            legacy.extend_from_slice(&client_nonce);
+            legacy.extend_from_slice(&expires_at.to_be_bytes());
+
+            assert_eq!(
+                derive_challenge(&binding, client_nonce, expires_at),
+                blake3::hash(&legacy)
+            );
+        }
+
+        let params = test_parameters();
+        let binding = ChallengeBinding::new(&DESCRIPTOR, &RELAY, Some(&transcript));
+        let challenge = derive_challenge(&binding, client_nonce, expires_at);
+        let mut legacy_salt =
+            Vec::with_capacity(SOLUTION_DOMAIN.len() + challenge.as_bytes().len());
+        legacy_salt.extend_from_slice(SOLUTION_DOMAIN);
+        legacy_salt.extend_from_slice(challenge.as_bytes());
+        assert_eq!(
+            derive_solution_salt(&challenge).as_slice(),
+            legacy_salt.as_slice()
+        );
+
+        let solution = [0x55; 32];
+        let argon_params = Params::new(
+            params.memory_kib.get(),
+            params.time_cost.get(),
+            params.lanes.get(),
+            Some(OUTPUT_LEN),
+        )
+        .expect("valid argon parameters");
+        let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, argon_params);
+        let mut expected = [0u8; OUTPUT_LEN];
+        argon2
+            .hash_password_into(&solution, &legacy_salt, &mut expected)
+            .expect("legacy argon2 digest");
+
+        assert_eq!(
+            derive_solution_digest(&challenge, &solution, &params)
+                .expect("derive puzzle solution digest"),
+            expected
+        );
     }
 
     fn first_invalid_solution(
@@ -700,6 +836,32 @@ mod tests {
         )
         .expect_err("expired");
         assert!(matches!(err, Error::Expired(_, _)));
+    }
+
+    #[test]
+    fn mint_rejects_ttl_that_overflows_system_time() {
+        let memory = NonZeroU32::new(8).expect("non-zero memory");
+        let time = NonZeroU32::new(1).expect("non-zero time");
+        let lanes = NonZeroU32::new(1).expect("non-zero lanes");
+        let params = Parameters::try_new(
+            memory,
+            time,
+            lanes,
+            0,
+            Duration::from_secs(u64::MAX),
+            Duration::from_secs(1),
+        )
+        .expect("huge bounds are structurally valid");
+        let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
+        let binding = binding();
+
+        let err = mint_ticket(&params, &binding, Duration::from_secs(u64::MAX), &mut rng)
+            .expect_err("overflowing ttl should fail closed");
+        assert!(matches!(
+            err,
+            MintError::ExpiryTimestampOverflow(ttl)
+                if ttl == Duration::from_secs(u64::MAX)
+        ));
     }
 
     #[test]

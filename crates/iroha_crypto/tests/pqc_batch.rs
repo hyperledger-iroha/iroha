@@ -8,8 +8,12 @@ use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as
 fn pqc_batch_verify_ok_and_fail() {
     // Prepare a few distinct messages and signatures
     let kp = KeyPair::from_seed(b"iroha:ml-dsa:pqc-batch".to_vec(), Algorithm::MlDsa);
-    let pk = dilithium::PublicKey::from_bytes(kp.public_key().to_bytes().1)
-        .expect("seeded ML-DSA public key");
+    let (algorithm, public_bytes) = kp
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture ML-DSA public key must be well-formed");
+    assert_eq!(algorithm, Algorithm::MlDsa);
+    let pk = dilithium::PublicKey::from_bytes(public_bytes).expect("seeded ML-DSA public key");
     let sk = dilithium::SecretKey::from_bytes(&kp.private_key().to_bytes().1)
         .expect("seeded ML-DSA secret key");
 

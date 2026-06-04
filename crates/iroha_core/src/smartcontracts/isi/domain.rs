@@ -17,7 +17,7 @@ pub mod isi {
         str::FromStr,
     };
 
-    use iroha_crypto::Algorithm;
+    use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         ChainId, IntoKeyValue,
         account::{
@@ -3159,7 +3159,7 @@ pub mod isi {
         allowed_algorithms: &[Algorithm],
         allowed_curve_ids: &[u8],
     ) -> Result<(), InstructionExecutionError> {
-        if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms) {
+        if let Some(disallowed) = first_disallowed_algorithm(controller, allowed_algorithms)? {
             let allowed_summary = if allowed_algorithms.is_empty() {
                 "none".to_string()
             } else {
@@ -3179,8 +3179,8 @@ pub mod isi {
             ));
         }
 
-        match first_disallowed_curve(controller, allowed_curve_ids) {
-            Ok(Some(curve)) => {
+        match first_disallowed_curve(controller, allowed_curve_ids)? {
+            Some(curve) => {
                 let algo = curve.algorithm();
                 let curve_code: u8 = curve.into();
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -3192,17 +3192,7 @@ pub mod isi {
                     .into(),
                 ));
             }
-            Ok(None) => {}
-            Err((algo, err)) => {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "account controller uses signing algorithm {} which is not registered in \
-                         the account curve registry: {err}",
-                        algo.as_static_str()
-                    )
-                    .into(),
-                ));
-            }
+            None => {}
         }
 
         Ok(())
@@ -3211,16 +3201,33 @@ pub mod isi {
     fn first_disallowed_algorithm(
         controller: &AccountController,
         allowed: &[Algorithm],
-    ) -> Option<Algorithm> {
+    ) -> Result<Option<Algorithm>, InstructionExecutionError> {
         match controller {
-            AccountController::Single(signatory) => {
-                algorithm_if_disallowed(signatory.algorithm(), allowed)
+            AccountController::Single(signatory) => Ok(algorithm_if_disallowed(
+                controller_algorithm(signatory)?,
+                allowed,
+            )),
+            AccountController::Multisig(policy) => {
+                for member in policy.members() {
+                    if let Some(disallowed) =
+                        algorithm_if_disallowed(controller_algorithm(member.public_key())?, allowed)
+                    {
+                        return Ok(Some(disallowed));
+                    }
+                }
+                Ok(None)
             }
-            AccountController::Multisig(policy) => policy
-                .members()
-                .iter()
-                .find_map(|member| algorithm_if_disallowed(member.algorithm(), allowed)),
         }
+    }
+
+    fn controller_algorithm(
+        public_key: &PublicKey,
+    ) -> Result<Algorithm, InstructionExecutionError> {
+        public_key.try_algorithm().map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("account controller public key is malformed: {err}").into(),
+            )
+        })
     }
 
     fn algorithm_if_disallowed(algo: Algorithm, allowed: &[Algorithm]) -> Option<Algorithm> {
@@ -3234,19 +3241,37 @@ pub mod isi {
     fn first_disallowed_curve(
         controller: &AccountController,
         allowed_curve_ids: &[u8],
-    ) -> Result<Option<CurveId>, (Algorithm, CurveRegistryError)> {
+    ) -> Result<Option<CurveId>, InstructionExecutionError> {
         match controller {
             AccountController::Single(signatory) => {
-                let algo = signatory.algorithm();
-                curve_if_disallowed(algo, allowed_curve_ids).map_err(|err| (algo, err))
+                let algo = controller_algorithm(signatory)?;
+                curve_if_disallowed(algo, allowed_curve_ids).map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "account controller uses signing algorithm {} which is not registered in \
+                             the account curve registry: {err}",
+                            algo.as_static_str()
+                        )
+                        .into(),
+                    )
+                })
             }
             AccountController::Multisig(policy) => {
                 for member in policy.members() {
-                    let algo = member.algorithm();
+                    let algo = controller_algorithm(member.public_key())?;
                     match curve_if_disallowed(algo, allowed_curve_ids) {
                         Ok(Some(curve)) => return Ok(Some(curve)),
                         Ok(None) => {}
-                        Err(err) => return Err((algo, err)),
+                        Err(err) => {
+                            return Err(InstructionExecutionError::InvariantViolation(
+                                format!(
+                                    "account controller uses signing algorithm {} which is not registered in \
+                                     the account curve registry: {err}",
+                                    algo.as_static_str()
+                                )
+                                .into(),
+                            ));
+                        }
                     }
                 }
                 Ok(None)
@@ -3676,6 +3701,47 @@ mod tests {
         seed_domain(&mut state, &domain_id, authority);
         seed_account(&mut state, authority, &domain_id);
         state
+    }
+
+    #[test]
+    fn domain_controller_capabilities_check_multisig_members_with_checked_algorithm_access() {
+        let allowed = [Algorithm::Ed25519];
+        let allowed_curve_ids =
+            iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(&allowed);
+        let ed25519 = KeyPair::from_seed(b"domain-controller-ed25519".to_vec(), Algorithm::Ed25519);
+        let secp256k1 = KeyPair::from_seed(
+            b"domain-controller-secp256k1".to_vec(),
+            Algorithm::Secp256k1,
+        );
+
+        let allowed_policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(ed25519.public_key().clone(), 1).expect("member")],
+        )
+        .expect("policy");
+        super::isi::ensure_controller_capabilities(
+            &AccountController::Multisig(allowed_policy),
+            &allowed,
+            &allowed_curve_ids,
+        )
+        .expect("Ed25519 multisig member should be accepted");
+
+        let disallowed_policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(secp256k1.public_key().clone(), 1).expect("member")],
+        )
+        .expect("policy");
+        let err = super::isi::ensure_controller_capabilities(
+            &AccountController::Multisig(disallowed_policy),
+            &allowed,
+            &allowed_curve_ids,
+        )
+        .expect_err("Secp256k1 multisig member should be rejected");
+
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvariantViolation(_)
+        ));
     }
 
     #[test]

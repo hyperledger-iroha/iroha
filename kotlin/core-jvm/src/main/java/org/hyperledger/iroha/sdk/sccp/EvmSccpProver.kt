@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.sccp
 
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.math.BigInteger
@@ -832,6 +833,27 @@ object SccpEvm {
     }
 }
 
+private const val ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES: Int = 1024 * 1024
+private const val ETHEREUM_MAINNET_SECONDS_PER_SLOT: Long = 12L
+
+private data class EthereumBeaconRestHeaderSummary(
+    val root: String,
+    val slot: BigInteger,
+)
+
+private data class EthereumBeaconRestBlockId(
+    val id: String,
+    val slot: BigInteger? = null,
+    val root: String? = null,
+)
+
+private data class EthereumBeaconRestFinalityUpdateSummary(
+    val syncCommitteeBits: String,
+    val syncCommitteeSignature: String,
+    val syncCommitteeParticipation: BigInteger,
+    val syncSignatureSlot: BigInteger,
+)
+
 /** Ethereum mainnet SCCP Groth16 helpers with chain-id and domain checks baked in. */
 object SccpEthereumMainnet {
     const val DOMAIN_SORA: Int = SccpEvm.DOMAIN_SORA
@@ -933,6 +955,9 @@ object SccpEthereumMainnet {
         }
         require(request.destinationBinding.networkId == MAINNET_NETWORK_ID) {
             "Ethereum mainnet proof results require chain id 1 destinationBinding"
+        }
+        require(request.destinationBinding.hash == request.destinationBindingHash) {
+            "destinationBindingHash must match Ethereum mainnet destinationBinding"
         }
         return SccpEvm.wrapProofResult(proofBytes, request)
     }
@@ -1133,6 +1158,9 @@ object SccpBsc {
         }
         require(request.destinationBinding?.networkId == MAINNET_NETWORK_ID) {
             "BSC mainnet proof results require chain id 56 destinationBinding"
+        }
+        require(request.destinationBinding.hash == request.destinationBindingHash) {
+            "destinationBindingHash must match BSC mainnet destinationBinding"
         }
         return SccpEvm.wrapProofResult(proofBytes, request)
     }
@@ -1900,16 +1928,33 @@ object EthereumMainnetBeaconRestHttpTransport : EthereumMainnetBeaconRestTranspo
                 connection.setRequestProperty(name, value)
             }
             val statusCode = connection.responseCode
-            val body = try {
-                (if (statusCode in 200..299) connection.inputStream else connection.errorStream)
-                    ?.use { it.readBytes() } ?: ByteArray(0)
-            } catch (ex: Exception) {
-                ByteArray(0)
-            }
+            val body = readEthereumMainnetBeaconRestBody(
+                if (statusCode in 200..299) connection.inputStream else connection.errorStream,
+            )
             return EthereumMainnetBeaconRestResponse(statusCode, body, connection.responseMessage)
         } finally {
             connection.disconnect()
         }
+    }
+}
+
+private fun readEthereumMainnetBeaconRestBody(stream: InputStream?): ByteArray {
+    if (stream == null) return ByteArray(0)
+    stream.use { input ->
+        val out = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            total += read
+            require(total <= ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES) {
+                "Ethereum mainnet Beacon REST response body must be at most " +
+                    "$ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES bytes"
+            }
+            out.write(buffer, 0, read)
+        }
+        return out.toByteArray()
     }
 }
 
@@ -1945,56 +1990,149 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             "block.receiptsRoot",
             32,
         )
-        val headerRoot = fetchJsonObject(
+        val targetBlockId = beaconRestBlockIdForTarget(block)
+        val finalizedHeaderResponse = fetchJsonObject(
             "/eth/v1/beacon/headers/finalized",
             "Ethereum mainnet Beacon REST finalized header",
         )
-        rejectUnsafeBeaconRestPayload(headerRoot, "Ethereum mainnet Beacon REST finalized header")
-        val headerData = expectBeaconRestObject(
+        val finalizedHeader = ethereumBeaconRestHeaderSummary(
+            finalizedHeaderResponse,
+            "Ethereum mainnet Beacon REST finalized header",
+        )
+        val targetHeader = if (targetBlockId.id == "finalized") {
+            finalizedHeader
+        } else {
+            ethereumBeaconRestHeaderSummary(
+                fetchJsonObject(
+                    "/eth/v1/beacon/headers/${targetBlockId.id}",
+                    "Ethereum mainnet Beacon REST finalized target header",
+                ),
+                "Ethereum mainnet Beacon REST finalized target header",
+            )
+        }
+        require(targetBlockId.slot == null || targetHeader.slot == targetBlockId.slot) {
+            "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot"
+        }
+        require(targetBlockId.root == null || targetHeader.root == targetBlockId.root) {
+            "Ethereum mainnet Beacon REST finalized target header root must match beaconBlockRoot"
+        }
+        require(targetHeader.slot <= finalizedHeader.slot) {
+            "Ethereum mainnet Beacon REST target block is newer than the finalized header"
+        }
+        require(targetHeader.slot != finalizedHeader.slot || targetHeader.root == finalizedHeader.root) {
+            "Ethereum mainnet Beacon REST target header root must match finalized header root at the same slot"
+        }
+        val finalizedBlockRootResponse = fetchJsonObject(
+            "/eth/v1/beacon/blocks/${targetBlockId.id}/root",
+            "Ethereum mainnet Beacon REST finalized block root",
+        )
+        rejectUnsafeBeaconRestPayload(
+            finalizedBlockRootResponse,
+            "Ethereum mainnet Beacon REST finalized block root",
+        )
+        val finalizedBlockRootData = expectBeaconRestObject(
             requireBeaconRestField(
-                headerRoot,
-                "Ethereum mainnet Beacon REST finalized header",
+                finalizedBlockRootResponse,
+                "Ethereum mainnet Beacon REST finalized block root",
                 "data",
             ),
-            "Ethereum mainnet Beacon REST finalized header.data",
+            "Ethereum mainnet Beacon REST finalized block root.data",
         )
-        require(headerData["canonical"] != false) {
-            "Ethereum mainnet Beacon REST finalized header must be canonical"
-        }
-        val finalizedHeaderRoot = normalizeEthereumBeaconRestHex(
+        val finalizedBlockRootHash = normalizeEthereumBeaconRestHex(
             requireBeaconRestField(
-                headerData,
-                "Ethereum mainnet Beacon REST finalized header.data",
+                finalizedBlockRootData,
+                "Ethereum mainnet Beacon REST finalized block root.data",
                 "root",
             ),
-            "finalizedHeaderRoot",
+            "finalizedBlockRoot",
             32,
         )
-        val header = expectBeaconRestObject(
-            requireBeaconRestField(
-                headerData,
-                "Ethereum mainnet Beacon REST finalized header.data",
-                "header",
-            ),
-            "Ethereum mainnet Beacon REST finalized header.data.header",
+        require(finalizedBlockRootHash == targetHeader.root) {
+            "Ethereum mainnet Beacon REST finalized block root must match finalized header root"
+        }
+        val finalizedBlockRoot = fetchJsonObject(
+            "/eth/v2/beacon/blocks/${targetBlockId.id}",
+            "Ethereum mainnet Beacon REST finalized block",
         )
-        val message = expectBeaconRestObject(
+        rejectUnsafeBeaconRestPayload(finalizedBlockRoot, "Ethereum mainnet Beacon REST finalized block")
+        val blockData = expectBeaconRestObject(
             requireBeaconRestField(
-                header,
-                "Ethereum mainnet Beacon REST finalized header.data.header",
+                finalizedBlockRoot,
+                "Ethereum mainnet Beacon REST finalized block",
+                "data",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data",
+        )
+        val blockMessage = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockData,
+                "Ethereum mainnet Beacon REST finalized block.data",
                 "message",
             ),
-            "Ethereum mainnet Beacon REST finalized header.data.header.message",
+            "Ethereum mainnet Beacon REST finalized block.data.message",
         )
-        val beaconSlot = normalizeEthereumBeaconRestUnsigned(
+        val finalizedBlockSlot = normalizeEthereumBeaconRestUnsigned(
             requireBeaconRestField(
-                message,
-                "Ethereum mainnet Beacon REST finalized header.data.header.message",
+                blockMessage,
+                "Ethereum mainnet Beacon REST finalized block.data.message",
                 "slot",
             ),
-            "beaconFinality.beaconSlot",
+            "Ethereum mainnet Beacon REST finalized block.data.message.slot",
         )
-        require(beaconSlot > BigInteger.ZERO) { "beaconFinality.beaconSlot must be positive" }
+        require(finalizedBlockSlot == targetHeader.slot) {
+            "Ethereum mainnet Beacon REST finalized block slot must match finalized header slot"
+        }
+        val blockBody = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockMessage,
+                "Ethereum mainnet Beacon REST finalized block.data.message",
+                "body",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body",
+        )
+        val executionPayload = expectBeaconRestObject(
+            requireBeaconRestField(
+                blockBody,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body",
+                "execution_payload",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+        )
+        val payloadBlockHash = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "block_hash",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash",
+            32,
+        )
+        require(payloadBlockHash == blockHash) {
+            "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash"
+        }
+        val payloadBlockNumber = normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "block_number",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number",
+        )
+        require(payloadBlockNumber == normalizeEthereumBeaconRestUnsigned(blockNumber, "block.number")) {
+            "Ethereum mainnet Beacon REST execution payload block_number must match block.number"
+        }
+        val payloadReceiptsRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(
+                executionPayload,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                "receipts_root",
+            ),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root",
+            32,
+        )
+        require(payloadReceiptsRoot == receiptsRoot) {
+            "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot"
+        }
         if (verifyFinalityCheckpoint) {
             val checkpointRoot = fetchJsonObject(
                 "/eth/v1/beacon/states/finalized/finality_checkpoints",
@@ -2026,20 +2164,99 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
                 "finalizedCheckpointRoot",
                 32,
             )
-            require(finalizedCheckpointRoot == finalizedHeaderRoot) {
+            require(finalizedCheckpointRoot == finalizedHeader.root) {
                 "Ethereum mainnet Beacon REST finality checkpoint root must match finalized header root"
             }
         }
+        val finalityUpdate = ethereumBeaconRestFinalityUpdateSummary(
+            fetchJsonObject(
+                "/eth/v1/beacon/light_client/finality_update",
+                "Ethereum mainnet Beacon REST light-client finality update",
+            ),
+            finalizedHeader.slot,
+        )
         return mapOf(
             "executionBlockNumber" to normalizeEthereumBeaconRestUnsigned(blockNumber, "block.number").toString(),
             "executionBlockHash" to blockHash,
             "executionReceiptsRoot" to receiptsRoot,
-            "finalizedHeaderRoot" to finalizedHeaderRoot,
+            "finalizedHeaderRoot" to targetHeader.root,
             "syncCommitteeRoot" to resolveEthereumBeaconRestSyncCommitteeRoot(
                 syncCommitteeRoot,
                 syncCommitteePayload,
             ),
-            "beaconSlot" to beaconSlot.toString(),
+            "beaconSlot" to targetHeader.slot.toString(),
+            "syncCommitteeBits" to finalityUpdate.syncCommitteeBits,
+            "syncCommitteeSignature" to finalityUpdate.syncCommitteeSignature,
+            "syncCommitteeParticipation" to finalityUpdate.syncCommitteeParticipation.toString(),
+            "syncSignatureSlot" to finalityUpdate.syncSignatureSlot.toString(),
+        )
+    }
+
+    private fun beaconRestBlockIdForTarget(block: Map<String, Any?>): EthereumBeaconRestBlockId {
+        val rootInput = firstPresent(
+            block,
+            "beaconBlockRoot",
+            "beacon_block_root",
+            "targetBeaconBlockRoot",
+            "target_beacon_block_root",
+        )
+        if (rootInput != null) {
+            val root = normalizeEthereumBeaconRestHex(rootInput, "block.beaconBlockRoot", 32)
+            return EthereumBeaconRestBlockId(root, root = root)
+        }
+        val idInput = firstPresent(
+            block,
+            "beaconBlockId",
+            "beacon_block_id",
+            "targetBeaconBlockId",
+            "target_beacon_block_id",
+        )
+        if (idInput != null) return ethereumBeaconRestBlockIdFromValue(idInput, "block.beaconBlockId")
+        val slotInput = firstPresent(
+            block,
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot",
+        )
+        if (slotInput != null) {
+            val slot = normalizeEthereumBeaconRestSlot(slotInput, "block.beaconSlot")
+            return EthereumBeaconRestBlockId(slot.toString(), slot = slot)
+        }
+        val timestampInput = firstPresent(block, "timestamp", "blockTimestamp", "block_timestamp")
+        if (timestampInput != null) {
+            val timestamp = normalizeEthereumBeaconRestUnsigned(timestampInput, "block.timestamp")
+            val genesisTime = beaconRestGenesisTime()
+            require(timestamp >= genesisTime) { "block.timestamp must not be before Beacon genesis time" }
+            val elapsed = timestamp.subtract(genesisTime)
+            val secondsPerSlot = BigInteger.valueOf(ETHEREUM_MAINNET_SECONDS_PER_SLOT)
+            require(elapsed.mod(secondsPerSlot) == BigInteger.ZERO) {
+                "block.timestamp must align to an Ethereum mainnet Beacon slot"
+            }
+            val slot = elapsed.divide(secondsPerSlot)
+            require(slot > BigInteger.ZERO) { "beaconFinality.beaconSlot must be positive" }
+            return EthereumBeaconRestBlockId(slot.toString(), slot = slot)
+        }
+        return EthereumBeaconRestBlockId("finalized")
+    }
+
+    private fun beaconRestGenesisTime(): BigInteger {
+        val genesis = fetchJsonObject(
+            "/eth/v1/beacon/genesis",
+            "Ethereum mainnet Beacon REST genesis",
+        )
+        val data = expectBeaconRestObject(
+            requireBeaconRestField(genesis, "Ethereum mainnet Beacon REST genesis", "data"),
+            "Ethereum mainnet Beacon REST genesis.data",
+        )
+        return normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(
+                data,
+                "Ethereum mainnet Beacon REST genesis.data",
+                "genesis_time",
+            ),
+            "Ethereum mainnet Beacon REST genesis.data.genesis_time",
         )
     }
 
@@ -2049,9 +2266,142 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
             val suffix = response.statusMessage?.let { " $it" } ?: ""
             "$label request failed ${response.statusCode}$suffix"
         }
+        require(response.body.size <= ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES) {
+            "$label response body must be at most $ETHEREUM_MAINNET_BEACON_REST_MAX_RESPONSE_BYTES bytes"
+        }
         val parsed = JsonParser.parse(String(response.body, Charsets.UTF_8))
         return expectBeaconRestObject(parsed, "$label response JSON")
     }
+}
+
+private fun firstPresent(input: Map<String, Any?>, vararg keys: String): Any? {
+    for (key in keys) {
+        if (input.containsKey(key)) return input[key]
+    }
+    return null
+}
+
+private fun strictFirstPresent(input: Map<String, Any?>, label: String, vararg keys: String): Any? {
+    var selected: Any? = null
+    var found = false
+    for (key in keys) {
+        if (input.containsKey(key)) {
+            require(!found) { "$label must not use multiple aliases" }
+            selected = input[key]
+            found = true
+        }
+    }
+    return selected
+}
+
+private fun ethereumBeaconRestHeaderSummary(
+    payload: Map<String, Any?>,
+    label: String,
+): EthereumBeaconRestHeaderSummary {
+    rejectUnsafeBeaconRestPayload(payload, label)
+    val headerData = expectBeaconRestObject(
+        requireBeaconRestField(payload, label, "data"),
+        "$label.data",
+    )
+    rejectNonBooleanBeaconRestCanonical(headerData, label)
+    val root = normalizeEthereumBeaconRestHex(
+        requireBeaconRestField(headerData, "$label.data", "root"),
+        if (label.contains("target")) "targetHeaderRoot" else "finalizedHeaderRoot",
+        32,
+    )
+    val header = expectBeaconRestObject(
+        requireBeaconRestField(headerData, "$label.data", "header"),
+        "$label.data.header",
+    )
+    val message = expectBeaconRestObject(
+        requireBeaconRestField(header, "$label.data.header", "message"),
+        "$label.data.header.message",
+    )
+    for (field in listOf("parent_root", "state_root", "body_root")) {
+        normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(message, "$label.data.header.message", field),
+            "$label.data.header.message.$field",
+            32,
+        )
+    }
+    normalizeEthereumBeaconRestHex(
+        requireBeaconRestField(header, "$label.data.header", "signature"),
+        "$label.data.header.signature",
+        96,
+    )
+    val slot = normalizeEthereumBeaconRestSlot(
+        requireBeaconRestField(message, "$label.data.header.message", "slot"),
+        "beaconFinality.beaconSlot",
+    )
+    return EthereumBeaconRestHeaderSummary(root, slot)
+}
+
+private fun ethereumBeaconRestFinalityUpdateSummary(
+    payload: Map<String, Any?>,
+    expectedFinalizedSlot: BigInteger,
+): EthereumBeaconRestFinalityUpdateSummary {
+    val label = "Ethereum mainnet Beacon REST light-client finality update"
+    rejectUnsafeBeaconRestPayload(payload, label)
+    val data = expectBeaconRestObject(
+        requireBeaconRestField(payload, label, "data"),
+        "$label.data",
+    )
+    val finalizedHeader = expectBeaconRestObject(
+        requireBeaconRestField(data, "$label.data", "finalized_header"),
+        "$label.data.finalized_header",
+    )
+    val finalizedBeacon = expectBeaconRestObject(
+        requireBeaconRestField(finalizedHeader, "$label.data.finalized_header", "beacon"),
+        "$label.data.finalized_header.beacon",
+    )
+    val finalizedSlot = normalizeEthereumBeaconRestSlot(
+        requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "slot"),
+        "$label.data.finalized_header.beacon.slot",
+    )
+    require(finalizedSlot == expectedFinalizedSlot) {
+        "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot"
+    }
+    val syncSignatureSlot = normalizeEthereumBeaconRestSlot(
+        requireBeaconRestField(data, "$label.data", "signature_slot"),
+        "$label.data.signature_slot",
+    )
+    require(syncSignatureSlot >= expectedFinalizedSlot) {
+        "Ethereum mainnet Beacon REST finality update signature_slot must cover finalized header slot"
+    }
+    val syncAggregate = expectBeaconRestObject(
+        requireBeaconRestField(data, "$label.data", "sync_aggregate"),
+        "$label.data.sync_aggregate",
+    )
+    val syncCommitteeBits = normalizeEthereumBeaconRestSyncCommitteeBits(
+        requireBeaconRestField(syncAggregate, "$label.data.sync_aggregate", "sync_committee_bits"),
+        "$label.data.sync_aggregate.sync_committee_bits",
+    )
+    val syncCommitteeSignature = normalizeEthereumBeaconRestHex(
+        requireBeaconRestField(syncAggregate, "$label.data.sync_aggregate", "sync_committee_signature"),
+        "$label.data.sync_aggregate.sync_committee_signature",
+        96,
+    )
+    return EthereumBeaconRestFinalityUpdateSummary(
+        syncCommitteeBits = syncCommitteeBits,
+        syncCommitteeSignature = syncCommitteeSignature,
+        syncCommitteeParticipation = ethereumBeaconRestSyncCommitteeParticipation(syncCommitteeBits),
+        syncSignatureSlot = syncSignatureSlot,
+    )
+}
+
+private fun ethereumBeaconRestBlockIdFromValue(value: Any?, label: String): EthereumBeaconRestBlockId {
+    if (value is String && value.trim() == value && value.startsWith("0x") && value.length == 66) {
+        val root = normalizeEthereumBeaconRestHex(value, label, 32)
+        return EthereumBeaconRestBlockId(root, root = root)
+    }
+    val slot = normalizeEthereumBeaconRestSlot(value, label)
+    return EthereumBeaconRestBlockId(slot.toString(), slot = slot)
+}
+
+private fun normalizeEthereumBeaconRestSlot(value: Any?, label: String): BigInteger {
+    val slot = normalizeEthereumBeaconRestUnsigned(value, label)
+    require(slot > BigInteger.ZERO) { "beaconFinality.beaconSlot must be positive" }
+    return slot
 }
 
 private fun normalizeEthereumBeaconRestEndpoint(endpoint: String): String {
@@ -2068,13 +2418,15 @@ private fun normalizeEthereumBeaconRestEndpoint(endpoint: String): String {
 private fun beaconRestUrl(endpoint: String, path: String): String {
     val url = URL(endpoint)
     val basePath = url.path.trimEnd('/')
-    val apiPath = if (basePath.endsWith("/eth/v1") && path.startsWith("/eth/v1/")) {
-        path.removePrefix("/eth/v1")
+    val apiPath = if (Regex("/eth/v[0-9]+$").containsMatchIn(basePath) &&
+        Regex("^/eth/v[0-9]+/").containsMatchIn(path)
+    ) {
+        Regex("/eth/v[0-9]+$").replace(basePath, "") + path
     } else {
-        path
+        basePath + path
     }
     val query = url.query?.let { "?$it" } ?: ""
-    return "${url.protocol}://${url.authority}$basePath$apiPath$query"
+    return "${url.protocol}://${url.authority}$apiPath$query"
 }
 
 private fun expectBeaconRestObject(value: Any?, label: String): Map<String, Any?> {
@@ -2089,12 +2441,29 @@ private fun requireBeaconRestField(value: Map<String, Any?>, label: String, fiel
 }
 
 private fun rejectUnsafeBeaconRestPayload(payload: Map<String, Any?>, label: String) {
-    require(payload["execution_optimistic"] != true && payload["executionOptimistic"] != true) {
+    val executionOptimistic = optionalBeaconRestBoolean(payload, "execution_optimistic", label)
+    val executionOptimisticAlias = optionalBeaconRestBoolean(payload, "executionOptimistic", label)
+    val finalized = optionalBeaconRestBoolean(payload, "finalized", label)
+    require(executionOptimistic != true && executionOptimisticAlias != true) {
         "$label must not be execution optimistic"
     }
-    require(payload["finalized"] != false) {
+    require(finalized != false) {
         "$label must be finalized"
     }
+}
+
+private fun rejectNonBooleanBeaconRestCanonical(payload: Map<String, Any?>, label: String) {
+    val canonical = optionalBeaconRestBoolean(payload, "canonical", label)
+    require(canonical != false) { "$label must be canonical" }
+}
+
+private fun optionalBeaconRestBoolean(payload: Map<String, Any?>, field: String, label: String): Boolean? {
+    if (!payload.containsKey(field)) {
+        return null
+    }
+    val value = payload[field]
+    require(value is Boolean) { "$label.$field must be a boolean" }
+    return value
 }
 
 private fun normalizeEthereumBeaconRestHex(value: Any?, label: String, byteLength: Int): String {
@@ -2107,6 +2476,46 @@ private fun normalizeEthereumBeaconRestHex(value: Any?, label: String, byteLengt
     }
     require(text.any { it != '0' }) { "$label must not be zero" }
     return value
+}
+
+private fun normalizeEthereumBeaconRestSyncCommitteeBits(value: Any?, label: String): String {
+    val bits = normalizeEthereumBeaconRestHex(value, label, 64, allowZero = true)
+    require(ethereumBeaconRestSyncCommitteeParticipation(bits) > BigInteger.ZERO) {
+        "$label must contain at least one participant"
+    }
+    return bits
+}
+
+private fun normalizeEthereumBeaconRestHex(
+    value: Any?,
+    label: String,
+    byteLength: Int,
+    allowZero: Boolean,
+): String {
+    require(value is String && value.trim() == value && value.startsWith("0x")) {
+        "$label must be canonical lowercase 0x hex"
+    }
+    val text = value.substring(2)
+    require(text.length == byteLength * 2 && text.matches(Regex("[0-9a-f]+"))) {
+        "$label must be $byteLength bytes canonical lowercase 0x hex"
+    }
+    require(allowZero || text.any { it != '0' }) { "$label must not be zero" }
+    return value
+}
+
+private fun ethereumBeaconRestSyncCommitteeParticipation(bits: String): BigInteger {
+    val text = bits.removePrefix("0x")
+    var count = BigInteger.ZERO
+    var index = 0
+    while (index < text.length) {
+        var value = text.substring(index, index + 2).toInt(16)
+        while (value != 0) {
+            if ((value and 1) == 1) count = count.add(BigInteger.ONE)
+            value = value ushr 1
+        }
+        index += 2
+    }
+    return count
 }
 
 private fun normalizeEthereumBeaconRestQuantity(value: Any?, label: String): String {
@@ -2185,6 +2594,10 @@ data class EthereumMainnetBeaconFinalityEvidence(
     val executionReceiptsRoot: String,
     val additionalFields: Map<String, Any?> = emptyMap(),
     val beaconSlot: String? = null,
+    val syncCommitteeBits: String? = null,
+    val syncCommitteeSignature: String? = null,
+    val syncCommitteeParticipation: String? = null,
+    val syncSignatureSlot: String? = null,
 ) {
     fun toMap(): Map<String, Any?> =
         additionalFields + listOfNotNull(
@@ -2192,6 +2605,10 @@ data class EthereumMainnetBeaconFinalityEvidence(
             "executionBlockHash" to executionBlockHash,
             "executionReceiptsRoot" to executionReceiptsRoot,
             beaconSlot?.let { "beaconSlot" to it },
+            syncCommitteeBits?.let { "syncCommitteeBits" to it },
+            syncCommitteeSignature?.let { "syncCommitteeSignature" to it },
+            syncCommitteeParticipation?.let { "syncCommitteeParticipation" to it },
+            syncSignatureSlot?.let { "syncSignatureSlot" to it },
         ).toMap()
 }
 
@@ -2322,6 +2739,27 @@ fun interface BscMainnetOutboundSubmitter {
     fun submit(submission: EvmSccpSubmission): Any?
 }
 
+/** BSC mainnet receipt-proof transcript collected from app-supplied providers. */
+data class BscMainnetReceiptProof(
+    val sourceEventDigest: String,
+    val validatorEpoch: String,
+    val blockNumber: String,
+    val blockHash: String,
+    val receiptsRoot: String,
+    val validatorSetHash: String,
+    val commitSealHash: String,
+    val receiptRootIndex: String,
+    val receiptTrieProofNodes: List<ByteArray>,
+    val inclusionBranch: List<ByteArray>,
+    val sourceDomain: Int = SccpEvm.DOMAIN_BSC,
+) {
+    fun snapshot(): BscMainnetReceiptProof =
+        copy(
+            receiptTrieProofNodes = receiptTrieProofNodes.map { it.copyOf() },
+            inclusionBranch = inclusionBranch.map { it.copyOf() },
+        )
+}
+
 /** Locally collected BSC mainnet inbound evidence before source-proof generation. */
 data class BscMainnetInboundEvidence(
     val sourceDomain: Int = SccpEvm.DOMAIN_BSC,
@@ -2331,6 +2769,9 @@ data class BscMainnetInboundEvidence(
     val block: Map<String, Any?>? = null,
     val parliaFinality: Map<String, Any?>? = null,
     val receiptProofHash: String? = null,
+    val receiptProof: BscMainnetReceiptProof? = null,
+    val sourceEventDigest: String? = null,
+    val sourceBridgeEmitterAddress: String? = null,
 ) {
     companion object {
         fun withParliaFinalityEvidence(
@@ -2341,6 +2782,9 @@ data class BscMainnetInboundEvidence(
             block: Map<String, Any?>? = null,
             parliaFinalityEvidence: BscMainnetParliaFinalityEvidence? = null,
             receiptProofHash: String? = null,
+            receiptProof: BscMainnetReceiptProof? = null,
+            sourceEventDigest: String? = null,
+            sourceBridgeEmitterAddress: String? = null,
         ): BscMainnetInboundEvidence =
             BscMainnetInboundEvidence(
                 sourceDomain = sourceDomain,
@@ -2350,6 +2794,9 @@ data class BscMainnetInboundEvidence(
                 block = block,
                 parliaFinality = parliaFinalityEvidence?.toMap(),
                 receiptProofHash = receiptProofHash,
+                receiptProof = receiptProof,
+                sourceEventDigest = sourceEventDigest,
+                sourceBridgeEmitterAddress = sourceBridgeEmitterAddress,
             )
     }
 }
@@ -2640,6 +3087,16 @@ class EthereumMainnetSccp(
         require(evidence.beaconFinality["beaconSlot"] != null) {
             "Ethereum mainnet SCCP inbound proof requires beaconFinality.beaconSlot"
         }
+        listOf(
+            "syncCommitteeBits",
+            "syncCommitteeSignature",
+            "syncCommitteeParticipation",
+            "syncSignatureSlot",
+        ).forEach { field ->
+            require(evidence.beaconFinality[field] != null) {
+                "Ethereum mainnet SCCP inbound proof requires beaconFinality.$field"
+            }
+        }
         val proofBytes = prover.prove(evidence)
         require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
         require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
@@ -2877,10 +3334,14 @@ class EthereumMainnetSccp(
             require(proofReceiptsRoot == beaconFinality["executionReceiptsRoot"]) {
                 "receiptProof.executionReceiptsRoot must match beaconFinality.executionReceiptsRoot"
             }
-            val finalityFinalizedRoot = beaconFinality["finalizedHeaderRoot"]
-                ?: beaconFinality["finalized_header_root"]
-                ?: beaconFinality["beaconFinalizedRoot"]
-                ?: beaconFinality["beacon_finalized_root"]
+            val finalityFinalizedRoot = strictFirstPresent(
+                beaconFinality,
+                "beaconFinality.finalizedHeaderRoot",
+                "finalizedHeaderRoot",
+                "finalized_header_root",
+                "beaconFinalizedRoot",
+                "beacon_finalized_root",
+            )
             if (finalityFinalizedRoot != null) {
                 require(
                     normalizeRpcHex(
@@ -2896,8 +3357,12 @@ class EthereumMainnetSccp(
                     "receiptProof.beaconFinalizedRoot must match beaconFinality.finalizedHeaderRoot"
                 }
             }
-            val finalitySyncCommitteeRoot = beaconFinality["syncCommitteeRoot"]
-                ?: beaconFinality["sync_committee_root"]
+            val finalitySyncCommitteeRoot = strictFirstPresent(
+                beaconFinality,
+                "beaconFinality.syncCommitteeRoot",
+                "syncCommitteeRoot",
+                "sync_committee_root",
+            )
             if (finalitySyncCommitteeRoot != null) {
                 require(
                     normalizeRpcHex(
@@ -2913,11 +3378,15 @@ class EthereumMainnetSccp(
                     "receiptProof.syncCommitteeRoot must match beaconFinality.syncCommitteeRoot"
                 }
             }
-            val finalityBeaconSlot = beaconFinality["beaconSlot"]
-                ?: beaconFinality["beacon_slot"]
-                ?: beaconFinality["finalizedSlot"]
-                ?: beaconFinality["finalized_slot"]
-                ?: beaconFinality["slot"]
+            val finalityBeaconSlot = strictFirstPresent(
+                beaconFinality,
+                "beaconFinality.beaconSlot",
+                "beaconSlot",
+                "beacon_slot",
+                "finalizedSlot",
+                "finalized_slot",
+                "slot",
+            )
             if (finalityBeaconSlot != null) {
                 require(
                     normalizeUnsignedInteger(
@@ -2945,6 +3414,720 @@ class EthereumMainnetSccp(
     }
 
     private fun ethereumReceiptSourceEvent(
+        receipt: Map<String, Any?>?,
+        sourceEventDigestInput: String?,
+        sourceBridgeEmitterAddressInput: String?,
+        transactionHash: String?,
+        blockHash: String?,
+        blockNumber: String?,
+    ): Pair<String?, String?> {
+        val sourceEventDigest = sourceEventDigestInput?.let {
+            normalizeRpcHex(it, "sourceEventDigest", 32)
+        }
+        val sourceBridgeEmitterAddress = sourceBridgeEmitterAddressInput?.let {
+            normalizeRpcHex(it, "sourceBridgeEmitterAddress", 20)
+        }
+        if (sourceEventDigest == null && sourceBridgeEmitterAddress == null) {
+            return Pair(null, null)
+        }
+        require(sourceBridgeEmitterAddress != null) {
+            "sourceBridgeEmitterAddress is required when validating sourceEventDigest"
+        }
+        val logs = receipt?.get("logs") as? List<*>
+            ?: throw IllegalArgumentException("receipt.logs is required for SCCP source event validation")
+        var matchedDigest: String? = null
+        for ((index, logInput) in logs.withIndex()) {
+            val log = logInput as? Map<*, *>
+                ?: throw IllegalArgumentException("receipt.logs[$index] must be an object")
+            if (log["removed"] == true) {
+                throw IllegalArgumentException("receipt.logs must not contain removed logs")
+            }
+            val logAddress = normalizeRpcHex(
+                log["address"],
+                "receipt.logs[$index].address",
+                20,
+                allowZero = true,
+            )
+            val topics = log["topics"] as? List<*>
+                ?: throw IllegalArgumentException("receipt.logs[$index].topics must be an array")
+            require(topics.size <= 4) {
+                "receipt.logs[$index].topics must contain at most 4 entries"
+            }
+            val normalizedTopics = topics.mapIndexed { topicIndex, topic ->
+                normalizeRpcHex(
+                    topic,
+                    "receipt.logs[$index].topics[$topicIndex]",
+                    32,
+                    allowZero = true,
+                )
+            }
+            if (
+                logAddress == sourceBridgeEmitterAddress &&
+                normalizedTopics.firstOrNull() == SccpEthereumMainnet.SOURCE_EVENT_TOPIC_V1
+            ) {
+                require(normalizedTopics.size == 2) {
+                    "SCCP source event log must contain exactly 2 topics"
+                }
+                val data = log["data"] as? String
+                    ?: throw IllegalArgumentException("receipt.logs[$index].data is required")
+                require(data == "0x") {
+                    "SCCP source event log data must be 0x"
+                }
+                @Suppress("UNCHECKED_CAST")
+                val logFields = log as Map<String, Any?>
+                val logTransactionHash = normalizeRpcHex(
+                    strictFirstPresent(
+                        logFields,
+                        "receipt.logs[$index].transactionHash",
+                        "transactionHash",
+                        "transaction_hash",
+                    ),
+                    "receipt.logs[$index].transactionHash",
+                    32,
+                )
+                require(transactionHash == null || logTransactionHash == transactionHash) {
+                    "receipt.logs transactionHash must match receipt.transactionHash"
+                }
+                val logBlockHash = normalizeRpcHex(
+                    strictFirstPresent(
+                        logFields,
+                        "receipt.logs[$index].blockHash",
+                        "blockHash",
+                        "block_hash",
+                    ),
+                    "receipt.logs[$index].blockHash",
+                    32,
+                )
+                require(blockHash == null || logBlockHash == blockHash) {
+                    "receipt.logs blockHash must match receipt.blockHash"
+                }
+                val logBlockNumber = normalizePositiveRpcQuantity(
+                    strictFirstPresent(
+                        logFields,
+                        "receipt.logs[$index].blockNumber",
+                        "blockNumber",
+                        "block_number",
+                    ),
+                    "receipt.logs[$index].blockNumber",
+                )
+                require(blockNumber == null || logBlockNumber == blockNumber) {
+                    "receipt.logs blockNumber must match receipt.blockNumber"
+                }
+                val candidateDigest = normalizedTopics[1]
+                require(candidateDigest != "0x" + "0".repeat(64)) {
+                    "SCCP source event digest must not be zero"
+                }
+                if (sourceEventDigest != null && candidateDigest != sourceEventDigest) {
+                    continue
+                }
+                require(matchedDigest == null) {
+                    "receipt.logs must contain exactly one matching SCCP source event"
+                }
+                matchedDigest = candidateDigest
+            }
+        }
+        return Pair(
+            matchedDigest
+                ?: throw IllegalArgumentException("receipt.logs must contain the expected SCCP source event"),
+            sourceBridgeEmitterAddress,
+        )
+    }
+
+    private fun resolveSourceBridgeEmitterAddress(inputAddress: String?, defaultAddress: String?): String? {
+        val normalizedInput = inputAddress?.let {
+            normalizeRpcHex(it, "sourceBridgeEmitterAddress", 20)
+        }
+        val normalizedDefault = defaultAddress?.let {
+            normalizeRpcHex(it, "sourceBridgeEmitterAddress", 20)
+        }
+        require(normalizedInput == null || normalizedDefault == null || normalizedInput == normalizedDefault) {
+            "sourceBridgeEmitterAddress values must match"
+        }
+        return normalizedInput ?: normalizedDefault
+    }
+
+    private fun normalizeRpcQuantity(value: Any?, label: String): String {
+        require(value is String && value.trim() == value && value.startsWith("0x")) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        val text = value.substring(2)
+        require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
+            "$label must be a canonical JSON-RPC quantity"
+        }
+        return "0x" + BigInteger(text, 16).toString(16)
+    }
+
+    private fun normalizePositiveRpcQuantity(value: Any?, label: String): String {
+        val quantity = normalizeRpcQuantity(value, label)
+        require(quantity != "0x0") { "$label must be positive" }
+        return quantity
+    }
+
+    private fun normalizeBeaconFinality(
+        finality: Map<String, Any?>,
+        expectedBlockHash: String?,
+        expectedBlockNumber: String?,
+        expectedReceiptsRoot: String?,
+    ): Map<String, Any?> {
+        val executionBlockNumber = normalizeUnsignedInteger(
+            strictFirstPresent(
+                finality,
+                "beaconFinality.executionBlockNumber",
+                "executionBlockNumber",
+                "execution_block_number",
+                "finalityHeight",
+                "finality_height",
+            ),
+            "beaconFinality.executionBlockNumber",
+        )
+        require(executionBlockNumber > 0) { "beaconFinality.executionBlockNumber must be positive" }
+        if (expectedBlockNumber != null) {
+            require(executionBlockNumber == normalizeUnsignedInteger(expectedBlockNumber, "block.number")) {
+                "beaconFinality.executionBlockNumber must match block.number"
+            }
+        }
+        val executionBlockHash = normalizeRpcHex(
+            strictFirstPresent(
+                finality,
+                "beaconFinality.executionBlockHash",
+                "executionBlockHash",
+                "execution_block_hash",
+                "finalityBlockHash",
+                "finality_block_hash",
+            ),
+            "beaconFinality.executionBlockHash",
+            32,
+        )
+        if (expectedBlockHash != null) {
+            require(executionBlockHash == expectedBlockHash) {
+                "beaconFinality.executionBlockHash must match block.hash"
+            }
+        }
+        val executionReceiptsRoot = normalizeRpcHex(
+            strictFirstPresent(
+                finality,
+                "beaconFinality.executionReceiptsRoot",
+                "executionReceiptsRoot",
+                "execution_receipts_root",
+                "receiptsRoot",
+                "receipts_root",
+            ),
+            "beaconFinality.executionReceiptsRoot",
+            32,
+        )
+        if (expectedReceiptsRoot != null) {
+            require(executionReceiptsRoot == expectedReceiptsRoot) {
+                "beaconFinality.executionReceiptsRoot must match block.receiptsRoot"
+            }
+        }
+        val normalized = finality + mapOf(
+            "executionBlockNumber" to executionBlockNumber.toString(),
+            "executionBlockHash" to executionBlockHash,
+            "executionReceiptsRoot" to executionReceiptsRoot,
+        )
+        val finalizedHeaderRoot = strictFirstPresent(
+            finality,
+            "beaconFinality.finalizedHeaderRoot",
+            "finalizedHeaderRoot",
+            "finalized_header_root",
+            "beaconFinalizedRoot",
+            "beacon_finalized_root",
+        )
+        val syncCommitteeRoot = strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeRoot",
+            "syncCommitteeRoot",
+            "sync_committee_root",
+        )
+        val beaconSlot = strictFirstPresent(
+            finality,
+            "beaconFinality.beaconSlot",
+            "beaconSlot",
+            "beacon_slot",
+            "finalizedSlot",
+            "finalized_slot",
+            "slot",
+        )
+        val syncCommitteeBits = strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeBits",
+            "syncCommitteeBits",
+            "sync_committee_bits",
+        )
+        val syncCommitteeSignature = strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeSignature",
+            "syncCommitteeSignature",
+            "sync_committee_signature",
+        )
+        val syncSignatureSlot = strictFirstPresent(
+            finality,
+            "beaconFinality.syncSignatureSlot",
+            "syncSignatureSlot",
+            "sync_signature_slot",
+            "signatureSlot",
+            "signature_slot",
+        )
+        val syncCommitteeParticipation = strictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeParticipation",
+            "syncCommitteeParticipation",
+            "sync_committee_participation",
+        )
+        return normalized +
+            listOfNotNull(
+                finalizedHeaderRoot?.let {
+                    "finalizedHeaderRoot" to normalizeRpcHex(
+                        it,
+                        "beaconFinality.finalizedHeaderRoot",
+                        32,
+                    )
+                },
+                syncCommitteeRoot?.let {
+                    "syncCommitteeRoot" to normalizeRpcHex(
+                        it,
+                        "beaconFinality.syncCommitteeRoot",
+                        32,
+                    )
+                },
+                beaconSlot?.let {
+                    val normalizedSlot = normalizeUnsignedInteger(
+                        it,
+                        "beaconFinality.beaconSlot",
+                    )
+                    require(normalizedSlot > 0) {
+                        "beaconFinality.beaconSlot must be positive"
+                    }
+                    "beaconSlot" to normalizedSlot.toString()
+                },
+                syncCommitteeBits?.let {
+                    "syncCommitteeBits" to normalizeEthereumBeaconRestSyncCommitteeBits(
+                        it,
+                        "beaconFinality.syncCommitteeBits",
+                    )
+                },
+                syncCommitteeSignature?.let {
+                    "syncCommitteeSignature" to normalizeEthereumBeaconRestHex(
+                        it,
+                        "beaconFinality.syncCommitteeSignature",
+                        96,
+                    )
+                },
+                syncSignatureSlot?.let {
+                    val normalizedSlot = normalizeUnsignedInteger(
+                        it,
+                        "beaconFinality.syncSignatureSlot",
+                    )
+                    require(normalizedSlot > BigInteger.ZERO) {
+                        "beaconFinality.syncSignatureSlot must be positive"
+                    }
+                    "syncSignatureSlot" to normalizedSlot.toString()
+                },
+                syncCommitteeParticipation?.let {
+                    val normalizedParticipation = normalizeUnsignedInteger(
+                        it,
+                        "beaconFinality.syncCommitteeParticipation",
+                    )
+                    require(normalizedParticipation > BigInteger.ZERO) {
+                        "beaconFinality.syncCommitteeParticipation must be positive"
+                    }
+                    "syncCommitteeParticipation" to normalizedParticipation.toString()
+                },
+            ).toMap()
+    }
+}
+
+/** Local-first BSC mainnet SCCP facade for native UI SDKs. */
+class BscMainnetSccp(
+    private val witnessProvider: EvmSccpWitnessProvider? = null,
+    private val proofEngine: EvmSccpProofEngine? = null,
+    private val executionProvider: BscMainnetExecutionProvider? = null,
+    private val consensusProvider: BscMainnetConsensusProvider? = null,
+    private val inboundProver: BscMainnetInboundProver? = null,
+    private val inboundSubmitter: BscMainnetInboundSubmitter? = null,
+    private val outboundSubmitter: BscMainnetOutboundSubmitter? = null,
+    private val sourceBridgeEmitterAddress: String? = null,
+) {
+    fun validateExecutionProviderMainnet(provider: BscMainnetExecutionProvider? = executionProvider): Any? {
+        val selectedProvider = provider
+            ?: throw IllegalStateException("BSC mainnet execution provider is not linked")
+        val chainId = selectedProvider.request("eth_chainId", emptyList())
+        SccpBsc.requireMainnetChainId(normalizeRpcChainId(chainId))
+        return chainId
+    }
+
+    fun collectInboundEvidenceFromReceipt(
+        input: BscMainnetInboundEvidence,
+        provider: BscMainnetExecutionProvider? = executionProvider,
+        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
+    ): BscMainnetInboundEvidence {
+        require(input.sourceDomain == SccpEvm.DOMAIN_BSC) {
+            "BSC mainnet inbound evidence sourceDomain must be BSC"
+        }
+        require(input.targetDomain == SccpEvm.DOMAIN_SORA) {
+            "BSC mainnet inbound evidence targetDomain must be SORA"
+        }
+        provider?.let { validateExecutionProviderMainnet(it) }
+
+        var transactionHash = input.transactionHash?.let {
+            normalizeRpcHex(it, "transactionHash", 32)
+        }
+        var receipt = input.receipt
+        if (receipt == null && transactionHash != null && provider != null) {
+            receipt = requireMap(
+                provider.request("eth_getTransactionReceipt", listOf(transactionHash)),
+                "eth_getTransactionReceipt",
+            )
+        }
+        val receiptProof = input.receiptProof?.snapshot()
+        if (receipt == null && receiptProof == null && input.receiptProofHash == null) {
+            throw IllegalArgumentException(
+                "BSC mainnet inbound evidence requires receipt, receiptProof, receiptProofHash, or transactionHash",
+            )
+        }
+
+        var blockHash: String? = null
+        var receiptBlockNumber: String? = null
+        var blockReceiptsRoot: String? = null
+        var sourceEventDigest: String? = null
+        var normalizedSourceBridgeEmitterAddress: String? = null
+        if (receipt != null) {
+            require(receipt["status"] == "0x1") {
+                "BSC mainnet inbound receipt status must be 0x1"
+            }
+            val receiptTransactionHash = normalizeRpcHex(
+                receipt["transactionHash"] ?: receipt["transaction_hash"],
+                "receipt.transactionHash",
+                32,
+            )
+            if (transactionHash != null) {
+                require(receiptTransactionHash == transactionHash) {
+                    "receipt.transactionHash must match transactionHash"
+                }
+            }
+            transactionHash = receiptTransactionHash
+            blockHash = normalizeRpcHex(receipt["blockHash"] ?: receipt["block_hash"], "receipt.blockHash", 32)
+            receiptBlockNumber = normalizePositiveRpcQuantity(
+                receipt["blockNumber"] ?: receipt["block_number"],
+                "receipt.blockNumber",
+            )
+            val sourceEvent = evmReceiptSourceEvent(
+                receipt = receipt,
+                sourceEventDigestInput = input.sourceEventDigest,
+                sourceBridgeEmitterAddressInput = resolveSourceBridgeEmitterAddress(
+                    input.sourceBridgeEmitterAddress,
+                    sourceBridgeEmitterAddress,
+                ),
+                transactionHash = transactionHash,
+                blockHash = blockHash,
+                blockNumber = receiptBlockNumber,
+            )
+            sourceEventDigest = sourceEvent.first
+            normalizedSourceBridgeEmitterAddress = sourceEvent.second
+        } else if (input.sourceEventDigest != null || input.sourceBridgeEmitterAddress != null) {
+            throw IllegalArgumentException("receipt.logs is required for SCCP source event validation")
+        }
+
+        var block = input.block
+        if (block == null && blockHash != null && provider != null) {
+            block = requireMap(
+                provider.request("eth_getBlockByHash", listOf(blockHash, false)),
+                "eth_getBlockByHash",
+            )
+        }
+        if (block != null) {
+            val normalizedBlockHash = normalizeRpcHex(block["hash"], "block.hash", 32)
+            if (blockHash != null) {
+                require(normalizedBlockHash == blockHash) {
+                    "block.hash must match receipt.blockHash"
+                }
+            }
+            blockHash = normalizedBlockHash
+            val blockNumber = normalizePositiveRpcQuantity(
+                block["number"] ?: block["blockNumber"] ?: block["block_number"],
+                "block.number",
+            )
+            if (receiptBlockNumber != null) {
+                require(blockNumber == receiptBlockNumber) {
+                    "block.number must match receipt.blockNumber"
+                }
+            }
+            receiptBlockNumber = blockNumber
+            blockReceiptsRoot = normalizeRpcHex(block["receiptsRoot"] ?: block["receipts_root"], "block.receiptsRoot", 32)
+        }
+
+        val parliaFinality = input.parliaFinality
+            ?: consensusProvider?.collectFinalityEvidence(receipt, block, transactionHash)
+        val normalizedParliaFinality = parliaFinality?.let {
+            normalizeParliaFinality(
+                it,
+                expectedBlockHash = blockHash,
+                expectedBlockNumber = receiptBlockNumber,
+                expectedReceiptsRoot = blockReceiptsRoot,
+            )
+        }
+        requireReceiptProofMatchesEvidence(
+            receiptProof = receiptProof,
+            blockHash = blockHash,
+            receiptBlockNumber = receiptBlockNumber,
+            blockReceiptsRoot = blockReceiptsRoot,
+            parliaFinality = normalizedParliaFinality,
+            sourceEventDigest = sourceEventDigest,
+        )
+
+        return input.copy(
+            sourceDomain = SccpEvm.DOMAIN_BSC,
+            targetDomain = SccpEvm.DOMAIN_SORA,
+            transactionHash = transactionHash,
+            receipt = receipt,
+            block = block,
+            parliaFinality = normalizedParliaFinality,
+            receiptProofHash = normalizeReceiptProofHash(receiptProof, input.receiptProofHash),
+            receiptProof = receiptProof,
+            sourceEventDigest = sourceEventDigest,
+            sourceBridgeEmitterAddress = normalizedSourceBridgeEmitterAddress,
+        )
+    }
+
+    fun proveInboundToSora(
+        input: BscMainnetInboundEvidence,
+        provider: BscMainnetExecutionProvider? = executionProvider,
+        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
+    ): ByteArray {
+        val prover = inboundProver
+            ?: throw IllegalStateException("BSC mainnet SCCP inbound prover is not linked")
+        val evidence = collectInboundEvidenceFromReceipt(input, provider, consensusProvider)
+        require(evidence.parliaFinality != null) {
+            "BSC mainnet SCCP inbound proof requires parliaFinality"
+        }
+        require(evidence.receiptProof != null) {
+            "BSC mainnet SCCP inbound proof requires receiptProof"
+        }
+        require(evidence.sourceEventDigest != null) {
+            "BSC mainnet SCCP inbound proof requires receipt source event validation"
+        }
+        val proofBytes = prover.prove(evidence)
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        return proofBytes.copyOf()
+    }
+
+    fun submitInboundToIroha(proofBytes: ByteArray): Any? {
+        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
+        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
+        val submitter = inboundSubmitter
+            ?: throw IllegalStateException("BSC mainnet SCCP inbound submitter is not linked")
+        return submitter.submit(proofBytes.copyOf())
+    }
+
+    fun buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest =
+        SccpBsc.buildProofRequest(
+            witnessProvider?.resolveWitness(witnessProviderInputSnapshot(input)) ?: input,
+        )
+
+    fun proveOutboundToBsc(input: EvmSccpProofRequestInput): EvmSccpProofResult {
+        val request = buildOutboundProofRequest(input)
+        val engine = proofEngine
+            ?: throw IllegalStateException("BSC mainnet SCCP Groth16 prover is not linked")
+        return SccpBsc.wrapProofResult(
+            engine.prove(SccpEvm.callbackRequestSnapshot(request)),
+            request,
+        )
+    }
+
+    fun buildBscCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission =
+        SccpBsc.buildSubmission(input)
+
+    fun buildLocalAdmissionSubmission(
+        input: BscMainnetLocalAdmissionSubmissionInput,
+    ): BscMainnetLocalAdmissionSubmission =
+        SccpBsc.buildLocalAdmissionSubmission(input)
+
+    fun submitOutboundToBsc(input: EvmSccpSubmissionInput): Any? {
+        val submitter = outboundSubmitter
+            ?: throw IllegalStateException("BSC mainnet SCCP outbound submitter is not linked")
+        return submitter.submit(buildBscCalldata(input))
+    }
+
+    fun requireExecutionMainnet(chainId: Long) =
+        SccpBsc.requireMainnetChainId(chainId)
+
+    private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =
+        input.copy(
+            bundleBytes = input.bundleBytes.copyOf(),
+            sourceProofBytes = input.sourceProofBytes.copyOf(),
+        )
+
+    private fun normalizeRpcChainId(value: Any?): Long {
+        val quantity = normalizeRpcQuantity(value, "eth_chainId")
+        val parsed = BigInteger(quantity.substring(2), 16)
+        require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
+        return parsed.toLong()
+    }
+
+    private fun requireMap(value: Any?, label: String): Map<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        return value as? Map<String, Any?>
+            ?: throw IllegalArgumentException("$label must return an object")
+    }
+
+    private fun normalizeRpcHex(
+        value: Any?,
+        label: String,
+        byteLength: Int,
+        allowZero: Boolean = false,
+    ): String {
+        require(value is String) { "$label must be canonical lowercase 0x hex" }
+        require(value.trim() == value && value.startsWith("0x")) {
+            "$label must be canonical lowercase 0x hex"
+        }
+        val text = value.substring(2)
+        require(text.length == byteLength * 2 && text.matches(Regex("[0-9a-f]+"))) {
+            "$label must be $byteLength bytes canonical lowercase 0x hex"
+        }
+        require(allowZero || text.any { it != '0' }) { "$label must not be zero" }
+        return value
+    }
+
+    private fun normalizeReceiptProofHash(
+        receiptProof: BscMainnetReceiptProof?,
+        suppliedHash: String?,
+    ): String? {
+        var normalizedHash = suppliedHash?.let { normalizeRpcHex(it, "receiptProofHash", 32) }
+        if (receiptProof == null) {
+            return normalizedHash
+        }
+        require(receiptProof.sourceDomain == SccpEvm.DOMAIN_BSC) {
+            "receiptProof.sourceDomain must be BSC"
+        }
+        val computedHash = SccpSourceProofs.bscReceiptProofHash(
+            sourceEventDigest = receiptProof.sourceEventDigest,
+            validatorEpoch = receiptProof.validatorEpoch,
+            blockNumber = receiptProof.blockNumber,
+            blockHash = receiptProof.blockHash,
+            receiptsRoot = receiptProof.receiptsRoot,
+            validatorSetHash = receiptProof.validatorSetHash,
+            commitSealHash = receiptProof.commitSealHash,
+            receiptRootIndex = receiptProof.receiptRootIndex,
+            receiptTrieProofNodes = receiptProof.receiptTrieProofNodes,
+            inclusionBranch = receiptProof.inclusionBranch,
+            sourceDomain = receiptProof.sourceDomain,
+        )
+        if (normalizedHash != null && normalizedHash != computedHash) {
+            throw IllegalArgumentException("receiptProofHash must match receiptProof")
+        }
+        normalizedHash = computedHash
+        return normalizedHash
+    }
+
+    private fun requireReceiptProofMatchesEvidence(
+        receiptProof: BscMainnetReceiptProof?,
+        blockHash: String?,
+        receiptBlockNumber: String?,
+        blockReceiptsRoot: String?,
+        parliaFinality: Map<String, Any?>?,
+        sourceEventDigest: String?,
+    ) {
+        if (receiptProof == null) {
+            return
+        }
+        val proofBlockNumber = normalizeUnsignedInteger(receiptProof.blockNumber, "receiptProof.blockNumber")
+        if (receiptBlockNumber != null) {
+            require(proofBlockNumber == normalizeUnsignedInteger(receiptBlockNumber, "block.number")) {
+                "receiptProof.blockNumber must match block.number"
+            }
+        }
+        if (parliaFinality != null) {
+            require(
+                proofBlockNumber == normalizeUnsignedInteger(
+                    parliaFinality["executionBlockNumber"],
+                    "parliaFinality.executionBlockNumber",
+                ),
+            ) {
+                "receiptProof.blockNumber must match parliaFinality.executionBlockNumber"
+            }
+        }
+        val proofBlockHash = normalizeRpcHex(receiptProof.blockHash, "receiptProof.blockHash", 32)
+        if (blockHash != null) {
+            require(proofBlockHash == blockHash) {
+                "receiptProof.blockHash must match block.hash"
+            }
+        }
+        if (parliaFinality != null) {
+            require(proofBlockHash == parliaFinality["executionBlockHash"]) {
+                "receiptProof.blockHash must match parliaFinality.executionBlockHash"
+            }
+        }
+        val proofReceiptsRoot = normalizeRpcHex(receiptProof.receiptsRoot, "receiptProof.receiptsRoot", 32)
+        if (blockReceiptsRoot != null) {
+            require(proofReceiptsRoot == blockReceiptsRoot) {
+                "receiptProof.receiptsRoot must match block.receiptsRoot"
+            }
+        }
+        if (parliaFinality != null) {
+            require(proofReceiptsRoot == parliaFinality["executionReceiptsRoot"]) {
+                "receiptProof.receiptsRoot must match parliaFinality.executionReceiptsRoot"
+            }
+            val finalityValidatorEpoch = parliaFinality["validatorEpoch"] ?: parliaFinality["validator_epoch"]
+            if (finalityValidatorEpoch != null) {
+                require(
+                    normalizeUnsignedInteger(
+                        receiptProof.validatorEpoch,
+                        "receiptProof.validatorEpoch",
+                    ) == normalizeUnsignedInteger(
+                        finalityValidatorEpoch,
+                        "parliaFinality.validatorEpoch",
+                    ),
+                ) {
+                    "receiptProof.validatorEpoch must match parliaFinality.validatorEpoch"
+                }
+            }
+            val finalityValidatorSetHash = parliaFinality["validatorSetHash"] ?: parliaFinality["validator_set_hash"]
+            if (finalityValidatorSetHash != null) {
+                require(
+                    normalizeRpcHex(
+                        receiptProof.validatorSetHash,
+                        "receiptProof.validatorSetHash",
+                        32,
+                    ) == normalizeRpcHex(
+                        finalityValidatorSetHash,
+                        "parliaFinality.validatorSetHash",
+                        32,
+                    ),
+                ) {
+                    "receiptProof.validatorSetHash must match parliaFinality.validatorSetHash"
+                }
+            }
+            val finalityCommitSealHash = parliaFinality["commitSealHash"] ?: parliaFinality["commit_seal_hash"]
+            if (finalityCommitSealHash != null) {
+                require(
+                    normalizeRpcHex(
+                        receiptProof.commitSealHash,
+                        "receiptProof.commitSealHash",
+                        32,
+                    ) == normalizeRpcHex(
+                        finalityCommitSealHash,
+                        "parliaFinality.commitSealHash",
+                        32,
+                    ),
+                ) {
+                    "receiptProof.commitSealHash must match parliaFinality.commitSealHash"
+                }
+            }
+        }
+        if (sourceEventDigest != null) {
+            val proofSourceEventDigest = normalizeRpcHex(
+                receiptProof.sourceEventDigest,
+                "receiptProof.sourceEventDigest",
+                32,
+            )
+            require(proofSourceEventDigest == sourceEventDigest) {
+                "receiptProof.sourceEventDigest must match receipt source event"
+            }
+        }
+    }
+
+    private fun evmReceiptSourceEvent(
         receipt: Map<String, Any?>?,
         sourceEventDigestInput: String?,
         sourceBridgeEmitterAddressInput: String?,
@@ -3058,327 +4241,6 @@ class EthereumMainnetSccp(
             "sourceBridgeEmitterAddress values must match"
         }
         return normalizedInput ?: normalizedDefault
-    }
-
-    private fun normalizeRpcQuantity(value: Any?, label: String): String {
-        require(value is String && value.trim() == value && value.startsWith("0x")) {
-            "$label must be a canonical JSON-RPC quantity"
-        }
-        val text = value.substring(2)
-        require(text.isNotEmpty() && text.matches(Regex("0|[1-9a-f][0-9a-f]*"))) {
-            "$label must be a canonical JSON-RPC quantity"
-        }
-        return "0x" + BigInteger(text, 16).toString(16)
-    }
-
-    private fun normalizePositiveRpcQuantity(value: Any?, label: String): String {
-        val quantity = normalizeRpcQuantity(value, label)
-        require(quantity != "0x0") { "$label must be positive" }
-        return quantity
-    }
-
-    private fun normalizeBeaconFinality(
-        finality: Map<String, Any?>,
-        expectedBlockHash: String?,
-        expectedBlockNumber: String?,
-        expectedReceiptsRoot: String?,
-    ): Map<String, Any?> {
-        val executionBlockNumber = normalizeUnsignedInteger(
-            finality["executionBlockNumber"]
-                ?: finality["execution_block_number"]
-                ?: finality["finalityHeight"]
-                ?: finality["finality_height"],
-            "beaconFinality.executionBlockNumber",
-        )
-        require(executionBlockNumber > 0) { "beaconFinality.executionBlockNumber must be positive" }
-        if (expectedBlockNumber != null) {
-            require(executionBlockNumber == normalizeUnsignedInteger(expectedBlockNumber, "block.number")) {
-                "beaconFinality.executionBlockNumber must match block.number"
-            }
-        }
-        val executionBlockHash = normalizeRpcHex(
-            finality["executionBlockHash"]
-                ?: finality["execution_block_hash"]
-                ?: finality["finalityBlockHash"]
-                ?: finality["finality_block_hash"],
-            "beaconFinality.executionBlockHash",
-            32,
-        )
-        if (expectedBlockHash != null) {
-            require(executionBlockHash == expectedBlockHash) {
-                "beaconFinality.executionBlockHash must match block.hash"
-            }
-        }
-        val executionReceiptsRoot = normalizeRpcHex(
-            finality["executionReceiptsRoot"]
-                ?: finality["execution_receipts_root"]
-                ?: finality["receiptsRoot"]
-                ?: finality["receipts_root"],
-            "beaconFinality.executionReceiptsRoot",
-            32,
-        )
-        if (expectedReceiptsRoot != null) {
-            require(executionReceiptsRoot == expectedReceiptsRoot) {
-                "beaconFinality.executionReceiptsRoot must match block.receiptsRoot"
-            }
-        }
-        val normalized = finality + mapOf(
-            "executionBlockNumber" to executionBlockNumber.toString(),
-            "executionBlockHash" to executionBlockHash,
-            "executionReceiptsRoot" to executionReceiptsRoot,
-        )
-        val finalizedHeaderRoot = finality["finalizedHeaderRoot"]
-            ?: finality["finalized_header_root"]
-            ?: finality["beaconFinalizedRoot"]
-            ?: finality["beacon_finalized_root"]
-        val syncCommitteeRoot = finality["syncCommitteeRoot"]
-            ?: finality["sync_committee_root"]
-        val beaconSlot = finality["beaconSlot"]
-            ?: finality["beacon_slot"]
-            ?: finality["finalizedSlot"]
-            ?: finality["finalized_slot"]
-            ?: finality["slot"]
-        return normalized +
-            listOfNotNull(
-                finalizedHeaderRoot?.let {
-                    "finalizedHeaderRoot" to normalizeRpcHex(
-                        it,
-                        "beaconFinality.finalizedHeaderRoot",
-                        32,
-                    )
-                },
-                syncCommitteeRoot?.let {
-                    "syncCommitteeRoot" to normalizeRpcHex(
-                        it,
-                        "beaconFinality.syncCommitteeRoot",
-                        32,
-                    )
-                },
-                beaconSlot?.let {
-                    val normalizedSlot = normalizeUnsignedInteger(
-                        it,
-                        "beaconFinality.beaconSlot",
-                    )
-                    require(normalizedSlot > 0) {
-                        "beaconFinality.beaconSlot must be positive"
-                    }
-                    "beaconSlot" to normalizedSlot.toString()
-                },
-            ).toMap()
-    }
-}
-
-/** Local-first BSC mainnet SCCP facade for native UI SDKs. */
-class BscMainnetSccp(
-    private val witnessProvider: EvmSccpWitnessProvider? = null,
-    private val proofEngine: EvmSccpProofEngine? = null,
-    private val executionProvider: BscMainnetExecutionProvider? = null,
-    private val consensusProvider: BscMainnetConsensusProvider? = null,
-    private val inboundProver: BscMainnetInboundProver? = null,
-    private val inboundSubmitter: BscMainnetInboundSubmitter? = null,
-    private val outboundSubmitter: BscMainnetOutboundSubmitter? = null,
-) {
-    fun validateExecutionProviderMainnet(provider: BscMainnetExecutionProvider? = executionProvider): Any? {
-        val selectedProvider = provider
-            ?: throw IllegalStateException("BSC mainnet execution provider is not linked")
-        val chainId = selectedProvider.request("eth_chainId", emptyList())
-        SccpBsc.requireMainnetChainId(normalizeRpcChainId(chainId))
-        return chainId
-    }
-
-    fun collectInboundEvidenceFromReceipt(
-        input: BscMainnetInboundEvidence,
-        provider: BscMainnetExecutionProvider? = executionProvider,
-        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
-    ): BscMainnetInboundEvidence {
-        require(input.sourceDomain == SccpEvm.DOMAIN_BSC) {
-            "BSC mainnet inbound evidence sourceDomain must be BSC"
-        }
-        require(input.targetDomain == SccpEvm.DOMAIN_SORA) {
-            "BSC mainnet inbound evidence targetDomain must be SORA"
-        }
-        provider?.let { validateExecutionProviderMainnet(it) }
-
-        var transactionHash = input.transactionHash?.let {
-            normalizeRpcHex(it, "transactionHash", 32)
-        }
-        var receipt = input.receipt
-        if (receipt == null && transactionHash != null && provider != null) {
-            receipt = requireMap(
-                provider.request("eth_getTransactionReceipt", listOf(transactionHash)),
-                "eth_getTransactionReceipt",
-            )
-        }
-        if (receipt == null && input.receiptProofHash == null) {
-            throw IllegalArgumentException(
-                "BSC mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash",
-            )
-        }
-
-        var blockHash: String? = null
-        var receiptBlockNumber: String? = null
-        var blockReceiptsRoot: String? = null
-        if (receipt != null) {
-            require(receipt["status"] == "0x1") {
-                "BSC mainnet inbound receipt status must be 0x1"
-            }
-            val receiptTransactionHash = normalizeRpcHex(
-                receipt["transactionHash"] ?: receipt["transaction_hash"],
-                "receipt.transactionHash",
-                32,
-            )
-            if (transactionHash != null) {
-                require(receiptTransactionHash == transactionHash) {
-                    "receipt.transactionHash must match transactionHash"
-                }
-            }
-            transactionHash = receiptTransactionHash
-            blockHash = normalizeRpcHex(receipt["blockHash"] ?: receipt["block_hash"], "receipt.blockHash", 32)
-            receiptBlockNumber = normalizePositiveRpcQuantity(
-                receipt["blockNumber"] ?: receipt["block_number"],
-                "receipt.blockNumber",
-            )
-        }
-
-        var block = input.block
-        if (block == null && blockHash != null && provider != null) {
-            block = requireMap(
-                provider.request("eth_getBlockByHash", listOf(blockHash, false)),
-                "eth_getBlockByHash",
-            )
-        }
-        if (block != null) {
-            val normalizedBlockHash = normalizeRpcHex(block["hash"], "block.hash", 32)
-            if (blockHash != null) {
-                require(normalizedBlockHash == blockHash) {
-                    "block.hash must match receipt.blockHash"
-                }
-            }
-            blockHash = normalizedBlockHash
-            val blockNumber = normalizePositiveRpcQuantity(
-                block["number"] ?: block["blockNumber"] ?: block["block_number"],
-                "block.number",
-            )
-            if (receiptBlockNumber != null) {
-                require(blockNumber == receiptBlockNumber) {
-                    "block.number must match receipt.blockNumber"
-                }
-            }
-            receiptBlockNumber = blockNumber
-            blockReceiptsRoot = normalizeRpcHex(block["receiptsRoot"] ?: block["receipts_root"], "block.receiptsRoot", 32)
-        }
-
-        val parliaFinality = input.parliaFinality
-            ?: consensusProvider?.collectFinalityEvidence(receipt, block, transactionHash)
-        val normalizedParliaFinality = parliaFinality?.let {
-            normalizeParliaFinality(
-                it,
-                expectedBlockHash = blockHash,
-                expectedBlockNumber = receiptBlockNumber,
-                expectedReceiptsRoot = blockReceiptsRoot,
-            )
-        }
-
-        return input.copy(
-            sourceDomain = SccpEvm.DOMAIN_BSC,
-            targetDomain = SccpEvm.DOMAIN_SORA,
-            transactionHash = transactionHash,
-            receipt = receipt,
-            block = block,
-            parliaFinality = normalizedParliaFinality,
-            receiptProofHash = input.receiptProofHash?.let {
-                normalizeRpcHex(it, "receiptProofHash", 32)
-            },
-        )
-    }
-
-    fun proveInboundToSora(
-        input: BscMainnetInboundEvidence,
-        provider: BscMainnetExecutionProvider? = executionProvider,
-        consensusProvider: BscMainnetConsensusProvider? = this.consensusProvider,
-    ): ByteArray {
-        val prover = inboundProver
-            ?: throw IllegalStateException("BSC mainnet SCCP inbound prover is not linked")
-        val evidence = collectInboundEvidenceFromReceipt(input, provider, consensusProvider)
-        require(evidence.parliaFinality != null) {
-            "BSC mainnet SCCP inbound proof requires parliaFinality"
-        }
-        val proofBytes = prover.prove(evidence)
-        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
-        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
-        return proofBytes.copyOf()
-    }
-
-    fun submitInboundToIroha(proofBytes: ByteArray): Any? {
-        require(proofBytes.isNotEmpty()) { "proofBytes must not be empty" }
-        require(proofBytes.any { it.toInt() != 0 }) { "proofBytes must not be all zero" }
-        val submitter = inboundSubmitter
-            ?: throw IllegalStateException("BSC mainnet SCCP inbound submitter is not linked")
-        return submitter.submit(proofBytes.copyOf())
-    }
-
-    fun buildOutboundProofRequest(input: EvmSccpProofRequestInput): EvmSccpProofRequest =
-        SccpBsc.buildProofRequest(
-            witnessProvider?.resolveWitness(witnessProviderInputSnapshot(input)) ?: input,
-        )
-
-    fun proveOutboundToBsc(input: EvmSccpProofRequestInput): EvmSccpProofResult {
-        val request = buildOutboundProofRequest(input)
-        val engine = proofEngine
-            ?: throw IllegalStateException("BSC mainnet SCCP Groth16 prover is not linked")
-        return SccpBsc.wrapProofResult(
-            engine.prove(SccpEvm.callbackRequestSnapshot(request)),
-            request,
-        )
-    }
-
-    fun buildBscCalldata(input: EvmSccpSubmissionInput): EvmSccpSubmission =
-        SccpBsc.buildSubmission(input)
-
-    fun buildLocalAdmissionSubmission(
-        input: BscMainnetLocalAdmissionSubmissionInput,
-    ): BscMainnetLocalAdmissionSubmission =
-        SccpBsc.buildLocalAdmissionSubmission(input)
-
-    fun submitOutboundToBsc(input: EvmSccpSubmissionInput): Any? {
-        val submitter = outboundSubmitter
-            ?: throw IllegalStateException("BSC mainnet SCCP outbound submitter is not linked")
-        return submitter.submit(buildBscCalldata(input))
-    }
-
-    fun requireExecutionMainnet(chainId: Long) =
-        SccpBsc.requireMainnetChainId(chainId)
-
-    private fun witnessProviderInputSnapshot(input: EvmSccpProofRequestInput): EvmSccpProofRequestInput =
-        input.copy(
-            bundleBytes = input.bundleBytes.copyOf(),
-            sourceProofBytes = input.sourceProofBytes.copyOf(),
-        )
-
-    private fun normalizeRpcChainId(value: Any?): Long {
-        val quantity = normalizeRpcQuantity(value, "eth_chainId")
-        val parsed = BigInteger(quantity.substring(2), 16)
-        require(parsed.bitLength() <= 63) { "eth_chainId must fit positive i64" }
-        return parsed.toLong()
-    }
-
-    private fun requireMap(value: Any?, label: String): Map<String, Any?> {
-        @Suppress("UNCHECKED_CAST")
-        return value as? Map<String, Any?>
-            ?: throw IllegalArgumentException("$label must return an object")
-    }
-
-    private fun normalizeRpcHex(value: Any?, label: String, byteLength: Int): String {
-        require(value is String) { "$label must be canonical lowercase 0x hex" }
-        require(value.trim() == value && value.startsWith("0x")) {
-            "$label must be canonical lowercase 0x hex"
-        }
-        val text = value.substring(2)
-        require(text.length == byteLength * 2 && text.matches(Regex("[0-9a-f]+"))) {
-            "$label must be $byteLength bytes canonical lowercase 0x hex"
-        }
-        require(text.any { it != '0' }) { "$label must not be zero" }
-        return value
     }
 
     private fun normalizeRpcQuantity(value: Any?, label: String): String {

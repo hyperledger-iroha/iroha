@@ -541,13 +541,14 @@ async function main() {
   );
   const verifierAddress = await verifier.getAddress();
   const verifierCodeHash = await contractCodeHash(provider, verifierAddress);
+  const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);
   const bridgeConstructorArgs = ({
     bridgeVerifierAddress = verifierAddress,
     bridgeVerifierCodeHash = verifierCodeHash,
     bridgeVerifierKeyHash = ethers.ZeroHash,
     verifierBackendKey = "evm-secp256k1-keccak-v1",
     proofFamily = "stark-fri-v1",
-    networkId = ethers.encodeBytes32String("evm-devnet"),
+    networkId = ethMainnetNetworkId,
     sourceDomain = 0,
     targetDomain = 1,
   } = {}) => [
@@ -573,7 +574,7 @@ async function main() {
           ethers.ZeroHash,
           "evm-secp256k1-keccak-v1",
           "stark-fri-v1",
-          ethers.encodeBytes32String("evm-devnet"),
+          ethMainnetNetworkId,
           0,
           1,
         ]
@@ -731,7 +732,7 @@ async function main() {
     ethers.toUtf8Bytes("evm-secp256k1-keccak-v1")
   );
   const proofFamilyHash = ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1"));
-  const networkId = ethers.encodeBytes32String("evm-devnet");
+  const networkId = ethMainnetNetworkId;
   const referenceWrapperAddress = await signer.getAddress();
   const destinationBindingHash = computeDestinationBindingHash(abi, {
     verifierBackendHash,

@@ -410,7 +410,7 @@ fn build_fixture() -> Result<Value, Box<dyn Error>> {
         ),
         (
             "offline_fi_public_key_base64",
-            Value::from(public_key_base64(&issuer_key_pair)),
+            Value::from(public_key_base64(&issuer_key_pair)?),
         ),
         ("receive_request", receive_request),
         ("payment_token", payment_token),
@@ -733,7 +733,7 @@ fn signed_certificate(
     key_id: &str,
     device_id: &str,
 ) -> Result<VectorCertificate, Box<dyn Error>> {
-    let (_algorithm, public_key) = note_key_pair.public_key().to_bytes();
+    let public_key = checked_ed25519_public_key_payload(note_key_pair, "note public key")?;
     let public_key = public_key.to_vec();
     let assertion_signing_key = p256_assertion_signing_key(platform, key_id, device_id);
     let assertion_public_key = p256_assertion_public_key(&assertion_signing_key);
@@ -1143,9 +1143,29 @@ fn frame_kind_label(kind: QrStreamFrameKind) -> &'static str {
     }
 }
 
-fn public_key_base64(key_pair: &KeyPair) -> String {
-    let (_algorithm, public_key) = key_pair.public_key().to_bytes();
-    BASE64_STANDARD.encode(public_key)
+fn checked_ed25519_public_key_payload<'a>(
+    key_pair: &'a KeyPair,
+    context: &str,
+) -> Result<&'a [u8], Box<dyn Error>> {
+    let (algorithm, public_key) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| format!("{context} is malformed: {err}"))?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(format!(
+            "{context} must be Ed25519, got {}",
+            algorithm.as_static_str()
+        )
+        .into());
+    }
+    Ok(public_key)
+}
+
+fn public_key_base64(key_pair: &KeyPair) -> Result<String, Box<dyn Error>> {
+    Ok(BASE64_STANDARD.encode(checked_ed25519_public_key_payload(
+        key_pair,
+        "offline FI public key",
+    )?))
 }
 
 fn object(entries: Vec<(&'static str, Value)>) -> Value {

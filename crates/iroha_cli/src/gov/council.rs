@@ -276,14 +276,16 @@ impl GenVrfArgs {
                 iroha_crypto::Hash::new(format!("{alias}|normal|{index}|{attempt}").as_bytes());
             let (pk, sk) = iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(
                 bls_seed.as_ref().to_vec(),
-            ));
+            ))
+            .wrap_err("failed to derive BLS normal keypair")?;
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
-            let proof_result = std::panic::catch_unwind(|| {
+            if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_normal_with_chain(&sk, chain_bytes, &input)
-            });
-            if let Ok((_output, proof)) = proof_result {
-                let (_alg, pk_payload) = public_key.to_bytes();
+            {
+                let (_alg, pk_payload) = public_key
+                    .try_to_bytes()
+                    .wrap_err("derived BLS normal public key is malformed")?;
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG2(bytes) => bytes,
                     _ => unreachable!("Normal uses SigInG2"),
@@ -314,14 +316,16 @@ impl GenVrfArgs {
                 iroha_crypto::Hash::new(format!("{alias}|small|{index}|{attempt}").as_bytes());
             let (pk, sk) = iroha_crypto::BlsSmall::keypair(iroha_crypto::KeyGenOption::UseSeed(
                 bls_seed.as_ref().to_vec(),
-            ));
+            ))
+            .wrap_err("failed to derive BLS small keypair")?;
             let (public_key, _) = iroha_crypto::KeyPair::from((pk, sk.clone())).into_parts();
             let input = parliament::build_input(seed, account_id);
-            let proof_result = std::panic::catch_unwind(|| {
+            if let Ok((_output, proof)) =
                 iroha_crypto::vrf::prove_small_with_chain(&sk, chain_bytes, &input)
-            });
-            if let Ok((_output, proof)) = proof_result {
-                let (_alg, pk_payload) = public_key.to_bytes();
+            {
+                let (_alg, pk_payload) = public_key
+                    .try_to_bytes()
+                    .wrap_err("derived BLS small public key is malformed")?;
                 let proof_bytes = match proof {
                     iroha_crypto::vrf::VrfProof::SigInG1(bytes) => bytes,
                     _ => unreachable!("Small uses SigInG1"),

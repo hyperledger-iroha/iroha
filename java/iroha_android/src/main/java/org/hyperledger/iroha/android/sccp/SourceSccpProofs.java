@@ -1636,6 +1636,9 @@ public final class SourceSccpProofs {
       final List<byte[]> receiptTrieProofNodes,
       final List<byte[]> inclusionBranch,
       final int sourceDomain) {
+    if (sourceDomain != DOMAIN_ETH) {
+      throw new IllegalArgumentException("sourceDomain must be ETH");
+    }
     validateTronMptProofNodes(receiptTrieProofNodes);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
@@ -1652,7 +1655,7 @@ public final class SourceSccpProofs {
     for (final byte[] node : receiptTrieProofNodes) {
       writeVector(out, node);
     }
-    writeBranch(out, inclusionBranch);
+    writeBranch(out, inclusionBranch, true);
     return out.toByteArray();
   }
 
@@ -2174,6 +2177,9 @@ public final class SourceSccpProofs {
       final List<byte[]> receiptTrieProofNodes,
       final List<byte[]> inclusionBranch,
       final int sourceDomain) {
+    if (sourceDomain != DOMAIN_BSC) {
+      throw new IllegalArgumentException("sourceDomain must be BSC");
+    }
     validateTronMptProofNodes(receiptTrieProofNodes);
     final ByteArrayOutputStream out = new ByteArrayOutputStream();
     out.write(1);
@@ -2190,7 +2196,7 @@ public final class SourceSccpProofs {
     for (final byte[] node : receiptTrieProofNodes) {
       writeVector(out, node);
     }
-    writeBranch(out, inclusionBranch);
+    writeBranch(out, inclusionBranch, true);
     return out.toByteArray();
   }
 
@@ -2848,7 +2854,7 @@ public final class SourceSccpProofs {
   public static byte[] canonicalEvmReceiptRootMptValue(final String receiptRoot) {
     final List<byte[]> fields = new ArrayList<byte[]>();
     fields.add(rlpBytes(EVM_RECEIPT_ROOT_VALUE_MARKER));
-    fields.add(rlpBytes(hex32Bytes(receiptRoot, "receiptRoot")));
+    fields.add(rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")));
     final byte[] value = rlpList(fields);
     if (value.length == 0 || value.length > EVM_MAX_RECEIPT_VALUE_BYTES) {
       throw new IllegalArgumentException(
@@ -6087,6 +6093,7 @@ public final class SourceSccpProofs {
             BigInteger.valueOf((long) receipts.size() - 1L),
             "block receipt index");
     final List<EvmTrieItem> items = new ArrayList<EvmTrieItem>(receipts.size());
+    final Set<String> seenTransactionHashes = new HashSet<String>();
     byte[] targetReceiptRlp = null;
     for (int index = 0; index < receipts.size(); index++) {
       final Map<String, Object> receipt =
@@ -6097,6 +6104,16 @@ public final class SourceSccpProofs {
               "blockReceipts[" + index + "].transactionIndex");
       if (!receiptIndex.equals(BigInteger.valueOf(index))) {
         throw new IllegalArgumentException("block receipt transactionIndex must match receipt order");
+      }
+      final byte[] transactionHash =
+          ethereumRpcHexBytes(
+              firstPresent(receipt, "transactionHash", "transaction_hash"),
+              "blockReceipts[" + index + "].transactionHash",
+              32,
+              true,
+              false);
+      if (!seenTransactionHashes.add(hexLower(transactionHash))) {
+        throw new IllegalArgumentException("block receipt transactionHash values must be unique");
       }
       final byte[] encodedReceipt = canonicalEvmReceiptRlp(receipt);
       if (receiptIndex.equals(targetIndex)) {
@@ -6172,7 +6189,7 @@ public final class SourceSccpProofs {
                     topics.get(topicIndex),
                     "receipt.logs[" + index + "].topics[" + topicIndex + "]",
                     Integer.valueOf(32),
-                    true,
+                    false,
                     false)));
       }
       encodedLogs.add(
@@ -6183,7 +6200,7 @@ public final class SourceSccpProofs {
                           log.get("address"),
                           "receipt.logs[" + index + "].address",
                           Integer.valueOf(20),
-                          true,
+                          false,
                           false)),
                   rlpList(topicFields),
                   rlpBytes(

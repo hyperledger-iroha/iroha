@@ -131,8 +131,9 @@ fn main() {
     let msg_small = "昭和SIGN-スモール".as_bytes(); // "Showa SIGN - small"
 
     // Normal (G1 pk, G2 sig)
-    let (pk_n, sk_n) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![7; 16]));
-    let sig_n = BlsNormal::sign(msg_normal, &sk_n);
+    let (pk_n, sk_n) =
+        BlsNormal::keypair(KeyGenOption::UseSeed(vec![7; 16])).expect("BLS normal keypair");
+    let sig_n = BlsNormal::sign(msg_normal, &sk_n).expect("BLS sign");
     let pk_n_bytes = pk_n.to_bytes();
     println!(
         "  [NORMAL] pk_len={} sig_len={}",
@@ -144,8 +145,9 @@ fn main() {
     print_result("NORMAL", f_n);
 
     // Small (G2 pk, G1 sig)
-    let (pk_s, sk_s) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![9; 24]));
-    let sig_s = BlsSmall::sign(msg_small, &sk_s);
+    let (pk_s, sk_s) =
+        BlsSmall::keypair(KeyGenOption::UseSeed(vec![9; 24])).expect("BLS small keypair");
+    let sig_s = BlsSmall::sign(msg_small, &sk_s).expect("BLS sign");
     let pk_small_bytes = pk_s.to_bytes();
     println!(
         "  [SMALL ] pk_len={} sig_len={}",

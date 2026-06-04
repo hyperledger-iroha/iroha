@@ -1022,6 +1022,16 @@ def _collect_route_canary_transaction_evidence(
         opener=opener,
         timeout=timeout,
     )
+    finalized_block = (
+        _route_canary_finalized_block_summary(
+            rpc_url,
+            receipt_block,
+            opener=opener,
+            timeout=timeout,
+        )
+        if block_tag == "finalized"
+        else {"receipt_block_finalized": False}
+    )
     bridge_address = _parse_hex_bytes(
         str(destination["bridge_address"]),
         label="destination bridge address",
@@ -1178,6 +1188,7 @@ def _collect_route_canary_transaction_evidence(
         **event_summary,
         "receipt_status": "0x1",
         **receipt_block,
+        **finalized_block,
         **call_summary,
         **used_summary,
         "route_canary_evidence_hash": _hex(canary_hash),
@@ -1235,6 +1246,55 @@ def _route_canary_receipt_block_summary(
         "block_hash": _hex(receipt_block_hash),
         "block_receipts_root": _hex(block_receipts_root),
         "receipt_block_matches": True,
+    }
+
+
+def _route_canary_finalized_block_summary(
+    rpc_url: str,
+    receipt_block: dict[str, Any],
+    *,
+    opener: Urlopen,
+    timeout: float,
+) -> dict[str, Any]:
+    finalized = _json_rpc(
+        rpc_url,
+        "eth_getBlockByNumber",
+        ["finalized", False],
+        opener=opener,
+        timeout=timeout,
+    )
+    if not isinstance(finalized, dict):
+        raise RuntimeError("route-canary finalized block was not found")
+    finalized_block_number = _rpc_quantity(
+        finalized.get("number"),
+        method="route-canary finalized block number",
+    )
+    if finalized_block_number == 0:
+        raise RuntimeError("route-canary finalized block number must be non-zero")
+    finalized_block_hash = _parse_exact_hex32_blob(
+        finalized.get("hash"),
+        label="route-canary finalized block hash",
+    )
+    receipt_block_number = int(receipt_block["block_number"])
+    if receipt_block_number > finalized_block_number:
+        raise RuntimeError(
+            "route-canary receipt block is newer than the finalized execution block"
+        )
+    receipt_block_hash = _parse_hex32(
+        str(receipt_block["block_hash"]),
+        label="route-canary receipt block hash",
+    )
+    if (
+        receipt_block_number == finalized_block_number
+        and receipt_block_hash != finalized_block_hash
+    ):
+        raise RuntimeError(
+            "route-canary receipt block hash does not match the finalized execution block"
+        )
+    return {
+        "finalized_block_number": finalized_block_number,
+        "finalized_block_hash": _hex(finalized_block_hash),
+        "receipt_block_finalized": True,
     }
 
 
@@ -1333,6 +1393,10 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                     "--route-canary-used-message-proof",
                     "true"
                     if route_canary_transaction.get("message_proof_used") is True
+                    else "false",
+                    "--route-canary-receipt-block-finalized",
+                    "true"
+                    if route_canary_transaction.get("receipt_block_finalized") is True
                     else "false",
                 ]
             )
@@ -1513,6 +1577,7 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction.get("call_matches") is True
         and transaction.get("message_proof_used") is True
         and transaction.get("receipt_block_matches") is True
+        and transaction.get("receipt_block_finalized") is True
         and transaction.get("transaction_block_matches") is True
         and type(transaction.get("block_number")) is int
         and isinstance(transaction.get("block_hash"), str)
@@ -1569,6 +1634,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     destination_binding_hash = evidence._destination_binding_hash_from_args(args)
     rendered = evidence.render_toml(args, destination_binding_hash)
     comments = [
+        "# sccp_evm_block_tag = " + json.dumps(str(summary["block_tag"])),
         "# sccp_evm_rpc_chain_id = " + json.dumps(str(destination["rpc_chain_id"])),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(str(destination["bridge_code_hash"])),
@@ -1605,6 +1671,8 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
 def _validate_route_allowlist_hash(
     args: argparse.Namespace,
     destination: dict[str, Any],
+    *,
+    include_route_canary: bool = True,
 ) -> dict[str, Any]:
     route_allowlist_hash = getattr(args, "route_allowlist_hash", None)
     if route_allowlist_hash is None:
@@ -1649,13 +1717,14 @@ def _validate_route_allowlist_hash(
         "expected_route_allowlist_hash": _hex(expected_hash),
         "expected_route_allowlist_hash_matches": True,
     }
-    route_canary = evidence._route_canary_summary(
-        args,
-        route_allowlist_hash=route_allowlist_hash,
-        destination_binding_hash=destination_binding_hash,
-    )
-    if route_canary is not None:
-        summary["route_canary"] = route_canary
+    if include_route_canary:
+        route_canary = evidence._route_canary_summary(
+            args,
+            route_allowlist_hash=route_allowlist_hash,
+            destination_binding_hash=destination_binding_hash,
+        )
+        if route_canary is not None:
+            summary["route_canary"] = route_canary
     return summary
 
 
@@ -1887,9 +1956,23 @@ def collect_live_evidence(
         args.route_canary_proof_source_domain = int(
             route_canary_transaction["proof_source_domain"]
         )
-        args.route_canary_used_message_proof = True
+        args.route_canary_used_message_proof = (
+            route_canary_transaction.get("message_proof_used") is True
+        )
+        args.route_canary_receipt_block_finalized = (
+            route_canary_transaction.get("receipt_block_finalized") is True
+        )
     if route_allowlist_hash is not None:
-        summary.update(_validate_route_allowlist_hash(args, destination))
+        summary.update(
+            _validate_route_allowlist_hash(
+                args,
+                destination,
+                include_route_canary=(
+                    route_canary_transaction is None
+                    or route_canary_transaction.get("receipt_block_finalized") is True
+                ),
+            )
+        )
         if route_canary_transaction is not None:
             summary["route_canary_transaction"] = route_canary_transaction
             route_canary = summary.get("route_canary")

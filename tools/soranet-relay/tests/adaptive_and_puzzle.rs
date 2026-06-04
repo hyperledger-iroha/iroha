@@ -59,7 +59,8 @@ fn adaptive_difficulty_escalates_after_repeated_failures() {
         None,
         Arc::clone(&metrics),
         RelayMode::Entry,
-    );
+    )
+    .expect("dos controls");
 
     let remote: SocketAddr = "192.0.2.10:7447".parse().expect("valid socket");
 
@@ -143,7 +144,8 @@ fn puzzle_failures_surface_and_sync_policies() {
         None,
         Arc::clone(&metrics),
         RelayMode::Entry,
-    );
+    )
+    .expect("dos controls");
 
     let remote: SocketAddr = "192.0.2.44:7555".parse().expect("valid socket");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
@@ -276,7 +278,8 @@ fn adaptive_difficulty_replay_is_deterministic() {
         None,
         metrics_primary,
         RelayMode::Entry,
-    );
+    )
+    .expect("primary dos controls");
     let controls_replay = DoSControls::new(
         base_params,
         &pow_cfg,
@@ -284,7 +287,8 @@ fn adaptive_difficulty_replay_is_deterministic() {
         None,
         metrics_replay,
         RelayMode::Entry,
-    );
+    )
+    .expect("replay dos controls");
 
     let remote: SocketAddr = "192.0.2.200:7555".parse().expect("valid socket addr");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
@@ -414,7 +418,8 @@ fn volumetric_dos_soak_preserves_puzzle_and_latency_slo() {
         None,
         Arc::clone(&metrics),
         RelayMode::Entry,
-    );
+    )
+    .expect("dos controls");
     let descriptor = DEFAULT_DESCRIPTOR_COMMIT;
     let relay_id = [0xBA; 32];
     let binding = PuzzleBinding::new(&descriptor, &relay_id, None);

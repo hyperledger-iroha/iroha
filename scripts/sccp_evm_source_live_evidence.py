@@ -1329,6 +1329,7 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     )
     rendered = evidence.render_toml(args)
     comments = [
+        "# sccp_evm_source_block_tag = " + json.dumps(str(summary["block_tag"])),
         "# sccp_evm_source_rpc_chain_id = "
         + json.dumps(str(source_bridge["rpc_chain_id"])),
         "# sccp_evm_source_bridge_address = "

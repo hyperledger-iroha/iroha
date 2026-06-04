@@ -257,7 +257,12 @@ mod tests {
             .expect("fixture SM2 payload");
         let prefixed = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .expect("fixture public key payload must be valid");
-        assert_eq!(prefixed.to_prefixed_string(), fixture.public_key_prefixed);
+        assert_eq!(
+            prefixed
+                .try_to_prefixed_string()
+                .expect("fixture public key must format as prefixed multihash"),
+            fixture.public_key_prefixed
+        );
 
         let signature = keypair.sign(&message);
         assert_eq!(signature, expected_signature);

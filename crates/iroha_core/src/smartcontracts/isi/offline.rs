@@ -2378,14 +2378,6 @@ pub mod isi {
                         "recursive Kagemusha spend verifier key is not registered",
                     )
                 })?;
-            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
-                &self.bundle,
-                &recursive_record,
-            )
-            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-            state_transaction
-                .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
-
             let (redeem_vk, redeem_record) = resolve_kagemusha_unshield_verifier(
                 &def_id,
                 &self.redeem_proof,
@@ -2396,6 +2388,14 @@ pub mod isi {
                 state_transaction,
                 &redeem_record,
             )?;
+            crate::zk::preverify_kagemusha_recursive_spend_bundle_with_record(
+                &self.bundle,
+                &recursive_record,
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+            state_transaction
+                .register_confidential_proof(self.bundle.recursive_proof.proof.bytes.len())?;
+
             if let Some(lineage_witness) = &self.lineage_witness {
                 ensure_kagemusha_recursive_lineage_verifier_records_registered(
                     lineage_witness,
@@ -2644,7 +2644,10 @@ pub mod isi {
 
         fn sample_certificate() -> OfflineNoteKeyCertificate {
             let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
-            let (_algorithm, public_key) = keypair.public_key().to_bytes();
+            let (_algorithm, public_key) = keypair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
             OfflineNoteKeyCertificate {
                 version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
                 platform: "ios-appattest".to_owned(),
@@ -2668,7 +2671,10 @@ pub mod isi {
             key_id: &str,
         ) -> OfflineNoteKeyCertificate {
             let note_key = KeyPair::from_seed(vec![note_seed; 32], Algorithm::Ed25519);
-            let (_algorithm, public_key) = note_key.public_key().to_bytes();
+            let (_algorithm, public_key) = note_key
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
             let mut certificate = OfflineNoteKeyCertificate {
                 version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
                 platform: "offline-unit-test".to_owned(),

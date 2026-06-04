@@ -296,6 +296,8 @@ static MEMBERSHIP_VIEW: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_EPOCH: AtomicU64 = AtomicU64::new(0);
 static MEMBERSHIP_VIEW_HASH: OnceLock<Mutex<[u8; 32]>> = OnceLock::new();
 static MEMBERSHIP_MISMATCH_REGISTRY: OnceLock<Mutex<MembershipMismatchRegistry>> = OnceLock::new();
+#[cfg(test)]
+static MEMBERSHIP_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 static RBC_MISMATCH_REGISTRY: OnceLock<Mutex<BTreeMap<PeerId, RbcMismatchCounts>>> =
     OnceLock::new();
 static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
@@ -1716,6 +1718,8 @@ fn membership_view_hash() -> Option<[u8; 32]> {
 
 /// Snapshot the current membership view hash for mismatch detection.
 pub fn membership_snapshot() -> Option<SumeragiMembershipStatus> {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     let view_hash = membership_view_hash()?;
     Some(SumeragiMembershipStatus {
         height: MEMBERSHIP_HEIGHT.load(Ordering::Relaxed),
@@ -1742,6 +1746,8 @@ pub fn record_membership_mismatch(
     local_hash: [u8; 32],
     remote_hash: [u8; 32],
 ) -> u32 {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     let now_ms = now_timestamp_ms();
     let Some(mut registry) = membership_mismatch_registry() else {
         return 0;
@@ -1771,6 +1777,8 @@ pub fn record_membership_mismatch(
 
 /// Clear any recorded membership mismatch for the given peer.
 pub fn clear_membership_mismatch(peer: &PeerId) {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     let Some(mut registry) = membership_mismatch_registry() else {
         return;
     };
@@ -1779,6 +1787,8 @@ pub fn clear_membership_mismatch(peer: &PeerId) {
 
 /// Return the consecutive mismatch count for the given peer.
 pub fn membership_mismatch_consecutive(peer: &PeerId) -> u32 {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     membership_mismatch_registry()
         .and_then(|registry| registry.entries.get(peer).map(|entry| entry.consecutive))
         .unwrap_or(0)
@@ -1786,6 +1796,8 @@ pub fn membership_mismatch_consecutive(peer: &PeerId) -> u32 {
 
 /// Snapshot the current membership mismatch registry.
 pub fn membership_mismatch_snapshot() -> MembershipMismatchSnapshot {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     let Some(registry) = membership_mismatch_registry() else {
         return MembershipMismatchSnapshot::default();
     };
@@ -1881,6 +1893,7 @@ pub fn reset_vote_validation_drops_for_tests() {
 #[cfg(test)]
 /// Reset the membership mismatch registry for unit tests.
 pub fn reset_membership_mismatch_for_tests() {
+    let _guard = membership_status_test_guard();
     if let Some(mut registry) = membership_mismatch_registry() {
         registry.entries.clear();
         registry.last = None;
@@ -1890,6 +1903,7 @@ pub fn reset_membership_mismatch_for_tests() {
 #[cfg(test)]
 /// Reset the membership snapshot counters for unit tests.
 pub fn reset_membership_snapshot_for_tests() {
+    let _guard = membership_status_test_guard();
     MEMBERSHIP_HEIGHT.store(0, Ordering::Relaxed);
     MEMBERSHIP_VIEW.store(0, Ordering::Relaxed);
     MEMBERSHIP_EPOCH.store(0, Ordering::Relaxed);
@@ -2154,6 +2168,8 @@ fn reset_npos_repair_coverage_for_tests() {
 
 /// Record the latest deterministic membership view hash snapshot.
 pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u64) {
+    #[cfg(test)]
+    let _guard = membership_status_test_guard();
     MEMBERSHIP_HEIGHT.store(height, Ordering::Relaxed);
     MEMBERSHIP_VIEW.store(view, Ordering::Relaxed);
     MEMBERSHIP_EPOCH.store(epoch, Ordering::Relaxed);
@@ -8343,6 +8359,12 @@ pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn membership_status_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&MEMBERSHIP_STATUS_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn gossip_fallback_test_guard() -> TestLockGuard {
     reentrant_test_guard(&GOSSIP_FALLBACK_TEST_LOCK)
 }
@@ -8724,6 +8746,7 @@ mod tests {
 
     #[test]
     fn membership_snapshot_tracks_view_hash() {
+        let _guard = super::membership_status_test_guard();
         super::reset_membership_snapshot_for_tests();
         assert!(super::membership_snapshot().is_none());
 
@@ -8740,6 +8763,7 @@ mod tests {
 
     #[test]
     fn membership_mismatch_tracks_active_peers_and_clears() {
+        let _guard = super::membership_status_test_guard();
         super::reset_membership_mismatch_for_tests();
         let peer_a = PeerId::new(KeyPair::random().public_key().clone());
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());

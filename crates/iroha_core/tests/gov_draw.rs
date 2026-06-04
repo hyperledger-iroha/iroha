@@ -24,11 +24,15 @@ fn make_candidate(
     let chain_bytes = chain_id.as_str().as_bytes();
     match variant {
         CandidateVariant::Normal => {
-            let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
-            let (vrf_output, proof) = prove_normal_with_chain(&sk, chain_bytes, &input);
+            let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+                .expect("deterministic BLS normal keypair");
+            let (vrf_output, proof) =
+                prove_normal_with_chain(&sk, chain_bytes, &input).expect("normal VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
-            let (algo, pk_payload) = public_key.to_bytes();
+            let (algo, pk_payload) = public_key
+                .try_to_bytes()
+                .expect("fixture BLS public key must be well-formed");
             assert_eq!(algo, Algorithm::BlsNormal);
             let proof_bytes = match proof {
                 VrfProof::SigInG2(bytes) => bytes.to_vec(),
@@ -37,11 +41,15 @@ fn make_candidate(
             (pk_payload.to_vec(), proof_bytes, vrf_output.0)
         }
         CandidateVariant::Small => {
-            let (pk_raw, sk) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
-            let (vrf_output, proof) = prove_small_with_chain(&sk, chain_bytes, &input);
+            let (pk_raw, sk) = BlsSmall::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+                .expect("deterministic BLS small keypair");
+            let (vrf_output, proof) =
+                prove_small_with_chain(&sk, chain_bytes, &input).expect("small VRF proof");
             let key_pair = KeyPair::from((pk_raw, sk));
             let (public_key, _) = key_pair.into_parts();
-            let (algo, pk_payload) = public_key.to_bytes();
+            let (algo, pk_payload) = public_key
+                .try_to_bytes()
+                .expect("fixture BLS public key must be well-formed");
             assert_eq!(algo, Algorithm::BlsSmall);
             let proof_bytes = match proof {
                 VrfProof::SigInG1(bytes) => bytes.to_vec(),

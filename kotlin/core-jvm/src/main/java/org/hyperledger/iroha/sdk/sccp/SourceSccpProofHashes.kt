@@ -1291,6 +1291,7 @@ object SccpSourceProofs {
         inclusionBranch: List<ByteArray>,
         sourceDomain: Int = DOMAIN_ETH,
     ): ByteArray {
+        require(sourceDomain == DOMAIN_ETH) { "sourceDomain must be ETH" }
         validateTronMptProofNodes(receiptTrieProofNodes)
         val out = ByteArrayOutputStream()
         out.write(1)
@@ -1305,7 +1306,7 @@ object SccpSourceProofs {
         writeU64Le(out, normalizeU64(receiptRootIndex, "receiptRootIndex"))
         writeU32Le(out, receiptTrieProofNodes.size)
         receiptTrieProofNodes.forEach { node -> writeVector(out, node) }
-        writeBranch(out, inclusionBranch)
+        writeBranch(out, inclusionBranch, requireNonEmpty = true)
         return out.toByteArray()
     }
 
@@ -1668,6 +1669,7 @@ object SccpSourceProofs {
         inclusionBranch: List<ByteArray>,
         sourceDomain: Int = DOMAIN_BSC,
     ): ByteArray {
+        require(sourceDomain == DOMAIN_BSC) { "sourceDomain must be BSC" }
         validateTronMptProofNodes(receiptTrieProofNodes)
         val out = ByteArrayOutputStream()
         out.write(1)
@@ -1682,7 +1684,7 @@ object SccpSourceProofs {
         writeU64Le(out, normalizeU64(receiptRootIndex, "receiptRootIndex"))
         writeU32Le(out, receiptTrieProofNodes.size)
         receiptTrieProofNodes.forEach { node -> writeVector(out, node) }
-        writeBranch(out, inclusionBranch)
+        writeBranch(out, inclusionBranch, requireNonEmpty = true)
         return out.toByteArray()
     }
 
@@ -2260,7 +2262,7 @@ object SccpSourceProofs {
             rlpList(
                 listOf(
                     rlpBytes(EVM_RECEIPT_ROOT_VALUE_MARKER),
-                    rlpBytes(hex32Bytes(receiptRoot, "receiptRoot")),
+                    rlpBytes(nonZeroHex32Bytes(receiptRoot, "receiptRoot")),
                 ),
             )
         require(value.isNotEmpty() && value.size <= EVM_MAX_RECEIPT_VALUE_BYTES) {
@@ -4963,6 +4965,7 @@ object SccpSourceProofs {
             "block receipt index",
         )
         val items = ArrayList<EvmTrieItem>(receipts.size)
+        val seenTransactionHashes = HashSet<String>(receipts.size)
         var targetReceiptRlp: ByteArray? = null
         receipts.forEachIndexed { index, receipt ->
             val receiptIndex = requireEthereumRpcQuantity(
@@ -4971,6 +4974,14 @@ object SccpSourceProofs {
             )
             require(receiptIndex == BigInteger.valueOf(index.toLong())) {
                 "block receipt transactionIndex must match receipt order"
+            }
+            val transactionHash = ethereumRpcHexBytes(
+                receipt["transactionHash"] ?: receipt["transaction_hash"],
+                "blockReceipts[$index].transactionHash",
+                byteLength = 32,
+            )
+            require(seenTransactionHashes.add(hexLower(transactionHash))) {
+                "block receipt transactionHash values must be unique"
             }
             val encodedReceipt = canonicalEvmReceiptRlp(receipt)
             if (receiptIndex == targetIndex) {
@@ -5031,6 +5042,7 @@ object SccpSourceProofs {
                             log["address"],
                             "receipt.logs[$index].address",
                             byteLength = 20,
+                            nonzero = false,
                         ),
                     ),
                     rlpList(
@@ -5040,6 +5052,7 @@ object SccpSourceProofs {
                                     topic,
                                     "receipt.logs[$index].topics[$topicIndex]",
                                     byteLength = 32,
+                                    nonzero = false,
                                 ),
                             )
                         },

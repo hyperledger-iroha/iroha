@@ -13,8 +13,8 @@ use hkdf::Hkdf;
 use rand::{CryptoRng, RngCore};
 use sha3::{Digest, Sha3_256};
 use soranet_pq::{
-    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, generate_mlkem_keypair,
-    hedged_chacha20_rng,
+    HedgedRngSeed, MlKemSuite, decapsulate_mlkem, encapsulate_mlkem, hedged_chacha20_rng,
+    try_generate_mlkem_keypair,
 };
 use thiserror::Error;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
@@ -326,8 +326,13 @@ pub struct HybridKeyPair {
 }
 
 impl HybridKeyPair {
-    /// Generate a fresh key pair using the provided RNG.
-    pub fn generate<R>(rng: &mut R) -> Self
+    /// Fallibly generate a fresh key pair using the provided RNG.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HybridError`] if generated component material cannot be
+    /// reconstructed through the checked hybrid secret-key parser.
+    pub fn try_generate<R>(rng: &mut R) -> Result<Self, HybridError>
     where
         R: CryptoRng + RngCore,
     {
@@ -340,13 +345,26 @@ impl HybridKeyPair {
             HedgedRngSeed::from_entropy(kem_seed),
             b"iroha-crypto:hybrid:keypair",
         );
-        let kem_pair = generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng);
+        let kem_pair = try_generate_mlkem_keypair(HYBRID_KEM_SUITE, &mut kem_rng)
+            .map_err(|_| HybridError::InvalidKyberSecretKey)?;
         let secret =
-            HybridSecretKey::from_bytes(x25519_secret.to_bytes(), kem_pair.secret_key.as_slice())
-                .expect("generated ML-KEM secret must be valid");
+            HybridSecretKey::from_bytes(x25519_secret.to_bytes(), kem_pair.secret_key.as_slice())?;
         let public = secret.public().clone();
 
-        Self { public, secret }
+        Ok(Self { public, secret })
+    }
+
+    /// Generate a fresh key pair using the provided RNG.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HybridError`] if generated component material cannot be
+    /// reconstructed through the checked hybrid secret-key parser.
+    pub fn generate<R>(rng: &mut R) -> Result<Self, HybridError>
+    where
+        R: CryptoRng + RngCore,
+    {
+        Self::try_generate(rng)
     }
 
     /// Return the public component.
@@ -621,7 +639,7 @@ mod tests {
     #[test]
     fn generated_keys_roundtrip() {
         let mut rng = ChaCha20Rng::from_seed([0x42; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
 
         let (ciphertext, sender) = encapsulate(
             HybridSuite::X25519MlKem768ChaCha20Poly1305,
@@ -648,9 +666,28 @@ mod tests {
     }
 
     #[test]
+    fn try_generate_validates_generated_key_material() {
+        let mut rng = ChaCha20Rng::from_seed([0x43; 32]);
+        let pair = HybridKeyPair::try_generate(&mut rng).expect("generated hybrid keypair");
+        let encoded_secret = pair.secret().to_bytes();
+
+        let decoded_secret = HybridSecretKey::from_bytes(encoded_secret.0, encoded_secret.1)
+            .expect("generated secret key parses through checked constructor");
+
+        assert_eq!(
+            decoded_secret.public().kyber_bytes(),
+            pair.public().kyber_bytes()
+        );
+        assert_eq!(
+            decoded_secret.public().x25519().to_bytes(),
+            pair.public().x25519().to_bytes()
+        );
+    }
+
+    #[test]
     fn public_key_encoding_roundtrip() {
         let mut rng = ChaCha20Rng::from_seed([0x23; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let encoded_pub = (
             pair.public().x25519_bytes(),
             pair.public().kyber_bytes().to_vec(),
@@ -677,7 +714,7 @@ mod tests {
     #[test]
     fn public_key_decode_rejects_low_order_x25519_public_key() {
         let mut rng = ChaCha20Rng::from_seed([0x77; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let err = HybridPublicKey::from_bytes([0u8; 32], pair.public().kyber_bytes())
             .expect_err("low-order public key must be rejected while decoding");
         assert_eq!(err, HybridError::InvalidX25519PublicKey);
@@ -686,7 +723,7 @@ mod tests {
     #[test]
     fn public_key_decode_rejects_noncanonical_kyber_public_key() {
         let mut rng = ChaCha20Rng::from_seed([0x7A; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let mut kyber_public = pair.public().kyber_bytes().to_vec();
         set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_public);
 
@@ -698,7 +735,7 @@ mod tests {
     #[test]
     fn secret_key_decode_rejects_noncanonical_kyber_secret_key() {
         let mut rng = ChaCha20Rng::from_seed([0x7B; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let (x25519, mut kyber_secret) = pair.secret().to_bytes();
         set_first_mlkem_12_bit_coefficient_noncanonical(&mut kyber_secret);
 
@@ -710,7 +747,7 @@ mod tests {
     #[test]
     fn ciphertext_decode_rejects_low_order_ephemeral_public_key() {
         let mut rng = ChaCha20Rng::from_seed([0x78; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let (ciphertext, _sender) = encapsulate(
             HybridSuite::X25519MlKem768ChaCha20Poly1305,
             pair.public(),
@@ -725,7 +762,7 @@ mod tests {
     #[test]
     fn decapsulate_rejects_low_order_ephemeral_public_key() {
         let mut rng = ChaCha20Rng::from_seed([0x19; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let (mut ciphertext, _sender) = encapsulate(
             HybridSuite::X25519MlKem768ChaCha20Poly1305,
             pair.public(),

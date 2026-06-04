@@ -44,6 +44,7 @@ DOMAIN_PROFILES = {
     SCCP_DOMAIN_ETH: {
         "chain": "eth",
         "rpc_chain_id": "1",
+        "block_tag": "finalized",
         "network_id": ETH_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:eth:destination-anchor:ethereum-mainnet:v1",
         "route_allowlist_id": "sccp:eth:route-allowlist:ethereum-mainnet:v1",
@@ -51,11 +52,13 @@ DOMAIN_PROFILES = {
     SCCP_DOMAIN_BSC: {
         "chain": "bsc",
         "rpc_chain_id": "56",
+        "block_tag": "latest",
         "network_id": BSC_MAINNET_NETWORK_ID,
         "anchor_id": "sccp:bsc:destination-anchor:bsc-mainnet:v1",
         "route_allowlist_id": "sccp:bsc:route-allowlist:bsc-mainnet:v1",
     },
 }
+EVM_BLOCK_TAGS = ("finalized", "safe", "latest")
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
@@ -786,6 +789,14 @@ def _profile(args: argparse.Namespace) -> dict[str, str]:
         raise ValueError("domain must be ETH or BSC") from exc
 
 
+def _block_tag_from_args(args: argparse.Namespace) -> str:
+    profile = _profile(args)
+    block_tag = getattr(args, "block_tag", None) or profile["block_tag"]
+    if block_tag not in EVM_BLOCK_TAGS:
+        raise ValueError("block_tag must be finalized, safe, or latest")
+    return block_tag
+
+
 def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
     profile = _profile(args)
     yield "[[zk.sccp_destination_rollouts]]"
@@ -882,6 +893,7 @@ _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_proof_version",
     "route_canary_proof_source_domain",
     "route_canary_used_message_proof",
+    "route_canary_receipt_block_finalized",
 )
 
 
@@ -960,6 +972,10 @@ def _route_canary_transaction_toml_lines(args: argparse.Namespace) -> list[str]:
             "evm_route_canary_used_message_proof",
             values["used_message_proof"],
         ),
+        _toml_line(
+            "evm_route_canary_receipt_block_finalized",
+            values["receipt_block_finalized"],
+        ),
     ]
 
 
@@ -1010,6 +1026,11 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
         raise ValueError(
             "EVM route canary transaction metadata requires "
             "--route-canary-used-message-proof=true from live bridge state"
+        )
+    if getattr(args, "route_canary_receipt_block_finalized") is not True:
+        raise ValueError(
+            "EVM route canary transaction metadata requires "
+            "--route-canary-receipt-block-finalized=true from finalized live reads"
         )
     receipt_block_number = parse_u64_decimal(
         str(getattr(args, "route_canary_receipt_block_number")),
@@ -1096,6 +1117,10 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
         "proof_version": proof_version,
         "proof_source_domain": proof_source_domain,
         "used_message_proof": getattr(args, "route_canary_used_message_proof"),
+        "receipt_block_finalized": getattr(
+            args,
+            "route_canary_receipt_block_finalized",
+        ),
     }
     _require_distinct_hash_roles(
         tuple(
@@ -1185,6 +1210,8 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
         + json.dumps(str(values["proof_source_domain"])),
         "# sccp_evm_route_canary_used_message_proof = "
         + json.dumps("true" if values["used_message_proof"] is True else "false"),
+        "# sccp_evm_route_canary_receipt_block_finalized = "
+        + json.dumps("true" if values["receipt_block_finalized"] is True else "false"),
     ]
 
 
@@ -1253,6 +1280,7 @@ def _route_canary_summary(
                 "proof_version": values["proof_version"],
                 "proof_source_domain": values["proof_source_domain"],
                 "message_proof_used": values["used_message_proof"],
+                "receipt_block_finalized": values["receipt_block_finalized"],
             }
         )
     return summary
@@ -1401,6 +1429,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
 
     apply_runtime_bytecode_hash(args)
     apply_bridge_runtime_bytecode_hash(args)
+    block_tag = _block_tag_from_args(args)
+    if args.domain == SCCP_DOMAIN_ETH and block_tag != "finalized":
+        raise ValueError("Ethereum destination TOML requires --block-tag finalized")
     expected_hash = _destination_binding_hash_from_args(args)
     expected_pin = getattr(args, "expected_destination_binding_hash", None)
     if expected_pin is None:
@@ -1453,6 +1484,7 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
     sections = [
         "# sccp_evm_rpc_chain_id = "
         + json.dumps(str(_profile(args)["rpc_chain_id"])),
+        "# sccp_evm_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_bridge_runtime_code_hash = "
         + json.dumps(_hex(args.bridge_code_hash)),
     ]
@@ -1541,6 +1573,7 @@ def _json_summary(
         "source_domain": SCCP_DOMAIN_SORA,
         "target_domain": args.domain,
         "chain": profile["chain"],
+        "block_tag": _block_tag_from_args(args),
         "verifier_backend": SCCP_EVM_GROTH16_BACKEND,
         "proof_family": SCCP_PROOF_FAMILY_STARK_FRI,
         "network_id": _hex(args.network_id),
@@ -1642,6 +1675,15 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         type=lambda value: parse_evm_address(value, label="bridge address"),
         help="Deployed SCCP message bridge wrapper address.",
+    )
+    parser.add_argument(
+        "--block-tag",
+        choices=EVM_BLOCK_TAGS,
+        help=(
+            "EVM block tag represented by the audited rollout evidence. "
+            "Defaults to finalized for Ethereum and latest for BSC; production "
+            "Ethereum TOML requires finalized."
+        ),
     )
     parser.add_argument(
         "--bridge-code-hash",
@@ -1923,6 +1965,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Assert live bridge state returned usedMessageProofs(messageId) = true "
             "for the canary transaction."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-finalized",
+        type=lambda value: parse_bool_literal(
+            value,
+            label="route canary receipt block finalized",
+        ),
+        help=(
+            "Assert live finalized execution head proved the canary receipt block "
+            "was finalized."
         ),
     )
     parser.add_argument(

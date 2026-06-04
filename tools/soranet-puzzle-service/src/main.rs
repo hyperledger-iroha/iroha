@@ -973,7 +973,9 @@ fn derive_relay_id(policy: &HandshakePolicy) -> Result<[u8; 32], TokenInitError>
     let identity_key = KeyPair::from_private_key(private_key).map_err(|err| {
         TokenInitError::RelayIdentity(format!("failed to derive identity keypair: {err}"))
     })?;
-    let (algorithm, payload) = identity_key.public_key().to_bytes();
+    let (algorithm, payload) = identity_key.public_key().try_to_bytes().map_err(|err| {
+        TokenInitError::RelayIdentity(format!("malformed relay identity public key: {err}"))
+    })?;
     if algorithm != Algorithm::Ed25519 {
         return Err(TokenInitError::RelayIdentity(format!(
             "unsupported identity algorithm {algorithm:?}"
@@ -1314,7 +1316,10 @@ mod tests {
         let issuer_fingerprint = compute_issuer_fingerprint(keypair.public_key());
 
         let relay_keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
-        let (algorithm, relay_public) = relay_keypair.public_key().to_bytes();
+        let (algorithm, relay_public) = relay_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         assert_eq!(algorithm, Algorithm::Ed25519);
         assert_eq!(relay_public.len(), 32);
         let mut relay_id = [0u8; 32];
@@ -1780,7 +1785,10 @@ mod tests {
             let private_key =
                 PrivateKey::from_bytes(Algorithm::Ed25519, &identity_seed).expect("private key");
             let pair = KeyPair::from_private_key(private_key).expect("keypair");
-            let (algo, public) = pair.public_key().to_bytes();
+            let (algo, public) = pair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid");
             assert_eq!(algo, Algorithm::Ed25519);
             let mut id = [0u8; 32];
             id.copy_from_slice(public);

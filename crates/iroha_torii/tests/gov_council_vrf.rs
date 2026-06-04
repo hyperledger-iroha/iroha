@@ -60,22 +60,28 @@ async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
     );
 
     let (pk1, sk1) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+            .expect("deterministic BLS normal keypair");
     let (pk2, sk2) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![4, 3, 2, 1]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![4, 3, 2, 1]))
+            .expect("deterministic BLS normal keypair");
     let (pk3, sk3) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![9, 9, 9, 9]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![9, 9, 9, 9]))
+            .expect("deterministic BLS normal keypair");
 
     let input_alice = parliament::build_input(&seed, &account_alice);
     let input_bob = parliament::build_input(&seed, &account_bob);
     let input_carol = parliament::build_input(&seed, &account_carol);
 
     let (_y1, pi1) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk1, chain_id.as_bytes(), &input_alice);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk1, chain_id.as_bytes(), &input_alice)
+            .expect("alice normal VRF proof");
     let (_y2, pi2) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk2, chain_id.as_bytes(), &input_bob);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk2, chain_id.as_bytes(), &input_bob)
+            .expect("bob normal VRF proof");
     let (_y3, pi3) =
-        iroha_crypto::vrf::prove_normal_with_chain(&sk3, chain_id.as_bytes(), &input_carol);
+        iroha_crypto::vrf::prove_normal_with_chain(&sk3, chain_id.as_bytes(), &input_carol)
+            .expect("carol normal VRF proof");
 
     let pk1_bytes = KeyPair::from((pk1.clone(), sk1.clone()))
         .public_key()

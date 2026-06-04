@@ -2887,6 +2887,8 @@ pub struct FheParamSetV1 {
     pub withdraw_height: Option<u64>,
     /// Canonical digest of backend parameter bytes.
     pub parameter_digest: Hash,
+    /// Domain-separated digest of the backend RNS coefficient-modulus chain.
+    pub rns_modulus_chain_digest: Hash,
 }
 
 impl FheParamSetV1 {
@@ -13382,6 +13384,7 @@ mod tests {
             deprecation_height: Some(20_000),
             withdraw_height: Some(40_000),
             parameter_digest: sample_hash(77),
+            rns_modulus_chain_digest: sample_hash(78),
         }
     }
 
@@ -13391,6 +13394,7 @@ mod tests {
                 entries: Vec::new(),
             },
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         }
     }

@@ -533,10 +533,9 @@ impl<T> MerkleTree<T> {
                 _ => unreachable!(),
             };
             let parent_node = Self::pair_hash(l_node, r_node);
-            let parent_mut = self
-                .0
-                .get_mut(parent_index)
-                .expect("bug: missing parent node at computed index");
+            let Some(parent_mut) = self.0.get_mut(parent_index) else {
+                return;
+            };
             *parent_mut = parent_node;
             index = parent_index;
             node = parent_node;
@@ -1289,11 +1288,10 @@ impl<T> Iterator for LeafHashIterator<'_, T> {
         if self.index_back <= self.index {
             return None;
         }
-        let leaf = self
-            .tree
-            .get_leaf(self.index)
-            .copied()
-            .expect("bug: missing leaf at valid index");
+        let Some(leaf) = self.tree.get_leaf(self.index).copied() else {
+            self.index = self.index_back;
+            return None;
+        };
         // Increment the front index eagerly.
         self.index += 1;
         Some(leaf)
@@ -1307,11 +1305,10 @@ impl<T> DoubleEndedIterator for LeafHashIterator<'_, T> {
         }
         // Decrement the back index lazily.
         self.index_back -= 1;
-        let leaf = self
-            .tree
-            .get_leaf(self.index_back)
-            .copied()
-            .expect("bug: missing leaf at valid index");
+        let Some(leaf) = self.tree.get_leaf(self.index_back).copied() else {
+            self.index = self.index_back;
+            return None;
+        };
         Some(leaf)
     }
 }
@@ -1399,6 +1396,39 @@ mod tests {
         assert_eq!(leaves_iter.next_back(), None);
         assert_eq!(leaves_iter.next(), None);
         assert_eq!(leaves_iter.len(), 0);
+    }
+
+    #[test]
+    fn leaf_iterator_stops_on_missing_front_leaf() {
+        let leaf = test_hashes(1)[0];
+        let bad_tree = MerkleTree::<()>(vec![Some(leaf), None, Some(leaf)]);
+        let mut leaves_iter = bad_tree.leaves();
+
+        assert_eq!(leaves_iter.len(), 2);
+        assert_eq!(leaves_iter.next(), None);
+        assert_eq!(leaves_iter.len(), 0);
+        assert_eq!(leaves_iter.next_back(), None);
+    }
+
+    #[test]
+    fn leaf_iterator_stops_on_missing_back_leaf() {
+        let leaf = test_hashes(1)[0];
+        let bad_tree = MerkleTree::<()>(vec![Some(leaf), Some(leaf), None]);
+        let mut leaves_iter = bad_tree.leaves();
+
+        assert_eq!(leaves_iter.len(), 2);
+        assert_eq!(leaves_iter.next_back(), None);
+        assert_eq!(leaves_iter.len(), 0);
+        assert_eq!(leaves_iter.next(), None);
+    }
+
+    #[test]
+    fn update_stops_on_missing_parent_slot() {
+        let mut tree = MerkleTree::<()>(vec![None]);
+
+        tree.update(3);
+
+        assert_eq!(tree.0, vec![None]);
     }
 
     #[test]

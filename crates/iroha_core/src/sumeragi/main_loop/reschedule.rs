@@ -1021,6 +1021,7 @@ impl Actor {
                     && !consensus_queue_backlog
                     && !rbc_session_incomplete
                     && !relay_backpressure
+                    && !near_quorum_fast_timeout_allowed
                     && progress_stall_age < first_single_vote_frontier_quiet_window
                 {
                     debug!(
@@ -1126,12 +1127,14 @@ impl Actor {
                         vote_count,
                         min_votes_for_commit,
                     );
-                let effective_reschedule_backoff =
-                    if let Some(fast_resend_window) = vote_backed_frontier_resend_window {
-                        effective_reschedule_backoff.min(fast_resend_window)
-                    } else {
-                        effective_reschedule_backoff
-                    };
+                let effective_reschedule_backoff = if near_quorum_fast_timeout_allowed {
+                    effective_reschedule_backoff
+                        .min(near_quorum_timeout.max(Duration::from_millis(1)))
+                } else if let Some(fast_resend_window) = vote_backed_frontier_resend_window {
+                    effective_reschedule_backoff.min(fast_resend_window)
+                } else {
+                    effective_reschedule_backoff
+                };
                 let zero_vote_reschedule = !has_votes && !has_qc;
                 let effective_reschedule_backoff = consensus_ingress_reschedule_backoff(
                     effective_reschedule_backoff,
@@ -1162,6 +1165,13 @@ impl Actor {
                     reschedule_backoff_skipped = reschedule_backoff_skipped.saturating_add(1);
                     continue;
                 }
+                let bundle_window_override = if near_quorum_fast_timeout_allowed
+                    || vote_backed_frontier_resend_window.is_some()
+                {
+                    Some(effective_reschedule_backoff)
+                } else {
+                    None
+                };
                 to_reschedule.push((
                     key,
                     pending_age,
@@ -1170,7 +1180,7 @@ impl Actor {
                     min_votes_for_commit,
                     stake_quorum_missing,
                     effective_reschedule_backoff,
-                    vote_backed_frontier_resend_window.map(|_| effective_reschedule_backoff),
+                    bundle_window_override,
                 ));
             }
         }
@@ -1910,11 +1920,16 @@ impl Actor {
                     )
                 })
                 .flatten();
+        let reduced_missing_payload_window = bundle_window_override.is_some()
+            && !authoritative_payload_present
+            && vote_count > 0
+            && vote_count.saturating_add(1) >= min_votes_for_commit;
         let vote_backed_frontier_window_owned = contiguous_frontier
             && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately
             && !authoritative_payload_can_bypass_recovery_window
+            && !reduced_missing_payload_window
             && self.frontier_recovery_owns_height_window_with_window(
                 height,
                 now,

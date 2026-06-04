@@ -66,7 +66,7 @@ pub mod mldsa65 {
     }
 
     pub fn keypair_from_seed(seed: &[u8]) -> Result<(PublicKey, PrivateKey), Error> {
-        let seed_material = Zeroizing::new(derive_seed_material(seed));
+        let seed_material = Zeroizing::new(derive_seed_material(seed)?);
         keypair_from_seed_material(&seed_material)
     }
 
@@ -164,12 +164,12 @@ pub mod mldsa65 {
             .map_err(|err| Error::KeyGen(err.to_string()))
     }
 
-    fn derive_seed_material(seed: &[u8]) -> [u8; SEEDBYTES] {
+    fn derive_seed_material(seed: &[u8]) -> Result<[u8; SEEDBYTES], Error> {
         let kdf = Hkdf::<Sha512>::new(Some(HKDF_SALT), seed);
         let mut out = [0u8; SEEDBYTES];
         kdf.expand(HKDF_INFO, &mut out)
-            .expect("HKDF expand to SEEDBYTES must succeed");
-        out
+            .map_err(|_| Error::KeyGen(String::from("ML-DSA HKDF seed expansion failed")))?;
+        Ok(out)
     }
 
     #[allow(unsafe_code)]
@@ -410,8 +410,10 @@ pub mod mldsa65 {
 
         #[test]
         fn seed_material_changes_with_seed_input() {
-            let first = derive_seed_material(b"iroha:ml-dsa-seed:first");
-            let second = derive_seed_material(b"iroha:ml-dsa-seed:second");
+            let first =
+                derive_seed_material(b"iroha:ml-dsa-seed:first").expect("derive first seed");
+            let second =
+                derive_seed_material(b"iroha:ml-dsa-seed:second").expect("derive second seed");
 
             assert_ne!(first, second);
         }

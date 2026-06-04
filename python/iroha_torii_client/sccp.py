@@ -18750,6 +18750,18 @@ def _normalize_ethereum_mainnet_source_bridge_material(
     return material
 
 
+def _normalize_bsc_mainnet_source_bridge_material(
+    input_value: Any,
+    label: str,
+) -> Optional[Mapping[str, Any]]:
+    if input_value is None:
+        return None
+    material = normalize_sccp_source_verifier_material(input_value)
+    if material["source_domain"] != SCCP_DOMAIN_BSC:
+        raise ValueError(f"{label}.sourceDomain must be BSC")
+    return material
+
+
 def _source_bridge_emitter_address_input(value: Mapping[str, Any], label: str) -> Any:
     return _strict_optional_mapping_value(
         value,
@@ -18834,6 +18846,77 @@ def _ethereum_mainnet_receipt_source_event_options(
     }
 
 
+def _bsc_mainnet_receipt_source_event_options(
+    value: Mapping[str, Any],
+    options: Mapping[str, Any],
+    *,
+    default_source_verifier_material: Any = None,
+    default_source_bridge_emitter_address: Any = None,
+) -> Dict[str, Optional[str]]:
+    source_event_digest_input = _strict_optional_mapping_value(
+        value,
+        "sourceEventDigest",
+        "sourceEventDigest",
+        "source_event_digest",
+    )
+    source_event_digest = (
+        None
+        if source_event_digest_input is None
+        else _normalize_nonzero_hex32(source_event_digest_input, "sourceEventDigest")
+    )
+    input_material = _normalize_bsc_mainnet_source_bridge_material(
+        _strict_optional_mapping_value(
+            value,
+            "sourceVerifierMaterial",
+            "sourceVerifierMaterial",
+            "source_verifier_material",
+        ),
+        "sourceVerifierMaterial",
+    )
+    option_material = _normalize_bsc_mainnet_source_bridge_material(
+        _strict_optional_mapping_value(
+            options,
+            "sourceVerifierMaterial",
+            "sourceVerifierMaterial",
+            "source_verifier_material",
+        ),
+        "sourceVerifierMaterial",
+    )
+    default_material = _normalize_bsc_mainnet_source_bridge_material(
+        default_source_verifier_material,
+        "sourceVerifierMaterial",
+    )
+
+    supplied_addresses = [
+        _source_bridge_emitter_address_input(value, "sourceBridgeEmitterAddress"),
+        _source_bridge_emitter_address_input(options, "sourceBridgeEmitterAddress"),
+        default_source_bridge_emitter_address,
+        None if input_material is None else input_material["source_bridge_emitter_address"],
+        None if option_material is None else option_material["source_bridge_emitter_address"],
+        None if default_material is None else default_material["source_bridge_emitter_address"],
+    ]
+    source_bridge_emitter_address = None
+    for supplied_address in supplied_addresses:
+        if supplied_address is None:
+            continue
+        normalized_address = _normalize_evm_rpc_hex(
+            supplied_address,
+            "sourceBridgeEmitterAddress",
+            20,
+        )
+        if (
+            source_bridge_emitter_address is not None
+            and source_bridge_emitter_address != normalized_address
+        ):
+            raise ValueError("sourceBridgeEmitterAddress values must match")
+        source_bridge_emitter_address = normalized_address
+
+    return {
+        "source_event_digest": source_event_digest,
+        "source_bridge_emitter_address": source_bridge_emitter_address,
+    }
+
+
 def _ethereum_mainnet_receipt_log_source_event_digest(
     receipt: Mapping[str, Any],
     *,
@@ -18881,9 +18964,15 @@ def _ethereum_mainnet_receipt_log_source_event_digest(
         ]
         if (
             log_address == source_bridge_emitter_address
-            and len(normalized_topics) == 2
+            and normalized_topics
             and normalized_topics[0] == source_event_topic
         ):
+            if len(normalized_topics) != 2:
+                raise TypeError("SCCP source event log must contain exactly 2 topics")
+            if not isinstance(log.get("data"), str):
+                raise TypeError(f"receipt.logs[{index}].data is required")
+            if log.get("data") != "0x":
+                raise TypeError("SCCP source event log data must be 0x")
             log_transaction_hash = _normalize_evm_rpc_hex(
                 _mapping_value_without_aliases(
                     log,
@@ -18923,17 +19012,10 @@ def _ethereum_mainnet_receipt_log_source_event_digest(
                 raise TypeError(
                     "receipt.logs blockNumber must match receipt.blockNumber"
                 )
-            if not isinstance(log.get("data"), str):
-                raise TypeError(f"receipt.logs[{index}].data is required")
             candidate_digest = normalized_topics[1]
-            if (
-                not any(bytes.fromhex(candidate_digest.removeprefix("0x")))
-                or (
-                    source_event_digest is not None
-                    and candidate_digest != source_event_digest
-                )
-                or log.get("data") != "0x"
-            ):
+            if not any(bytes.fromhex(candidate_digest.removeprefix("0x"))):
+                raise TypeError("SCCP source event digest must not be zero")
+            if source_event_digest is not None and candidate_digest != source_event_digest:
                 continue
             if matched_digest is not None:
                 raise TypeError(
@@ -19288,6 +19370,185 @@ def _normalize_bsc_mainnet_parlia_finality(
         }
     )
     return normalized
+
+
+def _normalize_bsc_unsigned_integer(value: Any, label: str) -> int:
+    if isinstance(value, str) and value.startswith("0x"):
+        return int(_normalize_evm_rpc_quantity(value, label), 16)
+    return _normalize_u64(value, label)
+
+
+def _require_bsc_mainnet_receipt_proof_matches_evidence(
+    receipt_proof: Optional[Mapping[str, Any]],
+    *,
+    block_hash: Optional[str],
+    receipt_block_number: Optional[str],
+    block_receipts_root: Optional[str],
+    parlia_finality: Optional[Mapping[str, Any]],
+    source_event_digest: Optional[str],
+) -> None:
+    if receipt_proof is None:
+        return
+    proof = _require_mapping_input(receipt_proof, "receiptProof")
+    proof_block_number = _normalize_bsc_unsigned_integer(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.blockNumber",
+            "blockNumber",
+            "block_number",
+            "executionBlockNumber",
+            "execution_block_number",
+        ),
+        "receiptProof.blockNumber",
+    )
+    if receipt_block_number is not None and proof_block_number != int(
+        _normalize_evm_rpc_quantity(receipt_block_number, "block.number"),
+        16,
+    ):
+        raise ValueError("receiptProof.blockNumber must match block.number")
+    if parlia_finality is not None:
+        finality_block_number = _normalize_bsc_unsigned_integer(
+            _mapping_value_without_aliases(
+                parlia_finality,
+                "parliaFinality.executionBlockNumber",
+                "executionBlockNumber",
+                "execution_block_number",
+            ),
+            "parliaFinality.executionBlockNumber",
+        )
+        if proof_block_number != finality_block_number:
+            raise ValueError(
+                "receiptProof.blockNumber must match parliaFinality.executionBlockNumber"
+            )
+    proof_block_hash = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.blockHash",
+            "blockHash",
+            "block_hash",
+            "executionBlockHash",
+            "execution_block_hash",
+        ),
+        "receiptProof.blockHash",
+        32,
+    )
+    if block_hash is not None and proof_block_hash != block_hash:
+        raise ValueError("receiptProof.blockHash must match block.hash")
+    if (
+        parlia_finality is not None
+        and proof_block_hash != parlia_finality["execution_block_hash"]
+    ):
+        raise ValueError(
+            "receiptProof.blockHash must match parliaFinality.executionBlockHash"
+        )
+    proof_receipts_root = _normalize_evm_rpc_hex(
+        _mapping_value_without_aliases(
+            proof,
+            "receiptProof.receiptsRoot",
+            "receiptsRoot",
+            "receipts_root",
+            "executionReceiptsRoot",
+            "execution_receipts_root",
+        ),
+        "receiptProof.receiptsRoot",
+        32,
+    )
+    if block_receipts_root is not None and proof_receipts_root != block_receipts_root:
+        raise ValueError("receiptProof.receiptsRoot must match block.receiptsRoot")
+    if (
+        parlia_finality is not None
+        and proof_receipts_root != parlia_finality["execution_receipts_root"]
+    ):
+        raise ValueError(
+            "receiptProof.receiptsRoot must match parliaFinality.executionReceiptsRoot"
+        )
+    if parlia_finality is not None:
+        finality_validator_epoch = _strict_optional_mapping_value(
+            parlia_finality,
+            "parliaFinality.validatorEpoch",
+            "validatorEpoch",
+            "validator_epoch",
+        )
+        if finality_validator_epoch is not None:
+            proof_validator_epoch = _normalize_bsc_unsigned_integer(
+                _mapping_value_without_aliases(
+                    proof,
+                    "receiptProof.validatorEpoch",
+                    "validatorEpoch",
+                    "validator_epoch",
+                ),
+                "receiptProof.validatorEpoch",
+            )
+            if proof_validator_epoch != _normalize_bsc_unsigned_integer(
+                finality_validator_epoch,
+                "parliaFinality.validatorEpoch",
+            ):
+                raise ValueError(
+                    "receiptProof.validatorEpoch must match parliaFinality.validatorEpoch"
+                )
+        finality_validator_set_hash = _strict_optional_mapping_value(
+            parlia_finality,
+            "parliaFinality.validatorSetHash",
+            "validatorSetHash",
+            "validator_set_hash",
+        )
+        if finality_validator_set_hash is not None:
+            proof_validator_set_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    proof,
+                    "receiptProof.validatorSetHash",
+                    "validatorSetHash",
+                    "validator_set_hash",
+                ),
+                "receiptProof.validatorSetHash",
+                32,
+            )
+            if proof_validator_set_hash != _normalize_evm_rpc_hex(
+                finality_validator_set_hash,
+                "parliaFinality.validatorSetHash",
+                32,
+            ):
+                raise ValueError(
+                    "receiptProof.validatorSetHash must match parliaFinality.validatorSetHash"
+                )
+        finality_commit_seal_hash = _strict_optional_mapping_value(
+            parlia_finality,
+            "parliaFinality.commitSealHash",
+            "commitSealHash",
+            "commit_seal_hash",
+        )
+        if finality_commit_seal_hash is not None:
+            proof_commit_seal_hash = _normalize_evm_rpc_hex(
+                _mapping_value_without_aliases(
+                    proof,
+                    "receiptProof.commitSealHash",
+                    "commitSealHash",
+                    "commit_seal_hash",
+                ),
+                "receiptProof.commitSealHash",
+                32,
+            )
+            if proof_commit_seal_hash != _normalize_evm_rpc_hex(
+                finality_commit_seal_hash,
+                "parliaFinality.commitSealHash",
+                32,
+            ):
+                raise ValueError(
+                    "receiptProof.commitSealHash must match parliaFinality.commitSealHash"
+                )
+    if source_event_digest is not None:
+        proof_source_event_digest = _normalize_evm_rpc_hex(
+            _mapping_value_without_aliases(
+                proof,
+                "receiptProof.sourceEventDigest",
+                "sourceEventDigest",
+                "source_event_digest",
+            ),
+            "receiptProof.sourceEventDigest",
+            32,
+        )
+        if proof_source_event_digest != source_event_digest:
+            raise ValueError("receiptProof.sourceEventDigest must match receipt source event")
 
 
 def ethereum_mainnet_sccp_destination_binding(input_value: Any) -> Dict[str, Any]:
@@ -26825,6 +27086,34 @@ class EthereumMainnetSccp:
                     default_source_bridge_emitter_address=self.source_bridge_emitter_address,
                 ),
             )
+        elif (
+            _strict_optional_mapping_value(
+                value,
+                "sourceEventDigest",
+                "sourceEventDigest",
+                "source_event_digest",
+            )
+            is not None
+            or _source_bridge_emitter_address_input(value, "sourceBridgeEmitterAddress")
+            is not None
+            or _source_bridge_emitter_address_input(options, "sourceBridgeEmitterAddress")
+            is not None
+            or _strict_optional_mapping_value(
+                value,
+                "sourceVerifierMaterial",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
+            )
+            is not None
+            or _strict_optional_mapping_value(
+                options,
+                "sourceVerifierMaterial",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
+            )
+            is not None
+        ):
+            raise TypeError("BSC mainnet SCCP source event validation requires receipt logs")
 
         block = _strict_optional_mapping_value(value, "block", "block")
         if block is None and block_hash is not None and provider is not None:
@@ -26902,6 +27191,14 @@ class EthereumMainnetSccp:
                 "receipt_proof",
                 "receiptProofHash",
                 "receipt_proof_hash",
+                "sourceEventDigest",
+                "source_event_digest",
+                "sourceBridgeEmitterAddress",
+                "source_bridge_emitter_address",
+                "expectedSourceBridgeEmitterAddress",
+                "expected_source_bridge_emitter_address",
+                "sourceVerifierMaterial",
+                "source_verifier_material",
                 "blockHash",
                 "block_hash",
                 "block",
@@ -27029,6 +27326,8 @@ class BscMainnetSccp:
         submit_outbound_to_bsc: Optional[
             Callable[[Mapping[str, Any], Mapping[str, Any]], Union[Any, Awaitable[Any]]]
         ] = None,
+        source_verifier_material: Any = None,
+        source_bridge_emitter_address: Any = None,
     ) -> None:
         self.witness_provider = witness_provider
         self.prove_fn = prove
@@ -27037,6 +27336,8 @@ class BscMainnetSccp:
         self.inbound_prove_fn = prove_inbound
         self.inbound_submit_fn = submit_inbound_to_iroha
         self.outbound_submit_fn = submit_outbound_to_bsc
+        self.source_verifier_material = source_verifier_material
+        self.source_bridge_emitter_address = source_bridge_emitter_address
 
     @staticmethod
     def require_mainnet_chain_id(chain_id: Any) -> int:
@@ -27234,6 +27535,7 @@ class BscMainnetSccp:
         )
         receipt_block_number = None
         normalized_receipt = None
+        source_event: Dict[str, str] = {}
         if receipt is not None:
             receipt_mapping = _require_mapping_input(receipt, "receipt")
             if receipt_mapping.get("status") != "0x1":
@@ -27279,6 +27581,18 @@ class BscMainnetSccp:
             if receipt_block_number == "0x0":
                 raise ValueError("receipt.blockNumber must be positive")
             normalized_receipt = dict(receipt_mapping)
+            source_event = _ethereum_mainnet_receipt_log_source_event_digest(
+                normalized_receipt,
+                transaction_hash=transaction_hash,
+                block_hash=receipt_block_hash,
+                block_number=receipt_block_number,
+                **_bsc_mainnet_receipt_source_event_options(
+                    value,
+                    options,
+                    default_source_verifier_material=self.source_verifier_material,
+                    default_source_bridge_emitter_address=self.source_bridge_emitter_address,
+                ),
+            )
 
         block = _strict_optional_mapping_value(value, "block", "block")
         if block is None and block_hash is not None and provider is not None:
@@ -27372,6 +27686,10 @@ class BscMainnetSccp:
             evidence["receipt"] = normalized_receipt
         if normalized_block is not None:
             evidence["block"] = normalized_block
+        if source_event:
+            evidence.update(source_event)
+        if receipt_proof is not None:
+            evidence["receipt_proof"] = _immutable_prover_envelope_value(receipt_proof)
         if receipt_proof_hash is not None:
             evidence["receipt_proof_hash"] = receipt_proof_hash
         if supplied_finality is not None:
@@ -27400,6 +27718,14 @@ class BscMainnetSccp:
                     expected_block_number=receipt_block_number,
                     expected_receipts_root=execution_receipts_root,
                 )
+        _require_bsc_mainnet_receipt_proof_matches_evidence(
+            receipt_proof,
+            block_hash=block_hash,
+            receipt_block_number=receipt_block_number,
+            block_receipts_root=execution_receipts_root,
+            parlia_finality=evidence.get("parlia_finality"),
+            source_event_digest=evidence.get("source_event_digest"),
+        )
         return evidence
 
     async def prove_inbound_to_sora(
@@ -27418,6 +27744,12 @@ class BscMainnetSccp:
         parlia_finality = evidence.get("parlia_finality")
         if not isinstance(parlia_finality, Mapping) or not parlia_finality:
             raise TypeError("BSC mainnet SCCP inbound proof requires parliaFinality")
+        if evidence.get("receipt_proof") is None:
+            raise TypeError("BSC mainnet SCCP inbound proof requires receiptProof")
+        if evidence.get("source_event_digest") is None:
+            raise TypeError(
+                "BSC mainnet SCCP inbound proof requires receipt source event validation"
+            )
         proof_bytes = await _maybe_await(self.inbound_prove_fn(dict(evidence), options))
         return bytes(_require_non_empty_nonzero_bytes(proof_bytes, "proofBytes"))
 
