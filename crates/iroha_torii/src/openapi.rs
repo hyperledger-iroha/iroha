@@ -1590,6 +1590,11 @@ fn transaction_paths() -> Map {
             "sese.025",
             "Submit ISO 20022 sese.025 settlement confirmation payload.",
         ),
+        (
+            "/v1/iso20022/colr012",
+            "colr.012",
+            "Submit ISO 20022 colr.012 collateral substitution confirmation payload.",
+        ),
     ] {
         paths.insert(
             path.to_owned(),
@@ -1621,6 +1626,16 @@ fn transaction_paths() -> Map {
             "Return the rich ISO 20022 message record by message id, including profile metadata and status history.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("msg_id", "ISO 20022 message id.")],
+        )),
+    );
+    paths.insert(
+        "/v1/iso20022/audit/messages".to_owned(),
+        Value::Object(json_get_operation(
+            "ISO20022",
+            "Fetch ISO 20022 durable audit index.",
+            "Return the deterministic tamper-evident audit manifest for durable ISO 20022 bridge records.",
+            "#/components/schemas/JsonValue",
+            vec![],
         )),
     );
     paths.insert(
@@ -8483,7 +8498,7 @@ fn openapi_schemas() -> Map {
                 },
                 "fees": {
                     "type": "object",
-                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities"],
+                    "required": ["fee_asset_id", "fee_sink_account_id", "base_fee", "per_byte_fee", "per_instruction_fee", "per_gas_unit_fee", "sponsorship_enabled", "sponsor_max_fee", "sponsor_verified_balance_safety_floor", "fee_receipts_activation_height", "external_settlement_enabled", "burn_from_unix_timestamp_ms", "settlement_mode", "successful_claim_fee_exempt_authorities", "sponsored_contract_operation_allowlist"],
                     "additionalProperties": false,
                     "properties": {
                         "fee_asset_id": { "type": "string" },
@@ -8503,6 +8518,22 @@ fn openapi_schemas() -> Map {
                         "successful_claim_fee_exempt_authorities": {
                             "type": "array",
                             "items": { "type": "string" }
+                        },
+                        "sponsored_contract_operation_allowlist": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["entrypoints"],
+                                "additionalProperties": false,
+                                "properties": {
+                                    "contract_alias": { "type": ["string", "null"] },
+                                    "contract_address": { "type": ["string", "null"] },
+                                    "entrypoints": {
+                                        "type": "array",
+                                        "items": { "type": "string" }
+                                    }
+                                }
+                            }
                         }
                     }
                 }

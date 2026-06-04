@@ -5280,7 +5280,6 @@ fn analyze_surface_builtin_call(
         | Builtin::NumericMulDirect
         | Builtin::NumericDivDirect
         | Builtin::NumericRemDirect => {
-            let builtin = builtin;
             if arg_typed.len() != 2
                 || !is_wide_numeric_type(&arg_typed[0].ty)
                 || !is_wide_numeric_type(&arg_typed[1].ty)
@@ -5325,7 +5324,6 @@ fn analyze_surface_builtin_call(
         | Builtin::NumericLeDirect
         | Builtin::NumericGtDirect
         | Builtin::NumericGeDirect => {
-            let builtin = builtin;
             if arg_typed.len() != 2
                 || !is_wide_numeric_type(&arg_typed[0].ty)
                 || !is_wide_numeric_type(&arg_typed[1].ty)
@@ -5983,29 +5981,26 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
 
                 // Re-use normal builtin typing by matching on the resolved callee name.
-                return match callee.as_str() {
+                return {
                     // Fallback: user-defined calls use recorded return types when available.
-                    other => {
-                        if is_user_defined_function(other)
-                            && arg_typed.iter().any(is_state_map_expr)
-                        {
-                            return Err(SemanticError {
-                                message:
-                                    "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; use the state identifier directly."
-                                        .into(),
-                            });
-                        }
-                        let ret_ty = FUNCTION_RETURNS
-                            .with(|env| env.borrow().get(other).cloned())
-                            .unwrap_or(Type::Int);
-                        Ok(TypedExpr {
-                            expr: ExprKind::Call {
-                                name: other.to_string(),
-                                args: arg_typed,
-                            },
-                            ty: ret_ty,
-                        })
+                    let other = callee.as_str();
+                    if is_user_defined_function(other) && arg_typed.iter().any(is_state_map_expr) {
+                        return Err(SemanticError {
+                            message:
+                                "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; use the state identifier directly."
+                                    .into(),
+                        });
                     }
+                    let ret_ty = FUNCTION_RETURNS
+                        .with(|env| env.borrow().get(other).cloned())
+                        .unwrap_or(Type::Int);
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: other.to_string(),
+                            args: arg_typed,
+                        },
+                        ty: ret_ty,
+                    })
                 };
             }
 

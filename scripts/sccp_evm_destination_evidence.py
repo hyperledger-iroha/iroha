@@ -22,11 +22,14 @@ from typing import Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-PYTHON_CLIENT = REPO_ROOT / "python"
-if str(PYTHON_CLIENT) not in sys.path:
-    sys.path.insert(0, str(PYTHON_CLIENT))
+SCRIPT_DIR = REPO_ROOT / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-from iroha_torii_client.sccp import _keccak_256  # noqa: E402
+from sccp_client_loader import load_sccp_module  # noqa: E402
+
+
+_keccak_256 = load_sccp_module()._keccak_256
 
 
 SCCP_DOMAIN_SORA = 0

@@ -1,0 +1,25 @@
+{
+  "provider": "sepa-sct-inst-operator",
+  "environment": "preprod",
+  "rail": {
+    "inbox_dir": "sepa-sct-inst/inbox",
+    "torii_base_url": "https://torii.sepa-sct-inst.example.invalid",
+    "receipt_dir": "sepa-sct-inst/receipts/rail",
+    "bearer_token_file": "sepa-sct-inst/secrets/torii.bearer",
+    "max_payload_bytes": 4194304,
+    "timeout_secs": 10
+  },
+  "notary": {
+    "export_dir": "sepa-sct-inst/audit-export",
+    "endpoints": [
+      "https://notary.sepa-sct-inst.example.invalid/iso-anchor"
+    ],
+    "receipt_dir": "sepa-sct-inst/receipts/notary",
+    "bearer_token_file": "sepa-sct-inst/secrets/notary.bearer",
+    "timeout_secs": 10
+  },
+  "verify": {
+    "allow_insecure_http": false,
+    "require_source_files": true
+  }
+}

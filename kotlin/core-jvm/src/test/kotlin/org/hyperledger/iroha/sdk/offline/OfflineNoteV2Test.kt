@@ -73,6 +73,317 @@ class OfflineNoteV2Test {
     }
 
     @Test
+    fun proofVerifierAndHashValidationRejectsMalformedValues() {
+        val publicInputsHash = audit(loadFixture()).publicInputsHash()
+        val trimmedProof = OfflineNoteV2.ProofBox("  ${OfflineNoteV2.RECURSIVE_BACKEND}  ", byteArrayOf(1))
+        assertEquals(OfflineNoteV2.RECURSIVE_BACKEND, trimmedProof.backend)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.ProofBox(" \n ", byteArrayOf(1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RecursiveProofV2(
+                publicInputsHash = ByteArray(31) { 1 },
+                proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1)),
+            )
+        }
+        val nonCanonicalHash = publicInputsHash.copyOf()
+        nonCanonicalHash[31] = (nonCanonicalHash[31].toInt() and 0xfe).toByte()
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RecursiveProofV2(
+                publicInputsHash = nonCanonicalHash,
+                proof = OfflineNoteV2.ProofBox(OfflineNoteV2.RECURSIVE_BACKEND, byteArrayOf(1)),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.VerifyingKeyIdReference(backend = "", name = "vk")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2:ipa", name = "vk")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.VerifyingKeyIdReference(backend = "halo2/ipa", name = "bad:vk")
+        }
+    }
+
+    @Test
+    fun certificateValidationRejectsMalformedValues() {
+        val certJson = obj(obj(loadFixture(), "payment_token"), "sender_key_certificate")
+        val publicKey = base64Bytes(string(certJson, "public_key"))
+        val assertionPublicKey = base64Bytes(string(certJson, "assertion_public_key"))
+        val issuerSignature = base64Bytes(string(certJson, "issuer_signature_base64"))
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                version = 1,
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = false,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey.copyOfRange(0, 31),
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = -1,
+                oneUse = true,
+                issuerSignature = issuerSignature,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.KeyCertificateV2(
+                platform = string(certJson, "platform"),
+                keyId = string(certJson, "key_id"),
+                deviceId = string(certJson, "device_id"),
+                accountId = string(certJson, "account_id"),
+                publicKey = publicKey,
+                assertionScheme = string(certJson, "assertion_scheme"),
+                assertionKeyAlgorithm = string(certJson, "assertion_key_algorithm"),
+                assertionPublicKey = assertionPublicKey,
+                assertionUsageCountLimit = nullableInt(certJson, "assertion_usage_count_limit"),
+                oneUse = true,
+                issuerSignature = issuerSignature.copyOfRange(0, 63),
+            )
+        }
+    }
+
+    @Test
+    fun auditBundleRejectsInvalidShapesAndUncommittedOutputs() {
+        val audit = audit(loadFixture())
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = emptyList(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments(),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = emptyList(),
+                outputCommitments = audit.outputCommitments(),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers() + audit.inputNullifiers()[0],
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments(),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = emptyList(),
+                outputClaims = audit.outputClaims,
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments(),
+                outputClaims = emptyList(),
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+        val uncommittedOutput = OfflineNoteV2.AuditOutputClaimV2(
+            noteCommitment = OfflineNoteV2.hash("uncommitted-output".toByteArray()),
+            keyCertificate = audit.outputClaims[0].keyCertificate,
+            assetId = audit.outputClaims[0].assetId,
+            amount = audit.outputClaims[0].amount,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.AuditBundleV2(
+                tokenId = audit.tokenId(),
+                senderKeyCertificate = audit.senderKeyCertificate,
+                inputNullifiers = audit.inputNullifiers(),
+                inputClaims = audit.inputClaims,
+                outputCommitments = audit.outputCommitments(),
+                outputClaims = listOf(uncommittedOutput),
+                recursiveProof = audit.recursiveProof,
+            )
+        }
+    }
+
+    @Test
+    fun issueRedeemPublicInputsAndInstancesRejectMalformedValues() {
+        val fixture = loadFixture()
+        val cert = certificate(obj(obj(fixture, "payment_token"), "sender_key_certificate"))
+        val audit = audit(fixture)
+        val redeem = redeem(fixture)
+
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.IssueV2(
+                noteCommitment = ByteArray(31) { 1 },
+                keyCertificate = cert,
+                assetId = string(obj(obj(fixture, "chain_vectors"), "issue"), "asset_id"),
+                amount = "5",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.IssueV2(
+                noteCommitment = redeem.sourceNoteCommitment(),
+                keyCertificate = cert,
+                assetId = "cash#branch.sbp",
+                amount = "5",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.IssueV2(
+                noteCommitment = redeem.sourceNoteCommitment(),
+                keyCertificate = cert,
+                assetId = redeem.assetId,
+                amount = "not-a-number",
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RedeemV2(
+                sourceNoteCommitment = redeem.sourceNoteCommitment(),
+                inputNullifiers = emptyList(),
+                senderKeyCertificate = redeem.senderKeyCertificate,
+                recipient = redeem.recipient,
+                assetId = redeem.assetId,
+                amount = redeem.amount,
+                recursiveProof = redeem.recursiveProof,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RedeemPublicInputsV2(
+                sourceNoteCommitment = ByteArray(31) { 1 },
+                inputNullifiers = redeem.inputNullifiers(),
+                keyCertificatePayloadHash = redeem.senderKeyCertificate.payloadHash(),
+                recipient = redeem.recipient,
+                assetId = redeem.assetId,
+                amount = redeem.amount,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RedeemPublicInputsV2(
+                sourceNoteCommitment = redeem.sourceNoteCommitment(),
+                inputNullifiers = redeem.inputNullifiers(),
+                keyCertificatePayloadHash = ByteArray(31) { 1 },
+                recipient = redeem.recipient,
+                assetId = redeem.assetId,
+                amount = redeem.amount,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.RedeemPublicInputsV2(
+                sourceNoteCommitment = redeem.sourceNoteCommitment(),
+                inputNullifiers = redeem.inputNullifiers(),
+                keyCertificatePayloadHash = redeem.senderKeyCertificate.payloadHash(),
+                recipient = "${redeem.recipient}@bad",
+                assetId = redeem.assetId,
+                amount = redeem.amount,
+            )
+        }
+
+        val overLimitOutput = OfflineNoteV2.AuditOutputClaimV2(
+            noteCommitment = OfflineNoteV2.hash("third-output".toByteArray()),
+            keyCertificate = audit.outputClaims[0].keyCertificate,
+            assetId = audit.outputClaims[0].assetId,
+            amount = "0",
+        )
+        val tooManyOutputs = OfflineNoteV2.AuditBundleV2(
+            tokenId = audit.tokenId(),
+            senderKeyCertificate = audit.senderKeyCertificate,
+            inputNullifiers = audit.inputNullifiers(),
+            inputClaims = audit.inputClaims,
+            outputCommitments = audit.outputCommitments() + overLimitOutput.noteCommitment(),
+            outputClaims = audit.outputClaims + overLimitOutput,
+            recursiveProof = audit.recursiveProof,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.InstanceBuilder.auditInstanceValues(tooManyOutputs)
+        }
+
+        val unconservedOutput = OfflineNoteV2.AuditOutputClaimV2(
+            noteCommitment = audit.outputClaims[0].noteCommitment(),
+            keyCertificate = audit.outputClaims[0].keyCertificate,
+            assetId = audit.outputClaims[0].assetId,
+            amount = "6",
+        )
+        val unconservedAudit = OfflineNoteV2.AuditBundleV2(
+            tokenId = audit.tokenId(),
+            senderKeyCertificate = audit.senderKeyCertificate,
+            inputNullifiers = audit.inputNullifiers(),
+            inputClaims = audit.inputClaims,
+            outputCommitments = audit.outputCommitments(),
+            outputClaims = listOf(unconservedOutput, audit.outputClaims[1]),
+            recursiveProof = audit.recursiveProof,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            OfflineNoteV2.InstanceBuilder.auditInstanceValues(unconservedAudit)
+        }
+    }
+
+    @Test
     fun instanceValuesMatchRustVectors() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -196,9 +507,9 @@ class OfflineNoteV2Test {
             tokenId = hexBytes(string(vector, "token_id")),
             senderKeyCertificate = certificate(obj(payment, "sender_key_certificate")),
             inputNullifiers = list(vector, "input_nullifiers").map { hexBytes(it as String) },
-            inputClaims = list(payment, "input_claims").map { issuedClaim(it as Map<String, Any?>) },
+            inputClaims = list(payment, "input_claims").map { issuedClaim(objValue(it, "input claim")) },
             outputCommitments = list(vector, "output_commitments").map { hexBytes(it as String) },
-            outputClaims = list(payment, "output_claims").map { auditOutputClaim(it as Map<String, Any?>) },
+            outputClaims = list(payment, "output_claims").map { auditOutputClaim(objValue(it, "output claim")) },
             recursiveProof = OfflineNoteV2.RecursiveProofV2(
                 publicInputsHash = hexBytes(string(vector, "public_inputs_hash")),
                 proof = OfflineNoteV2.ProofBox(
@@ -257,6 +568,11 @@ class OfflineNoteV2Test {
     private fun list(map: Map<String, Any?>, key: String): List<Any?> {
         @Suppress("UNCHECKED_CAST")
         return map[key] as List<Any?>
+    }
+
+    private fun objValue(value: Any?, label: String): Map<String, Any?> {
+        @Suppress("UNCHECKED_CAST")
+        return value as? Map<String, Any?> ?: error("$label must be an object")
     }
 
     private fun string(map: Map<String, Any?>, key: String): String = map[key] as String

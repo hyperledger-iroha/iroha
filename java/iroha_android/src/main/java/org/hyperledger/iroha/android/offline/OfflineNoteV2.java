@@ -28,16 +28,16 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 /** Native Java implementation of Iroha Offline Note V2 canonical Norito encodings. */
 public final class OfflineNoteV2 {
   public static final String KEY_CERTIFICATE_PAYLOAD_DOMAIN =
-      "iroha:offline-note-v2:key-certificate-payload:v1";
-  public static final String ISSUED_CLAIM_DOMAIN = "iroha:offline-note-v2:issued-claim:v1";
+      "iroha:offline-note:key-certificate-payload";
+  public static final String ISSUED_CLAIM_DOMAIN = "iroha:offline-note:issued-claim";
   public static final String REDEEM_PUBLIC_INPUTS_DOMAIN =
-      "iroha:offline-note-v2:redeem-public-inputs:v1";
+      "iroha:offline-note:redeem-public-inputs";
   public static final String AUDIT_PUBLIC_INPUTS_DOMAIN =
-      "iroha:offline-note-v2:audit-public-inputs:v1";
+      "iroha:offline-note:audit-public-inputs";
   public static final String RECURSIVE_BACKEND = "halo2/ipa";
   public static final String RECURSIVE_VERIFIER_NAME = "offline-note-v2-recursive-v1";
   public static final String RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1 =
-      "{\"schema\":\"offline_note_v2_recursive_v1\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}";
+      "{\"schema\":\"offline_note_recursive\",\"public_inputs\":[\"public_inputs_hash_limb0\",\"public_inputs_hash_limb1\",\"public_inputs_hash_limb2\",\"public_inputs_hash_limb3\",\"proof_mode\",\"input_count\",\"output_count\",\"input_amount_sum\",\"output_amount_sum\",\"input_nullifier_sum_limb0\",\"output_commitment_sum_limb0\",\"key_certificate_payload_hash_limb0\",\"source_or_token_limb0\",\"input_claim_hash_sum_limb0\",\"output_claim_hash_sum_limb0\",\"reserved_zero\"]}";
 
   private static final int MULTISIG_POLICY_VERSION_V1 = 1;
   private static final int MAX_NUMERIC_SCALE = 28;
@@ -50,21 +50,21 @@ public final class OfflineNoteV2 {
   private static final BigInteger MAX_U64 = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE);
 
   private static final String KEY_CERTIFICATE_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteKeyCertificateV2";
+      "iroha_data_model::offline::model::OfflineNoteKeyCertificate";
   private static final String KEY_CERTIFICATE_PAYLOAD_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayloadV2";
+      "iroha_data_model::offline::model::OfflineNoteKeyCertificatePayload";
   private static final String ISSUE_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteIssueV2";
+      "iroha_data_model::offline::model::OfflineNoteIssue";
   private static final String ISSUED_CLAIM_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteIssuedClaimV2";
+      "iroha_data_model::offline::model::OfflineNoteIssuedClaim";
   private static final String REDEEM_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteRedeemV2";
+      "iroha_data_model::offline::model::OfflineNoteRedeem";
   private static final String REDEEM_PUBLIC_INPUTS_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputsV2";
+      "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs";
   private static final String AUDIT_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteAuditBundleV2";
+      "iroha_data_model::offline::model::OfflineNoteAuditBundle";
   private static final String AUDIT_PUBLIC_INPUTS_SCHEMA =
-      "iroha_data_model::offline::model::OfflineNoteAuditPublicInputsV2";
+      "iroha_data_model::offline::model::OfflineNoteAuditPublicInputs";
 
   private OfflineNoteV2() {}
 
@@ -130,6 +130,12 @@ public final class OfflineNoteV2 {
     public VerifyingKeyIdReference(final String backend, final String name) {
       this.backend = requireNonBlank(backend, "verifying key backend");
       this.name = requireNonBlank(name, "verifying key name");
+      if (this.backend.indexOf(':') >= 0) {
+        throw new IllegalArgumentException("verifying key backend must not contain ':'");
+      }
+      if (this.name.indexOf(':') >= 0) {
+        throw new IllegalArgumentException("verifying key name must not contain ':'");
+      }
     }
 
     public String backend() {
@@ -952,6 +958,15 @@ public final class OfflineNoteV2 {
       requireHashes(this.outputCommitments, "output_commitments");
       if (this.outputClaims.isEmpty()) {
         throw new IllegalArgumentException("output claims must not be empty");
+      }
+      final List<String> committed = new ArrayList<>();
+      for (final byte[] commitment : this.outputCommitments) {
+        committed.add(hexLower(commitment));
+      }
+      for (final AuditOutputClaimV2 claim : this.outputClaims) {
+        if (!committed.contains(hexLower(claim.noteCommitment()))) {
+          throw new IllegalArgumentException("audit output claim is not listed in output commitments");
+        }
       }
     }
 
@@ -1812,7 +1827,7 @@ public final class OfflineNoteV2 {
   }
 
   private static String requireNonBlank(final String value, final String field) {
-    final String checked = Objects.requireNonNull(value, field);
+    final String checked = Objects.requireNonNull(value, field).trim();
     if (checked.trim().isEmpty()) {
       throw new IllegalArgumentException(field + " must not be empty");
     }

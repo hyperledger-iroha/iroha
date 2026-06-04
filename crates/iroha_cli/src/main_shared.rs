@@ -5377,7 +5377,8 @@ mod trigger {
         let key: Name = "__enabled"
             .parse()
             .wrap_err("failed to construct trigger enabled metadata key")?;
-        let instruction = iroha::data_model::isi::SetKeyValue::trigger(id, key, Json::from(enabled));
+        let instruction =
+            iroha::data_model::isi::SetKeyValue::trigger(id, key, Json::from(enabled));
         context
             .finish([instruction])
             .wrap_err("Failed to set trigger enabled metadata")
@@ -5403,7 +5404,8 @@ mod trigger {
                 .wrap_err("Failed to parse --args-json as JSON")?;
             let instruction =
                 iroha::data_model::isi::ExecuteTrigger::new(self.id.clone()).with_args(args);
-            let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
+            let executable =
+                Executable::Instructions(vec![InstructionBox::from(instruction)].into());
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             validate_executable_metadata(&executable, &metadata)?;
             let client = context.client_from_config();
@@ -5422,16 +5424,25 @@ mod trigger {
             if self.wait.is_enabled() {
                 let status = wait_for_transaction_status(&client, hash, &self.wait)?;
                 pairs.push(("finalized", json_utils::json_value(&true)?));
-                pairs.push(("terminal_kind", json_utils::json_value(&status.terminal_kind)?));
+                pairs.push((
+                    "terminal_kind",
+                    json_utils::json_value(&status.terminal_kind)?,
+                ));
                 pairs.push(("attempts", json_utils::json_value(&status.attempts)?));
                 pairs.push(("elapsed_ms", json_utils::json_value(&status.elapsed_ms)?));
-                pairs.push(("block_height", json_utils::json_value(&status.block_height)?));
+                pairs.push((
+                    "block_height",
+                    json_utils::json_value(&status.block_height)?,
+                ));
                 pairs.push((
                     "rejection_reason",
                     json_utils::json_value(&status.rejection_reason)?,
                 ));
                 pairs.push(("scope", json_utils::json_value(&status.scope)?));
-                pairs.push(("resolved_from", json_utils::json_value(&status.resolved_from)?));
+                pairs.push((
+                    "resolved_from",
+                    json_utils::json_value(&status.resolved_from)?,
+                ));
                 pairs.push(("summary", json_utils::json_value(&status.summary)?));
                 pairs.push(("diagnostics", json_utils::json_value(&status.diagnostics)?));
                 pairs.push((
@@ -5595,8 +5606,7 @@ mod trigger {
                     .listen_for_events([filter])
                     .wrap_err("Failed to listen for trigger completion events")?
                     .try_for_each(|event| {
-                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
-                            event?
+                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event?
                         {
                             context.print_data(&event)?;
                         }
@@ -5630,8 +5640,8 @@ mod trigger {
             let entry: Trigger = client
                 .query_single(FindTriggerById::new(self.id.clone()))
                 .wrap_err("Failed to get trigger")?;
-            let trigger = trigger_pretty_json(&entry)
-                .wrap_err("Failed to serialise trigger for display")?;
+            let trigger =
+                trigger_pretty_json(&entry).wrap_err("Failed to serialise trigger for display")?;
             let completions = if self.completion_timeout_ms > 0 {
                 collect_completed_events(
                     context,
@@ -5819,6 +5829,67 @@ mod trigger {
         Updated,
     }
 
+    pub(super) fn parse_data_verifying_key_id(
+        spec: &str,
+    ) -> Result<iroha::data_model::proof::VerifyingKeyId> {
+        let (backend, name) = spec
+            .split_once(':')
+            .ok_or_else(|| eyre!("--data-verifying-key requires BACKEND:NAME format"))?;
+        if backend.is_empty() {
+            eyre::bail!("--data-verifying-key backend must be non-empty");
+        }
+        if !iroha_core::zk::is_production_verify_backend_label(backend) {
+            eyre::bail!(
+                "--data-verifying-key backend uses unsupported production verifier backend `{backend}`"
+            );
+        }
+
+        let normalized_name = name.trim();
+        if normalized_name.is_empty() {
+            eyre::bail!("--data-verifying-key name must be non-empty");
+        }
+        if normalized_name.contains(':') {
+            eyre::bail!("--data-verifying-key name must not contain ':'");
+        }
+
+        Ok(iroha::data_model::proof::VerifyingKeyId::new(
+            backend.to_string(),
+            normalized_name.to_string(),
+        ))
+    }
+
+    pub(super) fn parse_data_proof_id(spec: &str) -> Result<iroha::data_model::proof::ProofId> {
+        let (backend, hash_hex) = spec
+            .split_once(':')
+            .ok_or_else(|| eyre!("--data-proof requires BACKEND:HEX format"))?;
+        if backend.is_empty() {
+            eyre::bail!("--data-proof backend must be non-empty");
+        }
+        if !iroha_core::zk::is_production_verify_backend_label(backend) {
+            eyre::bail!(
+                "--data-proof backend uses unsupported production verifier backend `{backend}`"
+            );
+        }
+
+        let hash_hex = hash_hex.trim();
+        let hash_hex = hash_hex.strip_prefix("0x").unwrap_or(hash_hex);
+        if hash_hex.len() != 64 {
+            eyre::bail!("--data-proof hash must be 32 bytes (64 hex chars)");
+        }
+        let mut proof_hash = [0u8; 32];
+        for (index, chunk) in hash_hex.as_bytes().chunks_exact(2).enumerate() {
+            let byte_text =
+                std::str::from_utf8(chunk).map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
+            proof_hash[index] = u8::from_str_radix(byte_text, 16)
+                .map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
+        }
+
+        Ok(iroha::data_model::proof::ProofId {
+            backend: backend.to_string(),
+            proof_hash,
+        })
+    }
+
     #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
     pub enum ProofEventPreset {
         /// All proof events (default)
@@ -5961,18 +6032,7 @@ mod trigger {
                                 .for_trigger(trg),
                         )
                     } else if let Some(vk_spec) = self.data_verifying_key.as_ref() {
-                        // Parse `<backend>:<name>` into VerifyingKeyId
-                        let mut parts = vk_spec.splitn(2, ':');
-                        let Some(backend) = parts.next() else {
-                            eyre::bail!("--data-verifying-key requires BACKEND:NAME format")
-                        };
-                        let Some(name) = parts.next() else {
-                            eyre::bail!("--data-verifying-key requires BACKEND:NAME format")
-                        };
-                        let id = iroha::data_model::proof::VerifyingKeyId::new(
-                            backend.to_string(),
-                            name.to_string(),
-                        );
+                        let id = parse_data_verifying_key_id(vk_spec)?;
                         // Map preset to an event set (default: all)
                         let event_set = match self.data_vk_only.unwrap_or(VkEventPreset::All) {
                             VkEventPreset::Registered => iroha::data_model::events::data::verifying_keys::VerifyingKeyEventSet::only_registered(),
@@ -5986,38 +6046,7 @@ mod trigger {
                             .for_events(event_set),
                         )
                     } else if let Some(pf_spec) = self.data_proof.as_ref() {
-                        // Parse `<backend>:<HEX>` into ProofId
-                        let mut parts = pf_spec.splitn(2, ':');
-                        let Some(backend) = parts.next() else {
-                            eyre::bail!("--data-proof requires BACKEND:HEX format")
-                        };
-                        let Some(hex_hash) = parts.next() else {
-                            eyre::bail!("--data-proof requires BACKEND:HEX format")
-                        };
-                        let bytes = {
-                            let s = hex_hash.trim_start_matches("0x");
-                            if s.len() % 2 != 0 {
-                                return Err(eyre!("invalid hex length for proof hash"));
-                            }
-                            let mut v = Vec::with_capacity(s.len() / 2);
-                            let mut i = 0;
-                            while i < s.len() {
-                                let byte = u8::from_str_radix(&s[i..i + 2], 16)
-                                    .map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
-                                v.push(byte);
-                                i += 2;
-                            }
-                            v
-                        };
-                        if bytes.len() != 32 {
-                            eyre::bail!("proof hash must be 32 bytes (64 hex chars)")
-                        }
-                        let mut arr = [0u8; 32];
-                        arr.copy_from_slice(&bytes);
-                        let pid = iroha::data_model::proof::ProofId {
-                            backend: backend.to_string(),
-                            proof_hash: arr,
-                        };
+                        let pid = parse_data_proof_id(pf_spec)?;
                         let event_set = match self.data_proof_only.unwrap_or(ProofEventPreset::All)
                         {
                             ProofEventPreset::Verified => {
@@ -8105,6 +8134,63 @@ mod tests {
         let literal = sample_canonical_i105_literal(23);
         let parsed = parse_register_account_id(&literal).expect("register account id");
         assert_eq!(parsed.to_string(), literal);
+    }
+
+    #[test]
+    fn data_verifying_key_filter_parser_rejects_unsafe_backend_and_name() {
+        let id = trigger::parse_data_verifying_key_id("halo2/ipa: vk_main ")
+            .expect("valid verifying-key event filter id");
+        assert_eq!(id.backend.as_ref(), "halo2/ipa");
+        assert_eq!(id.name, "vk_main");
+
+        for spec in [
+            "mock/dev:vk_main",
+            "halo2/ipa/orchard:vk_main",
+            " halo2/ipa:vk_main",
+            "halo2/ipa :vk_main",
+            ":vk_main",
+            "halo2/ipa:",
+            "halo2/ipa:   ",
+            "halo2/ipa:vk:main",
+            "halo2/ipa",
+        ] {
+            let err = trigger::parse_data_verifying_key_id(spec)
+                .expect_err("unsafe verifying-key event filter id must reject");
+            let message = err.to_string();
+            assert!(
+                message.contains("--data-verifying-key"),
+                "unexpected error for {spec:?}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_proof_filter_parser_rejects_unsafe_backend_and_hash() {
+        let id = trigger::parse_data_proof_id(&format!("halo2/ipa:0x{}", "A5".repeat(32)))
+            .expect("valid proof event filter id");
+        assert_eq!(id.backend.as_ref(), "halo2/ipa");
+        assert_eq!(id.proof_hash, [0xA5; 32]);
+
+        for spec in [
+            format!("mock/dev:{}", "a".repeat(64)),
+            format!("groth16/bls12-377:{}", "a".repeat(64)),
+            format!(" halo2/ipa:{}", "a".repeat(64)),
+            format!("halo2/ipa:{}", "a".repeat(63)),
+            format!("halo2/ipa:{}", "z".repeat(64)),
+            "halo2/ipa:".to_string(),
+            ":aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            "halo2/ipa".to_string(),
+        ] {
+            let err = trigger::parse_data_proof_id(&spec)
+                .expect_err("unsafe proof event filter id must reject");
+            let message = err.to_string();
+            assert!(
+                message.contains("--data-proof")
+                    || message.contains("unsupported production verifier backend")
+                    || message.contains("invalid hex"),
+                "unexpected error for {spec:?}: {message}"
+            );
+        }
     }
 
     #[derive(Clone, Copy, JsonSerialize)]

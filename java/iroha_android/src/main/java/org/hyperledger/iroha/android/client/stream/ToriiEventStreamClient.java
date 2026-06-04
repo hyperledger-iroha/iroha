@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -23,6 +24,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.JsonEncoder;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.TransportSecurity;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
@@ -30,6 +33,7 @@ import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.client.transport.TransportStreamResponse;
+import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 
 /**
  * Minimal streaming client used to consume Torii server-sent event (SSE) feeds. The implementation
@@ -91,7 +95,10 @@ public final class ToriiEventStreamClient {
   }
 
   private TransportRequest buildRequest(final String path, final ToriiEventStreamOptions options) {
-    final URI target = appendQueryParameters(resolvePath(path), options.queryParameters());
+    final URI target =
+        appendQueryParameters(
+            normalizeEventSseUriFilter(resolvePath(path)),
+            normalizeEventSseQueryParameters(options.queryParameters()));
     final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
     headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE);
     headers.putIfAbsent("Cache-Control", "no-cache");
@@ -134,6 +141,199 @@ public final class ToriiEventStreamClient {
     }
     builder.append(query);
     return URI.create(builder.toString());
+  }
+
+  private static URI normalizeEventSseUriFilter(final URI target) {
+    final String rawQuery = target.getRawQuery();
+    if (rawQuery == null || rawQuery.isEmpty()) {
+      return target;
+    }
+    final String normalizedQuery = normalizeEventSseQuery(rawQuery);
+    if (normalizedQuery.equals(rawQuery)) {
+      return target;
+    }
+    final String targetText = target.toString();
+    final int fragmentIndex = targetText.indexOf('#');
+    final String withoutFragment =
+        fragmentIndex >= 0 ? targetText.substring(0, fragmentIndex) : targetText;
+    final String fragment = fragmentIndex >= 0 ? targetText.substring(fragmentIndex) : "";
+    final int queryIndex = withoutFragment.indexOf('?');
+    final String base = queryIndex >= 0 ? withoutFragment.substring(0, queryIndex) : withoutFragment;
+    return URI.create(base + "?" + normalizedQuery + fragment);
+  }
+
+  private static Map<String, String> normalizeEventSseQueryParameters(
+      final Map<String, String> params) {
+    if (!params.containsKey("filter")) {
+      return params;
+    }
+    final Map<String, String> normalized = new LinkedHashMap<>(params);
+    normalized.put("filter", normalizeEventFilterPayload(params.get("filter"), "eventFilter"));
+    return normalized;
+  }
+
+  private static String normalizeEventSseQuery(final String rawQuery) {
+    final String[] segments = rawQuery.split("&", -1);
+    boolean changed = false;
+    for (int i = 0; i < segments.length; i++) {
+      final String segment = segments[i];
+      if (segment.isEmpty()) {
+        continue;
+      }
+      final int equals = segment.indexOf('=');
+      final String rawName = equals >= 0 ? segment.substring(0, equals) : segment;
+      final String rawValue = equals >= 0 ? segment.substring(equals + 1) : "";
+      final String name = decodeQueryComponent(rawName);
+      if (!"filter".equals(name)) {
+        continue;
+      }
+      final String value = decodeQueryComponent(rawValue);
+      final String normalized = normalizeEventFilterPayload(value, "eventFilter");
+      if (!normalized.equals(value)) {
+        segments[i] =
+            URLEncoder.encode(name, StandardCharsets.UTF_8)
+                + "="
+                + URLEncoder.encode(normalized, StandardCharsets.UTF_8);
+        changed = true;
+      }
+    }
+    return changed ? String.join("&", segments) : rawQuery;
+  }
+
+  private static String decodeQueryComponent(final String value) {
+    return URLDecoder.decode(value.replace("+", " "), StandardCharsets.UTF_8);
+  }
+
+  @SuppressWarnings("unchecked")
+  private static String normalizeEventFilterPayload(final String filter, final String context) {
+    final String trimmed = filter == null ? "" : filter.trim();
+    if (trimmed.isEmpty() || (trimmed.charAt(0) != '{' && trimmed.charAt(0) != '[')) {
+      return filter;
+    }
+    final Object parsed;
+    try {
+      parsed = JsonParser.parse(trimmed);
+    } catch (final IllegalStateException ex) {
+      return filter;
+    }
+    if (!(parsed instanceof Map<?, ?>)) {
+      return filter;
+    }
+    final Map<String, Object> object = (Map<String, Object>) parsed;
+    return normalizeProductionEventFilterObject(object, context)
+        ? JsonEncoder.encode(object)
+        : filter;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static boolean normalizeProductionEventFilterObject(
+      final Map<String, Object> filter, final String context) {
+    boolean changed = false;
+    for (final String eventKind : List.of("VerifyingKey", "Proof")) {
+      final Object bodyValue = filter.get(eventKind);
+      if (!(bodyValue instanceof Map<?, ?>)) {
+        continue;
+      }
+      final Map<String, Object> body = (Map<String, Object>) bodyValue;
+      final Object matcherValue = body.get("id_matcher");
+      if (!(matcherValue instanceof Map<?, ?>)) {
+        continue;
+      }
+      final Map<String, Object> matcher = (Map<String, Object>) matcherValue;
+      if (!matcher.containsKey("backend")) {
+        continue;
+      }
+      final String backendContext = context + "." + eventKind + ".id_matcher.backend";
+      final Object backendValue = matcher.get("backend");
+      if (!(backendValue instanceof String backend)) {
+        throw new IllegalArgumentException(backendContext + " must be a string");
+      }
+      final String normalizedBackend =
+          VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(backend, backendContext);
+      if (!normalizedBackend.equals(backend)) {
+        matcher.put("backend", normalizedBackend);
+        changed = true;
+      }
+      if ("Proof".equals(eventKind)) {
+        changed =
+            normalizeProofHashMatcher(
+                    matcher, "hash_hex", context + "." + eventKind + ".id_matcher.hash_hex")
+                || changed;
+        changed =
+            normalizeProofHashMatcher(
+                    matcher,
+                    "proof_hash_hex",
+                    context + "." + eventKind + ".id_matcher.proof_hash_hex")
+                || changed;
+      } else {
+        changed =
+            normalizeVerifyingKeyNameMatcher(
+                    matcher, context + "." + eventKind + ".id_matcher.name")
+                || changed;
+      }
+    }
+    return changed;
+  }
+
+  private static boolean normalizeVerifyingKeyNameMatcher(
+      final Map<String, Object> matcher, final String context) {
+    if (!matcher.containsKey("name")) {
+      return false;
+    }
+    final Object rawValue = matcher.get("name");
+    if (!(rawValue instanceof String raw)) {
+      throw new IllegalArgumentException(context + " must be a string");
+    }
+    final String normalized = raw.trim();
+    if (normalized.isEmpty()) {
+      throw new IllegalArgumentException(context + " must be a non-empty string");
+    }
+    if (normalized.contains(":")) {
+      throw new IllegalArgumentException(context + " must not contain ':' characters");
+    }
+    if (normalized.equals(raw)) {
+      return false;
+    }
+    matcher.put("name", normalized);
+    return true;
+  }
+
+  private static boolean normalizeProofHashMatcher(
+      final Map<String, Object> matcher, final String propertyName, final String context) {
+    if (!matcher.containsKey(propertyName)) {
+      return false;
+    }
+    final Object rawValue = matcher.get(propertyName);
+    if (!(rawValue instanceof String raw)) {
+      throw new IllegalArgumentException(context + " must be a string");
+    }
+    final String normalized = normalizeHex32String(raw, context);
+    if (normalized.equals(raw)) {
+      return false;
+    }
+    matcher.put(propertyName, normalized);
+    return true;
+  }
+
+  private static String normalizeHex32String(final String raw, final String context) {
+    String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+    if (normalized.startsWith("0x")) {
+      normalized = normalized.substring(2);
+    }
+    if (normalized.length() != 64 || !isLowerHex(normalized)) {
+      throw new IllegalArgumentException(context + " must be a 32-byte hex string");
+    }
+    return normalized;
+  }
+
+  private static boolean isLowerHex(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char c = value.charAt(i);
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String encodeQuery(final Map<String, String> params) {

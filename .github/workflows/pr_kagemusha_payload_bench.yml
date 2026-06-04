@@ -1,0 +1,330 @@
+name: Kagemusha Payload Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/pr_kagemusha_payload_bench.yml"
+      - "ci/check_connect_norito_bridge_header.sh"
+      - "ci/check_no_tracked_python_bytecode.sh"
+      - "ci/check_kagemusha_recursive_spend_sdk_parity.sh"
+      - "ci/check_kagemusha_recursive_spend_policy.sh"
+      - "ci/check_kagemusha_recursive_spend_python_sdk.sh"
+      - "ci/check_kagemusha_recursive_spend_jvm_sdk.sh"
+      - "ci/check_kagemusha_recursive_spend_swift_sdk.sh"
+      - "ci/check_kagemusha_recursive_spend_csharp_sdk.sh"
+      - "ci/check_kagemusha_recursive_spend_js_sdk.sh"
+      - "ci/check_kagemusha_recursive_spend_payload_bench.sh"
+      - "crates/iroha_data_model/Cargo.toml"
+      - "crates/iroha_data_model/benches/kagemusha_recursive_spend_payload.rs"
+      - "crates/iroha_data_model/src/offline/**"
+      - "crates/iroha_core/src/zk.rs"
+      - "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+      - "crates/connect_norito_bridge/Cargo.toml"
+      - "crates/connect_norito_bridge/include/**"
+      - "crates/connect_norito_bridge/src/lib.rs"
+      - "crates/iroha_js_host/Cargo.toml"
+      - "crates/iroha_js_host/src/lib.rs"
+      - "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+      - "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"
+      - "javascript/iroha_js/src/crypto.js"
+      - "javascript/iroha_js/src/crypto.browser.js"
+      - "javascript/iroha_js/src/index.js"
+      - "javascript/iroha_js/dist/crypto.js"
+      - "javascript/iroha_js/dist/crypto.browser.js"
+      - "javascript/iroha_js/dist/index.js"
+      - "javascript/iroha_js/index.d.ts"
+      - "javascript/iroha_js/package.json"
+      - "javascript/iroha_js/package-lock.json"
+      - "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+      - "javascript/iroha_js/test/package_dist.test.js"
+      - "python/iroha_python/src/iroha_python/__init__.py"
+      - "python/iroha_python/src/iroha_python/kagemusha.py"
+      - "python/iroha_python/iroha_python_rs/Cargo.toml"
+      - "python/iroha_python/iroha_python_rs/src/lib.rs"
+      - "python/iroha_python/tests/kagemusha_test.py"
+      - "docs/source/offline_kagemusha.md"
+      - "roadmap.md"
+      - "status.md"
+      - "IrohaSwift/README.md"
+      - "java/iroha_android/README.md"
+      - "kotlin/README.md"
+      - "csharp/README.md"
+      - "javascript/iroha_js/README.md"
+      - "python/iroha_python/README.md"
+      - "javascript/iroha_js/test/kagemushaFfiContractParity.test.js"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kagemusha_native_bridge_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: Kagemusha recursive spend native bridge smoke tests
+        run: cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_invalid_archives_without_output --lib -- --test-threads=1
+
+  kagemusha_swift_sdk_parse:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kagemusha recursive spend Swift SDK parse
+        run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
+
+  kagemusha_csharp_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Kagemusha recursive spend C# SDK tests
+        run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh
+
+  kagemusha_javascript_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --prefix javascript/iroha_js
+      - name: Kagemusha recursive spend JavaScript SDK tests
+        run: ci/check_kagemusha_recursive_spend_js_sdk.sh
+
+  kagemusha_jvm_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+      - name: Kagemusha recursive spend JVM SDK tests
+        run: ci/check_kagemusha_recursive_spend_jvm_sdk.sh
+
+  kagemusha_python_sdk_tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python recursive spend SDK tests
+        run: ci/check_kagemusha_recursive_spend_python_sdk.sh
+
+  kagemusha_payload_bench:
+    needs: [kagemusha_native_bridge_tests, kagemusha_swift_sdk_parse, kagemusha_csharp_sdk_tests, kagemusha_javascript_sdk_tests, kagemusha_jvm_sdk_tests, kagemusha_python_sdk_tests]
+    runs-on: ubuntu-latest
+    container:
+      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+      - name: NoritoBridge recursive spend header parity
+        run: ci/check_connect_norito_bridge_header.sh
+      - name: NoritoBridge recursive spend header negative controls
+        run: |
+          ci/check_connect_norito_bridge_header.sh --negative-control-missing-recursive-header
+          ci/check_connect_norito_bridge_header.sh --negative-control-bad-recursive-signature
+          ci/check_connect_norito_bridge_header.sh --negative-control-missing-rust-export
+          ci/check_connect_norito_bridge_header.sh --negative-control-umbrella-drift
+      - name: Reject tracked Python bytecode
+        run: bash ci/check_no_tracked_python_bytecode.sh
+      - name: Kagemusha recursive spend SDK parity negative controls
+        run: |
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-manifest-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-browser-helper
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-stale-future-lineage
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-comment-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-main-guard-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-bytecode-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-runner-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-cache-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-runner-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-setup-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-version-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-setup-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-rust-cache-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-timeout-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-version-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-override-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-resolver-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-major-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-venv-rebuild-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-native-build-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-venv-activation-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-bytecode-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-sdk-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-runner-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-setup-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-distribution-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-version-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-jdk21-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-home-override-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-java-home-reject-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-test-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-sdk-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-runner-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-parse-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-version-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-override-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-sdk-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-setup-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-setup-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-version-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-override-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-dotnet-major-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-sdk-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-job-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-runner-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-setup-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-version-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-version-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-override-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-resolver-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-major-script
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-cache-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-node-setup-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-install-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-test-order-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-sdk-needs-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-parity-meta-test-workflow
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-negative-controls-order-workflow
+      - name: Kagemusha recursive spend SDK parity
+        run: ci/check_kagemusha_recursive_spend_sdk_parity.sh
+      - name: Kagemusha recursive spend fail-closed policy negative controls
+        run: |
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-selector-edge
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-preferred-cap-edge
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-selector-edge
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-hop-edges
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-hop-edges
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-hop-edges
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-sdk-append-cap-binding
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-package-dist-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-isi-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-script-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-ci-guard-script-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-self-test-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-self-test-order-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-missing-payload-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-reserved-lineage-payload-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-comment-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-order-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-manifest-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-source
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-payload-budget
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-sdk-host-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-sdk-availability-surface
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-doc-abi-entry-count
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-roadmap-abi-surface
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-isi
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-multi-hop-redeem-success
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-hop-proof
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-order
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-redeem-early-mint
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-verify-result-flags
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-status-doc-drift
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-workflow-cancel-in-progress
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-main-guards-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-comment-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-sdk-test-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-order-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-header-negative-controls-workflow
+      - name: Kagemusha recursive spend fail-closed policy
+        run: ci/check_kagemusha_recursive_spend_policy.sh
+      - name: Kagemusha recursive spend payload reducer self-test
+        run: ci/check_kagemusha_recursive_spend_payload_bench.sh --self-test
+      - name: Kagemusha recursive spend payload reducer negative controls
+        run: |
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-payload-baseline
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-payload-growth
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-missing-payload
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-transition-profile-growth
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-transition-profile-baseline
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-missing-transition-profile
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-payload-baseline
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-payload-growth
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-missing-reserved-lineage-payload
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-transition-profile-baseline
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-reserved-lineage-transition-profile-growth
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-missing-reserved-lineage-transition-profile
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unexpected-payload-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unexpected-transition-profile-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unexpected-reserved-lineage-payload-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unexpected-reserved-lineage-transition-profile-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-payload-size
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-transition-profile-size
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-payload-size
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-transition-profile-size
+      - name: Kagemusha recursive spend payload benchmark
+        run: ci/check_kagemusha_recursive_spend_payload_bench.sh
+      - name: Upload Kagemusha payload benchmark summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: kagemusha-recursive-spend-payload-bench
+          path: artifacts/kagemusha_recursive_spend_payload_bench
+          retention-days: 7

@@ -212,6 +212,40 @@ public sealed class SignedQueryBuilderTests
     }
 
     [Fact]
+    public void FindProofRecordByIdRejectsUnsupportedBackendsAndMalformedHashesBeforeBuild()
+    {
+        var validHash = new string('a', 64);
+        foreach (var backend in new[]
+        {
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa/orchard",
+            "groth16/bls12-377",
+            "halo2/kzg",
+            "mock/dev",
+        })
+        {
+            Assert.Throws<ArgumentException>(
+                () => new SignedQueryBuilder(FixtureAccountId).FindProofRecordById(backend, validHash));
+        }
+
+        foreach (var proofHash in new[]
+        {
+            "",
+            "abc",
+            new string('z', 64),
+            new string('a', 63),
+            "0x0x" + new string('a', 64),
+        })
+        {
+            Assert.Throws<ArgumentException>(
+                () => new SignedQueryBuilder(FixtureAccountId).FindProofRecordById("halo2/ipa", proofHash));
+        }
+    }
+
+    [Fact]
     public void BuildSignedEncodesDaPinAndSorafsQueries()
     {
         var ticketEnvelope = new SignedQueryBuilder(FixtureAccountId)

@@ -1,5 +1,37 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
+private val sorafsHexPattern = Regex("^[0-9a-fA-F]+$")
+
+private fun requireSorafsNonBlank(value: String?, fieldName: String): String {
+    require(!value.isNullOrBlank()) { "$fieldName must not be blank" }
+    return value
+}
+
+private fun requireSorafsHex(value: String?, fieldName: String, expectedBytes: Int = 0): String {
+    val nonBlank = requireSorafsNonBlank(value, fieldName)
+    val normalized = if (nonBlank.startsWith("0x", ignoreCase = true)) {
+        nonBlank.substring(2)
+    } else {
+        nonBlank
+    }
+    require(normalized.isNotEmpty() && normalized.length % 2 == 0) { "$fieldName must be even-length hex" }
+    require(sorafsHexPattern.matches(normalized)) { "$fieldName must be hexadecimal: $value" }
+    if (expectedBytes > 0) {
+        require(normalized.length == expectedBytes * 2) {
+            "$fieldName must be ${expectedBytes * 2} hex chars, found ${normalized.length}"
+        }
+    }
+    return normalized.lowercase()
+}
+
+private fun requireSorafsStorageClass(value: String?, fieldName: String): String =
+    when (requireSorafsNonBlank(value, fieldName).lowercase()) {
+        "hot" -> "Hot"
+        "warm" -> "Warm"
+        "cold" -> "Cold"
+        else -> throw IllegalArgumentException("$fieldName must be Hot, Warm, or Cold")
+    }
+
 /**
  * Typed builder for the `RegisterPinManifest` instruction.
  *
@@ -57,7 +89,7 @@ class RegisterPinManifestInstruction private constructor(
         private var aliasBinding: AliasBinding? = null
 
         fun setDigestHex(digestHex: String) = apply {
-            this.digestHex = requireNotNull(digestHex) { "digestHex" }
+            this.digestHex = requireSorafsHex(digestHex, "digestHex", 32)
         }
 
         fun setChunkerProfile(chunkerProfile: ChunkerProfile) = apply {
@@ -65,7 +97,7 @@ class RegisterPinManifestInstruction private constructor(
         }
 
         fun setChunkDigestSha3Hex(chunkDigestSha3Hex: String) = apply {
-            this.chunkDigestSha3Hex = requireNotNull(chunkDigestSha3Hex) { "chunkDigestSha3Hex" }
+            this.chunkDigestSha3Hex = requireSorafsHex(chunkDigestSha3Hex, "chunkDigestSha3Hex", 32)
         }
 
         fun setContentLength(contentLength: Long) = apply {
@@ -83,7 +115,9 @@ class RegisterPinManifestInstruction private constructor(
         }
 
         fun setSuccessorOfHex(successorOfHex: String?) = apply {
-            this.successorOfHex = successorOfHex
+            this.successorOfHex = successorOfHex?.takeIf { it.isNotBlank() }?.let {
+                requireSorafsHex(it, "successorOfHex", 32)
+            }
         }
 
         fun setAliasBinding(aliasBinding: AliasBinding?) = apply {
@@ -133,12 +167,18 @@ class RegisterPinManifestInstruction private constructor(
             private var handle: String? = null
             private var multihashCode: Long? = null
 
-            fun setProfileId(profileId: Int) = apply { this.profileId = profileId }
-            fun setNamespace(namespace: String) = apply { this.namespace = requireNotNull(namespace) { "namespace" } }
-            fun setName(name: String) = apply { this.name = requireNotNull(name) { "name" } }
-            fun setSemver(semver: String) = apply { this.semver = requireNotNull(semver) { "semver" } }
+            fun setProfileId(profileId: Int) = apply {
+                require(profileId > 0) { "profileId must be positive" }
+                this.profileId = profileId
+            }
+            fun setNamespace(namespace: String) = apply { this.namespace = requireSorafsNonBlank(namespace, "namespace") }
+            fun setName(name: String) = apply { this.name = requireSorafsNonBlank(name, "name") }
+            fun setSemver(semver: String) = apply { this.semver = requireSorafsNonBlank(semver, "semver") }
             fun setHandle(handle: String?) = apply { this.handle = handle }
-            fun setMultihashCode(multihashCode: Long) = apply { this.multihashCode = multihashCode }
+            fun setMultihashCode(multihashCode: Long) = apply {
+                require(multihashCode >= 0) { "multihashCode must be non-negative" }
+                this.multihashCode = multihashCode
+            }
 
             fun build(): ChunkerProfile {
                 val pid = checkNotNull(profileId) { "profileId must be set" }
@@ -195,7 +235,7 @@ class RegisterPinManifestInstruction private constructor(
                 this.minReplicas = minReplicas
             }
             fun setStorageClass(storageClass: String) = apply {
-                this.storageClass = requireNotNull(storageClass) { "storageClass" }
+                this.storageClass = requireSorafsStorageClass(storageClass, "storageClass")
             }
 
             fun setRetentionEpoch(retentionEpoch: Long) = apply {
@@ -248,9 +288,9 @@ class RegisterPinManifestInstruction private constructor(
             private var namespace: String? = null
             private var proofHex: String? = null
 
-            fun setName(name: String) = apply { this.name = requireNotNull(name) { "name" } }
-            fun setNamespace(namespace: String) = apply { this.namespace = requireNotNull(namespace) { "namespace" } }
-            fun setProofHex(proofHex: String) = apply { this.proofHex = requireNotNull(proofHex) { "proofHex" } }
+            fun setName(name: String) = apply { this.name = requireSorafsNonBlank(name, "alias.name") }
+            fun setNamespace(namespace: String) = apply { this.namespace = requireSorafsNonBlank(namespace, "alias.namespace") }
+            fun setProofHex(proofHex: String) = apply { this.proofHex = requireSorafsHex(proofHex, "alias.proofHex") }
 
             fun build(): AliasBinding {
                 val n = checkNotNull(name) { "name must be set" }
@@ -298,13 +338,16 @@ class RegisterPinManifestInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterPinManifestInstruction {
-            val digestHex = requireArg(arguments, "digest_hex")
-            val chunkDigestSha3Hex = requireArg(arguments, "chunk_digest_sha3_256_hex")
+            val digestHex = requireSorafsHex(requireArg(arguments, "digest_hex"), "digestHex", 32)
+            val chunkDigestSha3Hex =
+                requireSorafsHex(requireArg(arguments, "chunk_digest_sha3_256_hex"), "chunkDigestSha3Hex", 32)
             val contentLength = requireLong(arguments, "content_length")
             require(contentLength >= 0) { "contentLength must be non-negative" }
             val submittedEpoch = requireLong(arguments, "submitted_epoch")
             require(submittedEpoch >= 0) { "submittedEpoch must be non-negative" }
-            val successorOfHex = arguments["successor_of_hex"]
+            val successorOfHex = arguments["successor_of_hex"]?.takeIf { it.isNotBlank() }?.let {
+                requireSorafsHex(it, "successorOfHex", 32)
+            }
             val chunkerProfile = ChunkerProfile.fromArguments(arguments)
             val pinPolicy = PinPolicy.fromArguments(arguments)
             val aliasBinding = AliasBinding.fromArguments(arguments, required = false)

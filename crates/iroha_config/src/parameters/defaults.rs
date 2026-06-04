@@ -2053,6 +2053,10 @@ pub mod torii {
     pub const ISO_BRIDGE_STRUCTURED_ADDRESS_MODE: &str = "permissive";
     /// ISO 20022 reference data refresh cadence (seconds).
     pub const ISO_BRIDGE_REFERENCE_REFRESH_SECS: u64 = 24 * 60 * 60; // 24 hours
+    /// ISO 20022 durable store age retention (seconds); zero keeps records by age.
+    pub const ISO_BRIDGE_STORE_RETENTION_SECS: u64 = 0;
+    /// ISO 20022 durable store maximum record count; zero keeps all records by count.
+    pub const ISO_BRIDGE_STORE_MAX_RECORDS: u64 = 0;
     /// Return the default ISO 20022 bridge rail profile identifier.
     #[must_use]
     pub fn iso_bridge_default_profile() -> String {
@@ -2370,10 +2374,40 @@ pub mod nexus {
         pub const BURN_FROM_UNIX_TIMESTAMP_MS: u64 = u64::MAX;
         /// Default Nexus fee settlement mode.
         pub const SETTLEMENT_MODE: &str = "direct";
+        /// Default DPN application contract alias eligible for sponsored DPN operations.
+        pub const DPN_SPONSORED_CONTRACT_ALIAS: &str = "dpn_suite::dpn";
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
             super::super::canonical_asset_definition_literal("universal.universal", "xor")
+        }
+
+        /// Default DPN application contract entrypoints eligible for sponsored operation fees.
+        pub fn dpn_sponsored_contract_entrypoints() -> Vec<String> {
+            [
+                "configure",
+                "register_ed25519_key",
+                "record_issued_dpn",
+                "sync_nft_metadata",
+                "request_factored_invoice_issue",
+                "approve_factored_invoice_counterparty",
+                "finalize_factored_invoice_dpn",
+                "request_reverse_factored_invoice_issue",
+                "approve_reverse_factored_invoice_counterparty",
+                "finalize_reverse_factored_invoice_dpn",
+                "request_factoring",
+                "approve_factoring",
+                "mark_factoring_funds_sent",
+                "confirm_factoring_funds_received",
+                "finalize_factoring",
+                "transfer_dpn",
+                "mark_pending_settlement",
+                "freeze_dpn",
+                "unfreeze_dpn",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
         }
     }
 
@@ -3590,7 +3624,7 @@ pub mod confidential {
     /// Default verifier backend identifier.
     pub const VERIFIER_BACKEND: &str = "halo2-ipa-pallas";
     /// Maximum confidential proof size (bytes).
-    pub const MAX_PROOF_SIZE_BYTES: u32 = 262_144;
+    pub const MAX_PROOF_SIZE_BYTES: u32 = 1_048_576;
     /// Maximum nullifiers per transaction.
     pub const MAX_NULLIFIERS_PER_TX: u32 = 8;
     /// Maximum commitments per transaction.

@@ -164,6 +164,47 @@ client.recordSubscriptionUsage(
     .join();
 ```
 
+## Verifying key registry
+
+`HttpClientTransport` wraps Torii's `/v1/zk/vk/register` and
+`/v1/zk/vk/update` routes. The helpers validate production verifier backends,
+required signing fields, height ranges, and inline verifier-key commitments
+before sending the request:
+
+```java
+byte[] vkBytes = new byte[] {1, 2, 3};
+
+transport
+    .registerVerifyingKey(
+        VerifyingKeyRegisterRequest.builder()
+            .authority("alice")
+            .privateKey("ed25519:...")
+            .backend("halo2/ipa")
+            .name("vk_main")
+            .version(1L)
+            .circuitId("halo2/ipa::transfer_v1")
+            .publicInputsSchemaHashHex("a".repeat(64))
+            .gasScheduleId("halo2_default")
+            .verifyingKeyBytes(vkBytes)
+            .status("Active")
+            .build())
+    .join();
+
+transport
+    .updateVerifyingKey(
+        VerifyingKeyUpdateRequest.builder()
+            .authority("alice")
+            .privateKey("ed25519:...")
+            .backend("halo2/ipa")
+            .name("vk_main")
+            .version(2L)
+            .circuitId("halo2/ipa::transfer_v1")
+            .publicInputsSchemaHashHex("a".repeat(64))
+            .status("Withdrawn")
+            .build())
+    .join();
+```
+
 ## Layout
 
 ```
@@ -1124,11 +1165,101 @@ of a separate mutable purse protocol.
 token prover for shielded offline-offline payments. Pass a Norito-encoded
 `KagemushaVerifiedFoldRecordBundle`; the JNI bridge verifies each private hop
 proof against its verifier record and returns a Norito-encoded
-`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available.
+`KagemushaCompactPaymentToken` when `connect_norito_bridge` is available and
+the native Kagemusha entry point rejects the empty-archive availability probe.
 `KagemushaRecursiveAggregationProofBundleProver` exposes the matching
 admission-neutral recursive proof-bundle path. Pass the same record-bundle
 archive plus a Norito-encoded Pallas open-envelope archive to receive a
 Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
+`KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
+surface. It reports `recursive_spend_v1` as available only after the JNI bridge
+ABI-version probe succeeds and init, append, both transition-profile helpers,
+the append-boundary helper, both lineage-witness helpers, verify, and redeem
+reject the empty-archive availability probes instead of accepting permissive
+native calls.
+`transitionProfileInit(requestArchive)` and
+`transitionProfileAppend(requestArchive)` return the canonical Reserved-lineage
+accumulator transition profile as raw Norito archives for fixture generation
+and circuit preflight. `lineageAppendBoundary(profileArchive)` derives the
+compact append-boundary Norito archive from a full append transition profile
+with native opening preflight material. The append-boundary digest uses the
+public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
+`RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1` and
+`RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1` for
+chain/asset and final-root/current-note binding. Use
+`canRedeemWitnessless(circuitId, hopCount)` or
+`requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
+construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
+`RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is `true`, so
+witnessless Reserved-lineage online redemption is available for lineage bundles
+inside the 64-hop cap.
+Use `canAppendWitnesslessLineage(previousHopCount)` before attempting a
+witnessless Reserved-lineage append; it returns `true` for previous hop counts
+`1..63`.
+Use `preferredAppendOutputCircuitId(previousHopCount)` as the default append
+output selector; it selects Reserved-lineage append for previous hop counts `1..63`.
+Use `canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)` before
+selecting an append output circuit; semantic recursive append returns true
+through hop 64, and Reserved-lineage append returns true for previous hop
+counts `1..63`.
+The semantic append path is bounded by `COMPACT_TOKEN_MAX_HOPS`; witnessless
+Reserved-lineage append and redeem use the separate
+`RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` cap.
+Use `canSelectAppendOutputCircuitId(previousProofCircuitId, outputCircuitId,
+previousHopCount)` to apply the previous-proof transition rule before
+serializing an append request.
+`isSupportedPreviousProofCircuitId(previousProofCircuitId)` and
+`requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId)` let
+wallets reject unknown previous recursive proof circuits and include
+`previous_lineage_verifier_record` only for Reserved-lineage previous bundles.
+`requiresPreviousProofOpenEnvelopesForAppend(outputCircuitId,
+previousHopCount)` identifies whether the selected append output circuit
+requires the request to carry the previous recursive proof opening archive.
+`outputCircuitId` is the Norito append request's `output_proof_circuit_id`;
+missing or empty request values preserve semantic compatibility append.
+`previous_recursive_proof_open_envelopes_archive` is opaque native prover
+material: Android wallet code must pass it through Norito unchanged and must not
+construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
+`public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
+before proving or returning output bytes.
+Reserved-lineage append output is valid only when the previous bundle is
+already Reserved-lineage; semantic previous bundles keep using semantic append
+plus a record-backed lineage witness.
+`normalizeAppendOutputCircuitId` and `isSupportedAppendOutputCircuitId` expose
+that defaulting rule for wallet-side preflight.
+`RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1` and
+`RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` expose the
+exactly-one-envelope cardinality rule and native 8 MiB pre-decode cap for that
+archive.
+
+### Native privacy bridge
+
+`PrivacyNativeBridge` exposes the privacy FFI surface as generic raw Norito
+archives: `capabilitiesArchive()`, `buildProof(requestArchive)`, and
+`verifyProof(requestArchive)`. The Android SDK does not expose
+algorithm-specific production proof builders while the privacy rows remain
+gated. Native availability requires ABI 6, the privacy capability/build/verify
+JNI symbols, and successful Norito probe outputs whose operation-specific
+result schema bytes match the called entry point.
+
+All privacy request and response payloads must stay as raw Norito archives.
+Android validates archive magic, length, CRC, the 64 MiB native size cap, and
+the operation-specific result schema before returning bytes to callers.
+Capability metadata reports `privacy-production-gate-v1`, keeps
+`productionReady = false`, and remains fail-closed with missing production
+gates and no audit references until real proving, verification, chain
+admission, deterministic testing, fuzzing, performance gates, and external
+audit signoff are complete.
+
+Android also exposes the deterministic privacy FFI status/error-code contract
+for diagnostics and cross-language parity: `STATUS_ERROR`,
+`ERROR_NULL_POINTER`, `ERROR_MALFORMED_NORITO`,
+`ERROR_UNSUPPORTED_ALGORITHM`, `ERROR_PRODUCTION_DISABLED`, and
+`ERROR_INVALID_REQUEST`. The stable wire values are `status_error = 1`,
+`null_pointer = 1`, `malformed_norito = 2`, `unsupported_algorithm = 3`,
+`production_disabled = 4`, and `invalid_request = 5`; treat them as
+sanitized status metadata, not proof success.
+
 `OfflineNoteTransferHandoff` provides the app-facing payment-token transfer
 surface: `qrStreamingFrameBytes(token)` for animated/binary QR,
 `nfcFrameBytes(token)` for APDU-sized NFC frame exchange, and

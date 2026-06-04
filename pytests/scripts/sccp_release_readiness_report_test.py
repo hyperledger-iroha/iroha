@@ -263,6 +263,15 @@ NATIVE_LOCAL_PROVER_SOURCE_GLOBS = {
         "csharp/src/Hyperledger.Iroha.Sdk/Sccp/*.cs",
     ),
 }
+FORBIDDEN_PROVER_DEPENDENCY_SAMPLES = {
+    "WebAssembly": "const runtime = WebAssembly;",
+    "wasm": "const backend = 'wasm';",
+    "snarkjs": "import snarkjs from 'snarkjs';",
+    "remoteProver": "const remoteProver = true;",
+    "remote prover": "use a remote prover fallback",
+    "proverUrl": "const proverUrl = 'https://prover.invalid';",
+    "proverEndpoint": "const proverEndpoint = '/prove';",
+}
 
 
 def phase_command_lines(fragments) -> list[str]:
@@ -618,6 +627,51 @@ def sdk_symbol_export_tokens(symbol: str) -> tuple[str, ...]:
     return (symbol,)
 
 
+def sdk_source_paths(path_or_paths) -> tuple[Path, ...]:
+    """Normalize a single SDK source path or split source path tuple."""
+
+    return path_or_paths if isinstance(path_or_paths, tuple) else (path_or_paths,)
+
+
+def source_display_path(path: Path) -> Path:
+    """Return a stable path label for verifier diagnostics."""
+
+    try:
+        return path.relative_to(ROOT)
+    except ValueError:
+        return path
+
+
+def native_local_prover_source_violations(
+    source_paths,
+    chain_label: str,
+    *,
+    source_overrides: dict[Path, str] | None = None,
+) -> list[str]:
+    """Collect SDK source violations for forbidden remote-prover dependencies."""
+
+    source_overrides = source_overrides or {}
+    violations: list[str] = []
+    for sdk, path_or_paths in source_paths.items():
+        for path in sdk_source_paths(path_or_paths):
+            if path in source_overrides:
+                source = source_overrides[path]
+            elif path.is_file():
+                source = path.read_text(encoding="utf-8")
+            else:
+                violations.append(
+                    f"{sdk} missing {chain_label} source file: {source_display_path(path)}"
+                )
+                continue
+            for label, pattern in BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS.items():
+                if pattern.search(source):
+                    violations.append(
+                        f"{sdk} {source_display_path(path)} contains forbidden {label}"
+                    )
+
+    return violations
+
+
 def helper_matches_hook_marker(sdk: str, helper: str, marker: str) -> bool:
     """Return whether a helper symbol satisfies a UI-owned hook marker."""
 
@@ -665,39 +719,53 @@ def test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources() -> None:
 def test_release_readiness_bsc_sdk_sources_are_native_local_prover_only() -> None:
     """BSC SDK facades must stay native/local-prover owned, with no WASM fallback."""
 
-    violations: list[str] = []
-    for sdk, path_or_paths in BSC_MAINNET_SDK_SOURCE_PATHS.items():
-        paths = path_or_paths if isinstance(path_or_paths, tuple) else (path_or_paths,)
-        for path in paths:
-            if not path.is_file():
-                violations.append(f"{sdk} missing BSC source file: {path.relative_to(ROOT)}")
-                continue
-            source = path.read_text(encoding="utf-8")
-            for label, pattern in BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS.items():
-                if pattern.search(source):
-                    violations.append(
-                        f"{sdk} {path.relative_to(ROOT)} contains forbidden {label}"
-                    )
-
-    assert violations == []
+    assert native_local_prover_source_violations(
+        BSC_MAINNET_SDK_SOURCE_PATHS,
+        "BSC",
+    ) == []
 
 
 def test_release_readiness_ethereum_sdk_sources_are_native_local_prover_only() -> None:
     """Ethereum SDK facades must stay native/local-prover owned, with no WASM fallback."""
 
-    violations: list[str] = []
-    for sdk, path in ETHEREUM_MAINNET_SDK_SOURCE_PATHS.items():
-        if not path.is_file():
-            violations.append(f"{sdk} missing Ethereum source file: {path.relative_to(ROOT)}")
-            continue
-        source = path.read_text(encoding="utf-8")
-        for label, pattern in BSC_FORBIDDEN_PROVER_DEPENDENCY_PATTERNS.items():
-            if pattern.search(source):
-                violations.append(
-                    f"{sdk} {path.relative_to(ROOT)} contains forbidden {label}"
-                )
+    assert native_local_prover_source_violations(
+        ETHEREUM_MAINNET_SDK_SOURCE_PATHS,
+        "Ethereum",
+    ) == []
 
-    assert violations == []
+
+def test_release_readiness_native_source_scan_rejects_forbidden_prover_markers() -> None:
+    """The SDK source scan must fail closed for every remote-prover marker."""
+
+    sample_path = BSC_MAINNET_SDK_SOURCE_PATHS["js-sdk"]
+    assert isinstance(sample_path, Path)
+    for label, sample in FORBIDDEN_PROVER_DEPENDENCY_SAMPLES.items():
+        violations = native_local_prover_source_violations(
+            {"js-sdk": sample_path},
+            "BSC",
+            source_overrides={sample_path: f"export const sdk = true;\n{sample}\n"},
+        )
+        assert any(f"forbidden {label}" in violation for violation in violations)
+
+
+def test_release_readiness_native_source_scan_checks_split_dotnet_sources() -> None:
+    """Split .NET BSC facade files must all be scanned, not only the first path."""
+
+    dotnet_paths = BSC_MAINNET_SDK_SOURCE_PATHS["dotnet-sdk"]
+    assert isinstance(dotnet_paths, tuple)
+    first_path, second_path = dotnet_paths
+    violations = native_local_prover_source_violations(
+        {"dotnet-sdk": dotnet_paths},
+        "BSC",
+        source_overrides={
+            first_path: "namespace Hyperledger.Iroha.Sccp {}",
+            second_path: "namespace Hyperledger.Iroha.Sccp { const string proverEndpoint = \"x\"; }",
+        },
+    )
+
+    assert violations == [
+        f"dotnet-sdk {source_display_path(second_path)} contains forbidden proverEndpoint"
+    ]
 
 
 def test_release_readiness_ethereum_data_collection_has_no_proxy_fallback() -> None:
@@ -2271,6 +2339,65 @@ def test_release_readiness_report_rejects_phase_log_without_expected_command(
     ) in completed.stdout
 
 
+def test_release_readiness_report_requires_release_verifier_tests_in_evidence_phase(
+    tmp_path: Path,
+) -> None:
+    """The evidence phase must prove release readiness and bundle verifiers ran."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    required_verifier_tests = (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+    )
+    for omitted in required_verifier_tests:
+        assert omitted in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        required_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+            if fragment != omitted
+        ]
+        corridor_log = tmp_path / f"evidence-scripts-without-{Path(omitted).stem}.log"
+        corridor_log.write_text(
+            "\n".join(
+                (
+                    "==> SCCP production corridor: evidence-scripts",
+                    *phase_command_lines(required_fragments),
+                    *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--require-phase-evidence",
+                "--phase-result",
+                "all=missing",
+                "--phase-result",
+                "evidence-scripts=passed",
+                "--phase-evidence",
+                f"evidence-scripts={corridor_log}",
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1
+        assert "Status: NOT READY" in completed.stdout
+        assert (
+            "production corridor phase evidence-scripts evidence artifact is missing "
+            f"expected phase-block command: {omitted}"
+        ) in completed.stdout
+
+
 def test_release_readiness_report_rejects_phase_log_without_phase_completion(
     tmp_path: Path,
 ) -> None:
@@ -2366,6 +2493,66 @@ def test_release_readiness_report_rejects_output_only_phase_command_fragment(
         "production corridor phase rust-sccp evidence artifact is missing "
         "expected phase-block command: cargo test -p iroha_sccp -- --nocapture"
     ) in completed.stdout
+
+
+def test_release_readiness_report_requires_mobile_jdk21_transcripts(
+    tmp_path: Path,
+) -> None:
+    """Mobile SDK phase evidence must prove the runner used JDK 21."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    jdk21_marker = 'version "21'
+
+    for phase in ("kotlin-sdk", "java-android"):
+        assert "java -version" in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+        assert jdk21_marker in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase]
+        success_fragments = [
+            fragment
+            for fragment in report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS[phase]
+            if fragment != jdk21_marker
+        ]
+        corridor_log = tmp_path / f"{phase}-without-jdk21-version.log"
+        corridor_log.write_text(
+            "\n".join(
+                (
+                    f"==> SCCP production corridor: {phase}",
+                    *phase_command_lines(
+                        report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+                    ),
+                    *success_fragments,
+                    "SCCP production corridor completed.",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        completed = subprocess.run(
+            [
+                "python3",
+                str(SCRIPT),
+                "--require-phase-evidence",
+                "--phase-result",
+                "all=missing",
+                "--phase-result",
+                f"{phase}=passed",
+                "--phase-evidence",
+                f"{phase}={corridor_log}",
+                str(evidence),
+            ],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+        assert completed.returncode == 1
+        assert "Status: NOT READY" in completed.stdout
+        assert (
+            f"production corridor phase {phase} evidence artifact is missing "
+            f"expected phase-block success marker: {jdk21_marker}"
+        ) in completed.stdout
 
 
 def test_release_readiness_report_requires_js_package_dist_transcript(

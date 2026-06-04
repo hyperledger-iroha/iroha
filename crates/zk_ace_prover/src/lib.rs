@@ -2,7 +2,11 @@
 
 use core::fmt;
 
-use iroha_core::zk_stark::{STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkFriVerifyingKeyV1};
+use iroha_core::zk_stark::{
+    STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkFriVerifyingKeyV1,
+    ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2, ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES,
+    ZK_ACE_STARK_FRI_V1_N_LOG2, ZK_ACE_STARK_FRI_V1_QUERIES,
+};
 use iroha_data_model::{
     ChainId,
     account::AccountId,
@@ -55,10 +59,10 @@ pub struct ZkAceTransferAuthorizationV1 {
 pub fn zk_ace_stark_fri_params_v1() -> StarkFriParamsV1 {
     StarkFriParamsV1 {
         version: 1,
-        n_log2: 4,
-        blowup_log2: 1,
+        n_log2: ZK_ACE_STARK_FRI_V1_N_LOG2,
+        blowup_log2: ZK_ACE_STARK_FRI_V1_BLOWUP_LOG2,
         fold_arity: 2,
-        queries: 2,
+        queries: ZK_ACE_STARK_FRI_V1_QUERIES,
         merkle_arity: 2,
         hash_fn: STARK_HASH_SHA256_V1,
         domain_tag: "iroha:zk-ace:stark-fri:v0".to_owned(),
@@ -66,6 +70,9 @@ pub fn zk_ace_stark_fri_params_v1() -> StarkFriParamsV1 {
 }
 
 /// Build the canonical STARK/FRI verifying-key payload for ZK-ACE v0.
+///
+/// # Errors
+/// Returns an error if the canonical verifier-key payload cannot be encoded.
 pub fn zk_ace_verifying_key_box_v1() -> Result<VerifyingKeyBox> {
     let params = zk_ace_stark_fri_params_v1();
     let payload = StarkFriVerifyingKeyV1 {
@@ -87,6 +94,9 @@ pub fn zk_ace_verifying_key_box_v1() -> Result<VerifyingKeyBox> {
 }
 
 /// Build an active verifier-key record suitable for registering the ZK-ACE v0 verifier.
+///
+/// # Errors
+/// Returns an error if the bundled verifier-key payload cannot be built.
 pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord> {
     let key = zk_ace_verifying_key_box_v1()?;
     let commitment = iroha_core::zk::hash_vk(&key);
@@ -98,9 +108,9 @@ pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord
         zk_ace_public_inputs_schema_hash_v1(),
         commitment,
     );
-    record.namespace = "zk-ace".to_owned();
+    "zk-ace".clone_into(&mut record.namespace);
     record.vk_len = u32::try_from(key.bytes.len()).unwrap_or(u32::MAX);
-    record.max_proof_bytes = 256 * 1024;
+    record.max_proof_bytes = ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES;
     record.gas_schedule_id = Some("zk_ace_stark_default".to_owned());
     record.key = Some(key);
     record.status = ConfidentialStatus::Active;
@@ -108,12 +118,18 @@ pub fn zk_ace_verifying_key_record_v1(version: u32) -> Result<VerifyingKeyRecord
 }
 
 /// Commitment of the canonical bundled ZK-ACE v0 verifier key.
+///
+/// # Errors
+/// Returns an error if the bundled verifier-key payload cannot be built.
 pub fn zk_ace_verifying_key_commitment_v1() -> Result<[u8; 32]> {
     let key = zk_ace_verifying_key_box_v1()?;
     Ok(iroha_core::zk::hash_vk(&key))
 }
 
 /// Verify that the private witness matches the declared public inputs.
+///
+/// # Errors
+/// Returns an error if any witness field is empty or inconsistent with the public inputs.
 pub fn validate_zk_ace_witness_v1(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -185,6 +201,9 @@ pub fn validate_zk_ace_witness_v1(
 }
 
 /// Build a STARK/FRI-backed ZK-ACE authorization proof attachment.
+///
+/// # Errors
+/// Returns an error if witness validation, verifier-key validation, or proof generation fails.
 pub fn build_zk_ace_authorization_proof_v1(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -221,6 +240,9 @@ pub fn build_zk_ace_authorization_proof_v1(
 }
 
 /// Build the canonical public inputs and proof for a transparent transfer.
+///
+/// # Errors
+/// Returns an error if the transfer inputs are invalid or proof generation fails.
 #[allow(clippy::too_many_arguments)]
 pub fn build_zk_ace_transfer_authorization_v1(
     from: AccountId,
@@ -331,7 +353,8 @@ mod tests {
     fn structured_bytes(seed: u8, step: u8) -> [u8; 32] {
         let mut out = [0u8; 32];
         for (index, byte) in out.iter_mut().enumerate() {
-            *byte = seed.wrapping_add((index as u8).wrapping_mul(step));
+            let index = u8::try_from(index).expect("structured byte index fits u8");
+            *byte = seed.wrapping_add(index.wrapping_mul(step));
         }
         out
     }
@@ -454,7 +477,8 @@ mod tests {
         if lhs >= rhs {
             lhs - rhs
         } else {
-            ((u128::from(lhs) + MOD_P) - u128::from(rhs)) as u64
+            u64::try_from((u128::from(lhs) + MOD_P) - u128::from(rhs))
+                .expect("Goldilocks field subtraction result fits u64")
         }
     }
 
@@ -503,7 +527,7 @@ mod tests {
             asset(),
             25,
             ChainId::from_str("taira").expect("chain id"),
-            witness.clone(),
+            witness,
             [0x55; 32],
             zk_ace_verifier_key_id(ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID),
             vk_commitment,
@@ -1018,6 +1042,22 @@ mod tests {
     }
 
     #[test]
+    fn zk_ace_stark_fri_params_meet_ledger_admission_floor() {
+        let params = zk_ace_stark_fri_params_v1();
+        assert!(params.n_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2);
+        assert!(
+            params.blowup_log2 >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2
+        );
+        assert!(params.queries >= iroha_core::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES);
+
+        let vk = zk_ace_verifying_key_box_v1().expect("vk");
+        let payload: iroha_core::zk_stark::StarkFriVerifyingKeyV1 =
+            norito::decode_from_bytes(&vk.bytes).expect("decode ZK-ACE STARK VK");
+        iroha_core::zk_stark::validate_zk_ace_stark_fri_verifying_key_payload(&payload)
+            .expect("canonical ZK-ACE VK must satisfy ledger admission floor");
+    }
+
+    #[test]
     fn verifier_key_record_is_active_and_bound_to_zk_ace() {
         let record = zk_ace_verifying_key_record_v1(3).expect("record");
         assert_eq!(record.version, 3);
@@ -1025,7 +1065,7 @@ mod tests {
         assert_eq!(record.circuit_id, ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID);
         assert_eq!(record.backend, BackendTag::Stark);
         assert_eq!(record.status, ConfidentialStatus::Active);
-        assert_eq!(record.max_proof_bytes, 256 * 1024);
+        assert_eq!(record.max_proof_bytes, ZK_ACE_STARK_FRI_V1_MAX_PROOF_BYTES);
         assert_eq!(
             record.commitment,
             zk_ace_verifying_key_commitment_v1().expect("vk commitment")

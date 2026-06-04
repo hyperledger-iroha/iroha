@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from decimal import Decimal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import pytest
 import requests
@@ -10,11 +12,17 @@ import requests
 from iroha_python import (
     AccountAddress,
     AccountAssetsPage,
+    DataEventFilter,
     Ed25519KeyPair,
     Instruction,
     ToriiClient,
     TransactionConfig,
     TransactionDraft,
+)
+from iroha_python._privacy_backends import (
+    _is_pending_production_backend_label,
+    _is_production_verify_backend_label,
+    _require_production_verify_backend_label,
 )
 from iroha_python.repo import RepoAgreementListPage
 
@@ -58,10 +66,127 @@ def response(
     return result
 
 
-def account_address(seed: int) -> str:
+def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> None:
+    for label in (
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+    ):
+        assert _is_pending_production_backend_label(label)
+
+    for label in (
+        "halo2/ipa/orchard/dev-fixture",
+        "stark/fri/miden/claimed-production",
+        "anonymous-pgc-k-out-of-n-v1-production",
+        "sis-hints-anoncred-pq-v0-devfixture",
+        "groth16/bls12-377/../../prod",
+        "post-quantum-masp/audit-claimed",
+    ):
+        assert not _is_pending_production_backend_label(label)
+
+
+def test_privacy_backend_production_verify_classifier_parity() -> None:
+    supported = (
+        "halo2/ipa",
+        "halo2/ipa:ivm-execution-v1",
+        "halo2/pasta/ivm-execution-v1",
+        "halo2/pasta/kagemusha-folded-v1",
+        "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+        "stark/fri",
+        "stark/fri/sha256-goldilocks",
+    )
+    for backend in supported:
+        assert _is_production_verify_backend_label(backend), backend
+        assert _require_production_verify_backend_label(backend, "backend") == backend
+
+    unsupported = (
+        "",
+        "unknown/privacy/backend",
+        "halo2/unknown-native-v1",
+        "halo2/ipa:unknown-native-v1",
+        "stark/unknown-native-v1",
+        "halo2/bn254",
+        "groth16",
+        "groth16/bls12-377",
+        " halo2/ipa",
+        "halo2/ipa ",
+        "\thalo2/ipa",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "halo2/ipa\0",
+        "../halo2/ipa",
+        "halo2/ipa/orchard",
+        "halo2-ipa-orchard",
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+        "halo2/pasta/tiny-add",
+        "halo2/ipa/tiny-add",
+        "halo2/ipa:tiny-add",
+        "halo2/pasta/asset-hidden-transfer-public-test",
+        "halo2/ipa/asset-hidden-transfer-public-test",
+        "halo2/ipa:asset-hidden-transfer-public-test",
+        "stark/fri/miden",
+        "stark/fri/miden/claimed-production",
+        "stark/fri/latest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "stark/fri/sha256 goldilocks",
+        "stark/fri/sha256+goldilocks",
+        "halo2/ipa+mock",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:claimed-production",
+        "halo2/ipa:mainnet-ready",
+        "stark/fri/audit-signoff",
+        "stark/fri/externally-audited",
+        "stark/fri/security-review-passed",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        "stark/fri/dev-fixture",
+        "stark/fri/d-e-v-f-i-x-t-u-r-e",
+        "stark/fri/test",
+        "stark/fri/t-e-s-t",
+        "halo2/ipa:dev-fixture",
+        "halo2/ipa:dummy",
+        "halo2/ipa:f-a-k-e",
+        "halo2/ipa:stub",
+        "halo2/kzg",
+        "halo2/pasta/mock",
+        "kzg/powersoftau",
+    )
+    for backend in unsupported:
+        assert not _is_production_verify_backend_label(backend), backend
+        expected_error = (
+            "non-empty string"
+            if not isinstance(backend, str) or not backend.strip()
+            else "unsupported production verifier backend"
+        )
+        with pytest.raises(ValueError, match=expected_error):
+            _require_production_verify_backend_label(backend, "backend")
+
+
+def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:
+    backend_bytes = backend.encode("utf-8")
+    preimage = (
+        b"iroha:zk:v1:vk"
+        + len(backend_bytes).to_bytes(8, "big")
+        + backend_bytes
+        + len(vk_bytes).to_bytes(8, "big")
+        + vk_bytes
+    )
+    return hashlib.sha256(preimage).hexdigest()
+
+
+def account_address(seed: int, discriminant: int = 0x02F1) -> str:
     return Ed25519KeyPair.from_private_key(bytes([seed] * 32)).default_account_id(
         "wonderland",
-        0x02F1,
+        discriminant,
     )
 
 
@@ -373,7 +498,12 @@ def test_zk_verifying_key_helpers_detect_active_status() -> None:
 
     assert client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
     response_obj = client.submit_zk_verifying_key_registration(
-        {"backend": "halo2/ipa", "name": "vk_transfer"}
+        {
+            "authority": "alice",
+            "backend": "halo2/ipa",
+            "name": "vk_transfer",
+            "private_key": "ed25519:deadbeef",
+        }
     )
 
     assert response_obj.status_code == 202
@@ -381,6 +511,632 @@ def test_zk_verifying_key_helpers_detect_active_status() -> None:
         "/v1/zk/vk/halo2%2Fipa/vk_transfer",
         "/v1/zk/vk/register",
     ]
+
+
+def test_zk_verifying_key_helpers_reject_unstable_stark_aliases() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    for backend in ("stark/fri/latest", "stark/fri/attestation", "stark/fri/contest"):
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.submit_zk_verifying_key_registration(
+                {"backend": backend, "name": "vk_false_positive_guard"}
+            )
+
+    assert session.calls == []
+
+
+def test_zk_verifying_key_registration_rejects_unsupported_backends_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    for backend in (
+        "halo2/unknown-native-v1",
+        "halo2/ipa:unknown-native-v1",
+        "stark/unknown-native-v1",
+        " halo2/ipa",
+        "halo2/ipa ",
+        "\thalo2/ipa",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "stark/fri/miden",
+        "stark/fri/latest",
+        "stark/fri/attestation",
+        "stark/fri/contest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:claimed-production",
+        "halo2/ipa:mainnet-ready",
+        "stark/fri/audit-signoff",
+        "stark/fri/externally-audited",
+        "stark/fri/security-review-passed",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+        "halo2/pasta/tiny-add",
+        "halo2/ipa/tiny-add",
+        "halo2/ipa:tiny-add",
+        "halo2/pasta/tiny-commit-open",
+        "halo2/pasta/anon-transfer-2x2",
+        "halo2/ipa/anon-transfer-2x2",
+        "halo2/ipa:anon-transfer-2x2",
+        "halo2/pasta/anon-transfer-2x2-merkle2",
+        "halo2/ipa/anon-transfer-2x2-merkle8",
+        "halo2/ipa:anon-transfer-2x2-merkle16",
+        "halo2/pasta/vote-bool-commit",
+        "halo2/ipa/vote-bool-commit",
+        "halo2/ipa:vote-bool-commit",
+        "halo2/pasta/vote-bool-commit-merkle2",
+        "halo2/ipa/vote-bool-commit-merkle8",
+        "halo2/ipa:vote-bool-commit-merkle16",
+        "halo2/pasta/asset-hidden-transfer-public-test",
+        "halo2/ipa/asset-hidden-transfer-public-test",
+        "halo2/ipa:asset-hidden-transfer-public-test",
+        "stark/fri/dev-fixture",
+        "stark/fri/d-e-v-f-i-x-t-u-r-e",
+        "stark/fri/dev",
+        "stark/fri/d-e-v",
+        "stark/fri/test",
+        "stark/fri/t-e-s-t",
+        "stark/fri/placeholder",
+        " stark/fri/sha256-goldilocks",
+        "stark/fri/sha256-goldilocks ",
+        "halo2/ipa/orchard",
+        "halo2/kzg",
+        "halo2/ipa\0",
+        "halo2/ipa:dev-fixture",
+        "halo2/ipa:dev",
+        "halo2/ipa:d-e-v",
+        "halo2/ipa:dummy",
+        "halo2/ipa:f-a-k-e",
+        "halo2/ipa:stub",
+        "halo2/ipa:s-a-m-p-l-e",
+        "mock/dev",
+    ):
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.submit_zk_verifying_key_registration(
+                {"backend": backend, "name": "vk_transfer"}
+            )
+    assert session.calls == []
+
+
+def test_zk_verifying_key_registration_rejects_bad_names_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    for bad_name in ("", "   ", "\t", None, 7):
+        with pytest.raises((TypeError, ValueError), match="register_zk_verifying_key.name"):
+            client.submit_zk_verifying_key_registration(
+                {"backend": "halo2/ipa", "name": bad_name}
+            )
+
+    assert session.calls == []
+
+
+def test_zk_verifying_key_registration_rejects_missing_signing_fields_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    for authority in (None, "", "   ", 7):
+        with pytest.raises((TypeError, ValueError), match="register_zk_verifying_key.authority"):
+            client.submit_zk_verifying_key_registration(
+                {
+                    "authority": authority,
+                    "backend": "halo2/ipa",
+                    "name": "vk_transfer",
+                    "private_key": "ed25519:deadbeef",
+                }
+            )
+
+    for private_key in (None, "", "   ", 7):
+        with pytest.raises((TypeError, ValueError), match="register_zk_verifying_key.private_key"):
+            client.submit_zk_verifying_key_registration(
+                {
+                    "authority": "alice",
+                    "backend": "halo2/ipa",
+                    "name": "vk_transfer",
+                    "private_key": private_key,
+                }
+            )
+
+    assert session.calls == []
+
+
+def test_zk_verifying_key_registration_rejects_mismatched_inline_commitment() -> None:
+    session = FakeSession([response(202, {"accepted": True})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    vk_bytes = b"abc"
+    matching_commitment = zk_verifying_key_commitment("halo2/ipa", vk_bytes)
+
+    with pytest.raises(ValueError, match="commitment_hex must match domain-separated SHA-256"):
+        client.submit_zk_verifying_key_registration(
+            {
+                "authority": "alice",
+                "backend": "halo2/ipa",
+                "name": "vk_transfer",
+                "private_key": "ed25519:deadbeef",
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "public_inputs_schema_hash_hex": "aa" * 32,
+                "gas_schedule_id": "halo2_default",
+                "vk_bytes": base64.b64encode(vk_bytes).decode("ascii"),
+                "commitment_hex": "00" * 32,
+            }
+        )
+
+    assert session.calls == []
+    response_obj = client.submit_zk_verifying_key_registration(
+            {
+                "authority": "alice",
+                "backend": "halo2/ipa",
+                "name": "vk_transfer",
+                "private_key": "ed25519:deadbeef",
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "public_inputs_schema_hash_hex": "aa" * 32,
+                "gas_schedule_id": "halo2_default",
+                "vk_bytes": vk_bytes,
+                "commitment_hex": matching_commitment,
+            }
+    )
+
+    assert response_obj.status_code == 202
+    assert [call["path"] for call in session.calls] == ["/v1/zk/vk/register"]
+
+
+def test_zk_verifying_key_registration_rejects_withdraw_height_before_activation_height() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match="withdraw_height"):
+        client.submit_zk_verifying_key_registration(
+            {
+                "authority": "alice",
+                "backend": "halo2/ipa",
+                "name": "vk_transfer",
+                "private_key": "ed25519:deadbeef",
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "public_inputs_schema_hash_hex": "aa" * 32,
+                "gas_schedule_id": "halo2_default",
+                "activation_height": 10,
+                "withdraw_height": 9,
+            }
+        )
+    with pytest.raises(ValueError, match="activation_height"):
+        client.submit_zk_verifying_key_registration(
+            {
+                "authority": "alice",
+                "backend": "halo2/ipa",
+                "name": "vk_transfer",
+                "private_key": "ed25519:deadbeef",
+                "version": 1,
+                "circuit_id": "halo2/ipa::transfer_v1",
+                "public_inputs_schema_hash_hex": "aa" * 32,
+                "gas_schedule_id": "halo2_default",
+                "activation_height": -1,
+            }
+        )
+    assert session.calls == []
+
+
+def test_zk_verifying_key_update_helper_posts_signed_payload() -> None:
+    session = FakeSession([response(202, {"accepted": True})])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    vk_bytes = b"abc"
+    matching_commitment = zk_verifying_key_commitment("halo2/ipa", vk_bytes)
+
+    decoded = client.update_zk_verifying_key(
+        {
+            "authority": " alice ",
+            "backend": "halo2/ipa",
+            "name": "vk_transfer",
+            "private_key": " ed25519:deadbeef ",
+            "version": 2,
+            "circuit_id": "halo2/ipa::transfer_v2",
+            "public_inputs_schema_hash_hex": "aa" * 32,
+            "gas_schedule_id": "halo2_default",
+            "vk_bytes": vk_bytes,
+            "commitment_hex": matching_commitment,
+            "activation_height": "10",
+            "withdraw_height": "10",
+        }
+    )
+
+    assert decoded == {"accepted": True}
+    assert [call["path"] for call in session.calls] == ["/v1/zk/vk/update"]
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    body = json.loads(call["data"])
+    assert body["authority"] == "alice"
+    assert body["private_key"] == "ed25519:deadbeef"
+    assert body["backend"] == "halo2/ipa"
+    assert body["name"] == "vk_transfer"
+    assert body["vk_bytes"] == base64.b64encode(vk_bytes).decode("ascii")
+    assert body["commitment_hex"] == matching_commitment
+    assert body["activation_height"] == 10
+    assert body["withdraw_height"] == 10
+
+
+def test_zk_verifying_key_update_rejects_bad_inputs_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    vk_bytes = b"abc"
+    matching_commitment = zk_verifying_key_commitment("halo2/ipa", vk_bytes)
+
+    def payload(**overrides: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "authority": "alice",
+            "backend": "halo2/ipa",
+            "name": "vk_transfer",
+            "private_key": "ed25519:deadbeef",
+            "version": 2,
+            "circuit_id": "halo2/ipa::transfer_v2",
+            "public_inputs_schema_hash_hex": "aa" * 32,
+            "vk_bytes": base64.b64encode(vk_bytes).decode("ascii"),
+            "commitment_hex": matching_commitment,
+        }
+        base.update(overrides)
+        return base
+
+    for backend in (
+        " halo2/ipa",
+        "halo2/ipa ",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "stark/fri/miden",
+        "stark/fri/latest",
+        "halo2/kzg",
+        "mock/dev",
+    ):
+        with pytest.raises(ValueError, match="update_zk_verifying_key.backend"):
+            client.submit_zk_verifying_key_update(payload(backend=backend))
+
+    for bad_name in ("", "   ", "\t", None, 7):
+        with pytest.raises((TypeError, ValueError), match="update_zk_verifying_key.name"):
+            client.submit_zk_verifying_key_update(payload(name=bad_name))
+
+    for authority in (None, "", "   ", 7):
+        with pytest.raises((TypeError, ValueError), match="update_zk_verifying_key.authority"):
+            client.submit_zk_verifying_key_update(payload(authority=authority))
+
+    for private_key in (None, "", "   ", 7):
+        with pytest.raises((TypeError, ValueError), match="update_zk_verifying_key.private_key"):
+            client.submit_zk_verifying_key_update(payload(private_key=private_key))
+
+    with pytest.raises(TypeError, match="update_zk_verifying_key.vk_bytes"):
+        client.submit_zk_verifying_key_update(payload(vk_bytes=7))
+
+    with pytest.raises(ValueError, match="update_zk_verifying_key.vk_bytes"):
+        client.submit_zk_verifying_key_update(payload(vk_bytes="not base64!"))
+
+    with pytest.raises(ValueError, match="commitment_hex must match domain-separated SHA-256"):
+        client.submit_zk_verifying_key_update(payload(commitment_hex="00" * 32))
+
+    with pytest.raises(ValueError, match="commitment_hex"):
+        client.submit_zk_verifying_key_update(
+            payload(vk_bytes=None, vk_len=3, commitment_hex=None)
+        )
+
+    with pytest.raises(ValueError, match="withdraw_height"):
+        client.submit_zk_verifying_key_update(payload(activation_height=10, withdraw_height=9))
+
+    with pytest.raises(ValueError, match="activation_height"):
+        client.submit_zk_verifying_key_update(payload(activation_height=-1))
+
+    assert session.calls == []
+
+
+def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    for backend in (
+        " halo2/ipa",
+        "halo2/ipa ",
+        "\thalo2/ipa",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "stark/fri/miden",
+        "stark/fri/latest",
+        "stark/fri/attestation",
+        "stark/fri/contest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:claimed-production",
+        "halo2/ipa:mainnet-ready",
+        "stark/fri/audit-signoff",
+        "stark/fri/externally-audited",
+        "stark/fri/security-review-passed",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+        "halo2/pasta/tiny-add",
+        "halo2/ipa/tiny-add",
+        "halo2/ipa:tiny-add",
+        "halo2/pasta/tiny-commit-open",
+        "halo2/pasta/anon-transfer-2x2",
+        "halo2/ipa/anon-transfer-2x2",
+        "halo2/ipa:anon-transfer-2x2",
+        "halo2/pasta/anon-transfer-2x2-merkle2",
+        "halo2/ipa/anon-transfer-2x2-merkle8",
+        "halo2/ipa:anon-transfer-2x2-merkle16",
+        "halo2/pasta/vote-bool-commit",
+        "halo2/ipa/vote-bool-commit",
+        "halo2/ipa:vote-bool-commit",
+        "halo2/pasta/vote-bool-commit-merkle2",
+        "halo2/ipa/vote-bool-commit-merkle8",
+        "halo2/ipa:vote-bool-commit-merkle16",
+        "halo2/pasta/asset-hidden-transfer-public-test",
+        "halo2/ipa/asset-hidden-transfer-public-test",
+        "halo2/ipa:asset-hidden-transfer-public-test",
+        "stark/fri/dev-fixture",
+        "stark/fri/d-e-v-f-i-x-t-u-r-e",
+        "stark/fri/dev",
+        "stark/fri/d-e-v",
+        "stark/fri/test",
+        "stark/fri/t-e-s-t",
+        "stark/fri/placeholder",
+        " stark/fri/sha256-goldilocks",
+        "stark/fri/sha256-goldilocks ",
+        "halo2/ipa/orchard",
+        "halo2/kzg",
+        "halo2/ipa\0",
+        "halo2/ipa:dev-fixture",
+        "halo2/ipa:dev",
+        "halo2/ipa:d-e-v",
+        "halo2/ipa:dummy",
+        "halo2/ipa:f-a-k-e",
+        "halo2/ipa:stub",
+        "halo2/ipa:s-a-m-p-l-e",
+        "mock/dev",
+    ):
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.request_zk_verifying_key(backend, "vk_transfer")
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.zk_verifying_key_active(backend, "vk_transfer")
+    assert session.calls == []
+
+
+def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    for backend in (
+        " halo2/ipa",
+        "halo2/ipa ",
+        "\thalo2/ipa",
+        "halo2/ipa\n",
+        "halo2\uFF0Fipa",
+        "halo2/\u200Bipa",
+        "h\u0430lo2/ipa",
+        "stark/fri/miden",
+        "stark/fri/latest",
+        "stark/fri/attestation",
+        "stark/fri/contest",
+        "stark/fri/random-profile",
+        "stark/fri/sha512-goldilocks",
+        "stark/fri/audit-proof-v1",
+        "halo2/ipa:production-ready",
+        "halo2/ipa:claimed-production",
+        "halo2/ipa:mainnet-ready",
+        "stark/fri/audit-signoff",
+        "stark/fri/externally-audited",
+        "stark/fri/security-review-passed",
+        "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/a-u-d-i-t-c-l-a-i-m",
+        "halo2/ipa/penumbra",
+        "halo2/ipa/masp",
+        "halo2/ipa/monero",
+        "halo2/ipa/curve-tree",
+        "halo2/pasta/tiny-add",
+        "halo2/ipa/tiny-add",
+        "halo2/ipa:tiny-add",
+        "halo2/pasta/tiny-commit-open",
+        "halo2/pasta/anon-transfer-2x2",
+        "halo2/ipa/anon-transfer-2x2",
+        "halo2/ipa:anon-transfer-2x2",
+        "halo2/pasta/anon-transfer-2x2-merkle2",
+        "halo2/ipa/anon-transfer-2x2-merkle8",
+        "halo2/ipa:anon-transfer-2x2-merkle16",
+        "halo2/pasta/vote-bool-commit",
+        "halo2/ipa/vote-bool-commit",
+        "halo2/ipa:vote-bool-commit",
+        "halo2/pasta/vote-bool-commit-merkle2",
+        "halo2/ipa/vote-bool-commit-merkle8",
+        "halo2/ipa:vote-bool-commit-merkle16",
+        "halo2/pasta/asset-hidden-transfer-public-test",
+        "halo2/ipa/asset-hidden-transfer-public-test",
+        "halo2/ipa:asset-hidden-transfer-public-test",
+        "stark/fri/dev-fixture",
+        "stark/fri/d-e-v-f-i-x-t-u-r-e",
+        "stark/fri/dev",
+        "stark/fri/d-e-v",
+        "stark/fri/test",
+        "stark/fri/t-e-s-t",
+        "stark/fri/placeholder",
+        " stark/fri/sha256-goldilocks",
+        "stark/fri/sha256-goldilocks ",
+        "halo2/ipa/orchard",
+        "halo2/kzg",
+        "halo2/ipa\0",
+        "halo2/ipa:dev-fixture",
+        "halo2/ipa:dev",
+        "halo2/ipa:d-e-v",
+        "halo2/ipa:dummy",
+        "halo2/ipa:f-a-k-e",
+        "halo2/ipa:stub",
+        "halo2/ipa:s-a-m-p-l-e",
+        "mock/dev",
+    ):
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.stream_verifying_key_events(backend=backend, name="vk_transfer")
+        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+            client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
+    assert session.calls == []
+
+
+def test_zk_verifying_key_event_filters_reject_malformed_names_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    for name in ("", "   ", "\t", "\n", "vk:transfer", 42):
+        with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
+            DataEventFilter.verifying_key(backend="halo2/ipa", name=name)
+        with pytest.raises((TypeError, ValueError), match="verifying_key_filter.name"):
+            client.stream_verifying_key_events(backend="halo2/ipa", name=name)
+
+    payload = DataEventFilter.verifying_key(
+        backend="halo2/ipa",
+        name=" vk_transfer ",
+    ).to_dict()
+    assert payload["VerifyingKey"]["id_matcher"]["name"] == "vk_transfer"
+    assert session.calls == []
+
+
+def test_zk_proof_event_filters_reject_malformed_hashes_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    for proof_hash_hex in (
+        "",
+        "abc",
+        "z" * 64,
+        "a" * 63,
+        "0x" + "a" * 63,
+    ):
+        with pytest.raises((TypeError, ValueError), match="32-byte hex string"):
+            DataEventFilter.proof(backend="halo2/ipa", proof_hash_hex=proof_hash_hex)
+        with pytest.raises((TypeError, ValueError), match="32-byte hex string"):
+            client.stream_proof_events(backend="halo2/ipa", proof_hash_hex=proof_hash_hex)
+
+    payload = DataEventFilter.proof(
+        backend="halo2/ipa",
+        proof_hash_hex="0x" + "A" * 64,
+    ).to_dict()
+    assert payload["Proof"]["id_matcher"]["hash_hex"] == "a" * 64
+    assert session.calls == []
+
+
+def test_zk_raw_event_filters_reject_malformed_privacy_matchers_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    raw_filters = [
+        {
+            "VerifyingKey": {
+                "id_matcher": {"backend": "halo2/ipa/orchard", "name": "vk_transfer"},
+                "event_set": {"Registered": True},
+            }
+        },
+        {
+            "VerifyingKey": {
+                "id_matcher": {"backend": "halo2/ipa", "name": "vk:transfer"},
+                "event_set": {"Registered": True},
+            }
+        },
+        {
+            "VerifyingKey": {
+                "id_matcher": {"backend": "halo2/ipa", "name": 42},
+                "event_set": {"Registered": True},
+            }
+        },
+        {
+            "Proof": {
+                "id_matcher": {"backend": "mock/dev", "hash_hex": "a" * 64},
+                "event_set": {"Verified": True},
+            }
+        },
+        {
+            "Proof": {
+                "id_matcher": {"backend": "groth16/bls12-377", "hash_hex": "a" * 64},
+                "event_set": {"Verified": True},
+            }
+        },
+        {
+            "Proof": {
+                "id_matcher": {"backend": "halo2/ipa", "hash_hex": "z" * 64},
+                "event_set": {"Verified": True},
+            }
+        },
+    ]
+
+    for raw_filter in raw_filters:
+        with pytest.raises((TypeError, ValueError)):
+            client.stream_events(filter=raw_filter)
+        with pytest.raises((TypeError, ValueError)):
+            client.stream_events(filter=json.dumps(raw_filter))
+
+    with pytest.raises(ValueError, match="data_event_filter.VerifyingKey.id_matcher.name"):
+        DataEventFilter(
+            {
+                "VerifyingKey": {
+                    "id_matcher": {"backend": "halo2/ipa", "name": "vk:transfer"},
+                    "event_set": {"Registered": True},
+                }
+            }
+        )
+    assert session.calls == []
+
+
+def test_zk_raw_event_filters_canonicalize_privacy_matchers_before_request() -> None:
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+    captured_params = []
+
+    def capture_stream(path, **kwargs):
+        captured_params.append(kwargs.get("params"))
+        return iter(())
+
+    client._stream_sse = capture_stream
+
+    client.stream_events(
+        filter={
+            "VerifyingKey": {
+                "id_matcher": {"backend": "halo2/ipa", "name": " vk_transfer "},
+                "event_set": {"Registered": True},
+            }
+        }
+    )
+    encoded_vk_filter = captured_params[-1]["filter"]
+    decoded_vk_filter = json.loads(encoded_vk_filter)
+    assert decoded_vk_filter["VerifyingKey"]["id_matcher"]["name"] == "vk_transfer"
+
+    client.stream_events(
+        filter=json.dumps(
+            {
+                "Proof": {
+                    "id_matcher": {
+                        "backend": "halo2/ipa",
+                        "hash_hex": "0x" + "A" * 64,
+                        "proof_hash_hex": "0x" + "B" * 64,
+                    },
+                    "event_set": {"Verified": True},
+                }
+            }
+        )
+    )
+    encoded_proof_filter = captured_params[-1]["filter"]
+    decoded_proof_filter = json.loads(encoded_proof_filter)
+    proof_matcher = decoded_proof_filter["Proof"]["id_matcher"]
+    assert proof_matcher["hash_hex"] == "a" * 64
+    assert proof_matcher["proof_hash_hex"] == "b" * 64
+
+    assert session.calls == []
 
 
 def test_account_has_permission_uses_typed_permission_listing() -> None:
@@ -407,6 +1163,40 @@ def test_account_has_permission_uses_typed_permission_listing() -> None:
         "register_zk_asset",
         expected_payload={"asset_definition_id": "ds#wonderland.is"},
     )
+
+
+def test_account_permission_listing_accepts_configured_chain_discriminant() -> None:
+    taira_account = account_address(5, 0x0171)
+    session = FakeSession([response(200, {"items": [], "total": 0})])
+    client = ToriiClient(
+        "http://torii.example",
+        session=session,
+        max_retries=0,
+        chain_discriminant=0x0171,
+    )
+
+    assert client.list_account_permissions(taira_account) == {"items": [], "total": 0}
+    assert session.calls == [
+        {
+            "method": "GET",
+            "path": f"/v1/accounts/{quote(taira_account, safe='')}/permissions",
+            "params": None,
+            "data": None,
+        }
+    ]
+
+
+def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None:
+    taira_account = account_address(6, 0x0171)
+    session = FakeSession([])
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(
+        ValueError,
+        match="account_id must be a canonical I105 account id or on-chain account alias",
+    ):
+        client.list_account_permissions(taira_account)
+    assert session.calls == []
 
 
 def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
@@ -634,6 +1424,76 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     assert grant_kwargs["wait"] is False
     assert revoke_kwargs["private_key_hex"] == "22" * 32
     assert revoke_kwargs["wait"] is True
+
+
+def test_permission_grant_accepts_configured_chain_discriminant_account_ids() -> None:
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        max_retries=0,
+        chain_discriminant=0x0171,
+    )
+    captured: dict[str, object] = {}
+    account = account_address(0x45, 0x0171)
+    native_account = account_address(0x45)
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {"hash": "permission-taira"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    assert client.grant_account_permission_and_wait(
+        chain_id="chain",
+        authority=account,
+        private_key_hex="11" * 32,
+        account_id=account,
+        permission_name="CanUseFeeSponsor",
+        permission_payload={"sponsor": "sponsor@is"},
+        wait=False,
+    ) == {"hash": "permission-taira"}
+
+    draft = captured["draft"]
+    assert draft.config.authority == native_account
+    assert len(draft) == 1
+    assert captured["kwargs"]["private_key_hex"] == "11" * 32
+
+
+def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> None:
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([]),
+        max_retries=0,
+        chain_discriminant=0x0171,
+    )
+    captured: dict[str, object] = {}
+    source = account_address(0x46, 0x0171)
+    destination = account_address(0x47, 0x0171)
+    native_source = account_address(0x46)
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+
+    def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
+        captured["draft"] = draft
+        captured["kwargs"] = kwargs
+        return {"hash": "transfer-taira"}
+
+    client._submit_transaction_draft_result = fake_submit  # type: ignore[method-assign]
+
+    assert client.transfer_asset_and_wait(
+        chain_id="chain",
+        authority=source,
+        private_key_hex="22" * 32,
+        asset_id=f"{asset_definition_id}#{source}",
+        destination=destination,
+        quantity=Decimal("3"),
+        wait=False,
+    ) == {"hash": "transfer-taira"}
+
+    draft = captured["draft"]
+    assert draft.config.authority == native_source
+    assert len(draft) == 1
+    assert captured["kwargs"]["private_key_hex"] == "22" * 32
 
 
 def test_zk_instruction_helpers_serialize_full_surface() -> None:

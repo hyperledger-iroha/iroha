@@ -113,13 +113,11 @@ function validateEd25519SignatureForPayload(publicKey, payloadBytes, signature) 
 }
 
 function normalizeAlgorithm(algorithm) {
-  if (
-    algorithm === undefined ||
-    algorithm === null ||
-    algorithm === ALGORITHM_ED25519 ||
-    algorithm === "Ed25519" ||
-    algorithm === ALGORITHM_ED25519_TAG
-  ) {
+  if (algorithm === undefined || algorithm === null) {
+    return ALGORITHM_ED25519;
+  }
+  const normalized = String(algorithm).toLowerCase();
+  if (/^[\x20-\x7e]+$/.test(normalized) && (normalized === ALGORITHM_ED25519 || normalized === "0")) {
     return ALGORITHM_ED25519;
   }
   throw new NexusAppError(

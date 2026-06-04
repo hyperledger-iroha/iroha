@@ -50,7 +50,7 @@ enum class SigningAlgorithm(
                 normalized == "gost512b"
                     || normalized == "gost34102012512paramsetb" -> GOST_2012_512_B
                 normalized == "sm2" -> SM2
-                else -> ED25519
+                else -> throw IllegalArgumentException("Unsupported signing algorithm: $name")
             }
         }
 
@@ -60,9 +60,13 @@ enum class SigningAlgorithm(
                 ?: throw IllegalArgumentException("Unsupported signing algorithm code: $code")
 
         private fun normalize(name: String?): String {
-            if (name.isNullOrBlank()) return ED25519.wireName
-            return buildString(name.length) {
-                for (ch in name) {
+            val trimmed = name?.trim()
+            if (trimmed.isNullOrEmpty()) return ED25519.wireName
+            return buildString(trimmed.length) {
+                for (ch in trimmed) {
+                    if (ch.code < 0x20 || ch.code == 0x7F || ch.code > 0x7F) {
+                        throw IllegalArgumentException("Unsupported signing algorithm: $name")
+                    }
                     if (ch.isLetterOrDigit()) {
                         append(ch.lowercaseChar())
                     }

@@ -19,9 +19,17 @@ public final class SorafsRegisterPinManifestBuilderTests {
   private SorafsRegisterPinManifestBuilderTests() {}
 
   public static void main(final String[] args) throws Exception {
+    rejectsMalformedDigestHex();
+    rejectsMalformedChunkDigestHex();
+    rejectsMalformedSuccessorHex();
+    rejectsMalformedAliasProofHex();
     rejectsNegativeSubmittedEpoch();
     rejectsZeroMinReplicas();
     rejectsNegativeMinReplicas();
+    rejectsChunkerProfileNonpositiveProfileId();
+    rejectsChunkerProfileNegativeMultihashCode();
+    canonicalizesStorageClass();
+    rejectsUnsupportedStorageClass();
     rejectsNegativeContentLength();
     rejectsMissingContentLength();
     rejectsFromArgumentsMissingContentLength();
@@ -31,7 +39,14 @@ public final class SorafsRegisterPinManifestBuilderTests {
     rejectsFromArgumentsZeroMinReplicas();
     rejectsFromArgumentsNegativeMinReplicas();
     rejectsFromArgumentsNonnumericMinReplicas();
+    rejectsFromArgumentsUnsupportedStorageClass();
+    rejectsFromArgumentsNonpositiveChunkerProfileId();
+    rejectsFromArgumentsNegativeChunkerMultihashCode();
     rejectsFromArgumentsPartialAliasBinding();
+    rejectsFromArgumentsMalformedDigestHex();
+    rejectsFromArgumentsMalformedChunkDigestHex();
+    rejectsFromArgumentsMalformedSuccessorHex();
+    rejectsFromArgumentsMalformedAliasProofHex();
     rejectsNegativeRetentionEpoch();
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> instruction = asMap(fixture.get("instruction"), "instruction");
@@ -54,6 +69,48 @@ public final class SorafsRegisterPinManifestBuilderTests {
     System.out.println(
         "[IrohaAndroid] SorafsRegisterPinManifestBuilderTests passed (" + box.arguments().size()
             + " arguments).");
+  }
+
+  private static void rejectsMalformedDigestHex() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setDigestHex("zz"),
+        "Expected malformed digestHex to throw");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setDigestHex("a0".repeat(31)),
+        "Expected short digestHex to throw");
+  }
+
+  private static void rejectsMalformedChunkDigestHex() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("not-hex"),
+        "Expected malformed chunkDigestSha3Hex to throw");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setChunkDigestSha3Hex("b0".repeat(33)),
+        "Expected oversized chunkDigestSha3Hex to throw");
+  }
+
+  private static void rejectsMalformedSuccessorHex() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setSuccessorOfHex("01"),
+        "Expected short successorOfHex to throw");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.builder().setSuccessorOfHex("gg".repeat(32)),
+        "Expected non-hex successorOfHex to throw");
+  }
+
+  private static void rejectsMalformedAliasProofHex() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.AliasBinding.builder()
+            .setName("docs")
+            .setNamespace("sora")
+            .setProofHex("proof"),
+        "Expected non-hex alias proof to throw");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.AliasBinding.builder()
+            .setName("docs")
+            .setNamespace("sora")
+            .setProofHex("a"),
+        "Expected odd-length alias proof to throw");
   }
 
   private static void rejectsNegativeSubmittedEpoch() {
@@ -100,6 +157,40 @@ public final class SorafsRegisterPinManifestBuilderTests {
       threw = true;
     }
     assert threw : "Expected negative min replicas to throw";
+  }
+
+  private static void rejectsChunkerProfileNonpositiveProfileId() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(0),
+        "Expected zero chunker profile id to throw");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setProfileId(-1),
+        "Expected negative chunker profile id to throw");
+  }
+
+  private static void rejectsChunkerProfileNegativeMultihashCode() {
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.ChunkerProfile.builder().setMultihashCode(-1),
+        "Expected negative chunker multihash code to throw");
+  }
+
+  private static void canonicalizesStorageClass() {
+    final RegisterPinManifestInstruction.PinPolicy policy =
+        RegisterPinManifestInstruction.PinPolicy.builder()
+            .setMinReplicas(1)
+            .setStorageClass("hot")
+            .setRetentionEpoch(10)
+            .build();
+    assert Objects.equals(policy.storageClass(), "Hot") : "Expected canonical storage class";
+  }
+
+  private static void rejectsUnsupportedStorageClass() {
+    expectIllegalArgument(
+        () ->
+            RegisterPinManifestInstruction.PinPolicy.builder()
+                .setMinReplicas(1)
+                .setStorageClass("lava"),
+        "Expected unsupported storage class to throw");
   }
 
   private static void rejectsNegativeContentLength() {
@@ -304,6 +395,36 @@ public final class SorafsRegisterPinManifestBuilderTests {
     assert threw : "Expected nonnumeric fromArguments policy.min_replicas to throw";
   }
 
+  private static void rejectsFromArgumentsUnsupportedStorageClass() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("policy.storage_class", "lava");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected unsupported fromArguments policy.storage_class to throw");
+  }
+
+  private static void rejectsFromArgumentsNonpositiveChunkerProfileId() {
+    final Map<String, String> zeroArguments = baseArguments();
+    zeroArguments.put("chunker.profile_id", "0");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(zeroArguments),
+        "Expected zero fromArguments chunker.profile_id to throw");
+
+    final Map<String, String> negativeArguments = baseArguments();
+    negativeArguments.put("chunker.profile_id", "-1");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(negativeArguments),
+        "Expected negative fromArguments chunker.profile_id to throw");
+  }
+
+  private static void rejectsFromArgumentsNegativeChunkerMultihashCode() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("chunker.multihash_code", "-1");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected negative fromArguments chunker.multihash_code to throw");
+  }
+
   private static void rejectsFromArgumentsPartialAliasBinding() {
     final Map<String, String> arguments = new LinkedHashMap<>();
     arguments.put("digest_hex", "a0".repeat(32));
@@ -326,6 +447,67 @@ public final class SorafsRegisterPinManifestBuilderTests {
       threw = true;
     }
     assert threw : "Expected partial fromArguments alias binding to throw";
+  }
+
+  private static void rejectsFromArgumentsMalformedDigestHex() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("digest_hex", "zz");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected malformed fromArguments digest_hex to throw");
+  }
+
+  private static void rejectsFromArgumentsMalformedChunkDigestHex() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(31));
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected malformed fromArguments chunk digest to throw");
+  }
+
+  private static void rejectsFromArgumentsMalformedSuccessorHex() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("successor_of_hex", "not-hex");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected malformed fromArguments successor_of_hex to throw");
+  }
+
+  private static void rejectsFromArgumentsMalformedAliasProofHex() {
+    final Map<String, String> arguments = baseArguments();
+    arguments.put("alias.name", "docs");
+    arguments.put("alias.namespace", "sora");
+    arguments.put("alias.proof_hex", "abc");
+    expectIllegalArgument(
+        () -> RegisterPinManifestInstruction.fromArguments(arguments),
+        "Expected malformed fromArguments alias.proof_hex to throw");
+  }
+
+  private static Map<String, String> baseArguments() {
+    final Map<String, String> arguments = new LinkedHashMap<>();
+    arguments.put("digest_hex", "a0".repeat(32));
+    arguments.put("chunk_digest_sha3_256_hex", "b0".repeat(32));
+    arguments.put("content_length", "4096");
+    arguments.put("submitted_epoch", "1");
+    arguments.put("chunker.profile_id", "1");
+    arguments.put("chunker.namespace", "sorafs");
+    arguments.put("chunker.name", "sf1");
+    arguments.put("chunker.semver", "1.0.0");
+    arguments.put("chunker.multihash_code", "0");
+    arguments.put("policy.min_replicas", "1");
+    arguments.put("policy.storage_class", "hot");
+    arguments.put("policy.retention_epoch", "10");
+    return arguments;
+  }
+
+  private static void expectIllegalArgument(final Runnable action, final String message) {
+    boolean threw = false;
+    try {
+      action.run();
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+    }
+    assert threw : message;
   }
 
   private static RegisterPinManifestInstruction buildInstruction(

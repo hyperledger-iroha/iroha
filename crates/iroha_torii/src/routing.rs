@@ -522,6 +522,22 @@ pub(crate) struct PipelinePreflightQueue {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+pub(crate) struct PipelinePreflightSponsoredContractOperation {
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    pub entrypoints: Vec<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub(crate) struct PipelinePreflightFees {
     pub fee_asset_id: String,
     pub fee_sink_account_id: String,
@@ -539,6 +555,7 @@ pub(crate) struct PipelinePreflightFees {
     pub burn_from_unix_timestamp_ms: u64,
     pub settlement_mode: String,
     pub successful_claim_fee_exempt_authorities: Vec<String>,
+    pub sponsored_contract_operation_allowlist: Vec<PipelinePreflightSponsoredContractOperation>,
 }
 
 #[derive(
@@ -13760,6 +13777,16 @@ pub(crate) fn build_pipeline_preflight_response(
             successful_claim_fee_exempt_authorities: nexus
                 .fees
                 .successful_claim_fee_exempt_authorities,
+            sponsored_contract_operation_allowlist: nexus
+                .fees
+                .sponsored_contract_operation_allowlist
+                .into_iter()
+                .map(|entry| PipelinePreflightSponsoredContractOperation {
+                    contract_alias: entry.contract_alias.map(|alias| alias.to_string()),
+                    contract_address: entry.contract_address.map(|address| address.to_string()),
+                    entrypoints: entry.entrypoints.into_iter().collect(),
+                })
+                .collect(),
         },
     }
 }
@@ -27400,7 +27427,7 @@ pub struct ZkVkRegisterDto {
     /// Circuit identifier associated with the verifying key.
     pub circuit_id: String,
     /// Hex-encoded 32-byte hash of the public inputs schema.
-    pub public_inputs_schema_hex: String,
+    pub public_inputs_schema_hash_hex: String,
     /// Optional curve label; defaults to `unknown`.
     #[norito(default)]
     pub curve: Option<String>,
@@ -27475,7 +27502,7 @@ pub struct ZkVkUpdateDto {
     /// Circuit identifier associated with the verifying key.
     pub circuit_id: String,
     /// Hex-encoded 32-byte hash of the public inputs schema.
-    pub public_inputs_schema_hex: String,
+    pub public_inputs_schema_hash_hex: String,
     /// Optional curve label; defaults to `unknown`.
     #[norito(default)]
     pub curve: Option<String>,
@@ -27575,7 +27602,7 @@ struct VkRecordInputs {
     vk_bytes: Option<Vec<u8>>,
     commitment_hex: Option<String>,
     circuit_id: String,
-    public_inputs_schema_hex: String,
+    public_inputs_schema_hash_hex: String,
     curve: Option<String>,
     gas_schedule_id: Option<String>,
     vk_len: Option<u32>,
@@ -27603,7 +27630,7 @@ fn mk_record_from_inputs(
         vk_bytes,
         commitment_hex,
         circuit_id,
-        public_inputs_schema_hex,
+        public_inputs_schema_hash_hex,
         curve,
         gas_schedule_id,
         vk_len,
@@ -27613,19 +27640,6 @@ fn mk_record_from_inputs(
         activation_height,
         withdraw_height,
     } = inputs;
-    if let Some(ref status_value) = status {
-        if !matches!(
-            *status_value,
-            iroha_data_model::confidential::ConfidentialStatus::Active
-                | iroha_data_model::confidential::ConfidentialStatus::Proposed
-        ) {
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "status must be Active or Proposed".into(),
-                ),
-            )));
-        }
-    }
     let mut key_opt = None;
     let commitment: [u8; 32];
     let vk_len_value;
@@ -27679,23 +27693,15 @@ fn mk_record_from_inputs(
             ),
         )));
     }
-    let backend_tag = match backend.as_str() {
-        b if b.contains("halo2") && (b.contains("pasta") || b.contains("ipa")) => {
-            BackendTag::Halo2IpaPasta
-        }
-        b if b.contains("groth16") => BackendTag::Groth16,
-        b if b.contains("stark") => BackendTag::Stark,
-        _ => BackendTag::Unsupported,
-    };
-    let schema_hash = parse_hex32_str(&public_inputs_schema_hex, "public_inputs_schema_hex")?;
-    let gas_schedule_id = gas_schedule_id.ok_or_else(|| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "gas_schedule_id is required".into(),
-            ),
-        ))
-    })?;
-    if gas_schedule_id.trim().is_empty() {
+    let backend_tag = BackendTag::from_catalog_label(backend.as_str());
+    let schema_hash = parse_hex32_str(
+        &public_inputs_schema_hash_hex,
+        "public_inputs_schema_hash_hex",
+    )?;
+    if gas_schedule_id
+        .as_ref()
+        .is_some_and(|id| id.trim().is_empty())
+    {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "gas_schedule_id must not be empty".into(),
@@ -27729,7 +27735,7 @@ fn mk_record_from_inputs(
     record.activation_height = activation_height;
     record.withdraw_height = withdraw_height;
     record.key = key_opt;
-    record.gas_schedule_id = Some(gas_schedule_id);
+    record.gas_schedule_id = gas_schedule_id;
     Ok(record)
 }
 
@@ -27801,6 +27807,7 @@ fn vk_record_to_json(rec: &iroha_data_model::proof::VerifyingKeyRecord) -> norit
 #[cfg(all(test, feature = "app_api"))]
 mod vk_record_input_tests {
     use iroha_data_model::confidential::ConfidentialStatus;
+    use iroha_data_model::zk::BackendTag;
 
     use super::*;
 
@@ -27818,7 +27825,7 @@ mod vk_record_input_tests {
             vk_bytes: Some(vk_bytes.clone()),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hex: sample_hex32(0xAA),
+            public_inputs_schema_hash_hex: sample_hex32(0xAA),
             curve: Some("pallas".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: Some(vk_bytes.len() as u32),
@@ -27840,6 +27847,46 @@ mod vk_record_input_tests {
     }
 
     #[test]
+    fn mk_record_from_inputs_preserves_pending_protocol_backend_tags() {
+        for (backend, expected) in [
+            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
+            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
+            ("penumbra-masp", BackendTag::Groth16Bls12377),
+            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
+            ("sis-with-hints", BackendTag::SisWithHints),
+            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
+        ] {
+            let record = mk_record_from_inputs(VkRecordInputs {
+                backend: backend.to_string(),
+                version: 1,
+                status: Some(ConfidentialStatus::Proposed),
+                vk_bytes: None,
+                commitment_hex: Some(sample_hex32(0x11)),
+                circuit_id: "pending_circuit".to_string(),
+                public_inputs_schema_hash_hex: sample_hex32(0xAA),
+                curve: Some("pending".to_string()),
+                gas_schedule_id: Some("sched_default".to_string()),
+                vk_len: Some(32),
+                max_proof_bytes: Some(8192),
+                metadata_uri_cid: None,
+                vk_bytes_cid: None,
+                activation_height: None,
+                withdraw_height: None,
+            })
+            .expect("record created");
+
+            assert_eq!(
+                record.backend, expected,
+                "{backend} must not collapse into a generic supported backend",
+            );
+            assert!(
+                record.backend.is_pending_production_backend(),
+                "{backend} must remain pending production",
+            );
+        }
+    }
+
+    #[test]
     fn mk_record_requires_vk_len_without_bytes() {
         let res = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
@@ -27848,7 +27895,7 @@ mod vk_record_input_tests {
             vk_bytes: None,
             commitment_hex: Some(sample_hex32(0x11)),
             circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hex: sample_hex32(0x22),
+            public_inputs_schema_hash_hex: sample_hex32(0x22),
             curve: Some("pallas".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: None,
@@ -27862,15 +27909,15 @@ mod vk_record_input_tests {
     }
 
     #[test]
-    fn mk_record_rejects_missing_gas_schedule() {
-        let res = mk_record_from_inputs(VkRecordInputs {
+    fn mk_record_allows_missing_gas_schedule() {
+        let record = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Active),
             vk_bytes: Some(vec![1, 2, 3]),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hex: sample_hex32(0x33),
+            public_inputs_schema_hash_hex: sample_hex32(0x33),
             curve: Some("pallas".to_string()),
             gas_schedule_id: None,
             vk_len: Some(3),
@@ -27879,20 +27926,21 @@ mod vk_record_input_tests {
             vk_bytes_cid: None,
             activation_height: None,
             withdraw_height: None,
-        });
-        assert!(res.is_err());
+        })
+        .expect("record created without optional gas schedule");
+        assert!(record.gas_schedule_id.is_none());
     }
 
     #[test]
-    fn mk_record_rejects_invalid_status() {
-        let res = mk_record_from_inputs(VkRecordInputs {
+    fn mk_record_allows_withdrawn_status() {
+        let record = mk_record_from_inputs(VkRecordInputs {
             backend: "halo2/ipa".to_string(),
             version: 1,
             status: Some(ConfidentialStatus::Withdrawn),
             vk_bytes: Some(vec![1, 2, 3]),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hex: sample_hex32(0x44),
+            public_inputs_schema_hash_hex: sample_hex32(0x44),
             curve: Some("pallas".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: Some(3),
@@ -27901,8 +27949,9 @@ mod vk_record_input_tests {
             vk_bytes_cid: None,
             activation_height: None,
             withdraw_height: None,
-        });
-        assert!(res.is_err());
+        })
+        .expect("withdrawn verifier records can be submitted by update routes");
+        assert_eq!(record.status, ConfidentialStatus::Withdrawn);
     }
 
     #[test]
@@ -27914,7 +27963,7 @@ mod vk_record_input_tests {
             vk_bytes: Some(vec![1, 2, 3]),
             commitment_hex: None,
             circuit_id: "circuit_alpha".to_string(),
-            public_inputs_schema_hex: sample_hex32(0x55),
+            public_inputs_schema_hash_hex: sample_hex32(0x55),
             curve: Some("pallas".to_string()),
             gas_schedule_id: Some("sched_default".to_string()),
             vk_len: Some(3),
@@ -27945,7 +27994,7 @@ pub async fn handle_post_vk_register(
         vk_bytes: req.vk_bytes.clone(),
         commitment_hex: req.commitment_hex.clone(),
         circuit_id: req.circuit_id.clone(),
-        public_inputs_schema_hex: req.public_inputs_schema_hex.clone(),
+        public_inputs_schema_hash_hex: req.public_inputs_schema_hash_hex.clone(),
         curve: req.curve.clone(),
         gas_schedule_id: req.gas_schedule_id.clone(),
         vk_len: req.vk_len,
@@ -27987,7 +28036,7 @@ pub async fn handle_post_vk_update(
         vk_bytes: req.vk_bytes.clone(),
         commitment_hex: req.commitment_hex.clone(),
         circuit_id: req.circuit_id.clone(),
-        public_inputs_schema_hex: req.public_inputs_schema_hex.clone(),
+        public_inputs_schema_hash_hex: req.public_inputs_schema_hash_hex.clone(),
         curve: req.curve.clone(),
         gas_schedule_id: req.gas_schedule_id.clone(),
         vk_len: req.vk_len,
@@ -49470,6 +49519,60 @@ mod query_endpoint_tests {
         let resp = app.oneshot(req).await.unwrap();
         // Not found should map to 404
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn diagnostic_zk_submit_proof_does_not_create_ledger_proof_record() {
+        use axum::http::header::CONTENT_TYPE;
+
+        let state = Arc::new(iroha_core::state::State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let body = br#"{"backend":"halo2/ipa","proof":"diagnostic-only"}"#;
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/json"),
+        );
+
+        let response = handle_v1_zk_submit_proof(headers, axum::body::Bytes::from_static(body))
+            .await
+            .expect("diagnostic submit handler should respond");
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("collect diagnostic submit response")
+            .to_bytes();
+        let json: norito::json::Value =
+            norito::json::from_slice(&bytes).expect("diagnostic submit JSON");
+        assert_eq!(
+            json.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+        let diagnostic_id = json
+            .get("id")
+            .and_then(norito::json::Value::as_str)
+            .expect("diagnostic submit id");
+        assert_eq!(
+            diagnostic_id.len(),
+            64,
+            "diagnostic id should be a raw 32-byte body hash"
+        );
+
+        let ledger_id = format!("halo2/ipa:{diagnostic_id}");
+        let err = match handle_get_proof_record(state, axum::extract::Path(ledger_id)).await {
+            Ok(_) => panic!("diagnostic submit must not persist a ledger proof record"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
     }
 
     #[tokio::test]

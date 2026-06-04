@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.nonEmptyString
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.parseRecord
+import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.productionBackend
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescription
 
 private const val ACTION = "UpdateVerifyingKey"
@@ -19,10 +20,10 @@ class UpdateVerifyingKeyInstruction private constructor(
         name: String,
         record: VerifyingKeyRecordDescription,
     ) : this(
-        backend = validatedNotBlank(backend, "backend"),
+        backend = productionBackend(backend),
         name = validatedNotBlank(name, "name"),
         record = record,
-        arguments = buildArguments(backend.trim(), name.trim(), record),
+        arguments = buildArguments(productionBackend(backend), name.trim(), record),
     )
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
@@ -45,7 +46,7 @@ class UpdateVerifyingKeyInstruction private constructor(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): UpdateVerifyingKeyInstruction {
-            val backend = arguments.nonEmptyString("backend")
+            val backend = arguments.productionBackend("backend")
             val name = arguments.nonEmptyString("name")
             val record = arguments.parseRecord(backend)
             return UpdateVerifyingKeyInstruction(backend, name, record)

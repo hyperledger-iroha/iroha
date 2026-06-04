@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "schemas": [
+    {
+      "path": "iso/pacs.008.001.08.xsd",
+      "message_def_id": "pacs.008.001.08",
+      "payload_root": "FIToFICstmrCdtTrf"
+    },
+    {
+      "path": "iso/pacs.009.001.08.xsd",
+      "message_def_id": "pacs.009.001.08",
+      "payload_root": "FICdtTrf"
+    },
+    {
+      "path": "iso/pacs.002.001.10.xsd",
+      "message_def_id": "pacs.002.001.10",
+      "payload_root": "FIToFIPmtStsRpt"
+    },
+    {
+      "path": "iso/pacs.004.001.10.xsd",
+      "message_def_id": "pacs.004.001.10",
+      "payload_root": "PmtRtr"
+    },
+    {
+      "path": "iso/camt.056.001.08.xsd",
+      "message_def_id": "camt.056.001.08",
+      "payload_root": "FIToFIPmtCxlReq"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "../pacs008_fixture.xml",
+      "message_def_id": "pacs.008.001.08",
+      "payload_root": "FIToFICstmrCdtTrf",
+      "schema": "iso/pacs.008.001.08.xsd"
+    },
+    {
+      "path": "../pacs009_fixture.xml",
+      "message_def_id": "pacs.009.001.08",
+      "payload_root": "FICdtTrf",
+      "schema": "iso/pacs.009.001.08.xsd"
+    },
+    {
+      "path": "../pacs002_fixture.xml",
+      "message_def_id": "pacs.002.001.10",
+      "payload_root": "FIToFIPmtStsRpt",
+      "schema": "iso/pacs.002.001.10.xsd"
+    },
+    {
+      "path": "../pacs004_001_10_fixture.xml",
+      "message_def_id": "pacs.004.001.10",
+      "payload_root": "PmtRtr",
+      "schema": "iso/pacs.004.001.10.xsd"
+    },
+    {
+      "path": "../pacs004_fixture.xml",
+      "message_def_id": "pacs.004.001.09",
+      "payload_root": "PmtRtr",
+      "missing_schema_reason": "Legacy payment-return fixture used by runtime profile tests; the corresponding pacs.004.001.09 Standards Editor XSD is not checked in yet."
+    },
+    {
+      "path": "../camt056_fixture.xml",
+      "message_def_id": "camt.056.001.08",
+      "payload_root": "FIToFIPmtCxlReq",
+      "schema": "iso/camt.056.001.08.xsd"
+    },
+    {
+      "path": "../sese023_fixture.xml",
+      "message_def_id": "sese.023.001.11",
+      "payload_root": "SctiesSttlmTxInstr",
+      "missing_schema_reason": "Securities settlement instruction runtime fixture; official sese.023.001.11 XSD package is still pending."
+    },
+    {
+      "path": "../sese024_fixture.xml",
+      "message_def_id": "sese.024.001.10",
+      "payload_root": "SctiesSttlmTxStsAdvc",
+      "missing_schema_reason": "Securities settlement status runtime fixture; official sese.024.001.10 XSD package is still pending."
+    },
+    {
+      "path": "../sese025_fixture.xml",
+      "message_def_id": "sese.025.001.11",
+      "payload_root": "SctiesSttlmTxConf",
+      "missing_schema_reason": "Securities settlement confirmation runtime fixture; official sese.025.001.11 XSD package is still pending."
+    },
+    {
+      "path": "../colr012_fixture.xml",
+      "message_def_id": "colr.012.001.05",
+      "payload_root": "CollSbstitnConf",
+      "missing_schema_reason": "Collateral substitution confirmation runtime fixture; official colr.012.001.05 XSD package is still pending."
+    }
+  ]
+}

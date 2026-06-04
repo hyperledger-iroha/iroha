@@ -1292,6 +1292,636 @@ impl ZkProofsFilter<'_> {
     }
 }
 
+fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
+    if let Some(backend) = filter.backend {
+        require_production_verify_backend_label(backend, "zk proofs filter backend")?;
+    }
+    Ok(())
+}
+
+fn validate_zk_verify_or_submit_json(value: &norito::json::Value, context: &str) -> Result<()> {
+    let object = require_json_object(value, context)?;
+    let backend = require_json_backend_field(object, "backend", &format!("{context}.backend"))?;
+    validate_optional_json_vk_ref(object, context, Some(backend))?;
+    validate_optional_json_backend_object(
+        object,
+        "proof",
+        &format!("{context}.proof"),
+        Some(backend),
+    )?;
+    Ok(())
+}
+
+fn validate_zk_ivm_json(value: &norito::json::Value, context: &str) -> Result<()> {
+    let object = require_json_object(value, context)?;
+    require_json_vk_ref(object, context, None)?;
+    Ok(())
+}
+
+fn validate_zk_vk_submission_json(
+    value: &norito::json::Value,
+    context: &str,
+    require_gas_schedule_id: bool,
+) -> Result<()> {
+    let object = require_json_object(value, context)?;
+    let backend = require_json_backend_field(object, "backend", &format!("{context}.backend"))?;
+    require_json_vk_name_field(object, "name", &format!("{context}.name"))?;
+    require_json_non_empty_string_field(object, "authority", &format!("{context}.authority"))?;
+    require_json_non_empty_string_field(object, "private_key", &format!("{context}.private_key"))?;
+    require_json_positive_u32_field(object, "version", &format!("{context}.version"))?;
+    require_json_non_empty_string_field(object, "circuit_id", &format!("{context}.circuit_id"))?;
+    require_json_hex32_field(
+        object,
+        "public_inputs_schema_hash_hex",
+        &format!("{context}.public_inputs_schema_hash_hex"),
+    )?;
+    if require_gas_schedule_id {
+        require_json_non_empty_string_field(
+            object,
+            "gas_schedule_id",
+            &format!("{context}.gas_schedule_id"),
+        )?;
+    } else {
+        validate_optional_json_non_empty_string_field(
+            object,
+            "gas_schedule_id",
+            &format!("{context}.gas_schedule_id"),
+        )?;
+    }
+    validate_optional_json_non_empty_string_field(object, "curve", &format!("{context}.curve"))?;
+    validate_optional_json_non_empty_string_field(
+        object,
+        "metadata_uri_cid",
+        &format!("{context}.metadata_uri_cid"),
+    )?;
+    validate_optional_json_non_empty_string_field(
+        object,
+        "vk_bytes_cid",
+        &format!("{context}.vk_bytes_cid"),
+    )?;
+    validate_optional_json_u32_field(
+        object,
+        "max_proof_bytes",
+        &format!("{context}.max_proof_bytes"),
+    )?;
+    validate_optional_json_status_field(object, "status", &format!("{context}.status"))?;
+    validate_optional_json_height_range(object, context)?;
+    validate_optional_json_vk_submission_bytes(object, backend, context)?;
+    Ok(())
+}
+
+fn require_json_object<'a>(
+    value: &'a norito::json::Value,
+    context: &str,
+) -> Result<&'a norito::json::Map> {
+    value
+        .as_object()
+        .ok_or_else(|| eyre!("{context} must be a JSON object"))
+}
+
+fn require_json_backend_field<'a>(
+    object: &'a norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a str> {
+    let backend = object
+        .get(field)
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("{context} must be a string"))?;
+    require_production_verify_backend_label(backend, context)
+}
+
+fn require_json_non_empty_string_field<'a>(
+    object: &'a norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a str> {
+    let value = object
+        .get(field)
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("{context} must be a string"))?;
+    if value.trim().is_empty() {
+        return Err(eyre!("{context} must be non-empty"));
+    }
+    Ok(value)
+}
+
+fn require_json_vk_name_field<'a>(
+    object: &'a norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<&'a str> {
+    let value = require_json_non_empty_string_field(object, field, context)?;
+    if value.contains(':') {
+        return Err(eyre!("{context} must not contain ':'"));
+    }
+    Ok(value)
+}
+
+fn validate_optional_json_non_empty_string_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<()> {
+    match object.get(field) {
+        None => Ok(()),
+        Some(value) if value.is_null() => Ok(()),
+        Some(_) => {
+            require_json_non_empty_string_field(object, field, context)?;
+            Ok(())
+        }
+    }
+}
+
+fn require_json_positive_u32_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<u32> {
+    let value = object
+        .get(field)
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| eyre!("{context} must be a positive u32"))?;
+    if value == 0 || value > u64::from(u32::MAX) {
+        return Err(eyre!("{context} must be a positive u32"));
+    }
+    Ok(u32::try_from(value).expect("value is bounded to u32"))
+}
+
+fn validate_optional_json_positive_u32_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<u32>> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_u64()
+        .ok_or_else(|| eyre!("{context} must be a positive u32"))?;
+    if value == 0 || value > u64::from(u32::MAX) {
+        return Err(eyre!("{context} must be a positive u32"));
+    }
+    Ok(Some(u32::try_from(value).expect("value is bounded to u32")))
+}
+
+fn validate_optional_json_u32_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<u32>> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_u64()
+        .ok_or_else(|| eyre!("{context} must be a u32"))?;
+    if value > u64::from(u32::MAX) {
+        return Err(eyre!("{context} must be a u32"));
+    }
+    Ok(Some(u32::try_from(value).expect("value is bounded to u32")))
+}
+
+fn require_json_hex32_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<String> {
+    let value = object
+        .get(field)
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("{context} must be a 32-byte hex string"))?;
+    normalize_hex32_lower(value, context)
+}
+
+fn validate_optional_json_hex32_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<String>> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| eyre!("{context} must be a 32-byte hex string"))?;
+    Ok(Some(normalize_hex32_lower(value, context)?))
+}
+
+fn validate_optional_json_status_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<()> {
+    let Some(value) = object.get(field) else {
+        return Ok(());
+    };
+    if value.is_null() {
+        return Ok(());
+    }
+    let status = value
+        .as_str()
+        .ok_or_else(|| eyre!("{context} must be a string"))?;
+    if !matches!(status, "Proposed" | "Active" | "Withdrawn") {
+        return Err(eyre!("{context} must be Proposed, Active, or Withdrawn"));
+    }
+    Ok(())
+}
+
+fn validate_optional_json_height_range(object: &norito::json::Map, context: &str) -> Result<()> {
+    let activation = validate_optional_json_u64_field(
+        object,
+        "activation_height",
+        &format!("{context}.activation_height"),
+    )?;
+    let withdraw = validate_optional_json_u64_field(
+        object,
+        "withdraw_height",
+        &format!("{context}.withdraw_height"),
+    )?;
+    if let (Some(activation), Some(withdraw)) = (activation, withdraw)
+        && withdraw < activation
+    {
+        return Err(eyre!(
+            "{context}.withdraw_height must be greater than or equal to {context}.activation_height"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_optional_json_u64_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<u64>> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_u64()
+        .ok_or_else(|| eyre!("{context} must be a non-negative integer"))
+        .map(Some)
+}
+
+fn validate_optional_json_vk_submission_bytes(
+    object: &norito::json::Map,
+    backend: &str,
+    context: &str,
+) -> Result<()> {
+    let commitment_hex = validate_optional_json_hex32_field(
+        object,
+        "commitment_hex",
+        &format!("{context}.commitment_hex"),
+    )?;
+    let vk_len =
+        validate_optional_json_positive_u32_field(object, "vk_len", &format!("{context}.vk_len"))?;
+    let vk_bytes = validate_optional_json_base64_bytes_field(
+        object,
+        "vk_bytes",
+        &format!("{context}.vk_bytes"),
+    )?;
+    match (vk_bytes.as_ref(), commitment_hex.as_ref()) {
+        (None, None) => {
+            return Err(eyre!(
+                "{context} must provide either vk_bytes or commitment_hex"
+            ));
+        }
+        (None, Some(_)) if vk_len.is_none() => {
+            return Err(eyre!(
+                "{context}.vk_len is required when vk_bytes is omitted"
+            ));
+        }
+        _ => {}
+    }
+    if let Some(bytes) = vk_bytes.as_ref() {
+        if let Some(expected_len) = vk_len {
+            let actual_len = u32::try_from(bytes.len())
+                .map_err(|_| eyre!("{context}.vk_bytes length must fit u32"))?;
+            if expected_len != actual_len {
+                return Err(eyre!("{context}.vk_len must match vk_bytes length"));
+            }
+        }
+        if let Some(commitment_hex) = commitment_hex.as_ref() {
+            let expected = zk_vk_commitment_hex(backend, bytes)?;
+            if &expected != commitment_hex {
+                return Err(eyre!(
+                    "{context}.commitment_hex must match domain-separated SHA-256 of backend and vk_bytes"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_json_base64_bytes_field(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+) -> Result<Option<Vec<u8>>> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| eyre!("{context} must be a base64 string"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .wrap_err_with(|| format!("{context} must be valid base64"))?;
+    if bytes.is_empty() {
+        return Err(eyre!("{context} must not be empty"));
+    }
+    if bytes.len() > u32::MAX as usize {
+        return Err(eyre!("{context} length must fit in a u32"));
+    }
+    Ok(Some(bytes))
+}
+
+fn zk_vk_commitment_hex(backend: &str, bytes: &[u8]) -> Result<String> {
+    let backend_len = u64::try_from(backend.len()).wrap_err("backend length must fit in u64")?;
+    let bytes_len = u64::try_from(bytes.len()).wrap_err("vk_bytes length must fit in u64")?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha:zk:v1:vk");
+    hasher.update(backend_len.to_be_bytes());
+    hasher.update(backend.as_bytes());
+    hasher.update(bytes_len.to_be_bytes());
+    hasher.update(bytes);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn validate_optional_json_vk_ref(
+    object: &norito::json::Map,
+    context: &str,
+    expected_backend: Option<&str>,
+) -> Result<()> {
+    if object.contains_key("vk_ref") {
+        require_json_vk_ref(object, context, expected_backend)?;
+    }
+    Ok(())
+}
+
+fn require_json_vk_ref(
+    object: &norito::json::Map,
+    context: &str,
+    expected_backend: Option<&str>,
+) -> Result<()> {
+    let vk_ref = object
+        .get("vk_ref")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| eyre!("{context}.vk_ref must be a JSON object"))?;
+    let backend =
+        require_json_backend_field(vk_ref, "backend", &format!("{context}.vk_ref.backend"))?;
+    if let Some(expected) = expected_backend
+        && backend != expected
+    {
+        return Err(eyre!(
+            "{context}.vk_ref.backend must match {context}.backend"
+        ));
+    }
+    require_json_non_empty_string_field(vk_ref, "name", &format!("{context}.vk_ref.name"))?;
+    Ok(())
+}
+
+fn validate_optional_json_backend_object(
+    object: &norito::json::Map,
+    field: &str,
+    context: &str,
+    expected_backend: Option<&str>,
+) -> Result<()> {
+    let Some(value) = object.get(field) else {
+        return Ok(());
+    };
+    let Some(nested) = value.as_object() else {
+        return Ok(());
+    };
+    if nested.contains_key("backend") {
+        let backend = require_json_backend_field(nested, "backend", &format!("{context}.backend"))?;
+        if let Some(expected) = expected_backend
+            && backend != expected
+        {
+            return Err(eyre!("{context}.backend must match parent backend"));
+        }
+    }
+    Ok(())
+}
+
+const ZK_PRODUCTION_BACKEND_HALO2_IPA: &str = "halo2/ipa";
+const ZK_PRODUCTION_BACKEND_STARK_FRI: &str = "stark/fri";
+
+const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
+    "halo2/pasta/tiny-add",
+    "halo2/pasta/tiny-mul",
+    "halo2/pasta/tiny-add-2rows",
+    "halo2/pasta/tiny-add-public",
+    "halo2/pasta/tiny-mul-public",
+    "halo2/pasta/tiny-id-public",
+    "halo2/pasta/tiny-add3",
+    "halo2/pasta/tiny-add2inst-public",
+    "halo2/pasta/asset-hidden-transfer-public-test",
+    "halo2/pasta/tiny-anon-transfer-2x2",
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kaigi-usage-v1",
+    "halo2/pasta/tiny-vote-bool",
+    "halo2/pasta/ivm-overlay-bind",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/offline-note-recursive",
+    "halo2/pasta/kagemusha-folded-v1",
+    "halo2/pasta/kagemusha-recursive-aggregation-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+    "halo2/pasta/tiny-commit-open",
+    "halo2/pasta/tiny-merkle2",
+    "halo2/pasta/vote-bool-commit",
+    "halo2/pasta/vote-bool-commit-merkle2",
+    "halo2/pasta/vote-bool-commit-merkle8",
+    "halo2/pasta/vote-bool-commit-merkle16",
+    "halo2/pasta/anon-transfer-2x2",
+    "halo2/pasta/anon-transfer-2x2-merkle2",
+    "halo2/pasta/anon-transfer-2x2-merkle8",
+    "halo2/pasta/anon-transfer-2x2-merkle16",
+    "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+    "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
+    "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+];
+
+fn require_production_verify_backend_label<'a>(backend: &'a str, context: &str) -> Result<&'a str> {
+    if backend.trim().is_empty() {
+        return Err(eyre!("{context} must be a non-empty string"));
+    }
+    if !is_production_verify_backend_label(backend) {
+        return Err(eyre!(
+            "{context} uses unsupported production verifier backend `{backend}`"
+        ));
+    }
+    Ok(backend)
+}
+
+fn is_production_verify_backend_label(backend: &str) -> bool {
+    if backend.is_empty()
+        || backend.trim() != backend
+        || !is_portable_verify_backend_label(backend)
+        || iroha_data_model::zk::BackendTag::is_pending_production_backend_label(backend)
+        || is_trusted_setup_backend_label(backend)
+        || is_developer_only_backend_label(backend)
+    {
+        return false;
+    }
+
+    backend == ZK_PRODUCTION_BACKEND_HALO2_IPA
+        || is_stark_fri_production_backend_label(backend)
+        || is_native_halo2_pasta_production_backend_label(backend)
+}
+
+fn is_portable_verify_backend_label(backend: &str) -> bool {
+    backend.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'.' | b':' | b'-')
+    })
+}
+
+fn is_stark_fri_production_backend_label(backend: &str) -> bool {
+    backend == ZK_PRODUCTION_BACKEND_STARK_FRI
+        || backend.strip_prefix("stark/fri/").is_some_and(|profile| {
+            !profile.is_empty()
+                && profile
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        })
+}
+
+fn is_native_halo2_pasta_production_backend_label(backend: &str) -> bool {
+    normalize_native_halo2_pasta_backend_label(backend)
+        .as_deref()
+        .is_some_and(|normalized| ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.contains(&normalized))
+}
+
+fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
+    if backend.is_empty() || backend.trim() != backend {
+        return None;
+    }
+    for (prefix, target_prefix) in [
+        ("halo2/pasta/ipa/", "halo2/pasta/"),
+        ("halo2/pasta/", "halo2/pasta/"),
+        ("halo2/ipa::", "halo2/pasta/"),
+        ("halo2/ipa:", "halo2/pasta/"),
+        ("halo2/ipa/", "halo2/pasta/"),
+    ] {
+        if let Some(rest) = backend.strip_prefix(prefix) {
+            return (!rest.is_empty()).then(|| format!("{target_prefix}{rest}"));
+        }
+    }
+    None
+}
+
+fn is_trusted_setup_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    let compact = compact_privacy_backend_label(&backend);
+    has_trusted_setup_backend_segment(&backend)
+        || [
+            "groth16",
+            "kzg",
+            "bn254",
+            "bn256",
+            "bls12381",
+            "bls12",
+            "srs",
+            "crs",
+            "ptau",
+            "ceremony",
+            "trustedsetup",
+            "structuredreferencestring",
+            "universalsrs",
+            "powersoftau",
+        ]
+        .iter()
+        .any(|token| compact.contains(token))
+        || backend == "groth16"
+        || backend.starts_with("groth16/")
+        || backend == "kzg"
+        || backend.starts_with("kzg/")
+        || backend == "bn254"
+        || backend == "bn256"
+        || backend == "bls12_381"
+        || backend == "bls12-381"
+        || backend == "halo2/bn254"
+        || backend.starts_with("halo2/bn254/")
+        || backend.contains("/bn254")
+        || backend.contains(":bn254")
+        || backend.contains("/bn256")
+        || backend.contains(":bn256")
+        || backend.contains("/bls12")
+        || backend.contains(":bls12")
+        || backend == "halo2/kzg"
+        || backend.starts_with("halo2/kzg/")
+        || backend.contains("/kzg")
+        || backend.contains(":kzg")
+}
+
+fn has_trusted_setup_backend_segment(backend: &str) -> bool {
+    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
+        "groth16",
+        "kzg",
+        "bn254",
+        "bn256",
+        "bls12",
+        "srs",
+        "crs",
+        "ptau",
+        "ceremony",
+        "powersoftau",
+    ];
+    backend
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
+}
+
+fn is_developer_only_backend_label(backend: &str) -> bool {
+    let backend = backend.to_ascii_lowercase();
+    let compact = compact_privacy_backend_label(&backend);
+    backend.contains("debug")
+        || backend.contains("mock")
+        || compact.contains("debug")
+        || compact.contains("mock")
+}
+
+fn compact_privacy_backend_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
+    let hex_value = value.strip_prefix("0x").unwrap_or(value);
+    let bytes = hex::decode(hex_value)
+        .wrap_err_with(|| format!("{context} must be a 32-byte hex string"))?;
+    if bytes.len() != 32 {
+        return Err(eyre!("{context} must be a 32-byte hex string"));
+    }
+    Ok(hex::encode(bytes))
+}
+
+fn require_non_empty_path_segment<'a>(value: &'a str, context: &str) -> Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("{context} must be a non-empty string"));
+    }
+    Ok(trimmed)
+}
+
 /// Filters for `/v1/sorafs/pin` listing endpoint.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsPinListFilter<'a> {
@@ -5512,6 +6142,348 @@ mod evidence_http_tests {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
         assert!(has_content_type, "Content-Type header missing");
+    }
+
+    #[test]
+    fn post_zk_verify_json_rejects_unsupported_backend_shapes_before_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"ok\":true}");
+
+        for req in [
+            norito::json!({ "backend": "groth16/bls12-377", "proof": { "bytes": [1, 2, 3] } }),
+            norito::json!({
+                "backend": "halo2/ipa",
+                "vk_ref": { "backend": "mock/dev", "name": "vk_main" },
+                "proof": { "bytes": [1, 2, 3] },
+            }),
+            norito::json!({
+                "backend": "halo2/ipa",
+                "vk_ref": { "backend": "stark/fri", "name": "vk_main" },
+                "proof": { "bytes": [1, 2, 3] },
+            }),
+            norito::json!({
+                "backend": "halo2/ipa",
+                "proof": { "backend": "mock/dev", "bytes": [1, 2, 3] },
+            }),
+            norito::json!({
+                "backend": "halo2/ipa",
+                "proof": { "backend": "stark/fri", "bytes": [1, 2, 3] },
+            }),
+        ] {
+            let err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_verify_json(&req)
+                    .expect_err("unsupported verify JSON backend must be rejected")
+            });
+            let message = err.to_string();
+            assert!(
+                message.contains("unsupported production verifier backend")
+                    || message.contains("must match"),
+                "unexpected verify JSON error: {message}"
+            );
+        }
+
+        assert!(
+            snapshots.lock().expect("lock snapshot store").is_empty(),
+            "rejected verify JSON must not be sent"
+        );
+    }
+
+    #[test]
+    fn post_zk_submit_proof_json_rejects_unsupported_backend_before_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"ok\":true,\"id\":\"abc\"}");
+        let req = norito::json!({
+            "backend": "stark/fri/miden",
+            "proof": { "bytes": [1, 2, 3] },
+        });
+
+        let err = with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_zk_submit_proof_json(&req)
+                .expect_err("unsupported submit-proof JSON backend must be rejected")
+        });
+
+        assert!(
+            err.to_string()
+                .contains("unsupported production verifier backend"),
+            "unexpected submit-proof JSON error: {err}"
+        );
+        assert!(
+            snapshots.lock().expect("lock snapshot store").is_empty(),
+            "rejected submit-proof JSON must not be sent"
+        );
+    }
+
+    #[test]
+    fn post_zk_ivm_json_rejects_bad_vk_ref_before_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"job_id\":\"abc\"}");
+
+        for req in [
+            norito::json!({ "authority": { "placeholder": true } }),
+            norito::json!({ "vk_ref": "halo2/ipa:vk_main" }),
+            norito::json!({ "vk_ref": { "backend": "aztec/plonkish/private-kernel", "name": "vk_main" } }),
+            norito::json!({ "vk_ref": { "backend": "halo2/ipa", "name": "   " } }),
+        ] {
+            let derive_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_ivm_derive_json(&req)
+                    .expect_err("bad derive vk_ref must be rejected")
+            });
+            assert!(
+                derive_err.to_string().contains("vk_ref"),
+                "unexpected derive error: {derive_err}"
+            );
+
+            let prove_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_ivm_prove_json(&req)
+                    .expect_err("bad prove vk_ref must be rejected")
+            });
+            assert!(
+                prove_err.to_string().contains("vk_ref"),
+                "unexpected prove error: {prove_err}"
+            );
+        }
+
+        assert!(
+            snapshots.lock().expect("lock snapshot store").is_empty(),
+            "rejected IVM JSON must not be sent"
+        );
+    }
+
+    fn vk_submission_json(overrides: &[(&str, norito::json::Value)]) -> norito::json::Value {
+        use base64::Engine as _;
+
+        let backend = "halo2/ipa";
+        let vk_bytes = vec![1, 2, 3];
+        let mut object = norito::json::Map::new();
+        object.insert("backend".into(), norito::json::Value::from(backend));
+        object.insert("name".into(), norito::json::Value::from("vk_main"));
+        object.insert("authority".into(), norito::json::Value::from("alice"));
+        object.insert(
+            "private_key".into(),
+            norito::json::Value::from("ed25519:deadbeef"),
+        );
+        object.insert("version".into(), norito::json::Value::from(1u64));
+        object.insert("circuit_id".into(), norito::json::Value::from("transfer"));
+        object.insert(
+            "public_inputs_schema_hash_hex".into(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        object.insert(
+            "gas_schedule_id".into(),
+            norito::json::Value::from("halo2_default"),
+        );
+        object.insert(
+            "commitment_hex".into(),
+            norito::json::Value::from(
+                zk_vk_commitment_hex(backend, &vk_bytes).expect("vk commitment"),
+            ),
+        );
+        object.insert(
+            "vk_bytes".into(),
+            norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode(vk_bytes)),
+        );
+        object.insert("vk_len".into(), norito::json::Value::from(3u64));
+        object.insert("status".into(), norito::json::Value::from("Active"));
+
+        for (key, value) in overrides {
+            object.insert((*key).into(), value.clone());
+        }
+        norito::json::Value::Object(object)
+    }
+
+    #[test]
+    fn post_zk_vk_register_update_post_complete_payloads() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = empty_response(StatusCode::ACCEPTED);
+        let register_req = vk_submission_json(&[]);
+        let update_req = vk_submission_json(&[
+            ("version", norito::json::Value::from(2u64)),
+            ("status", norito::json::Value::from("Withdrawn")),
+            ("gas_schedule_id", norito::json::Value::Null),
+        ]);
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            client
+                .post_zk_vk_register(&register_req)
+                .expect("post register vk");
+            client
+                .post_zk_vk_update(&update_req)
+                .expect("post update vk");
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 2);
+        assert_eq!(store[0].method, HttpMethod::POST);
+        assert_eq!(store[0].url.as_str(), "http://mock.local/v1/zk/vk/register");
+        let register_body: Value =
+            norito::json::from_slice(&store[0].body).expect("decode register body");
+        assert_eq!(
+            register_body["public_inputs_schema_hash_hex"].as_str(),
+            Some("aa".repeat(32).as_str())
+        );
+        assert_eq!(register_body["status"].as_str(), Some("Active"));
+        assert_eq!(store[1].method, HttpMethod::POST);
+        assert_eq!(store[1].url.as_str(), "http://mock.local/v1/zk/vk/update");
+        let update_body: Value =
+            norito::json::from_slice(&store[1].body).expect("decode update body");
+        assert!(update_body["gas_schedule_id"].is_null());
+        assert_eq!(update_body["status"].as_str(), Some("Withdrawn"));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn post_zk_vk_register_update_reject_malformed_inputs_before_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = empty_response(StatusCode::ACCEPTED);
+
+        for req in [
+            vk_submission_json(&[("backend", norito::json::Value::from("mock/dev"))]),
+            vk_submission_json(&[("backend", norito::json::Value::from("halo2/ipa/orchard"))]),
+            vk_submission_json(&[("name", norito::json::Value::from("   "))]),
+            vk_submission_json(&[("name", norito::json::Value::from("scope:vk"))]),
+            vk_submission_json(&[("backend", norito::json::Value::from(7u64))]),
+            norito::json!({ "name": "vk_main" }),
+        ] {
+            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_register(&req)
+                    .expect_err("bad VK register JSON must be rejected")
+            });
+            assert!(
+                register_err.to_string().contains("backend")
+                    || register_err.to_string().contains("name"),
+                "unexpected register error: {register_err}"
+            );
+
+            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_update(&req)
+                    .expect_err("bad VK update JSON must be rejected")
+            });
+            assert!(
+                update_err.to_string().contains("backend")
+                    || update_err.to_string().contains("name"),
+                "unexpected update error: {update_err}"
+            );
+        }
+
+        for req in [
+            vk_submission_json(&[("authority", norito::json::Value::Null)]),
+            vk_submission_json(&[("authority", norito::json::Value::from("   "))]),
+            vk_submission_json(&[("private_key", norito::json::Value::Null)]),
+            vk_submission_json(&[("private_key", norito::json::Value::from("   "))]),
+        ] {
+            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_register(&req)
+                    .expect_err("VK register JSON without signing fields must be rejected")
+            });
+            assert!(
+                register_err.to_string().contains("authority")
+                    || register_err.to_string().contains("private_key"),
+                "unexpected register error: {register_err}"
+            );
+
+            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_update(&req)
+                    .expect_err("VK update JSON without signing fields must be rejected")
+            });
+            assert!(
+                update_err.to_string().contains("authority")
+                    || update_err.to_string().contains("private_key"),
+                "unexpected update error: {update_err}"
+            );
+        }
+
+        for (req, expected) in [
+            (
+                vk_submission_json(&[("version", norito::json::Value::from(0u64))]),
+                "version",
+            ),
+            (
+                vk_submission_json(&[(
+                    "public_inputs_schema_hash_hex",
+                    norito::json::Value::from("abc"),
+                )]),
+                "public_inputs_schema_hash_hex",
+            ),
+            (
+                vk_submission_json(&[("gas_schedule_id", norito::json::Value::from("   "))]),
+                "gas_schedule_id",
+            ),
+            (
+                vk_submission_json(&[("max_proof_bytes", norito::json::Value::from(u64::MAX))]),
+                "max_proof_bytes",
+            ),
+            (
+                vk_submission_json(&[("status", norito::json::Value::from("retired"))]),
+                "status",
+            ),
+            (
+                vk_submission_json(&[
+                    ("activation_height", norito::json::Value::from(8u64)),
+                    ("withdraw_height", norito::json::Value::from(7u64)),
+                ]),
+                "withdraw_height",
+            ),
+            (
+                vk_submission_json(&[("vk_bytes", norito::json::Value::from(""))]),
+                "vk_bytes",
+            ),
+            (
+                vk_submission_json(&[("vk_len", norito::json::Value::from(99u64))]),
+                "vk_len",
+            ),
+            (
+                vk_submission_json(&[(
+                    "commitment_hex",
+                    norito::json::Value::from("00".repeat(32)),
+                )]),
+                "commitment_hex",
+            ),
+            (
+                vk_submission_json(&[
+                    ("vk_bytes", norito::json::Value::Null),
+                    ("commitment_hex", norito::json::Value::Null),
+                ]),
+                "commitment_hex",
+            ),
+        ] {
+            let register_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_register(&req)
+                    .expect_err("malformed VK register JSON must be rejected")
+            });
+            assert!(
+                register_err.to_string().contains(expected),
+                "unexpected register error for {expected}: {register_err}"
+            );
+
+            let update_err = with_mock_http(respond_with(&snapshots, response.clone()), || {
+                client
+                    .post_zk_vk_update(&req)
+                    .expect_err("malformed VK update JSON must be rejected")
+            });
+            assert!(
+                update_err.to_string().contains(expected),
+                "unexpected update error for {expected}: {update_err}"
+            );
+        }
+
+        assert!(
+            snapshots.lock().expect("lock snapshot store").is_empty(),
+            "rejected VK JSON must not be sent"
+        );
     }
 
     #[test]
@@ -10075,6 +11047,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
     pub fn post_zk_verify_json(&self, value: &norito::json::Value) -> Result<norito::json::Value> {
+        validate_zk_verify_or_submit_json(value, "zk verify json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/verify");
         let body = norito::json::to_vec(value)?;
         let resp = self.send_builder(
@@ -11653,6 +12626,7 @@ impl Client {
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        validate_zk_verify_or_submit_json(value, "zk submit-proof json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/submit-proof");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -11732,6 +12706,7 @@ impl Client {
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        validate_zk_ivm_json(value, "zk ivm derive json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/ivm/derive");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -11761,6 +12736,7 @@ impl Client {
         &self,
         value: &norito::json::Value,
     ) -> Result<norito::json::Value> {
+        validate_zk_ivm_json(value, "zk ivm prove json")?;
         let url = join_torii_url(&self.torii_url, "v1/zk/ivm/prove");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -13503,6 +14479,7 @@ impl Client {
         &self,
         filter: &ZkProofsFilter,
     ) -> Result<norito::json::Value> {
+        validate_zk_proofs_filter(filter)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/proofs");
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
@@ -13521,6 +14498,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or the JSON body is malformed.
     pub fn get_zk_proofs_count(&self, filter: &ZkProofsFilter) -> Result<u64> {
+        validate_zk_proofs_filter(filter)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/proofs/count");
         let mut req = self.default_request(HttpMethod::GET, url);
         req = filter.apply(req);
@@ -13542,9 +14520,12 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_proof_json(&self, backend: &str, hash_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(
+        let backend = require_production_verify_backend_label(backend, "zk proof backend")?;
+        let hash_hex = normalize_hex32_lower(hash_hex, "zk proof hash")?;
+        let url = join_torii_url_with_path_segments(
             &self.torii_url,
-            &format!("v1/zk/proof/{backend}/{hash_hex}"),
+            "v1/zk/proof",
+            &[backend, hash_hex.as_str()],
         );
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
@@ -13735,6 +14716,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
     pub fn post_zk_vk_register(&self, value: &norito::json::Value) -> Result<()> {
+        validate_zk_vk_submission_json(value, "zk vk register json", true)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vk/register");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -13757,6 +14739,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails or the response is not `202 Accepted`.
     pub fn post_zk_vk_update(&self, value: &norito::json::Value) -> Result<()> {
+        validate_zk_vk_submission_json(value, "zk vk update json", false)?;
         let url = join_torii_url(&self.torii_url, "v1/zk/vk/update");
         let body = norito::json::to_vec(value)?;
         let resp = self
@@ -13780,6 +14763,8 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
+        let backend = require_production_verify_backend_label(backend, "zk verifying key backend")?;
+        let name = require_non_empty_path_segment(name, "zk verifying key name")?;
         let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
@@ -15743,7 +16728,11 @@ fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -
 mod url_join_tests {
     use url::Url;
 
-    use super::{join_torii_url, join_torii_url_with_path_segments};
+    use super::{
+        ZkProofsFilter, is_production_verify_backend_label, join_torii_url,
+        join_torii_url_with_path_segments, normalize_hex32_lower,
+        require_production_verify_backend_label, validate_zk_proofs_filter,
+    };
 
     #[test]
     fn join_prover_reports_paths() {
@@ -15774,6 +16763,116 @@ mod url_join_tests {
             u.as_str(),
             "http://localhost:8080/api/v1/zk/vk/halo2%2Fipa/ivm_execution"
         );
+    }
+
+    #[test]
+    fn join_proof_path_encodes_slash_containing_backend_segment() {
+        let base = Url::parse("http://localhost:8080/api/").unwrap();
+        let proof_hash = "aa".repeat(32);
+        let u = join_torii_url_with_path_segments(
+            &base,
+            "v1/zk/proof",
+            &["halo2/ipa", proof_hash.as_str()],
+        );
+        let expected = format!("http://localhost:8080/api/v1/zk/proof/halo2%2Fipa/{proof_hash}");
+
+        assert_eq!(u.as_str(), expected.as_str());
+    }
+
+    #[test]
+    fn zk_client_backend_guard_accepts_current_production_backends() {
+        for backend in [
+            "halo2/ipa",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kagemusha-folded-v1",
+            "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+        ] {
+            assert!(
+                is_production_verify_backend_label(backend),
+                "production backend {backend} must be admitted"
+            );
+            assert_eq!(
+                require_production_verify_backend_label(backend, "backend")
+                    .expect("production backend"),
+                backend
+            );
+        }
+    }
+
+    #[test]
+    fn zk_client_backend_guard_rejects_pending_trusted_setup_and_path_labels() {
+        for backend in [
+            "unknown/privacy/backend",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa\0",
+            "../halo2/ipa",
+            "halo2/ipa/../tiny-add",
+            "halo2/ipa/orchard",
+            "groth16/bls12-377",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "stark/fri/kzg",
+            "stark/fri/debug",
+            "halo2/kzg",
+            "mock/dev",
+        ] {
+            assert!(
+                !is_production_verify_backend_label(backend),
+                "unsupported backend {backend:?} must stay fail-closed"
+            );
+            let err = require_production_verify_backend_label(backend, "backend")
+                .expect_err("unsupported backend rejected");
+            assert!(
+                format!("{err}").contains("unsupported production verifier backend"),
+                "unexpected backend error for {backend:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn zk_client_proof_filter_rejects_unsupported_backends_before_request() {
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa/orchard",
+            "stark/fri/miden",
+            "halo2/kzg",
+            "mock/dev",
+        ] {
+            let filter = ZkProofsFilter {
+                backend: Some(backend),
+                ..ZkProofsFilter::default()
+            };
+            let err = validate_zk_proofs_filter(&filter)
+                .expect_err("unsupported filter backend rejected");
+            assert!(format!("{err}").contains("unsupported production verifier backend"));
+        }
+    }
+
+    #[test]
+    fn zk_client_proof_hash_canonicalizes_and_rejects_malformed_values() {
+        assert_eq!(
+            normalize_hex32_lower(&format!("0x{}", "AA".repeat(32)), "proof hash").expect("hash"),
+            "aa".repeat(32)
+        );
+
+        for hash in [
+            String::new(),
+            "abc".to_string(),
+            "z".repeat(64),
+            "a".repeat(63),
+            format!("0x0x{}", "aa".repeat(32)),
+        ] {
+            assert!(
+                normalize_hex32_lower(&hash, "proof hash").is_err(),
+                "malformed proof hash {hash:?} must be rejected"
+            );
+        }
     }
 }
 
@@ -23000,7 +24099,6 @@ mod tests {
                     expected_destination_binding_hash_hex: Some("ef".repeat(32)),
                     tron_verifier_address: Some("TJRabPrwbZy45sbavfcjinPJC18kjpRTv8".to_owned()),
                     proof_bytes_hex: Some(proof_bytes_hex.clone()),
-                    ..SccpMessageProofQueryParams::default()
                 },
                 "EVM and TRON SCCP destination fields cannot be mixed",
             ),

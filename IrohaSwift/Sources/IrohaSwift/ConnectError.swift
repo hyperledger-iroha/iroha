@@ -167,6 +167,11 @@ extension ConnectEnvelopeError: ConnectErrorConvertible {
                                 code: "envelope.unknown_payload_kind",
                                 message: "Unknown payload kind '\(kind)'.",
                                 underlying: self)
+        case .unsupportedSignatureAlgorithm(let algorithm):
+            return ConnectError(category: .codec,
+                                code: "envelope.unsupported_signature_algorithm",
+                                message: "Unsupported wallet signature algorithm '\(algorithm)'.",
+                                underlying: self)
         }
     }
 }

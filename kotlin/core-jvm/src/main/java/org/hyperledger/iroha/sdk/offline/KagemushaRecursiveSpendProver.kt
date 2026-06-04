@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.sdk.offline
 
-/** Native recursive Kagemusha spend init/append/verify/redeem bridge. */
+/** Native recursive Kagemusha spend ABI-6 bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
         RECURSIVE_SPEND_V1("recursive_spend_v1"),
@@ -13,8 +13,33 @@ class KagemushaRecursiveSpendProver private constructor() {
             "kagemusha-recursive-aggregation-v1"
         const val RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
             "kagemusha-recursive-spend-lineage-v1"
+        const val RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-spend-lineage-onehop-v1"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+            "kagemusha-recursive-spend-lineage-append-v1"
+        const val COMPACT_TOKEN_MAX_HOPS: Int = 64
+        const val RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1: Int = 64
+        const val RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1: Boolean = true
+        const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1: Int = 1
+        const val RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES: Int = 8 * 1024 * 1024
+        const val RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: Int = 128
+        const val RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN: String =
+            "iroha:kagemusha:v1:recursive-spend-transition-profile"
+        const val RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN: String =
+            "iroha:kagemusha:v1:recursive-spend-transition-profile-digest"
+        const val RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN: String =
+            "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1: String =
+            "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1: String =
+            "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1: String =
+            "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1"
+        const val RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1: String =
+            "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
 
         private const val LIBRARY_NAME = "connect_norito_bridge"
+        private val MALFORMED_NATIVE_PROBE_ARCHIVE = byteArrayOf(0x00)
         private val nativeAvailable: Boolean = loadLibrary()
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
@@ -27,12 +52,145 @@ class KagemushaRecursiveSpendProver private constructor() {
             if (recursiveSpendAvailable) Mode.RECURSIVE_SPEND_V1 else Mode.CHECKED_PREFOLD_V1
 
         @JvmStatic
+        fun canRedeemWitnessless(circuitId: String?, hopCount: Int): Boolean =
+            RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+                isLineageProofCircuitId(circuitId) &&
+                hopCount >= 1 &&
+                hopCount <= RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+
+        @JvmStatic
+        fun isLineageProofCircuitId(circuitId: String?): Boolean =
+            circuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+                circuitId == RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+                circuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+
+        @JvmStatic
+        fun isLineageAppendOutputCircuitId(outputCircuitId: String?): Boolean =
+            outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+                outputCircuitId == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+
+        @JvmStatic
+        fun requiresLineageWitnessForRedeem(circuitId: String?, hopCount: Int): Boolean =
+            !canRedeemWitnessless(circuitId, hopCount)
+
+        @JvmStatic
+        fun canAppendWitnesslessLineage(previousHopCount: Int): Boolean =
+            RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+                previousHopCount >= 1 &&
+                previousHopCount < RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+
+        @JvmStatic
+        fun normalizeAppendOutputCircuitId(outputCircuitId: String?): String =
+            if (outputCircuitId.isNullOrEmpty()) {
+                RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            } else if (outputCircuitId == RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            } else {
+                outputCircuitId
+            }
+
+        @JvmStatic
+        fun isSupportedAppendOutputCircuitId(outputCircuitId: String?): Boolean =
+            when (normalizeAppendOutputCircuitId(outputCircuitId)) {
+                RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+                -> true
+                else -> false
+            }
+
+        @JvmStatic
+        fun isSupportedPreviousProofCircuitId(previousProofCircuitId: String?): Boolean =
+            previousProofCircuitId == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+                isLineageProofCircuitId(previousProofCircuitId)
+
+        @JvmStatic
+        fun requiresPreviousLineageVerifierRecordForAppend(previousProofCircuitId: String?): Boolean =
+            isLineageProofCircuitId(previousProofCircuitId)
+
+        @JvmStatic
+        fun isSupportedAppendProofTransition(
+            previousProofCircuitId: String?,
+            outputCircuitId: String?,
+        ): Boolean {
+            val normalizedOutput = normalizeAppendOutputCircuitId(outputCircuitId)
+            return previousProofCircuitId == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
+                normalizedOutput == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+                isLineageProofCircuitId(previousProofCircuitId) &&
+                    (
+                        normalizedOutput == RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+                            normalizedOutput == RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+                    )
+        }
+
+        @JvmStatic
+        fun preferredAppendOutputCircuitId(previousHopCount: Int): String =
+            if (canAppendWitnesslessLineage(previousHopCount)) {
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+            } else {
+                RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            }
+
+        @JvmStatic
+        fun canProveAppendOutputCircuitId(outputCircuitId: String?, previousHopCount: Int): Boolean {
+            if (previousHopCount < 1) {
+                return false
+            }
+            return when (normalizeAppendOutputCircuitId(outputCircuitId)) {
+                RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ->
+                    previousHopCount < COMPACT_TOKEN_MAX_HOPS
+                RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 ->
+                    canAppendWitnesslessLineage(previousHopCount)
+                else -> false
+            }
+        }
+
+        @JvmStatic
+        fun canSelectAppendOutputCircuitId(
+            previousProofCircuitId: String?,
+            outputCircuitId: String?,
+            previousHopCount: Int,
+        ): Boolean {
+            if (!canProveAppendOutputCircuitId(outputCircuitId, previousHopCount)) {
+                return false
+            }
+            if (!isSupportedPreviousProofCircuitId(previousProofCircuitId)) {
+                return false
+            }
+            return isSupportedAppendProofTransition(previousProofCircuitId, outputCircuitId)
+        }
+
+        @JvmStatic
+        fun requiresPreviousProofOpenEnvelopesForAppend(
+            outputCircuitId: String?,
+            previousHopCount: Int,
+        ): Boolean =
+            isLineageAppendOutputCircuitId(normalizeAppendOutputCircuitId(outputCircuitId)) &&
+                previousHopCount >= 1
+
+        @JvmStatic
         fun initSpend(requestArchive: ByteArray): ByteArray =
             call("init", requestArchive, ::nativeInitSpend)
 
         @JvmStatic
         fun appendSpend(requestArchive: ByteArray): ByteArray =
             call("append", requestArchive, ::nativeAppendSpend)
+
+        @JvmStatic
+        fun transitionProfileInit(requestArchive: ByteArray): ByteArray =
+            call("transition profile init", requestArchive, ::nativeTransitionProfileInit)
+
+        @JvmStatic
+        fun transitionProfileAppend(requestArchive: ByteArray): ByteArray =
+            call("transition profile append", requestArchive, ::nativeTransitionProfileAppend)
+
+        @JvmStatic
+        fun lineageAppendBoundary(profileArchive: ByteArray): ByteArray =
+            callArchive(
+                "lineage append boundary",
+                "profileArchive",
+                profileArchive,
+                ::nativeLineageAppendBoundary,
+            )
 
         @JvmStatic
         fun lineageWitnessFromInitResult(
@@ -72,11 +230,19 @@ class KagemushaRecursiveSpendProver private constructor() {
             label: String,
             requestArchive: ByteArray,
             nativeCall: (ByteArray) -> ByteArray?,
+        ): ByteArray =
+            callArchive(label, "requestArchive", requestArchive, nativeCall)
+
+        private fun callArchive(
+            label: String,
+            archiveName: String,
+            archive: ByteArray,
+            nativeCall: (ByteArray) -> ByteArray?,
         ): ByteArray {
-            require(requestArchive.isNotEmpty()) { "requestArchive must not be empty" }
+            require(archive.isNotEmpty()) { "$archiveName must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
-            val output = nativeCall(requestArchive)
-            return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+            val output = nativeCall(archive)
+            return requireRecursiveSpendOutput(output, label)
         }
 
         private fun call(
@@ -89,7 +255,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(bundleArchive.isNotEmpty()) { "bundleArchive must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val output = nativeCall(requestArchive, bundleArchive)
-            return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+            return requireRecursiveSpendOutput(output, label)
         }
 
         private fun call(
@@ -104,8 +270,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             require(bundleArchive.isNotEmpty()) { "bundleArchive must not be empty" }
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val output = nativeCall(previousWitnessArchive, requestArchive, bundleArchive)
-            return KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
+            return requireRecursiveSpendOutput(output, label)
         }
+
+        internal fun requireRecursiveSpendOutput(output: ByteArray?, label: String): ByteArray =
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(output, "native $label")
 
         private fun loadLibrary(): Boolean =
             detectNativeAvailability(
@@ -115,17 +284,24 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
 
         private fun probeRequiredNativeSymbols(): Boolean {
+            val probe = MALFORMED_NATIVE_PROBE_ARCHIVE
             var available = true
-            available = expectIllegalArgumentProbe { nativeInitSpend(ByteArray(0)) } && available
-            available = expectIllegalArgumentProbe { nativeAppendSpend(ByteArray(0)) } && available
-            available = expectIllegalArgumentProbe { nativeVerifySpend(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe { nativeInitSpend(probe) } && available
+            available = expectIllegalArgumentProbe { nativeAppendSpend(probe) } && available
+            available =
+                expectIllegalArgumentProbe { nativeTransitionProfileInit(ByteArray(0)) } && available
+            available =
+                expectIllegalArgumentProbe { nativeTransitionProfileAppend(ByteArray(0)) } && available
+            available =
+                expectIllegalArgumentProbe { nativeLineageAppendBoundary(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe { nativeVerifySpend(probe) } && available
             available = expectIllegalArgumentProbe {
-                nativeLineageWitnessFromInitResult(ByteArray(0), byteArrayOf(0x01))
+                nativeLineageWitnessFromInitResult(probe, probe)
             } && available
             available = expectIllegalArgumentProbe {
-                nativeLineageWitnessAppendResult(ByteArray(0), byteArrayOf(0x01), byteArrayOf(0x02))
+                nativeLineageWitnessAppendResult(probe, probe, probe)
             } && available
-            available = expectIllegalArgumentProbe { nativeRedeemSpend(ByteArray(0)) } && available
+            available = expectIllegalArgumentProbe { nativeRedeemSpend(probe) } && available
             return available
         }
 
@@ -144,20 +320,16 @@ class KagemushaRecursiveSpendProver private constructor() {
         ): Boolean {
             try {
                 loadLibrary()
-            } catch (_: IllegalArgumentException) {
-                return false
             } catch (_: UnsatisfiedLinkError) {
                 return false
-            } catch (_: SecurityException) {
+            } catch (_: RuntimeException) {
                 return false
             }
             val abiVersion = try {
                 bridgeAbiVersion()
-            } catch (_: IllegalArgumentException) {
-                return false
             } catch (_: UnsatisfiedLinkError) {
                 return false
-            } catch (_: SecurityException) {
+            } catch (_: RuntimeException) {
                 return false
             }
             if (abiVersion < REQUIRED_BRIDGE_ABI_VERSION) {
@@ -167,9 +339,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 probeSymbol()
             } catch (_: UnsatisfiedLinkError) {
                 false
-            } catch (_: SecurityException) {
-                false
-            } catch (_: IllegalArgumentException) {
+            } catch (_: RuntimeException) {
                 false
             }
         }
@@ -182,6 +352,15 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic
         private external fun nativeAppendSpend(requestArchive: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeTransitionProfileInit(requestArchive: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeTransitionProfileAppend(requestArchive: ByteArray): ByteArray?
+
+        @JvmStatic
+        private external fun nativeLineageAppendBoundary(profileArchive: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativeLineageWitnessFromInitResult(

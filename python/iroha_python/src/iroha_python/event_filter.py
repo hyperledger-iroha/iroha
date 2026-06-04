@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
+from ._privacy_backends import _require_production_verify_backend_label
+
 __all__ = [
     "EventFilter",
     "DataEventFilter",
@@ -31,6 +33,32 @@ class EventFilter(ABC):
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=False)
 
 
+def _normalize_proof_hash_hex(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a 32-byte hex string")
+    normalized = value.strip().lower()
+    if normalized.startswith("0x"):
+        normalized = normalized[2:]
+    if len(normalized) != 64:
+        raise ValueError(f"{context} must be a 32-byte hex string")
+    try:
+        bytes.fromhex(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{context} must be a 32-byte hex string") from exc
+    return normalized
+
+
+def _normalize_verifying_key_name(value: Any, context: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{context} must be a string")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{context} must be a non-empty string")
+    if ":" in normalized:
+        raise ValueError(f"{context} must not contain ':' characters")
+    return normalized
+
+
 @dataclass(frozen=True)
 class VerifyingKeyFilter(EventFilter):
     """Filter verifying-key registry lifecycle events."""
@@ -45,9 +73,17 @@ class VerifyingKeyFilter(EventFilter):
         if self.backend is None and self.name is None:
             id_matcher = None
         else:
-            if not self.backend or not self.name:
+            if self.backend is None or self.name is None:
                 raise ValueError("both backend and name must be provided for verifying key filters")
-            id_matcher = {"backend": self.backend, "name": self.name}
+            backend = _require_production_verify_backend_label(
+                self.backend,
+                "verifying_key_filter.backend",
+            )
+            name = _normalize_verifying_key_name(
+                self.name,
+                "verifying_key_filter.name",
+            )
+            id_matcher = {"backend": backend, "name": name}
         event_set = {
             "Registered": bool(self.registered),
             "Updated": bool(self.updated),
@@ -77,8 +113,16 @@ class ProofEventFilter(EventFilter):
                 "proof filter requires both backend and proof_hash_hex when filtering by id"
             )
         id_matcher: Optional[Dict[str, Any]]
-        if self.backend and self.proof_hash_hex:
-            id_matcher = {"backend": self.backend, "hash_hex": self.proof_hash_hex}
+        if self.backend is not None and self.proof_hash_hex is not None:
+            backend = _require_production_verify_backend_label(
+                self.backend,
+                "proof_filter.backend",
+            )
+            proof_hash = _normalize_proof_hash_hex(
+                self.proof_hash_hex,
+                "proof_filter.proof_hash_hex",
+            )
+            id_matcher = {"backend": backend, "hash_hex": proof_hash}
         else:
             id_matcher = None
         event_set = {
@@ -193,11 +237,47 @@ class PipelineMergeFilter(EventFilter):
         return {"Pipeline": {"Merge": body}}
 
 
+def _normalize_event_filter_mapping(value: Mapping[str, Any], context: str) -> Dict[str, Any]:
+    normalized = dict(value)
+    for event_kind in ("VerifyingKey", "Proof"):
+        body = value.get(event_kind)
+        if not isinstance(body, Mapping):
+            continue
+        matcher = body.get("id_matcher")
+        if not isinstance(matcher, Mapping) or "backend" not in matcher:
+            continue
+        normalized_matcher = dict(matcher)
+        normalized_matcher["backend"] = _require_production_verify_backend_label(
+            matcher.get("backend"),
+            f"{context}.{event_kind}.id_matcher.backend",
+        )
+        if event_kind == "Proof":
+            if "hash_hex" in matcher:
+                normalized_matcher["hash_hex"] = _normalize_proof_hash_hex(
+                    matcher.get("hash_hex"),
+                    f"{context}.{event_kind}.id_matcher.hash_hex",
+                )
+            if "proof_hash_hex" in matcher:
+                normalized_matcher["proof_hash_hex"] = _normalize_proof_hash_hex(
+                    matcher.get("proof_hash_hex"),
+                    f"{context}.{event_kind}.id_matcher.proof_hash_hex",
+                )
+        elif "name" in matcher:
+            normalized_matcher["name"] = _normalize_verifying_key_name(
+                matcher.get("name"),
+                f"{context}.{event_kind}.id_matcher.name",
+            )
+        normalized_body = dict(body)
+        normalized_body["id_matcher"] = normalized_matcher
+        normalized[event_kind] = normalized_body
+    return normalized
+
+
 class DataEventFilter(EventFilter):
     """Wrapper to compose data event filters."""
 
     def __init__(self, inner: Mapping[str, Any]) -> None:
-        self._inner = dict(inner)
+        self._inner = _normalize_event_filter_mapping(inner, "data_event_filter")
 
     @classmethod
     def verifying_key(cls, *, backend: Optional[str] = None, name: Optional[str] = None,
@@ -298,9 +378,27 @@ def ensure_event_filter(value: Optional[object]) -> Optional[str]:
     if value is None:
         return None
     if isinstance(value, EventFilter):
-        return value.to_json()
+        return json.dumps(
+            _normalize_event_filter_mapping(value.to_dict(), "event_filter"),
+            separators=(",", ":"),
+            sort_keys=False,
+        )
     if isinstance(value, Mapping):
-        return json.dumps(value, separators=(",", ":"), sort_keys=False)
+        return json.dumps(
+            _normalize_event_filter_mapping(value, "event_filter"),
+            separators=(",", ":"),
+            sort_keys=False,
+        )
     if isinstance(value, str):
+        trimmed = value.strip()
+        if trimmed and trimmed[0] in "{[":
+            try:
+                parsed = json.loads(trimmed)
+            except json.JSONDecodeError:
+                return value
+            if isinstance(parsed, Mapping):
+                normalized = _normalize_event_filter_mapping(parsed, "event_filter")
+                if normalized != parsed:
+                    return json.dumps(normalized, separators=(",", ":"), sort_keys=False)
         return value
     raise TypeError("event filter must be EventFilter, mapping, or JSON string")

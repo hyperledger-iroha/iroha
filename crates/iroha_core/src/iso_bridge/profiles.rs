@@ -132,6 +132,18 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "structured_address_mode": "permissive",
         "supplementary_data_max_bytes": 16384,
         "amount_minor_units": []
+      },
+      {
+        "message_type": "colr.012",
+        "direction": "inbound",
+        "versions": ["colr.012", "colr.012.001.05"],
+        "business_services": [],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 16384,
+        "amount_minor_units": []
       }
     ]
   },
@@ -440,6 +452,18 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "direction": "inbound",
         "versions": ["sese.025.001.08", "sese.025.001.10"],
         "business_services": ["securities.csd.settlement"],
+        "require_app_header": false,
+        "require_business_service": false,
+        "require_uetr": false,
+        "structured_address_mode": "permissive",
+        "supplementary_data_max_bytes": 4096,
+        "amount_minor_units": []
+      },
+      {
+        "message_type": "colr.012",
+        "direction": "inbound",
+        "versions": ["colr.012.001.05"],
+        "business_services": ["securities.csd.collateral"],
         "require_app_header": false,
         "require_business_service": false,
         "require_uetr": false,
@@ -1249,7 +1273,7 @@ mod tests {
         let catalog = default_profile_catalog();
         let generic = &catalog["generic-iso20022"];
         for message_type in [
-            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025",
+            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025", "colr.012",
         ] {
             assert!(
                 generic
@@ -1268,6 +1292,16 @@ mod tests {
             securities
                 .message_profile("sese.025", MessageDirection::Inbound)
                 .is_some()
+        );
+        assert!(
+            securities
+                .message_profile("colr.012", MessageDirection::Inbound)
+                .is_some()
+        );
+        assert!(
+            generic
+                .message_profile("colr.007", MessageDirection::Inbound)
+                .is_none()
         );
     }
 }

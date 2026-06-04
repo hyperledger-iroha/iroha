@@ -410,6 +410,11 @@ trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                     .to_owned(),
                 profiles: Vec::new(),
                 store_dir: None,
+                store_retention_secs:
+                    iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+                store_max_records:
+                    iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+                audit_export_dir: None,
                 embedded_signature_policy: None,
                 signer: None,
                 account_aliases: Vec::new(),

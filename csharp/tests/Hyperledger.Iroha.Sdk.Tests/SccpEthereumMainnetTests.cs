@@ -181,8 +181,10 @@ public sealed class SccpEthereumMainnetTests
             CancellationToken cancellationToken = default)
         {
             Calls++;
-            Assert.Same(expectedReceipt, receipt);
-            Assert.Same(expectedBlock, block);
+            Assert.NotSame(expectedReceipt, receipt);
+            Assert.NotSame(expectedBlock, block);
+            Assert.Equal(expectedReceipt["transactionHash"], receipt?["transactionHash"]);
+            Assert.Equal(expectedBlock["hash"], block?["hash"]);
             Assert.Equal(expectedTransactionHash, transactionHash);
             return ValueTask.FromResult<IReadOnlyDictionary<string, object?>?>(finality);
         }
@@ -255,6 +257,68 @@ public sealed class SccpEthereumMainnetTests
         }
     }
 
+    private sealed class MutatingConsensusProviderStub(
+        IReadOnlyDictionary<string, object?> expectedReceipt,
+        IReadOnlyDictionary<string, object?> expectedBlock,
+        IReadOnlyDictionary<string, object?> finality) : IEthereumMainnetConsensusProvider
+    {
+        public ValueTask<IReadOnlyDictionary<string, object?>?> CollectFinalityEvidenceAsync(
+            IReadOnlyDictionary<string, object?>? receipt,
+            IReadOnlyDictionary<string, object?>? block,
+            string? transactionHash,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.NotSame(expectedReceipt, receipt);
+            Assert.NotSame(expectedBlock, block);
+            Assert.Equal(expectedReceipt["transactionHash"], receipt?["transactionHash"]);
+            Assert.Equal(expectedBlock["hash"], block?["hash"]);
+            Assert.True(receipt is IDictionary<string, object?>);
+            Assert.True(block is IDictionary<string, object?>);
+            ((IDictionary<string, object?>)receipt!)["status"] = "0x0";
+            MutateNestedReceiptSnapshot(receipt);
+            ((IDictionary<string, object?>)block!)["receiptsRoot"] = "0x" + new string('e', 64);
+            return ValueTask.FromResult<IReadOnlyDictionary<string, object?>?>(finality);
+        }
+    }
+
+    private sealed class MutatingInboundProverStub(
+        IReadOnlyDictionary<string, object?> originalReceipt,
+        IReadOnlyDictionary<string, object?> originalBlock,
+        IReadOnlyDictionary<string, object?> originalFinality,
+        string expectedTransactionHash) : IEthereumMainnetInboundProver
+    {
+        public ValueTask<byte[]> ProveAsync(
+            EthereumMainnetInboundEvidence evidence,
+            CancellationToken cancellationToken = default)
+        {
+            Assert.NotSame(originalReceipt, evidence.Receipt);
+            Assert.NotSame(originalBlock, evidence.Block);
+            Assert.NotSame(originalFinality, evidence.BeaconFinality);
+            Assert.Equal(expectedTransactionHash, evidence.TransactionHash);
+            Assert.True(evidence.Receipt is IDictionary<string, object?>);
+            Assert.True(evidence.Block is IDictionary<string, object?>);
+            Assert.True(evidence.BeaconFinality is IDictionary<string, object?>);
+            ((IDictionary<string, object?>)evidence.Receipt!)["status"] = "0x0";
+            MutateNestedReceiptSnapshot(evidence.Receipt);
+            ((IDictionary<string, object?>)evidence.Block!)["receiptsRoot"] =
+                "0x" + new string('e', 64);
+            ((IDictionary<string, object?>)evidence.BeaconFinality!)["executionBlockHash"] =
+                "0x" + new string('e', 64);
+            return ValueTask.FromResult(new byte[] { 1, 2, 3 });
+        }
+    }
+
+    private static void MutateNestedReceiptSnapshot(
+        IReadOnlyDictionary<string, object?>? receipt)
+    {
+        var logs = Assert.IsType<object?[]>(receipt?["logs"]);
+        var metadata = Assert.IsAssignableFrom<IDictionary<string, object?>>(logs[0]);
+        var topics = Assert.IsType<object?[]>(logs[1]);
+
+        metadata["address"] = "0x" + new string('e', 40);
+        topics[0] = "0x" + new string('e', 64);
+    }
+
     private sealed class OutboundProverStub(byte[] proofBytes) : IEthereumMainnetOutboundProver
     {
         public EthereumMainnetOutboundProofRequest? Request { get; private set; }
@@ -267,6 +331,27 @@ public sealed class SccpEthereumMainnetTests
             Assert.Equal(ExpectedRequestHash, request.RequestHash);
             Assert.Equal(ExpectedBindingHash, request.DestinationBindingHash);
             Assert.Equal(ExpectedPublicSignalWords, request.PublicSignalWords);
+            return ValueTask.FromResult(proofBytes);
+        }
+    }
+
+    private sealed class MutatingOutboundProverStub(byte[] proofBytes) : IEthereumMainnetOutboundProver
+    {
+        public EthereumMainnetOutboundProofRequest? Request { get; private set; }
+
+        public ValueTask<byte[]> ProveAsync(
+            EthereumMainnetOutboundProofRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            request.BundleBytes[0] = (byte)(request.BundleBytes[0] ^ 0xff);
+            request.SourceProofBytes[0] = (byte)(request.SourceProofBytes[0] ^ 0xff);
+            request.PublicInputsBytes[0] = (byte)(request.PublicInputsBytes[0] ^ 0xff);
+            if (request.PublicSignalWords is string[] publicSignalWords)
+            {
+                publicSignalWords[0] = "0x" + new string('9', 64);
+            }
+
             return ValueTask.FromResult(proofBytes);
         }
     }
@@ -2035,6 +2120,62 @@ public sealed class SccpEthereumMainnetTests
     }
 
     [Fact]
+    public async Task InboundCallbacksReceiveSnapshotEvidence()
+    {
+        var txHash = "0x" + new string('a', 64);
+        var blockHash = "0x" + new string('b', 64);
+        var receiptsRoot = "0x" + new string('c', 64);
+        var logAddress = "0x" + new string('f', 40);
+        var logTopic = "0x" + new string('1', 64);
+        var logMetadata = new Dictionary<string, string> { ["address"] = logAddress };
+        var logTopics = new System.Collections.ArrayList { logTopic };
+        var receipt = new Dictionary<string, object?>
+        {
+            ["status"] = "0x1",
+            ["transactionHash"] = txHash,
+            ["blockHash"] = blockHash,
+            ["blockNumber"] = "0x1234",
+            ["logs"] = new object?[] { logMetadata, logTopics },
+        };
+        var block = new Dictionary<string, object?>
+        {
+            ["hash"] = blockHash,
+            ["number"] = "0x1234",
+            ["receiptsRoot"] = receiptsRoot,
+        };
+        var beaconFinality = new EthereumMainnetBeaconFinalityEvidence(
+            "0x1234",
+            blockHash,
+            receiptsRoot).ToDictionary();
+
+        var collected = await EthereumMainnetSccp.CollectInboundEvidenceFromReceiptAsync(
+            new EthereumMainnetInboundEvidence { TransactionHash = txHash },
+            new ExecutionProviderStub("0x1", receipt, block),
+            new MutatingConsensusProviderStub(receipt, block, beaconFinality));
+        Assert.Equal("0x1", collected.Receipt?["status"]);
+        Assert.Equal(receiptsRoot, collected.Block?["receiptsRoot"]);
+        Assert.Equal("0x1", receipt["status"]);
+        Assert.Equal(receiptsRoot, block["receiptsRoot"]);
+        Assert.Equal(logAddress, logMetadata["address"]);
+        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+
+        var proofBytes = await EthereumMainnetSccp.ProveInboundToSoraAsync(
+            new EthereumMainnetInboundEvidence
+            {
+                Receipt = receipt,
+                Block = block,
+                BeaconFinality = beaconFinality,
+            },
+            new MutatingInboundProverStub(receipt, block, beaconFinality, txHash));
+        Assert.Equal(new byte[] { 1, 2, 3 }, proofBytes);
+        Assert.Equal("0x1", receipt["status"]);
+        Assert.Equal(receiptsRoot, block["receiptsRoot"]);
+        Assert.Equal(blockHash, beaconFinality["executionBlockHash"]);
+        Assert.Equal(logAddress, logMetadata["address"]);
+        Assert.Equal(logTopic, Assert.IsType<string>(logTopics[0]));
+    }
+
+    [Fact]
     public async Task BeaconRestConsensusProviderCollectsFinalizedTargetEvidence()
     {
         var txHash = "0x" + new string('a', 64);
@@ -2464,6 +2605,57 @@ public sealed class SccpEthereumMainnetTests
                     new Dictionary<string, object?>(),
                     new Dictionary<string, object?>())));
         Assert.Null(guardedSubmitter.Submission);
+    }
+
+    [Fact]
+    public async Task OutboundCallbackAndSubmissionSnapshotsRejectMutation()
+    {
+        var input = SampleOutboundInput();
+        var expectedRequest = EthereumMainnetSccp.BuildOutboundProofRequest(input);
+        var prover = new MutatingOutboundProverStub(Groth16ProofBytes());
+
+        var proofResult = await EthereumMainnetSccp.ProveOutboundToEthereumAsync(input, prover);
+
+        Assert.NotNull(prover.Request);
+        Assert.Equal(expectedRequest.RequestHash, proofResult.RequestHash);
+        Assert.Equal(expectedRequest.BundleBytes, proofResult.Request.BundleBytes);
+        Assert.Equal(expectedRequest.SourceProofBytes, proofResult.Request.SourceProofBytes);
+        Assert.Equal(expectedRequest.PublicInputsBytes, proofResult.Request.PublicInputsBytes);
+        Assert.Equal(expectedRequest.PublicSignalWords, proofResult.Request.PublicSignalWords);
+
+        var submission = EthereumMainnetSccp.BuildEthereumCalldata(
+            new EthereumMainnetSccpSubmissionInput(proofResult));
+        Assert.Equal(ExpectedCallDataHex, submission.CallDataHex);
+
+        var mutatedProofBytes = proofResult.ProofBytes.ToArray();
+        mutatedProofBytes[31] = 9;
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEthereumCalldata(
+                new EthereumMainnetSccpSubmissionInput(
+                    proofResult with { ProofBytes = mutatedProofBytes })));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEthereumCalldata(
+                new EthereumMainnetSccpSubmissionInput(
+                    proofResult with
+                    {
+                        ProofBase64 = Convert.ToBase64String(mutatedProofBytes),
+                    })));
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEthereumCalldata(
+                new EthereumMainnetSccpSubmissionInput(
+                    proofResult with
+                    {
+                        Request = proofResult.Request with
+                        {
+                            BundleBytes = "swapped-eth-bundle"u8.ToArray(),
+                        },
+                    })));
+        var mutatedSignals = proofResult.PublicSignalWords.ToArray();
+        mutatedSignals[0] = "0x" + new string('9', 64);
+        Assert.Throws<ArgumentException>(
+            () => EthereumMainnetSccp.BuildEthereumCalldata(
+                new EthereumMainnetSccpSubmissionInput(
+                    proofResult with { PublicSignalWords = mutatedSignals })));
     }
 
     [Fact]

@@ -592,13 +592,30 @@ public final class ConnectEnvelopeCodec {
   }
 
   private static int algorithmTag(final String algorithm) {
-    if (algorithm == null || algorithm.trim().isEmpty()) {
+    if (algorithm == null) {
       return 0;
     }
-    if ("ed25519".equalsIgnoreCase(algorithm.trim())) {
+    final String normalized = algorithm.trim();
+    if (normalized.isEmpty()) {
+      return 0;
+    }
+    if (!isPrintableAscii(normalized)) {
+      throw new IllegalArgumentException("Unsupported wallet signature algorithm: " + algorithm);
+    }
+    if ("ed25519".equalsIgnoreCase(normalized)) {
       return 0;
     }
     throw new IllegalArgumentException("Unsupported wallet signature algorithm: " + algorithm);
+  }
+
+  private static boolean isPrintableAscii(final String value) {
+    for (int i = 0; i < value.length(); i++) {
+      final char ch = value.charAt(i);
+      if (ch < 0x20 || ch > 0x7e) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String algorithmName(final int tag) {

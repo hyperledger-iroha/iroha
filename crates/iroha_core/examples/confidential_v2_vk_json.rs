@@ -26,7 +26,7 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
             "  \"name\": \"{}\",\n",
             "  \"version\": {},\n",
             "  \"circuit_id\": \"{}\",\n",
-            "  \"public_inputs_schema_hex\": \"{}\",\n",
+            "  \"public_inputs_schema_hash_hex\": \"{}\",\n",
             "  \"curve\": \"{}\",\n",
             "  \"gas_schedule_id\": \"{}\",\n",
             "  \"vk_len\": {},\n",

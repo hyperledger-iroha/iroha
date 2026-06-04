@@ -99,28 +99,53 @@ Recursive Kagemusha spend bundles now carry a chain-visible top-up anchor set:
 the sorted first-hop input nullifiers from the online-to-offline top-up lineage.
 The anchor set is included in the recursive spend accumulator digest and
 therefore in the recursive proof public inputs. The final recursive redemption
-path can be admitted in the current release only when the holder supplies a
+path has two admission forms. Semantic v1 accumulator proofs require a
 record-backed lineage witness next to the constant-size D2D bundle. That witness
 contains the full checked hop record bundle, proof-derived Pallas open-envelope
 archive, the spendable note descriptor created by each hop, and the intermediate
-recursive proofs committed by `recursive_proof_chain_digest`. The witness
-record bundle must name exactly the hop verifier records referenced by the
-lineage, and the Pallas archive must decode to exactly one envelope per hop:
-no malformed, missing, duplicate, unreferenced, or count-mismatched witness
-material is accepted. Witness assembly first validates the recursive bundle's
-public-input binding, then requires intermediate `previous_recursive_proofs`
-entries to be semantic aggregation proofs in lineage order, with each proof's
-hop count equal to its one-based position and its lineage scalar-projection
-digest still zero; reserved lineage proofs cannot be smuggled into that
-record-backed witness chain. Core chain-side replay preflights those previous
-proofs before reconstructing hop evidence, so backend/profile substitutions,
-empty previous proofs, stale public-input hashes, scalar-projection splices, and
-out-of-order hop counts fail before expensive Pallas replay. Chain execution
-also requires every supplied record snapshot to equal the currently registered
-WSV verifier record. Without that witness, semantic v1 accumulator proofs remain
-admission-neutral until the
-reserved `kagemusha-recursive-spend-lineage-v1` circuit family verifies every
-private hop and accumulator transition in-circuit. Once admitted, redemption
+recursive proofs committed by `recursive_proof_chain_digest`. The witness record
+bundle must name exactly the hop verifier records referenced by the lineage, and
+the Pallas archive must decode to exactly one envelope per hop: no malformed,
+missing, duplicate, unreferenced, or count-mismatched witness material is
+accepted. Directly supplied redeem witnesses and helper-built init/append
+witnesses share the same verifier-record checks: every referenced record must
+be active, live in the canonical `offline_kagemusha` namespace, publish the
+expected backend tag and curve label (`pallas` for Halo2 IPA, `goldilocks` for
+Stark), a non-empty circuit id, a non-zero public-input schema hash, a non-zero
+commitment, and a proof-size cap; it must match the proof attachment
+commitment, match the inline verifier-key length, and carry inline key bytes
+equal to the hop verifier key. For Halo2 IPA hops, request validation also
+recomputes the stable verifier-key commitment from the inline key bytes, rejects
+hop proof envelopes whose `vk_hash` does not match that commitment, and binds
+each hop proof envelope's circuit id, verifier-key hash, and public-input
+schema metadata to the active verifier record, and binds each lineage Pallas
+opening envelope's verifier-key and public-input schema metadata to that checked
+hop proof envelope before native evidence construction.
+Witness assembly
+first validates the recursive bundle's public-input binding, then requires
+intermediate `previous_recursive_proofs` entries to be supported recursive spend
+proofs in lineage order, with each proof's hop count equal to its one-based
+position. Each previous proof must also share the final bundle's verifier
+opening length, Pallas parameter fingerprint, fixed-window schedule digest, and
+shared-table manifest digest; per-hop witness-batch and table-base digests
+remain prefix-specific and are replayed by core. Semantic previous proofs must
+leave the lineage scalar-projection digest zero; Reserved-lineage previous
+proofs must bind a non-zero scalar-projection digest and require the active
+lineage verifier record before native hosts can serialize a redeem instruction.
+Core chain-side replay
+preflights those previous proofs before
+reconstructing hop evidence, so backend/profile substitutions, empty previous
+proofs, stale public-input hashes, verifier-context splices,
+scalar-projection splices, and out-of-order hop counts fail before expensive
+Pallas replay. Chain execution also requires
+every supplied record snapshot to equal the currently registered WSV verifier
+record. Without that witness, semantic v1 accumulator proofs remain
+admission-neutral. The reserved `kagemusha-recursive-spend-lineage-v1` profile
+is the witnessless chain-admission path inside the 64-hop cap: its strict
+envelope/profile shape, active verifier-record binding, inline lineage key
+material, backend proof preverification, private hop chain, and accumulator
+transition bindings must all verify before redemption proceeds. Once admitted,
+redemption
 consumes every top-up anchor nullifier plus the current spendable note nullifier
 before minting the public amount, so two hidden branches from the same top-up
 collide on the anchor even when they end in different final notes. Append hops
@@ -165,57 +190,73 @@ into `recursive_proof_chain_digest`, and that digest is inside the accumulator
 digest exposed to the next recursive proof. Recursive spend proofs also expose
 that proof-chain digest as an explicit public-input limb group, while standalone
 reserved recursive aggregation proofs set the same public-input field to zero.
-The one-hop verifier-slice circuit also has a semantic public-input limb group
-for `recursive_verifier_scalar_projection_digest`; standalone recursive
-aggregation proofs and current spend proofs set that field to zero, while the
-composed verifier slice constrains the field to the embedded IPA verifier's
-field-friendly scalar projection when that slice is materialized.
+The Reserved-lineage verifier-slice circuits also have a semantic public-input
+limb group for `recursive_verifier_scalar_projection_digest`; standalone
+recursive aggregation proofs and semantic v1 spend proofs set that field to
+zero, while production Reserved-lineage spend proofs constrain the field to the
+embedded IPA verifier's field-friendly scalar projection. The first offline hop
+uses the one-hop verifier-slice profile. Later offline hops use the append
+profile, which proves both the previous recursive proof opening and the next
+confidential-transfer hop opening while emitting a single new recursive spend
+bundle.
 Receivers can verify, store, and re-spend without contacting a node while the
 D2D payload keeps only this constant-size proof-chain commitment instead of
 prior proof bundles. The final holder submits the recursive bundle, public
-redeem amount, final unshield proof, and a record-backed lineage witness online;
-chain admission first honors the config gates (`kagemusha_enabled = true` and
-`kagemusha_force_legacy = false`), validates the semantic recursive proof
-envelope, checks the bundle chain id, and checks the final root and note
-commitment against the final unshield proof public inputs. If the lineage
-witness is present, admission verifies every private hop against the supplied
-verifier records only after confirming those records exactly match WSV, checks
-the Pallas open envelopes, replays the accumulator from the ordered per-hop note
+redeem amount, and final unshield proof for online redemption. Reserved-lineage
+bundles whose hop count is inside
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` can redeem
+witnesslessly when they carry the active lineage verifier record and pass
+chain admission. Semantic v1 recursive bundles still carry a record-backed
+lineage witness for online redemption.
+Chain admission first honors the config gates (`kagemusha_enabled = true` and
+`kagemusha_force_legacy = false`), validates the recursive proof envelope,
+checks the bundle chain id, and checks the final root and note commitment
+against the final unshield proof public inputs. If a semantic lineage witness is
+present, admission verifies every private hop against the supplied verifier
+records only after confirming those records exactly match WSV, checks the
+Pallas open envelopes, replays the accumulator from the ordered per-hop note
 descriptors, verifies each intermediate recursive proof committed by the
 proof-chain digest, and requires the recomputed accumulator to match the redeem
-bundle before nullifiers are consumed or public assets are minted. Current
-semantic `kagemusha-recursive-aggregation-v1` spend proofs are still rejected as
+bundle before nullifiers are consumed or public assets are minted. Semantic
+`kagemusha-recursive-aggregation-v1` spend proofs are still rejected as
 admission-neutral when that witness is missing, because the semantic proof alone
 does not prove the private-hop lineage in-circuit. The
 record-backed lineage gate runs before final semantic recursive proof backend
 verification, while still preserving the cheaper bundle, verifier-record, and
 final redeem public-input checks that produce more specific diagnostics.
-The reserved `kagemusha-recursive-spend-lineage-v1` profile is also
-fail-closed until its verifier is wired. Before returning that unwired-profile
-error, admission now requires the proof and verifier key to stay in the
-transparent `halo2/ipa` corridor, rejects empty proof bytes, recomputes the
-recursive public-input hash, checks the accumulator-derived public fields, and
-requires a non-zero recursive verifier scalar-projection digest. It also
-decodes the inner `OpenVerifyEnvelope` and binds it to the Halo2/Pasta backend
-tag, the lineage circuit id, a non-zero verifier-key hash, the recursive
-public-input schema, empty auxiliary metadata, and the accumulator-derived
-public instance columns. The reserved lineage profile now requires those
-instance columns to come from a strict ZK1 no-trusted-setup inner proof envelope;
-legacy Halo2 proof-envelope wrappers remain accepted only for semantic v1
-preverification and are rejected under the lineage circuit id. Record-backed
-preverification additionally requires that the inline verifier-key envelope be a
-strict no-trusted-setup Halo2 IPA ZK1 key container: exactly one
-reserved-lineage `CID1`, exactly one bounded `IPAK` degree, exactly one
-non-empty `H2VK`, and no unrelated key TLVs. Preverification also checks the
-cheap Halo2/Pasta verifier-key header so the `H2VK` domain degree matches the
-bounded `IPAK`, and requires the payload to contain the declared fixed-column
-commitments so truncated verifier keys are rejected before the heavy one-hop
-verifier-slice circuit is materialized. The proof envelope
-verifier-key hash must match the verifier-record commitment. That
-preverification is admission-neutral: a well-formed reserved lineage profile
-can pass registry and envelope checks, but chain admission still returns the
-unwired-profile error after final redeem public-input validation and before
-proof verification, nullifier consumption, or minting.
+The reserved `kagemusha-recursive-spend-lineage-v1` profile is the enabled
+witnessless chain-admission path for constant-size lineage proofs inside the
+64-hop cap. Its
+preflight requires the proof and verifier key to stay in the transparent
+`halo2/ipa`
+corridor, rejects empty proof bytes, recomputes the recursive public-input
+hash, checks the accumulator-derived public fields, and requires a non-zero
+recursive verifier scalar-projection digest. It also decodes the inner
+`OpenVerifyEnvelope` and binds it to the Halo2/Pasta backend tag, the lineage
+circuit id, a non-zero verifier-key hash, the recursive public-input schema,
+empty auxiliary metadata, and the accumulator-derived public instance columns.
+The reserved lineage profile requires those instance columns to come from a
+strict ZK1 no-trusted-setup inner proof envelope; legacy Halo2 proof-envelope
+wrappers remain accepted only for semantic v1 preverification and are rejected
+under the lineage circuit id. Record-backed preverification additionally
+requires that the inline verifier-key envelope be a strict no-trusted-setup
+Halo2 IPA ZK1 key container: exactly one reserved-lineage `CID1`, exactly one
+bounded `IPAK` degree, exactly one non-empty `H2VK`, and no unrelated key TLVs.
+Preverification also checks the cheap Halo2/Pasta verifier-key header so the
+`H2VK` domain degree matches the bounded `IPAK`, and requires the payload to
+contain the declared fixed-column commitments so truncated verifier keys are
+rejected before the heavy verifier-slice circuit is materialized. The proof
+envelope verifier-key hash must match the verifier-record commitment. Chain
+admission validates the Reserved-lineage envelope/profile shape before backend
+proof verification and accepts two strict public-instance layouts: one-hop init
+(`witness_count = 1`, `hop_count = 1`, one verifier-slice scalar-projection
+column) and append (`witness_count = hop_count`, `hop_count > 1`, non-zero
+transition-profile, append-opening-preflight, append-boundary, and append
+scalar-projection limb groups). Appends must bind the previous recursive proof
+opening, current hop proof opening, chain and asset, final note, and accumulator
+transition profile. Any lineage bundle outside
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` is rejected
+before nullifiers or public assets are touched.
 Malformed profile attempts that splice accumulator public inputs, refresh a
 stale hash over forged fields, substitute a trusted-setup backend, omit scalar
 projection, replay a semantic inner envelope or semantic verifier key, smuggle
@@ -228,20 +269,30 @@ circuit id are rejected before mint admission.
 The spend accumulator and bridge redeem request validation are lineage-aware:
 reserved lineage bundles compare the same accumulator-derived fields as
 semantic v1 bundles while allowing the scalar-projection digest to be non-zero,
-so future lineage-proving D2D states can be represented by the accumulator and
-their proof artifacts remain domain-separated from semantic v1 artifacts. The
-ABI-6 bridge and Node native host now serialize semantic redeem instructions
-only when a record-backed lineage witness verifies the hop records, Pallas
-open envelopes, intermediate recursive proofs, and final accumulator binding.
-Reserved-lineage redeem requests remain representable by the data model, but
-they still fail closed until the production lineage verifier is wired.
-Recursive spend proof generation and append verification still use the semantic
-v1 verifier until that verifier is available.
-If a caller tries to append from a previous bundle that already advertises the
-reserved lineage circuit id, the core append prover now fails with an explicit
-lineage-verifier-not-wired diagnostic instead of falling through to a generic
-semantic-proof verification failure; the C bridge pins that path as a
-no-output ABI failure.
+so lineage-proving D2D states can be represented by the accumulator and
+their proof artifacts remain domain-separated from semantic v1 artifacts.
+`kagemusha_recursive_spend_proof_artifact_digest` exposes that canonical
+previous-proof digest to the core prover and SDK wrappers, so
+Reserved-lineage append circuitry can bind the exact previous recursive proof
+without each host inventing a separate hash. The ABI-6 bridge, Node native host,
+and Python PyO3 host now serialize semantic
+redeem instructions only when a record-backed lineage witness verifies the hop
+records, Pallas open envelopes, intermediate recursive proofs, and final
+accumulator binding. Witnessless semantic redeem requests return no instruction
+bytes without a record-backed lineage witness. Witnessless Reserved-lineage
+redeem requests serialize instruction bytes when
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64`,
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true`, and the
+bundle passes verifier-record, proof-envelope, chain/asset, final commitment,
+root, and nullifier checks. Malformed Reserved-lineage requests continue to
+fail earlier during profile validation.
+Recursive spend append requests carry an optional
+`previous_lineage_verifier_record`. Semantic v1 previous proofs use the
+canonical recursive aggregation verifier and must leave this field empty.
+Reserved-lineage previous proofs must provide the active lineage verifier record
+so the append prover verifies the previous proof before folding the next hop;
+missing records, semantic verifier records, malformed records, and tampered
+previous proofs fail closed and the bridge returns no output bytes.
 Swift, Kotlin/JVM, Java Android, JavaScript, Python, and C# expose stable
 constants for both circuit ids so wallets can classify semantic v1 versus
 reserved lineage bundles without duplicating string literals.
@@ -269,16 +320,21 @@ aliases such as `anon-transfer-2x2-merkle16-poseidon-diversified` are rejected
 before proof verification, even if the verifier record and proof envelope agree
 on the alias. Trusted-setup labels such as KZG/Groth16/BN254 are rejected before
 proof verification, including standalone labels such as `kzg`, `bn254`, and
-`bls12_381` and colon-delimited profiles such as `halo2/ipa:kzg`. The shared
-classifiers match those setup and developer-only markers ASCII-case-insensitively,
-and setup markers are tokenized across every non-alphanumeric delimiter, so
-punctuation-spliced profiles such as `stark/fri/prod;kzg`,
-`stark/fri/prod+bn254`, or `stark/fri/prod-bls12-381` fail closed before broad
-STARK/FRI allowlists are considered. Mixed or padded labels such as
-`halo2/ipa: KZG` or `halo2/ipa:Mock-Proof` therefore cannot pass broad allowlists,
-and delimiter-inserted setup spellings such as `stark/fri/prod-bn-254`,
-`stark/fri/prod-groth-16`, and `stark/fri/prod-k-z-g` are normalized before
-classification. Developer-only spellings are normalized the same way, so
+`bls12_381`, colon-delimited profiles such as `halo2/ipa:kzg`, and explicit
+trusted-setup markers such as `srs`, `crs`, `ptau`, `ceremony`,
+`trusted-setup`, `structured-reference-string`, and `powers-of-tau`. The
+shared classifiers match those setup and developer-only markers
+ASCII-case-insensitively, and setup markers are tokenized across every
+non-alphanumeric delimiter, so punctuation-spliced profiles such as
+`stark/fri/prod;kzg`, `stark/fri/prod+bn254`,
+`stark/fri/prod-bls12-381`, `stark/fri/prod-s-r-s`, or
+`stark/fri/prod-powers-of-tau` fail closed before broad STARK/FRI allowlists are
+considered. Mixed or padded labels such as `halo2/ipa: KZG` or
+`halo2/ipa:Mock-Proof` therefore cannot pass broad allowlists, and
+delimiter-inserted setup spellings such as `stark/fri/prod-bn-254`,
+`stark/fri/prod-groth-16`, `stark/fri/prod-k-z-g`, and
+`stark/fri/structured-reference-string` are normalized before classification.
+Developer-only spellings are normalized the same way, so
 `stark/fri/d-e-b-u-g`, `stark/fri/m-o-c-k`, and
 `halo2/ipa:m-o-c-k-proof` cannot be hidden inside otherwise valid profile
 syntax.
@@ -422,8 +478,9 @@ prefix, padded label, or punctuation wildcard; the shared core backend classifie
 and Torii proof/prover paths enforce the same profile rule before
 Offline/Kagemusha verifier admission reaches proof decoding. STARK/FRI profiles
 that name trusted-setup curves or openings such as KZG, BN254, or BLS12, or
-developer-only `debug`/mock markers, are rejected by the same
-ASCII-case-insensitive classifier.
+explicit setup markers such as SRS/CRS/PTAU/ceremony, or developer-only
+`debug`/mock markers, are rejected by the same ASCII-case-insensitive
+classifier.
 `KagemushaCompactPaymentToken` wraps those public inputs with a transparent
 folded proof and rejects tokens whose proof-declared public-input hash does not
 match the canonical transcript before backend verification runs. The final
@@ -506,9 +563,10 @@ proof must decode as a Halo2 IPA `OpenVerifyEnvelope` whose backend tag,
 confidential-transfer-v2 circuit id, public-input schema, and verifier-key hash
 match the asset-bound active verifier record before the shared shielded
 accumulator executor runs. The active record must also publish inline Halo2 IPA
-verifier-key bytes, a matching key length, a matching verifier-key commitment,
-and a non-zero proof-size cap before the proof envelope is decoded; non-empty
-auxiliary bytes are rejected there as a non-canonical envelope. Duplicate input
+verifier-key bytes, the canonical `pallas` curve label, a matching key length, a
+matching verifier-key commitment, and a non-zero proof-size cap before the proof
+envelope is decoded; non-empty auxiliary bytes are rejected there as a
+non-canonical envelope. Duplicate input
 nullifiers or output commitments are rejected before proof envelope decoding,
 matching the folded-token set invariant and preventing duplicate commitments
 from entering the shielded tree. Explicit all-zero nullifiers or output
@@ -534,54 +592,367 @@ to exercise the production Kagemusha path.
 Bridge ABI 6 exposes the production recursive spendable-cash entry points:
 `connect_norito_kagemusha_recursive_spend_init`,
 `connect_norito_kagemusha_recursive_spend_append`,
+`connect_norito_kagemusha_recursive_spend_transition_profile_init`,
+`connect_norito_kagemusha_recursive_spend_transition_profile_append`,
 `connect_norito_kagemusha_recursive_spend_lineage_witness_from_init_result`,
 `connect_norito_kagemusha_recursive_spend_lineage_witness_append_result`,
 `connect_norito_kagemusha_recursive_spend_verify`, and
-`connect_norito_kagemusha_recursive_spend_redeem`. All six entry points accept
+`connect_norito_kagemusha_recursive_spend_redeem`. All nine entry points accept
 and return raw Norito archives so SDKs do not implement recursive proof internals,
 accumulator derivation, or witness merging. The data model round-trips the raw
-archive contracts for `init`, `append`, lineage-witness assembly, `verify`,
-`verify_result`, and `redeem` so SDK wrappers share one Norito ABI shape. The
+archive contracts for `init`, `append`, transition-profile preflight,
+lineage-witness assembly, `verify`, `verify_result`, and `redeem` so SDK
+wrappers share one Norito ABI shape. The
 offline recipe is: load/top-up online, build the first
-`KagemushaRecursiveSpendBundleV1` with `init`, immediately derive and retain the
-matching `KagemushaRecursiveSpendLineageWitnessV1` with
-`lineage_witness_from_init_result`, verify and store the bundle on receipt,
-append one verified hop plus the new spendable note descriptor for every
-offline re-spend, update the witness with `lineage_witness_append_result` after
-each append, and call `redeem` when the final holder comes back online. Because
-current semantic recursive spend proofs verify only the public
-accumulator columns and do not yet prove private-hop lineage in-circuit, the
-native bridge, JavaScript host, and Python PyO3 `verify` results are
-split between offline spendability and chain admission: a semantically valid
-recursive proof without record-backed lineage returns `valid = true` for
-receiver-side offline acceptance, while `chain_admissible = false` carries the
-same private-hop-lineage diagnostic that ledger redemption would emit. The
-native bridge, JavaScript host, and Python PyO3 `redeem` entry points are
-fail-closed on the chain-admission gate:
+`KagemushaRecursiveSpendBundleV1` with `init`, verify and store the bundle on
+receipt, append one verified hop plus the new spendable note descriptor for
+every offline re-spend, and call `redeem` when the final holder comes back
+online. Rust callers should use the validated `new` constructors on
+`KagemushaRecursiveSpendInitRequestV1`,
+`KagemushaRecursiveSpendAppendRequestV1`,
+`KagemushaRecursiveSpendVerifyRequestV1`, and
+`KagemushaRecursiveSpendRedeemRequestV1` before serializing request archives;
+these constructors run the same public-binding guards as the native bridge
+request boundary. Rust callers should use
+`prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive`
+for the reserved-lineage first-hop proof surface. The generic recursive spend
+append helper and ABI-6 append request now honor
+`output_proof_circuit_id`: missing, empty, or semantic
+`kagemusha-recursive-aggregation-v1` preserves the compatibility output path,
+while explicit `kagemusha-recursive-spend-lineage-v1` selects the guarded
+Reserved-lineage output path. ABI-6 `init` produces the current
+`kagemusha-recursive-spend-lineage-v1` one-hop verifier-slice proof: the core
+helper decodes the supplied Pallas open-envelope archive, derives the opening
+length, selects the matching lineage verifier key, and returns a
+reserved-lineage recursive spend bundle. ABI-6 `append` verifies semantic
+previous proofs with the semantic recursive verifier and Reserved-lineage
+previous proofs with the supplied active lineage verifier record, then selects
+the output verifier key from the requested output circuit id. New wallets should
+use the preferred append selector, which keeps Reserved-lineage output selected
+for previous hop counts `1..63`; the semantic output remains available as the
+legacy ABI-6 compatibility path. Callers that still use semantic output must
+derive and retain the matching
+`KagemushaRecursiveSpendLineageWitnessV1` with
+`lineage_witness_from_init_result`, update it with
+`lineage_witness_append_result` after each append, and attach that witness at
+redeem. Because semantic recursive spend proofs verify only the public
+accumulator columns, native bridge and SDK `verify` results are split between
+offline spendability and chain admission: a semantically valid recursive proof
+without record-backed lineage returns `valid = true` for receiver-side offline
+acceptance, while `chain_admissible = false` carries the same
+private-hop-lineage diagnostic that ledger redemption would emit.
+Reserved-lineage proofs use the recursive
+verifier-slice profile for witnessless chain admission inside the 64-hop cap.
+Verify
+results also expose `witnessless_redeem_supported` and
+`lineage_witness_required_for_redeem`, so wallets that do not decode bundle
+internals can still decide whether to keep or attach the record-backed lineage
+witness before going online. The
+native bridge and SDK `redeem` entry points are fail-closed on the
+chain-admission gate:
 semantic v1 bundles serialize redeem instructions only when the request carries
 a verified record-backed lineage witness and the final recursive proof verifies
 against the transparent recursive verifier key. Witnessless semantic v1 bundles,
-tampered final recursive proofs, and unwired reserved-lineage bundles return no
-instruction bytes.
-Rust and SDK callers can assemble that separate redeem witness with
+tampered final recursive proofs, malformed reserved-lineage bundles,
+reserved-lineage bundles missing their scalar projection, reserved-lineage
+bundles missing verifier-slice columns, and over-cap Reserved-lineage bundles
+return no instruction bytes. Metadata-valid Reserved-lineage bundles with
+strict verifier-slice columns are profile-checked and can redeem witnesslessly
+inside the 64-hop cap. Record-backed lineage validation also keeps the final
+redeem note nullifier disjoint from every earlier lineage input and every
+lineage output commitment, and core mirrors that check before Pallas replay so
+nullifier/commitment splices fail with a deterministic preflight error. SDKs expose
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64`; wallets use
+the helper predicates to decide when a record-backed semantic witness is still
+required.
+The SDK helpers `canRedeem...Witnessless` and
+`requires...LineageWitnessForRedeem` expose the same 64-hop Reserved-lineage
+decision so app code does not duplicate the rule. SDKs can still carry
+record-backed lineage witnesses for semantic v1 production redemption and as an
+over-cap compatibility fallback.
+Append requests whose previous bundle already uses the reserved-lineage circuit
+id must include the current lineage verifier record in
+`previous_lineage_verifier_record`; semantic previous bundles must omit it. The
+append request also carries the defaulted `output_proof_circuit_id` selector and
+the defaulted `previous_recursive_proof_open_envelopes_archive` slot for the
+production witnessless Reserved-lineage append circuit. Missing, empty, or
+semantic output selectors preserve legacy ABI-6 behavior and may leave the
+previous-proof archive empty. Append attempts that select
+`kagemusha-recursive-spend-lineage-v1` as the output proof circuit must provide
+it so the append verifier-slice circuit can consume the previous recursive proof's opening
+material. The archive must be a Norito archive containing exactly one
+`iroha_zkp_halo2::OpenVerifyEnvelope` at the data-model boundary and native
+append preflight. The previous recursive proof envelope must carry the same
+backend and circuit id as its verifier-key reference. The opening envelope's
+verifier-key commitment, public-input schema hash, and recursive-proof domain
+tag must match that checked previous recursive proof, so a caller cannot splice
+a valid opening witness from a different recursive proof into a Reserved-lineage
+append request. Malformed, mismatched, or missing required archives are rejected
+before native proving starts. SDKs must
+treat `previous_recursive_proof_open_envelopes_archive` as opaque native prover
+material and must not construct, rewrite, or mutate it; the native bridge and
+SDK append wrappers validate the metadata tuple (`vk_commitment`,
+`public_inputs_schema_hash`, `domain_tag`) against the exact previous bundle
+before proving or returning output bytes. Native append
+preflight also caps the archive at
+`KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES` (8 MiB) before
+decoding and checks that each supplied previous-proof envelope is bounded Pallas
+IPA opening material with non-zero verifier-key, public-input schema, and
+recursive-proof domain metadata; matching parameter/public lengths; valid
+generator and proof round counts; and an IPA opening proof that can derive a
+verifier witness under lineage-sized resource limits. SDK recursive-spend
+helpers expose the same required envelope count and 8 MiB cap so wallets can
+preflight the archive before native calls. SDKs expose append-side branching
+helpers alongside the redeem helpers:
+`canAppend...WitnesslessLineage(previousHopCount)` returns true for previous
+hop counts `1..63`, and
+`requires...PreviousProofOpenEnvelopesForAppend(outputCircuitId,
+previousHopCount)` returns true for Reserved-lineage append attempts after an
+existing previous bundle so wallet code can populate the required archive slot.
+SDKs also expose
+`preferred...AppendOutput...CircuitId(previousHopCount)`, which is the
+recommended selector for new append requests; in this release it returns the
+Reserved-lineage circuit for previous hop counts `1..63`, while first-hop
+`init` continues to produce the one-hop Reserved-lineage bundle.
+`canProve...AppendOutput...CircuitId(outputCircuitId, previousHopCount)`;
+it returns true for semantic recursive append outputs through hop 64 and for
+Reserved-lineage append outputs when the previous hop is `1..63`, so wallets
+can select witnessless Reserved-lineage append while staying inside the cap.
+`canSelect...AppendOutput...CircuitId(previousProofCircuitId, outputCircuitId,
+previousHopCount)` applies the same proving check plus the previous-proof
+transition rule before a wallet serializes the append request.
+`isSupported...PreviousProof...CircuitId(previousProofCircuitId)` and
+`requires...PreviousLineageVerifierRecordForAppend(previousProofCircuitId)` let
+wallets reject unknown previous recursive proof circuits and include the
+previous lineage verifier record only for Reserved-lineage previous bundles.
+`normalize...AppendOutput...CircuitId` and `isSupported...AppendOutput...CircuitId`
+helpers let wallet code apply the same missing-or-empty-to-semantic selector
+rule before constructing Norito archives. A Reserved-lineage append output also
+requires the previous bundle to already be Reserved-lineage; semantic previous
+proofs cannot be upgraded into witnessless Reserved-lineage by supplying only a
+previous-proof opening archive, and must keep using semantic append plus a
+record-backed lineage witness for redemption.
+The Rust data model also exposes
+`KagemushaRecursiveSpendTransitionProfileV1`, built by the initial and append
+transition-profile helpers, as the canonical Reserved-lineage accumulator
+transition contract. The profile is a Norito object and digest that binds the
+previous accumulator digest, previous recursive proof artifact digest, previous
+accumulator public-input hash, previous recursive proof public-input hash,
+previous proof opening-archive digest when raw request bytes are supplied,
+normalized hop index, current hop statement, current note, verifier-witness
+batch digest, fixed-window table-base digest, resulting
+lineage/proof-chain/table/nullifier/output/fold digests, resulting accumulator
+digest, and resulting recursive public-input hash. Request-backed append
+transition profiles additionally bind
+`previous_recursive_proof_open_envelopes_archive_digest`; legacy evidence-only
+helpers omit it for compatibility. Reserved-lineage append proof output also
+binds `append_opening_preflight_digest` and, when
+native hosts computed the two Pallas preflights, the full
+`KagemushaRecursiveSpendLineageAppendOpeningPreflightV1` Norito contract. The
+contract must hash back to the digest and match the previous accumulator digest,
+previous recursive proof artifact digest, previous opening archive digest,
+current-hop proof hash, and current-hop verifier preflight aggregate. The digest
+is valid only when the previous opening archive digest is also present, so SDKs
+should use raw-archive helpers for actual append requests. The archive-aware
+Rust helper validates non-empty previous-proof opening archive metadata against
+the exact previous bundle before hashing it. Append profiles require the
+previous accumulator public-input hash to equal the previous recursive proof
+public-input hash before the profile can be digested. Append profiles normalize
+a one-hop transport fragment to the accumulated hop index before hashing; for
+example, the second offline spend hashes as hop `1`. SDK fixtures should compare
+against this profile with
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64`; matching the
+profile is required circuit preflight, and chain admission also verifies the
+lineage proof envelope and final redeem binding. Core init and append proof constructors build and
+compare the profile with the accumulator before emitting an ABI-6 recursive
+spend bundle, so bridge callers get the same Reserved-lineage transition guard
+as Rust fixtures. The native bridge and SDK raw-archive append
+transition-profile helpers now also compute this append opening preflight when
+`previous_recursive_proof_open_envelopes_archive` is
+present, bind its digest into `append_opening_preflight_digest`, and keep the
+legacy no-digest profile only when the previous opening archive is absent. The
+SDKs should treat the contract as opaque native verifier metadata and compare or
+roundtrip the Norito bytes; they must not synthesize it from partial fields.
+Core also exposes a Reserved-lineage append opening preflight
+contract that validates and digests the two Pallas opening witnesses the
+production append circuit must prove: the previous recursive proof opening,
+bound to the exact previous bundle and previous opening archive, and the current
+checked-hop opening, bound to the checked-hop proof hash. The two openings must
+also share the same verifier context before the contract can digest: opening
+length, Pallas parameter fingerprint, fixed-window schedule digest, and
+shared-table manifest digest. Core checks that this contract is attached to a Reserved-lineage
+previous proof, that its previous accumulator/proof artifact digests match the
+actual previous bundle, and that the resulting accumulator public inputs carry
+the same append opening preflight digest, compact append-boundary digest, and
+verifier corridor. The Reserved-lineage append proof branch binds those digests
+into the transition profile before emitting output. This material is circuit
+input and remains bounded by the 64-hop witnessless cap. The native C
+bridge, Swift, Android Java/Kotlin, JavaScript,
+Python, and C# SDK surfaces expose raw-archive transition-profile init/append
+helpers and the stable
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1`
+domain string, and require those symbols in their ABI-6 availability probes.
+They also expose the compact
+`KagemushaRecursiveSpendLineageAppendBoundaryV1` archive through
+`connect_norito_kagemusha_recursive_spend_lineage_append_boundary` and matching
+SDK helpers such as `lineageAppendBoundary`/
+`kagemushaRecursiveSpendLineageAppendBoundary`. This boundary is derived only
+from a full append transition profile with an attached opening preflight
+contract. It binds the profile digest, profile binding digest, explicit
+chain/asset binding digest, explicit final-root/current-note binding digest,
+previous accumulator and proof artifact digests, previous opening archive
+digest, previous/current opening aggregate digests, current-hop proof hash,
+resulting accumulator digest, the boundary-free resulting public-input hash,
+hop count, verifier opening length, and verifier-context fingerprints under the
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain. SDKs
+should treat it as opaque Norito verifier material; detached, stale, zero, or
+one-hop boundary fields reject before append proving.
+Full-contract Reserved-lineage append accumulators now store this compact
+boundary digest in `KagemushaRecursiveSpendAccumulatorV1.append_boundary_digest`.
+The accumulator digest intentionally blanks that field before hashing, and the
+compact boundary uses the resulting public-input hash with append-boundary limbs
+blanked, so the boundary digest can be placed back into final recursive proof
+public inputs without a fixed point. Digest-only compatibility append builders
+leave `append_boundary_digest` zero; a Reserved-lineage proof that exposes a
+nonzero append-boundary public input must match the accumulator field exactly.
+`KagemushaRecursiveSpendLineageAppendBoundaryV1::validate_against_transition_profile`
+re-derives the compact boundary from the full transition profile and compares
+every field, so a detached boundary with a refreshed self-digest still rejects
+if its previous accumulator, append-opening digest, opening aggregate,
+resulting public-input hash, verifier context, or hop count was spliced from a
+different transition. The native bridge plus Swift, Android Java/Kotlin,
+JavaScript, Python, and C# SDK wrappers call this validator before returning
+boundary archives or surfacing them to wallet code.
+SDKs also expose a structural append proof-transition helper: semantic
+previous proofs may only append semantic output, Reserved-lineage previous
+proofs may append semantic output for compatibility or Reserved-lineage output
+for witnessless spend-again-offline while the previous hop is `1..63`. Request
+validators require the previous Reserved-lineage verifier record and
+previous-proof opening archive before selecting Reserved-lineage output. The
+native bridge and SDK append wrappers derive the append Reserved-lineage
+verifier key from that opening archive so archive, transition-profile, and
+opening-contract checks run before proving. In this context, "one-hop
+Reserved-lineage" means the active lineage verifier slice proves exactly the
+first private hop and constrains `hop_count == 1`; it is sufficient for
+receiver-side verification of the first offline receipt, but it is not the
+multi-hop append verifier.
+Core now also carries the append verifier-slice circuit scaffold and host
+contract: `KagemushaRecursiveAggregationAppendVerifierSlice` composes recursive
+aggregation semantics with two shared-table IPA verifier slices, requires
+append-shaped recursive public inputs (`hop_count >= 2`), nonzero transition,
+append-opening, append-boundary, and scalar-projection public fields, exactly
+one previous-recursive-proof opening preflight, exactly one current-hop opening
+preflight, and an in-circuit combined scalar-projection digest over both
+verifier slices without adding per-hop projection public columns. Heavyweight
+ignored MockProver coverage exercises the honest two-opening profile plus
+scalar-projection, append-boundary, and current-verifier transcript splices.
+The Halo2 IPA backend profile classifier now distinguishes one-hop and append
+Reserved-lineage instance layouts under the same reserved circuit-family id:
+one-hop layouts continue to dispatch to the one-hop verifier slice, while
+append-shaped layouts dispatch to the append verifier-slice circuit only when
+the supplied verifier key matches that append circuit.
+The append proof constructor now has a concrete append-circuit target: it revalidates the previous
+recursive proof opening against its detached preflight, revalidates the current
+hop opening against the hop-bound preflight, builds the two-verifier append
+slice, and uses an append-specific proving-key cache keyed by the supplied
+append verifier key. Core also exposes a separate append verifier-key builder
+for this circuit; the compatibility lineage verifier-key builder remains
+one-hop for first-hop init and legacy verifier records. Product witnessless
+append output is reachable below the 64-hop cap.
+Verify requests whose received bundle uses the reserved-lineage circuit id must
+include the current lineage verifier record in `lineage_verifier_record`;
+semantic v1 verify requests must leave that field empty. Native bridge and SDK
+verifier wrappers return `valid = false` with a stable missing-record
+diagnostic when a reserved-lineage D2D payload is presented without that
+record, so receivers do not store or re-spend unverifiable witnessless cash.
+Init and append request archives now have the same cheap public-binding
+preflight before any recursive prover is invoked. Init preflight validates the
+one-hop record-backed fragment, Pallas envelope archive count, exact verifier
+records, and the first spendable note's output/nullifier binding. Append
+preflight additionally validates previous-bundle proof metadata, semantic vs.
+reserved-lineage previous-record selection, output proof circuit selection,
+required previous-proof opening archives for Reserved-lineage output append,
+chain/asset/root continuity, amount preservation, previous-note nullifier
+consumption, and top-up-anchor/output non-overlap. The native bridge plus SDK
+init/append entry points call these validators before constructing Halo2
+proving keys or returning native output bytes, so malformed D2D fragments fail
+consistently across SDKs.
+Rust and SDK callers can assemble the separate redeem witness with
 `kagemusha_recursive_spend_lineage_witness_from_init_result` after the first
 `init` proof and `kagemusha_recursive_spend_lineage_witness_append_result`
-after each `append` proof. These helpers validate one-hop record-backed
-fragments, exact verifier-record sets, and Pallas open-envelope archive counts,
-merge the envelope archive, carry forward ordered semantic previous recursive
-proofs, and reject record conflicts before the witness is attached to a redeem
-request.
+after each `append` proof. These helpers first run the same init/append
+public-binding preflight as the prover path, then validate one-hop
+record-backed fragments, exact verifier-record sets, Pallas open-envelope
+archive counts, Pallas transcript labels, non-zero opening metadata, Pallas
+curve ids, version fields, opening-length bounds, generator counts, IPA round
+counts, root continuity, duplicate or overlapping lineage nullifiers/commitments,
+accumulator initial/final root binding, current-note/output collisions, and the
+proof-attachment/backend/inline-key shape for every hop. Halo2 IPA fragments
+also bind Pallas opening `vk_commitment` and `public_inputs_schema_hash`
+metadata to the hop attachment and transparent hop proof envelope. They also reject
+inactive, missing-key, over-proof-cap, commitment/key-length-mismatched,
+namespace-mismatched, backend/curve-mismatched, empty-circuit, or zero-schema
+verifier-record snapshots before the witness is attached to a redeem request.
+SDKs expose the shared
+`KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128`
+bound for early UI/client checks, but native Norito validation remains
+authoritative.
+They merge the envelope archive, carry forward ordered semantic previous
+recursive proofs, and reject record conflicts, chain/asset-spliced append
+fragments, stale previous bundles, and stale appended bundle results before the
+witness is attached to a redeem request.
+Reserved-lineage previous proofs are accepted at this helper boundary only when
+the append request carries an active matching lineage verifier record; semantic
+previous proofs reject that record. Direct redeem-request validation mirrors the
+same selection rule: a final Reserved-lineage bundle must carry the active
+lineage verifier record, and semantic final bundles must leave it empty unless a
+record-backed witness path explicitly needs the record to verify prior
+Reserved-lineage proofs.
 Ledger execution repeats that witness verification and additionally rejects
 lineage witnesses whose hop verifier-record snapshots are stale, missing,
 duplicated, unreferenced, or absent from the current WSV registry.
+For recursive redeem instructions, ledger execution validates the final
+unshield/redeem proof public binding before attempting reserved-lineage
+chain-admission checks. Those checks admit witnessless Reserved-lineage bundles
+inside the 64-hop cap only after verifying the active lineage verifier record,
+the recursive proof envelope, chain/asset binding, final commitment binding,
+root freshness, and nullifier set. A tampered final spendable-note binding
+therefore fails at the final-proof gate instead of being masked by lineage-key
+metadata.
 Appenders must provide the previous recursive proof to the native append
 builder; SDKs should not derive the accumulator state themselves. The CI benchmark
 `kagemusha_recursive_spend_payload_bytes` records constant fixture archives for
 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 hops when the proof payload is fixed at
 256 bytes; production proof bytes can change the absolute number, but the
 Norito D2D archive size is asserted not to grow with hop count. The data-model
-CI guard also pins the current fixed-proof recursive spend bundle at 1,553 bytes
-and fails if the same fixture crosses the 1,600-byte material-growth ceiling.
+CI guard also pins the current fixed-proof recursive spend bundle at 1,751 bytes
+and fails if the same fixture crosses the 2,048-byte material-growth ceiling.
+The same benchmark emits `kagemusha_recursive_spend_transition_profile_bytes`
+and the CI reducer writes `transition_profile_bytes.tsv`; append transition
+profiles are built through the archive-aware helper with metadata-bound
+previous-proof opening archives and are asserted hop-count-independent
+separately from the D2D bundle so the Reserved-lineage accumulator preflight
+overhead is visible without loosening the receiver payload gate. The current
+fixed-proof semantic append transition profile is 2,094 bytes.
+The benchmark also emits
+`kagemusha_recursive_spend_reserved_lineage_payload_bytes` and
+`kagemusha_reserved_lineage_transition_profile_bytes`. Those
+fixtures use the actual split Reserved-lineage proof ids
+(`kagemusha-recursive-spend-lineage-onehop-v1` at hop 1 and
+`kagemusha-recursive-spend-lineage-append-v1` afterward), metadata-bound
+previous recursive proof opening archives, full append opening-preflight
+contracts, derived compact append boundaries, and accumulator-carried
+`append_boundary_digest` values. The CI reducer writes
+`reserved_lineage_payload_bytes.tsv` and
+`reserved_lineage_transition_profile_bytes.tsv` and checks those series for the
+same hop-count independence. The current fixed-proof Reserved-lineage D2D bundle
+is 3,847 bytes, and the append Reserved-lineage transition profile is 2,817
+bytes, with separate size ceilings because the Reserved-lineage fixtures carry
+proof-opening metadata that the compatibility semantic payload does not.
+The dedicated `Kagemusha Payload Benchmark` workflow runs
+`ci/check_kagemusha_recursive_spend_payload_bench.sh` on relevant Kagemusha
+payload, accumulator, and proof-surface changes and uploads the reduced-sample
+Criterion summary.
 Bridge ABI 6 also retains
 `connect_norito_kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_pallas_open_envelopes`.
 That proof-carrying entry point accepts the same record-backed bundle plus a
@@ -622,18 +993,25 @@ when proof-producing native calls return no archive or a zero-length archive,
 so missing native proof material cannot be coerced into a successful SDK
 result. The Swift dynamic loader now requires bridge ABI 6 and the
 record-backed plus complete recursive-spend Kagemusha symbols, including both
-lineage-witness assembly helpers, before reporting the
-native Kagemusha provers as available, and the Swift recursive-spend wrapper
-refuses to select `recursive_spend_v1` unless the full ABI 6 surface is loaded.
+lineage-witness assembly helpers, before probing those symbols with malformed
+Norito archives. Swift reports native compact-token, recursive-aggregation, and
+recursive-spend Kagemusha provers as available only when the loaded bridge
+returns the expected Kagemusha rejection without output bytes, and the Swift
+recursive-spend wrapper refuses to select `recursive_spend_v1` unless the full
+ABI 6 surface passes that probe.
 JavaScript/Node, Python, Kotlin/JVM, Java Android, and C# apply the same
 fail-closed rule in their native availability probes: init, append, both
-lineage-witness helpers, verify, and redeem must be callable from the loaded
-native bridge before wallet code is told recursive redemption is supported.
-Python, Kotlin/JVM, Java Android, and C# also treat malformed native loading or
-ABI-version probing as unavailable, and the JVM/Android/C# probes now reject a
-native symbol that accepts empty archives. Only the expected empty-archive
-rejection across the required symbol set can prove that a loaded native surface
-exists.
+transition-profile helpers, the append-boundary helper, both lineage-witness
+helpers, verify, and redeem must be callable from the loaded native bridge
+before wallet code is told recursive redemption is supported.
+JavaScript/Node, Python, Swift, Kotlin/JVM, Java Android, and C# also treat
+malformed native loading or ABI-version probing as unavailable, and their
+availability probes now reject a native symbol that accepts empty or malformed
+archives. Only the expected Kagemusha rejection across the required symbol set
+can prove that a loaded native surface exists. When a non-empty recursive spend
+redeem request is rejected by the native bridge, SDK wrappers surface that
+rejection instead of substituting fallback bytes or downgrading it to bridge
+availability.
 Python direct helper calls and the optional C# P/Invoke wrapper also require
 that complete ABI-6 surface before producing any recursive spend output; C# also
 requires the expected Kagemusha empty-archive bridge error during symbol probes.
@@ -654,10 +1032,15 @@ All SDKs expose the same default spend-mode choice:
 `recursive_spend_v1` is selected when the recursive spend ABI 6 surface is
 available, and `checked_prefold_v1` remains the compatibility fallback for
 older runtimes that only provide the record-backed compact-token path.
-Verifier records for chain-side transfers, record-backed compact-token proving,
-and final folded-token record verification must live in the canonical
-`offline_kagemusha` namespace; generic active confidential-transfer verifier
-records are rejected before proof decoding.
+Verifier records for chain-side transfers, recursive final redeem/unshield,
+record-backed compact-token proving, and final folded-token record verification
+must live in the canonical `offline_kagemusha` namespace and publish the
+expected backend/curve pair. Chain-side transfer and final redeem/unshield
+records must also be the active record for their circuit/version index and
+embed the canonical confidential transfer or unshield verifier key for that
+circuit; generic active confidential-transfer verifier records, stale circuit
+bindings, substituted inline keys, or Halo2 IPA records claiming a non-`pallas`
+curve are rejected before proof decoding.
 
 The first folded-token proof path is `kagemusha-folded-v1`, a transparent
 Halo2 IPA circuit over Pasta. It binds the 30-column folded public statement,
@@ -936,27 +1319,38 @@ opening lengths, rejects
 all-zero schedule/manifest/base commitments, and rejects schedule or manifest
 commitments that do not match the declared opening length before hop proof
 decoding. The data model also defines proof-carrying recursive aggregation
-public inputs and bundles whose 43 public instance columns bind a transparent
+public inputs and bundles whose 55 public instance columns bind a transparent
 no-trusted-setup proof payload to the recursive evidence digest, aggregation
 transcript digest, verifier-parameter fingerprint, fixed-window schedule
 digest, shared-table manifest digest, table-base digest, native witness-batch
-digest, recursive spend proof-chain digest, reserved recursive verifier
+digest, recursive spend proof-chain digest, non-circular transition-profile
+binding digest, Reserved-lineage append opening preflight digest, compact
+Reserved-lineage append-boundary digest, reserved recursive verifier
 scalar-projection digest, verifier opening length, witness count, and hop count
-while rejecting backend, circuit-id, public-input-hash, and evidence-field
-substitution. That proof-carrying bundle is pinned to the
+while rejecting backend,
+circuit-id, public-input-hash, and evidence-field substitution. That
+proof-carrying bundle is pinned to the
 canonical transparent Halo2 IPA/Pasta recursive aggregation circuit and rejects
 empty proof payloads before backend verification; STARK/FRI remains available
 only for supported hop transcript material, not for this in-tree recursive
 proof circuit. Standalone recursive aggregation evidence carries a
-zero proof-chain digest and zero recursive verifier scalar-projection digest;
-`KagemushaRecursiveSpendBundleV1` requires the public-input proof-chain digest
-to equal the accumulator's non-zero `recursive_proof_chain_digest` while keeping
-the scalar-projection digest zero until a composed verifier-slice proof is used.
+zero proof-chain digest, zero transition-profile binding digest, zero append
+opening preflight digest, zero append-boundary digest, and zero recursive
+verifier scalar-projection digest; `KagemushaRecursiveSpendBundleV1`
+requires the public-input proof-chain, transition-profile binding, and append
+opening preflight digests to equal the accumulator's
+`recursive_proof_chain_digest`, `transition_profile_binding_digest`, and
+`append_opening_preflight_digest`. The first two are nonzero for spend bundles;
+the append preflight digest remains zero for init and semantic append, and is
+nonzero only for Reserved-lineage append outputs. The append-boundary digest is
+nonzero only for those Reserved-lineage append proofs and must be paired with a
+nonzero append-opening preflight digest. The scalar-projection digest stays zero
+until a composed verifier-slice proof is used.
 This is still a reserved evidence binding, not the final in-circuit derivation
 from each compact-hop Halo2 proof envelope.
 Core preverification for that proof-carrying bundle now checks the transparent
 Halo2 IPA `OpenVerifyEnvelope`, canonical circuit id, verifier-key hash,
-public-input schema, empty auxiliary metadata, exactly 43 one-row Pasta public
+public-input schema, empty auxiliary metadata, exactly 55 one-row Pasta public
 instance columns, the fixed-window schedule and shared-table manifest digests
 for the declared opening length, proof-size cap, active Kagemusha
 verifier-record namespace, inline verifier-key length, and verifier-key
@@ -968,7 +1362,7 @@ suffix bytes, rejects ZK1 inner proof envelopes with unexpected or duplicate
 verification, even when a forged verifier record and proof envelope are
 self-consistent about the folded-token verifier-key commitment and `vk_hash`.
 Core also
-keeps the ZK1 public-instance parser bounded while allowing the 43-column
+keeps the ZK1 public-instance parser bounded while allowing the 55-column
 recursive aggregation envelope through the native bridge and backend verifier.
 It also ships the transparent Halo2 IPA semantic proof/prover/verifier path for
 the recursive aggregation evidence layout. The semantic circuit constrains the

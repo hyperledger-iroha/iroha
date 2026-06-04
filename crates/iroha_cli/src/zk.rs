@@ -285,8 +285,11 @@ pub struct ProofFilterArgs {
 }
 
 impl ProofFilterArgs {
-    fn as_filter(&self) -> ZkProofsFilter<'_> {
-        ZkProofsFilter {
+    fn as_filter(&self) -> Result<ZkProofsFilter<'_>> {
+        if let Some(backend) = self.backend.as_deref() {
+            ensure_production_verify_backend_label(backend, "proof filter backend")?;
+        }
+        Ok(ZkProofsFilter {
             backend: self.backend.as_deref(),
             status: self.status.as_deref(),
             has_tag: self.has_tag.as_deref(),
@@ -296,7 +299,7 @@ impl ProofFilterArgs {
             offset: self.offset,
             order: self.order.as_deref(),
             ids_only: None,
-        }
+        })
     }
 }
 
@@ -312,7 +315,7 @@ pub struct ProofListArgs {
 impl Run for ProofListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let mut filter = self.filter.as_filter();
+        let mut filter = self.filter.as_filter()?;
         if self.ids_only {
             filter.ids_only = Some(true);
         }
@@ -331,7 +334,7 @@ pub struct ProofCountArgs {
 impl Run for ProofCountArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let filter = self.filter.as_filter();
+        let filter = self.filter.as_filter()?;
         let count = client.get_zk_proofs_count(&filter)?;
         let value = json_utils::json_object(vec![("count", json_utils::json_value(&count)?)])?;
         context.print_data(&value)?;
@@ -352,11 +355,9 @@ pub struct ProofGetArgs {
 impl Run for ProofGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let hash_hex = self
-            .hash
-            .strip_prefix("0x")
-            .map_or_else(|| self.hash.clone(), str::to_string);
-        let value = client.get_zk_proof_json(&self.backend, &hash_hex)?;
+        let backend = ensure_production_verify_backend_label(&self.backend, "proof get backend")?;
+        let hash_hex = parse_hex32_lower(&self.hash, "proof hash")?;
+        let value = client.get_zk_proof_json(backend, &hash_hex)?;
         context.print_data(&value)?;
         Ok(())
     }
@@ -383,6 +384,9 @@ pub struct ProofPruneArgs {
 
 impl Run for ProofPruneArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if let Some(backend) = self.backend.as_deref() {
+            ensure_production_verify_backend_label(backend, "proof prune backend")?;
+        }
         let prune: InstructionBox =
             iroha_data_model::isi::zk::PruneProofs::new(self.backend).into();
         context.finish(Executable::Instructions(vec![prune].into()))
@@ -1654,6 +1658,21 @@ fn parse_hex_string(hex_str: &str) -> eyre::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn ensure_production_verify_backend_label<'a>(backend: &'a str, field: &str) -> Result<&'a str> {
+    if backend.is_empty() {
+        eyre::bail!("{field} must be non-empty");
+    }
+    if !iroha_core::zk::is_production_verify_backend_label(backend) {
+        eyre::bail!("{field} uses unsupported production verifier backend `{backend}`");
+    }
+    Ok(backend)
+}
+
+fn parse_hex32_lower(value: &str, field: &str) -> Result<String> {
+    let bytes = parse_hex32_str(value, field)?;
+    Ok(hex::encode(bytes))
+}
+
 fn build_proof_attachment_from_json(
     v: &norito::json::Value,
 ) -> eyre::Result<iroha::data_model::proof::ProofAttachment> {
@@ -1676,10 +1695,7 @@ fn build_proof_attachment_from_json(
         .get("backend")
         .and_then(|x| x.as_str())
         .ok_or_else(|| eyre::eyre!("missing backend"))?;
-    let backend = backend.trim();
-    if backend.is_empty() {
-        return Err(eyre::eyre!("backend must be non-empty"));
-    }
+    let backend = ensure_production_verify_backend_label(backend, "backend")?;
     let proof_b64 = v
         .get("proof_b64")
         .and_then(|x| x.as_str())
@@ -1700,6 +1716,7 @@ fn build_proof_attachment_from_json(
             .get("backend")
             .and_then(|x| x.as_str())
             .ok_or_else(|| eyre::eyre!("vk_ref.backend missing"))?;
+        ensure_production_verify_backend_label(b, "vk_ref.backend")?;
         if b != backend {
             return Err(eyre::eyre!("vk_ref.backend must match backend"));
         }
@@ -1878,7 +1895,7 @@ mod tests {
                     "proof_b64": "AA==",
                     "vk_ref": { "backend": "halo2/ipa", "name": "vk_transfer" }
                 }"#,
-                "backend must be non-empty",
+                "unsupported production verifier backend",
             ),
             (
                 r#"{
@@ -1886,7 +1903,7 @@ mod tests {
                     "proof_b64": "AA==",
                     "vk_ref": { "backend": "   ", "name": "vk_transfer" }
                 }"#,
-                "vk_ref.backend must match backend",
+                "unsupported production verifier backend",
             ),
         ] {
             let v = norito::json::from_str(json).expect("blank backend json");
@@ -1895,6 +1912,98 @@ mod tests {
             assert!(
                 format!("{err}").contains(expected),
                 "expected error to mention {expected}, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_proof_attachment_from_json_rejects_unsupported_production_backends() {
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa ",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "groth16/bls12-377",
+            "mock/dev",
+            "stark/fri/miden",
+        ] {
+            let json = format!(
+                r#"{{
+                    "backend": "{backend}",
+                    "proof_b64": "AA==",
+                    "vk_ref": {{ "backend": "{backend}", "name": "vk_transfer" }}
+                }}"#
+            );
+            let v = norito::json::from_str(&json).expect("unsupported backend json");
+            let err = build_proof_attachment_from_json(&v)
+                .expect_err("unsupported production backend rejected");
+            assert!(
+                format!("{err}").contains("unsupported production verifier backend"),
+                "expected unsupported backend error for {backend:?}, got {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_filter_args_reject_unsupported_backend_labels() {
+        for backend in [
+            " halo2/ipa",
+            "halo2/ipa ",
+            "\thalo2/ipa",
+            "halo2/ipa\n",
+            "halo2/ipa/orchard",
+            "halo2/kzg",
+            "mock/dev",
+        ] {
+            let args = ProofFilterArgs {
+                backend: Some(backend.to_string()),
+                ..ProofFilterArgs::default()
+            };
+            let err = args
+                .as_filter()
+                .expect_err("unsupported proof filter backend rejected");
+            assert!(format!("{err}").contains("unsupported production verifier backend"));
+        }
+    }
+
+    #[test]
+    fn parse_vk_id_pair_rejects_unsupported_backend_labels_and_preserves_colon_aliases() {
+        for literal in [
+            " halo2/ipa:vk_transfer",
+            "halo2/ipa :vk_transfer",
+            "halo2/ipa/orchard:vk_transfer",
+            "mock/dev:vk_transfer",
+            "halo2/ipa:",
+            "halo2/ipa:vk:shadow",
+        ] {
+            assert!(
+                parse_vk_id_pair(literal).is_err(),
+                "{literal:?} must reject before building a verifying-key id"
+            );
+        }
+
+        let parsed =
+            parse_vk_id_pair("halo2/ipa:ivm-execution-v1:vk_ivm").expect("colon alias vk id");
+        assert_eq!(parsed.backend.as_str(), "halo2/ipa:ivm-execution-v1");
+        assert_eq!(parsed.name.as_str(), "vk_ivm");
+    }
+
+    #[test]
+    fn parse_hex32_lower_canonicalizes_and_rejects_malformed_hashes() {
+        assert_eq!(
+            parse_hex32_lower(&format!("0x{}", "AA".repeat(32)), "proof hash").expect("hash"),
+            "aa".repeat(32)
+        );
+        for value in [
+            String::new(),
+            "abc".to_string(),
+            "z".repeat(64),
+            "a".repeat(63),
+            format!("0x0x{}", "aa".repeat(32)),
+        ] {
+            assert!(
+                parse_hex32_lower(&value, "proof hash").is_err(),
+                "{value:?} must reject as malformed proof hash"
             );
         }
     }
@@ -1924,6 +2033,26 @@ mod tests {
             norito::codec::decode_adaptive(&bytes).expect("decode envelope");
         assert_eq!(payload, decoded);
         assert!(!expected_b64.is_empty());
+    }
+
+    #[test]
+    fn vk_submission_backend_parser_preserves_pending_protocol_tags() {
+        use iroha::data_model::zk::BackendTag;
+
+        for (label, expected) in [
+            ("halo2/ipa/orchard", BackendTag::Halo2IpaOrchard),
+            ("groth16/bls12-377", BackendTag::Groth16Bls12377),
+            ("penumbra-masp", BackendTag::Groth16Bls12377),
+            ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
+            ("sis-with-hints", BackendTag::LatticePcsSis),
+            ("post-quantum-masp", BackendTag::PqMaspStarkFri),
+        ] {
+            assert_eq!(
+                vk_backend_tag_from_label(label),
+                expected,
+                "{label} must not collapse into a generic supported backend",
+            );
+        }
     }
 
     #[test]
@@ -2011,8 +2140,16 @@ pub struct ZkRegisterAssetArgs {
 fn parse_vk_id_pair(s: &str) -> eyre::Result<iroha::data_model::proof::VerifyingKeyId> {
     use iroha::data_model::proof::VerifyingKeyId;
     let (backend, name) = s
-        .split_once(':')
+        .rsplit_once(':')
         .ok_or_else(|| eyre::eyre!("expected BACKEND:NAME for verifying key id"))?;
+    let backend = ensure_production_verify_backend_label(backend, "verifying key backend")?;
+    let name = name.trim();
+    if name.is_empty() {
+        eyre::bail!("verifying key name must be non-empty");
+    }
+    if name.contains(':') {
+        eyre::bail!("verifying key name must not contain ':'");
+    }
     Ok(VerifyingKeyId::new(backend, name))
 }
 
@@ -2083,7 +2220,7 @@ struct VkSubmissionJson {
     name: String,
     version: u32,
     circuit_id: String,
-    public_inputs_schema_hex: String,
+    public_inputs_schema_hash_hex: String,
     #[norito(default)]
     curve: Option<String>,
     #[norito(default)]
@@ -2116,7 +2253,7 @@ struct PreparedVkSubmission {
 }
 
 fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
-    let trimmed = value.trim_start_matches("0x");
+    let trimmed = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(trimmed).wrap_err_with(|| format!("invalid {field}"))?;
     if bytes.len() != 32 {
         eyre::bail!("{field} must be 32 bytes");
@@ -2130,24 +2267,21 @@ fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
     parse_hex32_str(value, "commitment_hex")
 }
 
+fn vk_backend_tag_from_label(label: &str) -> iroha::data_model::zk::BackendTag {
+    iroha::data_model::zk::BackendTag::from_catalog_label(label)
+}
+
 fn build_vk_record(
     payload: &VkSubmissionJson,
 ) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
     use iroha::data_model::{
         confidential::ConfidentialStatus,
         proof::{VerifyingKeyBox, VerifyingKeyRecord},
-        zk::BackendTag,
     };
     use iroha_core::zk::hash_vk;
 
-    if let Some(ref status_value) = payload.status {
-        if !matches!(
-            *status_value,
-            ConfidentialStatus::Active | ConfidentialStatus::Proposed
-        ) {
-            eyre::bail!("status must be Active or Proposed");
-        }
-    }
+    let backend =
+        ensure_production_verify_backend_label(&payload.backend, "verifying key backend")?;
 
     let vk_bytes = match payload.vk_bytes.as_deref() {
         Some(value) => Some(
@@ -2162,7 +2296,7 @@ fn build_vk_record(
     let commitment;
     let vk_len_value;
     if let Some(bytes) = vk_bytes {
-        let vk = VerifyingKeyBox::new(payload.backend.as_str().into(), bytes);
+        let vk = VerifyingKeyBox::new(backend.into(), bytes);
         let actual_commitment = hash_vk(&vk);
         if let Some(hex) = payload.commitment_hex.as_deref() {
             let parsed = parse_commitment_hex(hex)?;
@@ -2192,23 +2326,16 @@ fn build_vk_record(
         eyre::bail!("provide either vk_bytes or commitment_hex");
     }
 
-    let backend_tag = match payload.backend.as_str() {
-        b if b.contains("halo2") && (b.contains("pasta") || b.contains("ipa")) => {
-            BackendTag::Halo2IpaPasta
-        }
-        b if b.contains("groth16") => BackendTag::Groth16,
-        b if b.contains("stark") => BackendTag::Stark,
-        _ => BackendTag::Unsupported,
-    };
+    let backend_tag = vk_backend_tag_from_label(backend);
     let schema_hash = parse_hex32_str(
-        &payload.public_inputs_schema_hex,
-        "public_inputs_schema_hex",
+        &payload.public_inputs_schema_hash_hex,
+        "public_inputs_schema_hash_hex",
     )?;
-    let gas_schedule_id = payload
+    if payload
         .gas_schedule_id
-        .clone()
-        .ok_or_else(|| eyre::eyre!("gas_schedule_id is required"))?;
-    if gas_schedule_id.trim().is_empty() {
+        .as_ref()
+        .is_some_and(|gas_schedule_id| gas_schedule_id.trim().is_empty())
+    {
         eyre::bail!("gas_schedule_id must not be empty");
     }
     if let (Some(activation_height), Some(withdraw_height)) =
@@ -2237,7 +2364,7 @@ fn build_vk_record(
     record.activation_height = payload.activation_height;
     record.withdraw_height = payload.withdraw_height;
     record.key = key_opt;
-    record.gas_schedule_id = Some(gas_schedule_id);
+    record.gas_schedule_id = payload.gas_schedule_id.clone();
     Ok(record)
 }
 
@@ -2246,10 +2373,10 @@ fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
         .wrap_err_with(|| format!("failed to read {}", path.display()))?;
     let payload: VkSubmissionJson =
         norito::json::from_str(&raw).wrap_err("failed to parse VK submission JSON")?;
-    let id = iroha::data_model::proof::VerifyingKeyId::new(
-        payload.backend.clone(),
-        payload.name.clone(),
-    );
+    let backend =
+        ensure_production_verify_backend_label(&payload.backend, "verifying key backend")?;
+    let id =
+        iroha::data_model::proof::VerifyingKeyId::new(backend.to_string(), payload.name.clone());
     let record = build_vk_record(&payload)?;
     Ok(PreparedVkSubmission {
         authority: payload.authority,
@@ -2334,8 +2461,14 @@ pub struct VkGetArgs {
 
 impl Run for VkGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let backend =
+            ensure_production_verify_backend_label(&self.backend, "verifying key get backend")?;
+        let name = self.name.trim();
+        if name.is_empty() {
+            eyre::bail!("verifying key get name must be non-empty");
+        }
         let client: Client = context.client_from_config();
-        let v = client.get_zk_vk_json(&self.backend, &self.name)?;
+        let v = client.get_zk_vk_json(backend, name)?;
         context.print_data(&v)?;
         Ok(())
     }

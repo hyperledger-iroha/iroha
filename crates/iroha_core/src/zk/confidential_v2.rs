@@ -173,6 +173,33 @@ where
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn ensure_confidential_v2_vk_box_shape(
+    vk_box: &VerifyingKeyBox,
+    circuit_id: &str,
+    ipa_k: u32,
+    label: &str,
+) -> Result<(), String> {
+    let actual_ipa_k =
+        super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(&vk_box.bytes, circuit_id)
+            .map_err(|err| format!("{label} verifier key {err}"))?;
+    if actual_ipa_k != ipa_k {
+        return Err(format!(
+            "{label} verifier key IPAK `{actual_ipa_k}` is not `{ipa_k}`"
+        ));
+    }
+    let h2vk = super::zk1::h2vk_payload(vk_box.bytes.as_slice())
+        .map_err(|err| format!("{label} verifier key {err}"))?;
+    let (h2vk_k, _compress_selectors, _fixed_columns) = super::zk1::halo2_pasta_vk_header(h2vk)
+        .map_err(|err| format!("{label} verifier key {err}"))?;
+    if h2vk_k != actual_ipa_k {
+        return Err(format!(
+            "{label} verifier key IPAK `{actual_ipa_k}` does not match H2VK domain `{h2vk_k}`"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn confidential_transfer_v2_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
 
@@ -202,6 +229,12 @@ pub fn ensure_confidential_transfer_v2_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+            CONFIDENTIAL_TRANSFER_V2_IPA_K,
+            "Confidential transfer v2",
+        )?;
         let canonical = confidential_transfer_v2_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -243,6 +276,12 @@ pub fn ensure_confidential_unshield_v2_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V2_IPA_K,
+            "Confidential unshield v2",
+        )?;
         let canonical = confidential_unshield_v2_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -284,6 +323,12 @@ pub fn ensure_confidential_unshield_v3_canonical_vk_box(
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     {
+        ensure_confidential_v2_vk_box_shape(
+            vk_box,
+            CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+            CONFIDENTIAL_UNSHIELD_V3_IPA_K,
+            "Confidential unshield v3",
+        )?;
         let canonical = confidential_unshield_v3_vk_box()?;
         if super::hash_vk(vk_box) != super::hash_vk(&canonical) || vk_box.bytes != canonical.bytes {
             return Err(
@@ -3175,6 +3220,21 @@ mod tests {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
+    fn confidential_transfer_v2_canonical_vk_guard_rejects_malformed_key_preflight() {
+        use iroha_data_model::proof::VerifyingKeyBox;
+
+        let malformed =
+            VerifyingKeyBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![0xC9; 32]);
+        let err = super::ensure_confidential_transfer_v2_canonical_vk_box(&malformed)
+            .expect_err("malformed verifier key must reject before canonical key generation");
+        assert!(
+            err.contains("invalid CID1/Halo2 IPA verifier-key envelope"),
+            "unexpected malformed-key error: {err}"
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
     fn confidential_unshield_v2_v3_canonical_caches_reject_key_substitution() {
         use iroha_data_model::proof::VerifyingKeyBox;
 
@@ -3252,13 +3312,13 @@ mod tests {
         let err = super::ensure_confidential_unshield_v3_canonical_vk_box(&v2)
             .expect_err("unshield v2 key must not satisfy unshield v3 canonical guard");
         assert!(
-            err.contains("canonical semantic circuit key"),
+            err.contains("CID1"),
             "unexpected v2-as-v3 canonical-guard error: {err}"
         );
         let err = super::ensure_confidential_unshield_v2_canonical_vk_box(&v3)
             .expect_err("unshield v3 key must not satisfy unshield v2 canonical guard");
         assert!(
-            err.contains("canonical semantic circuit key"),
+            err.contains("CID1"),
             "unexpected v3-as-v2 canonical-guard error: {err}"
         );
     }

@@ -6,6 +6,11 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "staticlib"]
 
+[features]
+compact-len = []
+packed-struct = []
+schema-structural = []
+
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
 iroha_core = { workspace = true, features = ["zk-halo2-ipa"] }

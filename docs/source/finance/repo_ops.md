@@ -768,7 +768,7 @@ scrambles to recreate hashes or event streams.
   tests cover the new matrix policy.
 - **ISO 20022 mapping:** When building ISO envelopes or reconciling external
   systems, reuse the field mapping documented in
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`, `sese.023`,
   `sese.025`) so the Norito payload and ISO confirmations stay in sync.
 
 ## 5. Operational Checklists

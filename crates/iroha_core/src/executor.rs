@@ -12,7 +12,9 @@ use std::{
 
 use base64::Engine as _;
 use derive_more::Debug;
-use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
+use iroha_config::parameters::actual::{
+    GasLiquidity, GasVolatility, NexusFees, SponsoredContractOperationAllowlistEntry,
+};
 use iroha_data_model::{
     Identifiable as _, Registrable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
@@ -39,11 +41,15 @@ use iroha_data_model::{
     prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
-    smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
+    smart_contract::{
+        ContractAddress, ContractAlias,
+        payloads::{ExecutorContext, Validate as ValidatePayload},
+    },
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
 };
 use iroha_executor_data_model::{
-    isi::multisig::MultisigInstructionBox, permission as executor_permission,
+    isi::multisig::{MultisigInstructionBox, MultisigProposalState},
+    permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
 use iroha_primitives::{
@@ -857,6 +863,13 @@ fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFee
     }
 }
 
+fn nexus_fee_admission_error_to_validation_fail(err: NexusFeeAdmissionError) -> ValidationFail {
+    match err {
+        NexusFeeAdmissionError::Rejected(reason) => ValidationFail::NotPermitted(reason),
+        NexusFeeAdmissionError::ConfigInvalid(reason) => ValidationFail::InternalError(reason),
+    }
+}
+
 pub(crate) fn can_use_fee_sponsor_read_only(
     world: &impl WorldReadOnly,
     caller: &AccountId,
@@ -890,6 +903,285 @@ pub(crate) fn can_use_fee_sponsor_read_only(
                 sponsor,
             )
         })
+}
+
+fn sponsored_contract_alias_metadata(
+    metadata: &Metadata,
+) -> Result<Option<ContractAlias>, NexusFeeAdmissionError> {
+    if let Some(alias_literal) = metadata_string(metadata, "contract_alias") {
+        return alias_literal
+            .parse::<ContractAlias>()
+            .map(Some)
+            .map_err(|err| {
+                NexusFeeAdmissionError::Rejected(format!(
+                    "invalid sponsored contract_alias metadata: {err}"
+                ))
+            });
+    }
+
+    Ok(None)
+}
+
+fn ensure_sponsored_contract_alias_metadata_matches_binding(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+    metadata_alias: Option<&ContractAlias>,
+) -> Result<(), NexusFeeAdmissionError> {
+    if let Some(metadata_alias) = metadata_alias {
+        let binding = world
+            .contract_alias_bindings()
+            .get(address)
+            .ok_or_else(|| {
+                NexusFeeAdmissionError::Rejected(
+                    "sponsored fee operation contract_alias metadata has no on-chain binding"
+                        .to_owned(),
+                )
+            })?;
+        if &binding.alias != metadata_alias {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "sponsored fee operation contract_alias metadata does not match on-chain binding"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn sponsored_allowlist_entry_matches_contract_call(
+    world: &impl WorldReadOnly,
+    entry: &SponsoredContractOperationAllowlistEntry,
+    address: &ContractAddress,
+    entrypoint: &str,
+) -> bool {
+    if !entry.entrypoints.contains(entrypoint) {
+        return false;
+    }
+    if entry.contract_alias.is_none() && entry.contract_address.is_none() {
+        return false;
+    }
+
+    if entry
+        .contract_address
+        .as_ref()
+        .is_some_and(|expected| expected != address)
+    {
+        return false;
+    }
+
+    if let Some(expected_alias) = entry.contract_alias.as_ref()
+        && !world
+            .contract_alias_bindings()
+            .get(address)
+            .is_some_and(|binding| &binding.alias == expected_alias)
+    {
+        return false;
+    }
+
+    true
+}
+
+fn sponsored_contract_call_allowed(
+    world: &impl WorldReadOnly,
+    fees: &NexusFees,
+    address: &ContractAddress,
+    entrypoint: &str,
+) -> bool {
+    fees.sponsored_contract_operation_allowlist
+        .iter()
+        .any(|entry| {
+            sponsored_allowlist_entry_matches_contract_call(world, entry, address, entrypoint)
+        })
+}
+
+fn ensure_sponsored_contract_call_metadata(
+    world: &impl WorldReadOnly,
+    fees: &NexusFees,
+    metadata: &Metadata,
+    call: &ContractInvocation,
+) -> Result<(), NexusFeeAdmissionError> {
+    let entrypoint = metadata_string(metadata, "contract_entrypoint").ok_or_else(|| {
+        NexusFeeAdmissionError::Rejected(
+            "sponsored fee operation must include contract_entrypoint metadata".to_owned(),
+        )
+    })?;
+    if entrypoint != call.entrypoint {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored fee operation contract_entrypoint metadata does not match executable"
+                .to_owned(),
+        ));
+    }
+
+    let address = metadata_string(metadata, "contract_address").ok_or_else(|| {
+        NexusFeeAdmissionError::Rejected(
+            "sponsored fee operation must include contract_address metadata".to_owned(),
+        )
+    })?;
+    let address = address.parse::<ContractAddress>().map_err(|err| {
+        NexusFeeAdmissionError::Rejected(format!(
+            "invalid sponsored contract_address metadata: {err}"
+        ))
+    })?;
+    if address != call.contract_address {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored fee operation contract_address metadata does not match executable"
+                .to_owned(),
+        ));
+    }
+
+    let metadata_alias = sponsored_contract_alias_metadata(metadata)?;
+    ensure_sponsored_contract_alias_metadata_matches_binding(
+        world,
+        &address,
+        metadata_alias.as_ref(),
+    )?;
+
+    if !sponsored_contract_call_allowed(world, fees, &address, &entrypoint) {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "sponsored contract entrypoint `{entrypoint}` is not allowlisted for target contract"
+        )));
+    }
+
+    Ok(())
+}
+
+fn ensure_sponsored_contract_executable(
+    world: &impl WorldReadOnly,
+    fees: &NexusFees,
+    executable: &Executable,
+    metadata: &Metadata,
+) -> Result<(), NexusFeeAdmissionError> {
+    match executable {
+        Executable::ContractCall(call) => {
+            ensure_sponsored_contract_call_metadata(world, fees, metadata, call)
+        }
+        Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
+            Err(NexusFeeAdmissionError::Rejected(
+                "sponsored fee operation must be an allowlisted contract call".to_owned(),
+            ))
+        }
+    }
+}
+
+fn ensure_sponsored_multisig_proposal_instructions(
+    world: &impl WorldReadOnly,
+    fees: &NexusFees,
+    instructions: &[InstructionBox],
+) -> Result<(), NexusFeeAdmissionError> {
+    let [register_trigger_instruction, execute_trigger_instruction] = instructions else {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored multisig proposal must wrap exactly one allowlisted contract call trigger"
+                .to_owned(),
+        ));
+    };
+    let register_trigger = register_trigger_instruction
+        .as_any()
+        .downcast_ref::<RegisterBox>()
+        .and_then(|register| match register {
+            RegisterBox::Trigger(register_trigger) => Some(register_trigger),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            NexusFeeAdmissionError::Rejected(
+                "sponsored multisig proposal must register an allowlisted contract call trigger"
+                    .to_owned(),
+            )
+        })?;
+    let execute_trigger = execute_trigger_instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+        .ok_or_else(|| {
+            NexusFeeAdmissionError::Rejected(
+                "sponsored multisig proposal must execute its allowlisted contract call trigger"
+                    .to_owned(),
+            )
+        })?;
+    if &execute_trigger.trigger != register_trigger.object.id() {
+        return Err(NexusFeeAdmissionError::Rejected(
+            "sponsored multisig proposal trigger execution does not match registered trigger"
+                .to_owned(),
+        ));
+    }
+
+    ensure_sponsored_contract_executable(
+        world,
+        fees,
+        &register_trigger.object.action.executable,
+        &register_trigger.object.action.metadata,
+    )
+}
+
+fn multisig_proposal_state_key_for_admission(
+    account: &AccountId,
+    instructions_hash: &iroha_crypto::HashOf<Vec<InstructionBox>>,
+) -> Result<Name, NexusFeeAdmissionError> {
+    smart_contract_state_name(
+        format!(
+            "multisig/proposal/{}/{}",
+            iroha_crypto::HashOf::new(account),
+            instructions_hash
+        ),
+        "multisig proposal state",
+    )
+}
+
+fn ensure_sponsored_fee_operation(
+    world: &impl WorldReadOnly,
+    fees: &NexusFees,
+    transaction: &SignedTransaction,
+) -> Result<(), NexusFeeAdmissionError> {
+    match transaction.instructions() {
+        Executable::ContractCall(call) => {
+            ensure_sponsored_contract_call_metadata(world, fees, transaction.metadata(), call)
+        }
+        Executable::Instructions(instructions) => {
+            let [instruction] = instructions.as_ref() else {
+                return Err(NexusFeeAdmissionError::Rejected(
+                    "sponsored fee operation must be an allowlisted contract call or multisig contract call".to_owned(),
+                ));
+            };
+            match MultisigInstructionBox::try_from(instruction) {
+                Ok(MultisigInstructionBox::Propose(propose)) => {
+                    ensure_sponsored_multisig_proposal_instructions(
+                        world,
+                        fees,
+                        &propose.instructions,
+                    )
+                }
+                Ok(MultisigInstructionBox::Approve(approve)) => {
+                    let key = multisig_proposal_state_key_for_admission(
+                        &approve.account,
+                        &approve.instructions_hash,
+                    )?;
+                    let payload = world.smart_contract_state().get(&key).ok_or_else(|| {
+                        NexusFeeAdmissionError::Rejected(
+                            "sponsored multisig approval references an unknown proposal".to_owned(),
+                        )
+                    })?;
+                    let proposal = norito::decode_from_bytes::<MultisigProposalState>(payload)
+                        .map_err(|err| {
+                            NexusFeeAdmissionError::ConfigInvalid(format!(
+                                "multisig proposal state decode failed: {err}"
+                            ))
+                        })?;
+                    ensure_sponsored_multisig_proposal_instructions(
+                        world,
+                        fees,
+                        &proposal.instructions,
+                    )
+                }
+                Ok(MultisigInstructionBox::Register(_))
+                | Ok(MultisigInstructionBox::Cancel(_))
+                | Err(_) => Err(NexusFeeAdmissionError::Rejected(
+                    "sponsored native instruction batch is not an allowlisted contract operation"
+                        .to_owned(),
+                )),
+            }
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => Err(NexusFeeAdmissionError::Rejected(
+            "sponsored fee operation must be an allowlisted contract call".to_owned(),
+        )),
+    }
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
@@ -1235,6 +1527,7 @@ pub(crate) fn check_external_nexus_fee_admission(
                 "fee sponsor is not authorized".to_owned(),
             ));
         }
+        ensure_sponsored_fee_operation(world, &nexus.fees, transaction)?;
         if nexus.fees.sponsor_max_fee > Numeric::zero() && fee > nexus.fees.sponsor_max_fee {
             return Err(NexusFeeAdmissionError::Rejected(
                 "fee exceeds sponsor_max_fee".to_owned(),
@@ -2296,6 +2589,31 @@ impl Executor {
             transaction.metadata(),
             state_transaction.current_dataspace_id,
         )?;
+        if let Some(sponsor) = fee_sponsor.as_ref() {
+            if !state_transaction.nexus.fees.sponsorship_enabled {
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorDisabled {
+                    payer_id: sponsor.to_string(),
+                });
+                return Err(ValidationFail::NotPermitted(
+                    "fee sponsorship is disabled".to_owned(),
+                ));
+            }
+            if !state_transaction.can_use_fee_sponsor(authority, sponsor) {
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorUnauthorized {
+                    sponsor_id: sponsor.to_string(),
+                    authority_id: authority.to_string(),
+                });
+                return Err(ValidationFail::NotPermitted(
+                    "fee sponsor is not authorized".to_owned(),
+                ));
+            }
+            ensure_sponsored_fee_operation(
+                &state_transaction.world,
+                &state_transaction.nexus.fees,
+                &transaction,
+            )
+            .map_err(nexus_fee_admission_error_to_validation_fail)?;
+        }
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
@@ -2432,6 +2750,33 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
+                    if iroha_data_model::zk::BackendTag::is_pending_production_backend_label(
+                        backend.as_str(),
+                    ) {
+                        return Err(ValidationFail::NotPermitted(
+                            "pending-production proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "production-claim proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "trusted-setup proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if crate::zk::is_developer_only_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "developer-only proof backends are not supported".to_owned(),
+                        ));
+                    }
+                    if !crate::zk::is_production_verify_backend_label(backend.as_str()) {
+                        return Err(ValidationFail::NotPermitted(
+                            "unsupported proof backends are not supported".to_owned(),
+                        ));
+                    }
 
                     // If a VK reference is provided without a commitment, check existence in
                     // WSV. If a commitment is provided, skip the lookup to keep pre-verify
@@ -2452,6 +2797,12 @@ impl Executor {
                     // Perform lightweight pre-verify (dedup + tag sanity).
                     let (expected_commitment, vk_active) =
                         if let Some(rec) = state_transaction.world.verifying_keys.get(&vk_ref) {
+                            if rec.backend.is_pending_production_backend() {
+                                return Err(ValidationFail::NotPermitted(
+                                    "pending-production verifying key backends are not supported"
+                                        .to_owned(),
+                                ));
+                            }
                             if let Some(ns_hint) = namespace_hint.as_deref() {
                                 if !rec.namespace.is_empty() && rec.namespace != ns_hint {
                                     return Err(ValidationFail::NotPermitted(
@@ -5523,7 +5874,7 @@ pub mod executor_norito {
 mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
-    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::Grant,
@@ -5534,7 +5885,7 @@ mod tests {
         transaction::executable::IvmBytecode,
     };
     use iroha_executor_data_model::{
-        isi::multisig::{MultisigRegister, MultisigSpec},
+        isi::multisig::{MultisigApprove, MultisigPropose, MultisigRegister, MultisigSpec},
         permission::nexus::CanUseFeeSponsor,
     };
     use iroha_primitives::{json::Json, time::TimeSource};
@@ -6034,6 +6385,75 @@ mod tests {
             let res =
                 executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache);
             assert!(res.is_err(), "duplicate proof should be rejected");
+        }
+    }
+
+    #[cfg(feature = "zk-preverify")]
+    #[test]
+    fn preverify_attachments_reject_non_production_backend_labels_before_vk_lookup() {
+        use iroha_data_model::{
+            proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+            transaction::{Executable, TransactionBuilder},
+        };
+        use iroha_schema::Ident;
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let world = World::with([domain], [alice_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        for (idx, (backend, expected_msg)) in [
+            (
+                "halo2/ipa:production-ready",
+                "production-claim proof backends",
+            ),
+            ("halo2/ipa:kzg", "trusted-setup proof backends"),
+            ("halo2/ipa:dev-fixture", "developer-only proof backends"),
+            ("halo2/unknown-native-v1", "unsupported proof backends"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let backend_ident: Ident = backend.parse().expect("backend ident");
+            let proof = ProofBox::new(
+                backend_ident.clone(),
+                vec![0xA0 | u8::try_from(idx).unwrap()],
+            );
+            let attachment = ProofAttachment::new_ref(
+                backend_ident.clone(),
+                proof,
+                VerifyingKeyId::new(backend_ident, format!("missing_vk_{idx}")),
+            );
+            let tx = TransactionBuilder::new("test-chain".parse().unwrap(), ALICE_ID.clone())
+                .with_executable(Executable::Instructions(Vec::new().into()))
+                .with_attachments(ProofAttachmentList(vec![attachment]))
+                .sign(ALICE_KEYPAIR.private_key());
+
+            let mut state_tx = block.transaction();
+            let err = executor
+                .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
+                .expect_err("non-production proof backend label must fail before vk lookup");
+            match err {
+                ValidationFail::NotPermitted(msg) => {
+                    assert!(
+                        msg.contains(expected_msg),
+                        "unexpected msg for {backend}: {msg}"
+                    );
+                    assert!(
+                        !msg.contains("referenced verifying key missing"),
+                        "backend classification for {backend} must precede vk lookup: {msg}"
+                    );
+                }
+                other => panic!("unexpected error for {backend}: {other:?}"),
+            }
         }
     }
 
@@ -6920,6 +7340,534 @@ mod tests {
             .expect("bench profile should execute without logger");
     }
 
+    fn dpn_contract_call_executable_and_metadata(
+        authority: &AccountId,
+        entrypoint: &str,
+        fee_sponsor: Option<&AccountId>,
+    ) -> (Executable, Metadata) {
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive DPN contract address");
+        let call = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: contract_address.clone(),
+            entrypoint: entrypoint.to_owned(),
+            payload: None,
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_address").expect("static name"),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
+            Name::from_str("contract_alias").expect("static name"),
+            Json::new("dpn_suite::dpn".to_owned()),
+        );
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new(entrypoint.to_owned()),
+        );
+        metadata.insert(
+            Name::from_str("gas_limit").expect("static name"),
+            Json::new(1_u64),
+        );
+        if let Some(fee_sponsor) = fee_sponsor {
+            metadata.insert(
+                Name::from_str("fee_sponsor").expect("static name"),
+                Json::new(fee_sponsor.to_string()),
+            );
+        }
+        (Executable::ContractCall(call), metadata)
+    }
+
+    struct SponsoredFeeAdmissionFixture {
+        state: State,
+        authority_id: AccountId,
+        authority_kp: KeyPair,
+        sponsor_id: AccountId,
+    }
+
+    fn bind_dpn_contract_alias(world: &mut World, address: &ContractAddress) {
+        world
+            .bind_contract_alias(
+                address,
+                "dpn_suite::dpn".parse().expect("DPN contract alias"),
+                None,
+                None,
+                0,
+            )
+            .expect("bind DPN contract alias");
+    }
+
+    fn sponsored_fee_admission_fixture(bind_dpn_alias: bool) -> SponsoredFeeAdmissionFixture {
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id =
+            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("xor asset name"));
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [asset_definition],
+            [],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        let dpn_contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority_id,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive DPN contract address");
+        if bind_dpn_alias {
+            bind_dpn_contract_alias(&mut state.world, &dpn_contract_address);
+        }
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.external_settlement_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        {
+            let mut stx = block.transaction();
+            Grant::account_permission(
+                CanUseFeeSponsor {
+                    sponsor: sponsor_id.clone(),
+                },
+                authority_id.clone(),
+            )
+            .execute(&sponsor_id, &mut stx)
+            .expect("grant fee sponsor permission");
+            stx.apply();
+        }
+        block.commit().expect("commit sponsor permission grant");
+
+        SponsoredFeeAdmissionFixture {
+            state,
+            authority_id,
+            authority_kp,
+            sponsor_id,
+        }
+    }
+
+    fn sign_sponsored_fixture_transaction(
+        fixture: &SponsoredFeeAdmissionFixture,
+        executable: Executable,
+        metadata: Metadata,
+    ) -> SignedTransaction {
+        let chain: ChainId = "test-chain".parse().unwrap();
+        TransactionBuilder::new(chain, fixture.authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(executable)
+            .sign(fixture.authority_kp.private_key())
+    }
+
+    fn expect_sponsored_admission_rejection(
+        fixture: &SponsoredFeeAdmissionFixture,
+        executable: Executable,
+        metadata: Metadata,
+        expected_message: &str,
+    ) {
+        let tx = sign_sponsored_fixture_transaction(fixture, executable, metadata);
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("sponsored transaction should be rejected");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message) if message.contains(expected_message)
+        ));
+    }
+
+    fn replace_metadata_string(metadata: &mut Metadata, key: &str, value: impl Into<String>) {
+        metadata.insert(
+            Name::from_str(key).expect("static metadata key"),
+            Json::new(value.into()),
+        );
+    }
+
+    fn multisig_contract_trigger_instructions(
+        fixture: &SponsoredFeeAdmissionFixture,
+        entrypoint: &str,
+        matching_execute_trigger: bool,
+    ) -> Vec<InstructionBox> {
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            entrypoint,
+            Some(&fixture.sponsor_id),
+        );
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            "sponsored_dpn_contract_call".parse().expect("trigger id");
+        let execute_trigger_id = if matching_execute_trigger {
+            trigger_id.clone()
+        } else {
+            "sponsored_dpn_contract_call_other"
+                .parse()
+                .expect("trigger id")
+        };
+        let action = iroha_data_model::trigger::action::Action::new(
+            executable,
+            iroha_data_model::trigger::action::Repeats::Exactly(1),
+            fixture.authority_id.clone(),
+            iroha_data_model::events::EventFilterBox::ExecuteTrigger(
+                iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new(),
+            ),
+        )
+        .with_metadata(metadata);
+        let trigger = Trigger::new(trigger_id.clone(), action);
+        vec![
+            InstructionBox::from(Register::trigger(trigger)),
+            InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
+                execute_trigger_id,
+            )),
+        ]
+    }
+
+    fn multisig_instruction_tx(
+        fixture: &SponsoredFeeAdmissionFixture,
+        instruction: impl Into<MultisigInstructionBox>,
+    ) -> SignedTransaction {
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        sign_sponsored_fixture_transaction(
+            fixture,
+            Executable::from(core::iter::once(InstructionBox::from(instruction.into()))),
+            metadata,
+        )
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_accepts_configured_dpn_contract_call() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+        let tx = sign_sponsored_fixture_transaction(&fixture, executable, metadata);
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("allowlisted DPN contract call should be sponsored");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_bound_non_dpn_contract_call() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        let (mut executable, mut metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+        let other_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &fixture.authority_id,
+            8,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive non-DPN contract address");
+        fixture
+            .state
+            .world
+            .bind_contract_alias(
+                &other_address,
+                "not_dpn::dpn".parse().expect("non-DPN contract alias"),
+                None,
+                None,
+                0,
+            )
+            .expect("bind non-DPN contract alias");
+        if let Executable::ContractCall(call) = &mut executable {
+            call.contract_address = other_address.clone();
+        }
+        replace_metadata_string(&mut metadata, "contract_address", other_address.to_string());
+        replace_metadata_string(&mut metadata, "contract_alias", "not_dpn::dpn");
+
+        expect_sponsored_admission_rejection(&fixture, executable, metadata, "not allowlisted");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_disallowed_dpn_entrypoint() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "delete_everything",
+            Some(&fixture.sponsor_id),
+        );
+
+        expect_sponsored_admission_rejection(&fixture, executable, metadata, "not allowlisted");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_alias_metadata_without_on_chain_binding() {
+        let fixture = sponsored_fee_admission_fixture(false);
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+
+        expect_sponsored_admission_rejection(
+            &fixture,
+            executable,
+            metadata,
+            "has no on-chain binding",
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_contract_address_metadata_mismatch() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let (executable, mut metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+        let other_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &fixture.authority_id,
+            9,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive other contract address");
+        replace_metadata_string(&mut metadata, "contract_address", other_address.to_string());
+
+        expect_sponsored_admission_rejection(
+            &fixture,
+            executable,
+            metadata,
+            "contract_address metadata does not match executable",
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_contract_entrypoint_metadata_mismatch() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let (executable, mut metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+        replace_metadata_string(&mut metadata, "contract_entrypoint", "freeze_dpn");
+
+        expect_sponsored_admission_rejection(
+            &fixture,
+            executable,
+            metadata,
+            "contract_entrypoint metadata does not match executable",
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_generic_instruction_batch_with_dpn_metadata() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let (_, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+
+        expect_sponsored_admission_rejection(
+            &fixture,
+            Executable::Instructions(Vec::new().into()),
+            metadata,
+            "contract call or multisig contract call",
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_max_fee_applies_after_allowlist_acceptance() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        fixture.state.nexus.get_mut().fees.sponsor_max_fee = Numeric::new(1, 1);
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &fixture.authority_id,
+            "transfer_dpn",
+            Some(&fixture.sponsor_id),
+        );
+
+        expect_sponsored_admission_rejection(
+            &fixture,
+            executable,
+            metadata,
+            "fee exceeds sponsor_max_fee",
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_accepts_multisig_proposal_for_allowlisted_dpn_call() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", true);
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigPropose::new(fixture.authority_id.clone(), proposal_instructions, None),
+        );
+
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("allowlisted multisig DPN proposal should be sponsored");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_multisig_proposal_with_mismatched_trigger_execution() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", false);
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigPropose::new(fixture.authority_id.clone(), proposal_instructions, None),
+        );
+
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("mismatched multisig trigger execution should be rejected");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message)
+                if message.contains("trigger execution does not match")
+        ));
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_multisig_proposal_with_extra_instruction() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let mut proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", true);
+        proposal_instructions.push(InstructionBox::from(
+            iroha_data_model::isi::ExecuteTrigger::new(
+                "sponsored_dpn_contract_call_extra"
+                    .parse()
+                    .expect("trigger id"),
+            ),
+        ));
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigPropose::new(fixture.authority_id.clone(), proposal_instructions, None),
+        );
+
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("extra multisig proposal instruction should be rejected");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message)
+                if message.contains("wrap exactly one allowlisted contract call trigger")
+        ));
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_multisig_approval_for_unknown_proposal() {
+        let fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", true);
+        let instructions_hash = HashOf::new(&proposal_instructions);
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigApprove::new(fixture.authority_id.clone(), instructions_hash),
+        );
+
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("unknown multisig proposal approval should be rejected");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message) if message.contains("unknown proposal")
+        ));
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_accepts_multisig_approval_for_stored_allowlisted_proposal() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "transfer_dpn", true);
+        let instructions_hash = HashOf::new(&proposal_instructions);
+        let key =
+            multisig_proposal_state_key_for_admission(&fixture.authority_id, &instructions_hash)
+                .expect("proposal key");
+        let proposal = MultisigProposalState::new(
+            fixture.authority_id.clone(),
+            instructions_hash,
+            proposal_instructions,
+            0,
+            60_000,
+            BTreeSet::from([fixture.authority_id.clone()]),
+            None,
+        );
+        fixture
+            .state
+            .world
+            .smart_contract_state
+            .insert(key, to_bytes(&proposal).expect("encode proposal state"));
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigApprove::new(fixture.authority_id.clone(), instructions_hash),
+        );
+
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("stored allowlisted multisig approval should be sponsored");
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rejects_multisig_approval_for_stored_non_allowlisted_proposal() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        let proposal_instructions =
+            multisig_contract_trigger_instructions(&fixture, "delete_everything", true);
+        let instructions_hash = HashOf::new(&proposal_instructions);
+        let key =
+            multisig_proposal_state_key_for_admission(&fixture.authority_id, &instructions_hash)
+                .expect("proposal key");
+        let proposal = MultisigProposalState::new(
+            fixture.authority_id.clone(),
+            instructions_hash,
+            proposal_instructions,
+            0,
+            60_000,
+            BTreeSet::from([fixture.authority_id.clone()]),
+            None,
+        );
+        fixture
+            .state
+            .world
+            .smart_contract_state
+            .insert(key, to_bytes(&proposal).expect("encode proposal state"));
+        let tx = multisig_instruction_tx(
+            &fixture,
+            MultisigApprove::new(fixture.authority_id.clone(), instructions_hash),
+        );
+
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect_err("stored non-allowlisted multisig approval should be rejected");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message) if message.contains("not allowlisted")
+        ));
+    }
+
     #[test]
     fn nexus_fee_sponsor_rejected_when_disabled() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
@@ -7020,7 +7968,7 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_sponsor_allowed_with_permission() {
+    fn nexus_fee_sponsor_rejects_native_batch_with_permission() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -7100,9 +8048,15 @@ mod tests {
 
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        executor
-            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("execution");
+        let res = executor.execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache);
+        match res {
+            Err(ValidationFail::NotPermitted(message)) => assert!(
+                message.contains("allowlisted contract call")
+                    || message.contains("allowlisted contract operation"),
+                "unexpected rejection message: {message}"
+            ),
+            other => panic!("sponsored native batch must be rejected, got {other:?}"),
+        }
 
         let sponsor_balance_after = stx
             .world
@@ -7112,33 +8066,14 @@ mod tests {
             .0
             .try_mantissa_u128()
             .unwrap();
-        let sink_balance_after = stx
-            .world
-            .assets()
-            .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
-            .expect("sink asset exists")
-            .0
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(sponsor_balance_after, 9_999);
-        assert_eq!(sink_balance_after, 0);
+        assert_eq!(sponsor_balance_after, 10_000);
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 0);
-
-        stx.apply();
-
-        let snap = crate::sumeragi::status::nexus_fee_snapshot();
-        assert_eq!(snap.charged_total, 1);
-        assert_eq!(snap.charged_via_sponsor_total, 1);
-        assert_eq!(
-            snap.last_payer,
-            Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
-        );
     }
 
     #[test]
-    fn nexus_fee_sponsor_allowed_with_dataspace_default() {
+    fn nexus_fee_dataspace_default_sponsor_rejects_native_batch() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -7210,9 +8145,15 @@ mod tests {
         stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
 
-        executor
-            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("execution");
+        let res = executor.execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache);
+        match res {
+            Err(ValidationFail::NotPermitted(message)) => assert!(
+                message.contains("allowlisted contract call")
+                    || message.contains("allowlisted contract operation"),
+                "unexpected rejection message: {message}"
+            ),
+            other => panic!("sponsored native batch must be rejected, got {other:?}"),
+        }
 
         let sponsor_balance_after = stx
             .world
@@ -7222,26 +8163,10 @@ mod tests {
             .0
             .try_mantissa_u128()
             .unwrap();
-        let sink_balance_after = stx
-            .world
-            .assets()
-            .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
-            .expect("sink asset exists")
-            .0
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(sponsor_balance_after, 9_999);
-        assert_eq!(sink_balance_after, 0);
-
-        stx.apply();
+        assert_eq!(sponsor_balance_after, 10_000);
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
-        assert_eq!(snap.charged_total, 1);
-        assert_eq!(snap.charged_via_sponsor_total, 1);
-        assert_eq!(
-            snap.last_payer,
-            Some(crate::sumeragi::status::NexusFeePayer::Sponsor)
-        );
+        assert_eq!(snap.charged_total, 0);
     }
 
     #[test]
@@ -7305,22 +8230,30 @@ mod tests {
         .execute(&sponsor_id, &mut stx)
         .expect("grant fee sponsor permission");
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        metadata.insert(
-            Name::from_str("fee_sponsor").expect("static name"),
-            Json::new(sponsor_id.to_string()),
+        let (executable, metadata) = dpn_contract_call_executable_and_metadata(
+            &authority_id,
+            "transfer_dpn",
+            Some(&sponsor_id),
         );
+        if let Executable::ContractCall(call) = &executable {
+            stx.world
+                .bind_contract_alias(
+                    &call.contract_address,
+                    "dpn_suite::dpn".parse().expect("DPN contract alias"),
+                    None,
+                    None,
+                    0,
+                )
+                .expect("bind DPN contract alias");
+        }
         let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
         let tx = TransactionBuilder::new(chain, authority_id.clone())
             .with_metadata(metadata)
-            .with_executable(Executable::Instructions(Vec::new().into()))
+            .with_executable(executable)
             .sign(authority_kp.private_key());
 
-        let executor = super::Executor::Initial;
-        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        executor
-            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("external-settled sponsor should not require local fee asset");
+        check_external_nexus_fee_admission(&stx.world, &stx.nexus, &tx, 0, 1, None)
+            .expect("external-settled DPN sponsor should not require local fee asset");
 
         assert!(
             stx.world
@@ -7332,7 +8265,7 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_sponsor_is_burned_even_when_sponsor_is_fee_sink() {
+    fn nexus_fee_sponsor_sink_rejects_native_batch() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -7406,9 +8339,15 @@ mod tests {
 
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        executor
-            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("execution");
+        let res = executor.execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache);
+        match res {
+            Err(ValidationFail::NotPermitted(message)) => assert!(
+                message.contains("allowlisted contract call")
+                    || message.contains("allowlisted contract operation"),
+                "unexpected rejection message: {message}"
+            ),
+            other => panic!("sponsored native batch must be rejected, got {other:?}"),
+        }
 
         let sponsor_asset_id = AssetId::of(asset_def_id, sponsor_id);
         let sponsor_balance_after = stx
@@ -7419,25 +8358,11 @@ mod tests {
             .0
             .try_mantissa_u128()
             .unwrap();
-        assert_eq!(sponsor_balance_after, 9_999);
-
-        stx.apply();
-        block.commit().expect("commit state block");
-
-        let committed_balance_after = state
-            .view()
-            .world()
-            .assets()
-            .get(&sponsor_asset_id)
-            .expect("sponsor asset exists after commit")
-            .0
-            .try_mantissa_u128()
-            .unwrap();
-        assert_eq!(committed_balance_after, 9_999);
+        assert_eq!(sponsor_balance_after, 10_000);
     }
 
     #[test]
-    fn nexus_fee_sponsor_self_fee_is_legacy_noop_before_burn_activation() {
+    fn nexus_fee_sponsor_legacy_sink_rejects_native_batch() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus fee test lock");
@@ -7508,9 +8433,20 @@ mod tests {
             .sign(authority_kp.private_key());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        super::Executor::Initial
-            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
-            .expect("legacy self-fee execution");
+        let res = super::Executor::Initial.execute_transaction(
+            &mut stx,
+            &authority_id,
+            tx,
+            &mut ivm_cache,
+        );
+        match res {
+            Err(ValidationFail::NotPermitted(message)) => assert!(
+                message.contains("allowlisted contract call")
+                    || message.contains("allowlisted contract operation"),
+                "unexpected rejection message: {message}"
+            ),
+            other => panic!("sponsored native batch must be rejected, got {other:?}"),
+        }
 
         let sponsor_balance_after = stx
             .world

@@ -12501,6 +12501,40 @@ impl World {
         Self::default()
     }
 
+    /// Bind or update a contract alias record and keep both alias indexes consistent.
+    ///
+    /// # Errors
+    /// Returns an error when the requested alias is already bound to a different contract.
+    pub fn bind_contract_alias(
+        &mut self,
+        contract_address: &ContractAddress,
+        alias: ContractAlias,
+        lease_expiry_ms: Option<u64>,
+        grace_until_ms: Option<u64>,
+        bound_at_ms: u64,
+    ) -> Result<(), Error> {
+        if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
+            && existing_contract != *contract_address
+        {
+            return Err(Error::InvariantViolation(
+                format!("contract alias `{alias}` is already bound").into(),
+            ));
+        }
+
+        self.contract_alias_bindings.insert(
+            contract_address.clone(),
+            ContractAliasBindingRecord {
+                alias,
+                lease_expiry_ms,
+                grace_until_ms,
+                bound_at_ms,
+            },
+        );
+        self.rebuild_contract_alias_indexes()
+            .map_err(|err| Error::InvariantViolation(err.into()))?;
+        Ok(())
+    }
+
     /// Register an active validator consensus key with a PoP for deterministic tests.
     pub fn register_validator_pop_for_testing(&mut self, public_key: PublicKey, pop: Vec<u8>) {
         let id = derive_validator_key_id(&public_key);
@@ -37485,6 +37519,76 @@ mod tests {
         assert_eq!(
             permanent_binding.status_at(10_000),
             AssetDefinitionAliasLeaseStatus::Permanent
+        );
+    }
+
+    #[test]
+    fn world_bind_contract_alias_keeps_indexes_consistent() {
+        let mut world = World::new();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let other_contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            2,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("other contract address");
+        let first_alias: ContractAlias = "router::universal".parse().expect("first alias");
+        let second_alias: ContractAlias = "router_v2::universal".parse().expect("second alias");
+
+        world
+            .bind_contract_alias(
+                &contract_address,
+                first_alias.clone(),
+                Some(200),
+                Some(300),
+                100,
+            )
+            .expect("bind first alias");
+        assert_eq!(
+            world.contract_aliases.view().get(&first_alias),
+            Some(&contract_address)
+        );
+        assert_eq!(
+            world
+                .contract_alias_bindings
+                .view()
+                .get(&contract_address)
+                .expect("first binding")
+                .alias,
+            first_alias
+        );
+
+        world
+            .bind_contract_alias(&contract_address, second_alias.clone(), None, None, 400)
+            .expect("rebind alias");
+        assert!(world.contract_aliases.view().get(&first_alias).is_none());
+        assert_eq!(
+            world.contract_aliases.view().get(&second_alias),
+            Some(&contract_address)
+        );
+        assert_eq!(
+            world
+                .contract_alias_bindings
+                .view()
+                .get(&contract_address)
+                .expect("second binding")
+                .bound_at_ms,
+            400
+        );
+
+        let err = world
+            .bind_contract_alias(&other_contract_address, second_alias, None, None, 500)
+            .expect_err("alias reuse across contracts must fail");
+        assert!(
+            err.to_string().contains("already bound"),
+            "unexpected error: {err}"
         );
     }
 

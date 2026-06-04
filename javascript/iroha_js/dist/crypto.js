@@ -15,6 +15,47 @@ const ED25519_PRIVATE_KEY_LENGTH = 64;
 export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
+export const PRIVACY_FFI_VERSION_V1 = 1;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 6;
+export const PRIVACY_NATIVE_ARCHIVE_MAX_BYTES = 64 * 1024 * 1024;
+export const PRIVACY_FFI_STATUS_ERROR = 1;
+export const PRIVACY_FFI_ERROR_NULL_POINTER = 1;
+export const PRIVACY_FFI_ERROR_MALFORMED_NORITO = 2;
+export const PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM = 3;
+export const PRIVACY_FFI_ERROR_PRODUCTION_DISABLED = 4;
+export const PRIVACY_FFI_ERROR_INVALID_REQUEST = 5;
+const PRIVACY_NORITO_HEADER_BYTES = 40;
+const PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES = 64;
+const PRIVACY_NORITO_SUPPORTED_FLAGS_MASK = 0x27;
+const PRIVACY_NORITO_FIELD_BITSET_FLAG = 0x20;
+const PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS = 0x06;
+const PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE = 0x50;
+const PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE = 0x42;
+const PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE = 0x56;
+const PRIVACY_REQUEST_SCHEMA_BYTE = 0x52;
+const PRIVACY_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const PRIVACY_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE = (() => {
+  const archive = Buffer.alloc(PRIVACY_NORITO_HEADER_BYTES);
+  archive.write("NRT0", 0, "ascii");
+  archive.fill(PRIVACY_REQUEST_SCHEMA_BYTE, 6, 22);
+  return archive;
+})();
+const PRIVACY_NORITO_MAGIC = Buffer.from("NRT0", "ascii");
+const PRIVACY_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ PRIVACY_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
 
 export const CRYPTO_ALGORITHMS = Object.freeze({
   ED25519: "ed25519",
@@ -106,10 +147,12 @@ function resolveNativeBinding() {
 }
 
 function cryptoAlgorithmAliasKey(value) {
-  return String(value)
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
+  const raw = String(value);
+  const trimmed = raw.trim();
+  if (!/^[\x20-\x7e]+$/.test(trimmed)) {
+    throw new Error(`unsupported crypto algorithm: ${raw}`);
+  }
+  return trimmed.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 export function supportedCryptoAlgorithms() {
@@ -721,20 +764,79 @@ export function deriveConfidentialNullifierV2(input) {
 }
 
 function hasKagemushaRecursiveSpendNative(native) {
-  const abiVersion =
-    typeof native?.connectNoritoBridgeAbiVersion === "function"
-      ? Number(native.connectNoritoBridgeAbiVersion())
-      : 0;
+  const abiVersion = kagemushaRecursiveSpendBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION ||
+    typeof native.kagemushaRecursiveSpendInit !== "function" ||
+    typeof native.kagemushaRecursiveSpendAppend !== "function" ||
+    typeof native.kagemushaRecursiveSpendTransitionProfileInit !== "function" ||
+    typeof native.kagemushaRecursiveSpendTransitionProfileAppend !== "function" ||
+    typeof native.kagemushaRecursiveSpendLineageAppendBoundary !== "function" ||
+    typeof native.kagemushaRecursiveSpendLineageWitnessFromInitResult !== "function" ||
+    typeof native.kagemushaRecursiveSpendLineageWitnessAppendResult !== "function" ||
+    typeof native.kagemushaRecursiveSpendVerify !== "function" ||
+    typeof native.kagemushaRecursiveSpendRedeem !== "function"
+  ) {
+    return false;
+  }
+  return probeKagemushaRecursiveSpendNative(native);
+}
+
+function kagemushaRecursiveSpendBridgeAbiVersion(native) {
+  if (typeof native?.connectNoritoBridgeAbiVersion !== "function") {
+    return 0;
+  }
+  try {
+    const version = native.connectNoritoBridgeAbiVersion();
+    return typeof version === "number" && Number.isInteger(version) ? version : 0;
+  } catch {
+    return 0;
+  }
+}
+
+const KAGEMUSHA_NATIVE_PROBE_ARCHIVE = Buffer.from([0]);
+
+function isExpectedKagemushaNativeProbeRejection(error) {
+  return error instanceof Error && /Kagemusha/i.test(error.message);
+}
+
+function expectKagemushaNativeProbeRejection(probe) {
+  try {
+    probe();
+    return false;
+  } catch (error) {
+    return isExpectedKagemushaNativeProbeRejection(error);
+  }
+}
+
+function probeKagemushaRecursiveSpendNative(native) {
+  const probeArchive = KAGEMUSHA_NATIVE_PROBE_ARCHIVE;
   return (
-    native &&
-    Number.isInteger(abiVersion) &&
-    abiVersion >= KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION &&
-    typeof native.kagemushaRecursiveSpendInit === "function" &&
-    typeof native.kagemushaRecursiveSpendAppend === "function" &&
-    typeof native.kagemushaRecursiveSpendLineageWitnessFromInitResult === "function" &&
-    typeof native.kagemushaRecursiveSpendLineageWitnessAppendResult === "function" &&
-    typeof native.kagemushaRecursiveSpendVerify === "function" &&
-    typeof native.kagemushaRecursiveSpendRedeem === "function"
+    expectKagemushaNativeProbeRejection(() => native.kagemushaRecursiveSpendInit(probeArchive)) &&
+    expectKagemushaNativeProbeRejection(() => native.kagemushaRecursiveSpendAppend(probeArchive)) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaRecursiveSpendTransitionProfileInit(probeArchive),
+    ) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaRecursiveSpendTransitionProfileAppend(probeArchive),
+    ) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaRecursiveSpendLineageAppendBoundary(probeArchive),
+    ) &&
+    expectKagemushaNativeProbeRejection(() => native.kagemushaRecursiveSpendVerify(probeArchive)) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaRecursiveSpendLineageWitnessFromInitResult(probeArchive, probeArchive),
+    ) &&
+    expectKagemushaNativeProbeRejection(() =>
+      native.kagemushaRecursiveSpendLineageWitnessAppendResult(
+        probeArchive,
+        probeArchive,
+        probeArchive,
+      ),
+    ) &&
+    expectKagemushaNativeProbeRejection(() => native.kagemushaRecursiveSpendRedeem(probeArchive))
   );
 }
 
@@ -745,6 +847,30 @@ export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-spend-lineage-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-onehop-v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1 =
+  "kagemusha-recursive-spend-lineage-append-v1";
+export const KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS = 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64;
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 = true;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1 = 1;
+export const KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_MAX_BYTES = 8 * 1024 * 1024;
+export const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES = 128;
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_DIGEST_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_PROFILE_BINDING_DIGEST_DOMAIN =
+  "iroha:kagemusha:v1:recursive-spend-transition-profile-binding-digest";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_OPENINGS_PREFLIGHT_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-openings-preflight:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
+export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
+  "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable = isKagemushaRecursiveSpendNativeAvailable(),
@@ -752,6 +878,146 @@ export function preferredKagemushaOfflineSpendMode(
   return recursiveSpendAvailable
     ? KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1
     : KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1;
+}
+
+export function canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount) {
+  return (
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+    isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) &&
+    Number.isInteger(hopCount) &&
+    hopCount >= 1 &&
+    hopCount <= KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageProofCircuitId(proofCircuitId) {
+  return (
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1 ||
+    proofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(outputProofCircuitId) {
+  return (
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 ||
+    outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
+  proofCircuitId,
+  hopCount,
+) {
+  return !canRedeemKagemushaRecursiveSpendWitnessless(proofCircuitId, hopCount);
+}
+
+export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount) {
+  return (
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1 &&
+    Number.isInteger(previousHopCount) &&
+    previousHopCount >= 1 &&
+    previousHopCount < KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
+  );
+}
+
+export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
+  if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
+    return KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
+  }
+  if (outputProofCircuitId === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1) {
+    return KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  }
+  return outputProofCircuitId;
+}
+
+export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
+  const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  return (
+    normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+    normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+  );
+}
+
+export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(previousHopCount) {
+  return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount)
+    ? KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
+    : KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1;
+}
+
+export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  if (!Number.isInteger(previousHopCount) || previousHopCount < 1) {
+    return false;
+  }
+  const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
+    return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
+  }
+  if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
+    return canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCount);
+  }
+  return false;
+}
+
+export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId) {
+  return (
+    previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+    isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId)
+  );
+}
+
+export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForAppend(
+  previousProofCircuitId,
+) {
+  return isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId);
+}
+
+export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
+  previousProofCircuitId,
+  outputProofCircuitId,
+) {
+  const normalizedOutput =
+    normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
+  return (
+    (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
+      normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
+    (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
+      (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+        normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
+  );
+}
+
+export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
+  previousProofCircuitId,
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  if (!canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId, previousHopCount)) {
+    return false;
+  }
+  if (!isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(previousProofCircuitId)) {
+    return false;
+  }
+  return isSupportedKagemushaRecursiveSpendAppendProofTransition(
+    previousProofCircuitId,
+    outputProofCircuitId,
+  );
+}
+
+export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
+  outputProofCircuitId,
+  previousHopCount,
+) {
+  return (
+    isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
+      normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId),
+    ) &&
+    Number.isInteger(previousHopCount) &&
+    previousHopCount >= 1
+  );
 }
 
 function ensureKagemushaRecursiveSpendNative(native, operation) {
@@ -763,15 +1029,22 @@ function ensureKagemushaRecursiveSpendNative(native, operation) {
   return native;
 }
 
-function callKagemushaRecursiveSpendNative(operation, requestArchive) {
-  const request = toBuffer(requestArchive, "requestArchive");
+function callKagemushaRecursiveSpendNative(operation, requestArchive, archiveName = "requestArchive") {
+  const request = toBuffer(requestArchive, archiveName);
   if (request.length === 0) {
-    throw new Error("requestArchive must not be empty");
+    throw new Error(`${archiveName} must not be empty`);
   }
   const native = ensureKagemushaRecursiveSpendNative(resolveNativeBinding(), operation);
   const result = native[operation](request);
+  return kagemushaRecursiveSpendOutputToBuffer(result, operation);
+}
+
+function kagemushaRecursiveSpendOutputToBuffer(result, operation) {
   if (result === undefined || result === null) {
     throw new Error(`native ${operation} returned no output`);
+  }
+  if (typeof result === "string") {
+    throw new Error(`native ${operation} returned text instead of Norito bytes`);
   }
   const output = Buffer.from(result);
   if (output.length === 0) {
@@ -802,6 +1075,28 @@ export function kagemushaRecursiveSpendAppend(requestArchive) {
   );
 }
 
+export function kagemushaRecursiveSpendTransitionProfileInit(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendTransitionProfileInit",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendTransitionProfileAppend(requestArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendTransitionProfileAppend",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendLineageAppendBoundary(profileArchive) {
+  return callKagemushaRecursiveSpendNative(
+    "kagemushaRecursiveSpendLineageAppendBoundary",
+    profileArchive,
+    "profileArchive",
+  );
+}
+
 export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
   requestArchive,
   bundleArchive,
@@ -827,13 +1122,10 @@ export function kagemushaRecursiveSpendLineageWitnessFromInitResult(
       "native kagemushaRecursiveSpendLineageWitnessFromInitResult returned no output",
     );
   }
-  const output = Buffer.from(result);
-  if (output.length === 0) {
-    throw new Error(
-      "native kagemushaRecursiveSpendLineageWitnessFromInitResult returned empty output",
-    );
-  }
-  return output;
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaRecursiveSpendLineageWitnessFromInitResult",
+  );
 }
 
 export function kagemushaRecursiveSpendLineageWitnessAppendResult(
@@ -867,13 +1159,10 @@ export function kagemushaRecursiveSpendLineageWitnessAppendResult(
       "native kagemushaRecursiveSpendLineageWitnessAppendResult returned no output",
     );
   }
-  const output = Buffer.from(result);
-  if (output.length === 0) {
-    throw new Error(
-      "native kagemushaRecursiveSpendLineageWitnessAppendResult returned empty output",
-    );
-  }
-  return output;
+  return kagemushaRecursiveSpendOutputToBuffer(
+    result,
+    "kagemushaRecursiveSpendLineageWitnessAppendResult",
+  );
 }
 
 export function kagemushaRecursiveSpendVerify(requestArchive) {
@@ -888,6 +1177,267 @@ export function kagemushaRecursiveSpendRedeem(requestArchive) {
     "kagemushaRecursiveSpendRedeem",
     requestArchive,
   );
+}
+
+function hasPrivacyNativeSurface(native) {
+  const abiVersion = privacyBridgeAbiVersion(native);
+  return (
+    native &&
+    Number.isInteger(abiVersion) &&
+    abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION &&
+    typeof native.privacyCapabilitiesV1 === "function" &&
+    typeof native.privacyBuildProofV1 === "function" &&
+    typeof native.privacyVerifyProofV1 === "function"
+  );
+}
+
+function privacyNativeProbeReturnsBytes(native, operation, requestArchive = undefined) {
+  let request;
+  try {
+    const result =
+      requestArchive === undefined
+        ? native[operation]()
+        : native[operation]((request = Buffer.from(requestArchive)));
+    privacyNativeOutputToBuffer(result, operation);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (request) {
+      request.fill(0);
+    }
+  }
+}
+
+function hasPrivacyNative(native) {
+  return (
+    hasPrivacyNativeSurface(native) &&
+    privacyNativeProbeReturnsBytes(native, "privacyCapabilitiesV1") &&
+    privacyNativeProbeReturnsBytes(
+      native,
+      "privacyBuildProofV1",
+      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
+    ) &&
+    privacyNativeProbeReturnsBytes(
+      native,
+      "privacyVerifyProofV1",
+      PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE,
+    )
+  );
+}
+
+function privacyBridgeAbiVersion(native) {
+  if (typeof native?.connectNoritoBridgeAbiVersion !== "function") {
+    return 0;
+  }
+  try {
+    const version = native.connectNoritoBridgeAbiVersion();
+    return typeof version === "number" && Number.isInteger(version) ? version : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function ensurePrivacyNative(native, operation) {
+  if (!hasPrivacyNativeSurface(native)) {
+    throw new Error(
+      `${operation} requires the iroha_js_host native binding built with privacy FFI support`,
+    );
+  }
+  return native;
+}
+
+function toPrivacyArchiveBuffer(value, name) {
+  if (typeof value === "string") {
+    throw new TypeError(`${name} must be Norito V1 bytes, not a string`);
+  }
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (value instanceof Uint8Array || value instanceof DataView) {
+    if (!(value.buffer instanceof ArrayBuffer)) {
+      throw new TypeError(`${name} must not use shared memory`);
+    }
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+  throw new TypeError(
+    `${name} must be Norito V1 bytes as a Buffer, Uint8Array, DataView, or ArrayBuffer`,
+  );
+}
+
+function toPrivacyRequestArchiveBuffer(value, name) {
+  const request = toPrivacyArchiveBuffer(value, name);
+  if (request.length === 0) {
+    throw new Error(`${name} must not be empty`);
+  }
+  if (request.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+    throw new Error(`${name} must not exceed ${PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes`);
+  }
+  assertPrivacyNoritoArchive(request, name, "request", PRIVACY_REQUEST_SCHEMA_BYTE);
+  return Buffer.from(request);
+}
+
+function privacyNativeOutputToBuffer(result, operation) {
+  if (result === undefined || result === null) {
+    throw new Error(`native ${operation} returned no output`);
+  }
+  if (typeof result === "string") {
+    throw new Error(`native ${operation} returned text instead of Norito V1 bytes`);
+  }
+  const output = toPrivacyArchiveBuffer(result, `native ${operation} output`);
+  if (output.length === 0) {
+    throw new Error(`native ${operation} returned empty output`);
+  }
+  if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+    throw new Error(`native ${operation} returned oversized output`);
+  }
+  assertPrivacyNoritoArchive(
+    output,
+    operation,
+    "native",
+    privacyExpectedResultSchemaByte(operation),
+  );
+  return Buffer.from(output);
+}
+
+function privacyCrc64(payload) {
+  let crc = PRIVACY_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = PRIVACY_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ PRIVACY_CRC64_MASK);
+}
+
+function assertPrivacyNoritoArchive(
+  output,
+  operation,
+  context = "native",
+  expectedSchemaByte = undefined,
+) {
+  const fail = () => {
+    if (context === "request") {
+      throw new Error(`${operation} must be a valid Norito V1 archive`);
+    }
+    throw new Error(`native ${operation} returned invalid Norito V1 archive`);
+  };
+  if (output.length < PRIVACY_NORITO_HEADER_BYTES) {
+    fail();
+  }
+  if (!output.subarray(0, 4).equals(PRIVACY_NORITO_MAGIC)) {
+    fail();
+  }
+  if (output[4] !== 0 || output[5] !== 0) {
+    fail();
+  }
+  if (output[22] !== 0) {
+    fail();
+  }
+  const flags = output[39];
+  if (
+    (flags & ~PRIVACY_NORITO_SUPPORTED_FLAGS_MASK) !== 0 ||
+    ((flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0 &&
+      (flags & PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS) !==
+        PRIVACY_NORITO_FIELD_BITSET_REQUIRED_FLAGS)
+  ) {
+    fail();
+  }
+  const payloadLengthBig = output.readBigUInt64LE(23);
+  if (payloadLengthBig > BigInt(Number.MAX_SAFE_INTEGER)) {
+    fail();
+  }
+  const payloadLength = Number(payloadLengthBig);
+  if (payloadLength === 0) {
+    if (context === "request") {
+      throw new Error(`${operation} must contain a non-empty privacy request payload`);
+    }
+    throw new Error(`native ${operation} returned empty privacy result payload`);
+  }
+  const minimumLength = PRIVACY_NORITO_HEADER_BYTES + payloadLength;
+  if (output.length < minimumLength) {
+    fail();
+  }
+  const paddingLength = output.length - minimumLength;
+  if (paddingLength > PRIVACY_NORITO_MAX_HEADER_PADDING_BYTES) {
+    fail();
+  }
+  const padding = output.subarray(
+    PRIVACY_NORITO_HEADER_BYTES,
+    PRIVACY_NORITO_HEADER_BYTES + paddingLength,
+  );
+  if (padding.some((byte) => byte !== 0)) {
+    fail();
+  }
+  const payload = output.subarray(PRIVACY_NORITO_HEADER_BYTES + paddingLength);
+  if (privacyCrc64(payload) !== output.readBigUInt64LE(31)) {
+    fail();
+  }
+  if (
+    expectedSchemaByte !== undefined &&
+    output.subarray(6, 22).some((byte) => byte !== expectedSchemaByte)
+  ) {
+    if (context === "request") {
+      throw new Error(`${operation} must use the privacy request schema`);
+    }
+    throw new Error(`native ${operation} returned unexpected privacy result schema`);
+  }
+}
+
+function privacyExpectedResultSchemaByte(operation) {
+  switch (operation) {
+    case "privacyCapabilitiesV1":
+      return PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE;
+    case "privacyBuildProofV1":
+      return PRIVACY_BUILD_PROOF_RESULT_SCHEMA_BYTE;
+    case "privacyVerifyProofV1":
+      return PRIVACY_VERIFY_PROOF_RESULT_SCHEMA_BYTE;
+    default:
+      return undefined;
+  }
+}
+
+function invokePrivacyNative(native, operation, ...args) {
+  try {
+    return native[operation](...args);
+  } catch {
+    throw new Error(`native ${operation} failed`);
+  }
+}
+
+function callPrivacyNative(operation, requestArchive) {
+  const request = toPrivacyRequestArchiveBuffer(requestArchive, "requestArchive");
+  try {
+    const native = ensurePrivacyNative(resolveNativeBinding(), operation);
+    const result = invokePrivacyNative(native, operation, request);
+    return privacyNativeOutputToBuffer(result, operation);
+  } finally {
+    request.fill(0);
+  }
+}
+
+export function isPrivacyNativeAvailable() {
+  try {
+    return hasPrivacyNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
+export function privacyCapabilitiesV1() {
+  const native = ensurePrivacyNative(resolveNativeBinding(), "privacyCapabilitiesV1");
+  const result = invokePrivacyNative(native, "privacyCapabilitiesV1");
+  return privacyNativeOutputToBuffer(result, "privacyCapabilitiesV1");
+}
+
+export function privacyBuildProofV1(requestArchive) {
+  return callPrivacyNative("privacyBuildProofV1", requestArchive);
+}
+
+export function privacyVerifyProofV1(requestArchive) {
+  return callPrivacyNative("privacyVerifyProofV1", requestArchive);
 }
 
 /**

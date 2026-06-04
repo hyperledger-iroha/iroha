@@ -7,6 +7,7 @@ public enum ConnectEnvelopeError: Error, LocalizedError, Sendable {
     case invalidPayload
     case invalidBase64(String)
     case unknownPayloadKind(String)
+    case unsupportedSignatureAlgorithm(String)
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +25,8 @@ public enum ConnectEnvelopeError: Error, LocalizedError, Sendable {
             return "Invalid base64 value for connect envelope field '\(field)'."
         case let .unknownPayloadKind(kind):
             return "Unknown connect envelope payload kind '\(kind)'."
+        case let .unsupportedSignatureAlgorithm(algorithm):
+            return "Unsupported connect wallet signature algorithm '\(algorithm)'."
         }
     }
 }
@@ -105,8 +108,11 @@ public enum ConnectEnvelopePayload: Equatable, Sendable {
             else {
                 throw ConnectEnvelopeError.invalidPayload
             }
+            guard let normalizedAlgorithm = ConnectWalletSignatureAlgorithm.normalize(algorithm) else {
+                throw ConnectEnvelopeError.unsupportedSignatureAlgorithm(algorithm)
+            }
             let signatureData = try Self.decodeBase64(dict["signature_b64"], field: "signature_b64")
-            self = .signResultOk(signature: ConnectWalletSignature(algorithm: algorithm, signature: signatureData))
+            self = .signResultOk(signature: ConnectWalletSignature(algorithm: normalizedAlgorithm, signature: signatureData))
         case "SignResultErr":
             guard let dict = payload as? [String: Any],
                   let code = dict["code"] as? String,

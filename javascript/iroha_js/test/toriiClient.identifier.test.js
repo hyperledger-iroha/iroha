@@ -741,6 +741,13 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
       },
     ],
     [
+      "noncanonical lowercase component digest",
+      (operationVectors) => {
+        operationVectors.evaluation_key_bundle.relinearization_entries[0].b_sha256 =
+          operationVectors.evaluation_key_bundle.relinearization_entries[0].b_sha256.toLowerCase();
+      },
+    ],
+    [
       "missing Galois component",
       (operationVectors) => {
         delete operationVectors.galois_keys[0].entries[0].a_sha256;
@@ -756,6 +763,12 @@ test("shared Soracloud BFV key-bundle component vectors reject adversarial drift
       "component coefficient-count drift",
       (operationVectors) => {
         operationVectors.bootstrap_key.zero_refresh_components.coefficient_count = 63;
+      },
+    ],
+    [
+      "rotation key count drift",
+      (operationVectors) => {
+        operationVectors.evaluation_key_bundle.rotation_key_count += 1;
       },
     ],
     [

@@ -405,16 +405,33 @@ function assertPlainObject(value, name) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a plain object`, name);
   }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a plain object`, name);
+  }
   return value;
 }
 
 function assertAllowedFields(source, allowed, name) {
-  for (const field of Object.keys(source)) {
-    if (!allowed.has(field)) {
+  for (const field of Reflect.ownKeys(source)) {
+    const label = typeof field === "symbol" ? field.toString() : field;
+    const descriptor = Object.getOwnPropertyDescriptor(source, field);
+    if (typeof field !== "string" || !allowed.has(field)) {
       fail(
         ValidationErrorCode.INVALID_OBJECT,
-        `${name}.${field} is not supported`,
-        `${name}.${field}`,
+        `${name}.${label} is not supported`,
+        `${name}.${label}`,
+      );
+    }
+    if (
+      !descriptor ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.${label} must be an enumerable data field`,
+        `${name}.${label}`,
       );
     }
   }
@@ -1139,11 +1156,11 @@ function normalizeVerifyingKeyId(value, name) {
     return null;
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
+    const raw = value;
+    if (raw.trim().length === 0) {
       fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
     }
-    const parts = trimmed.split(":");
+    const parts = raw.split(":");
     if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) {
       fail(
         ValidationErrorCode.INVALID_STRING,
@@ -1151,9 +1168,9 @@ function normalizeVerifyingKeyId(value, name) {
         name,
       );
     }
-    const backend = parts[0].trim();
+    const backend = parts[0];
     const keyName = parts[1].trim();
-    if (backend.length === 0 || keyName.length === 0) {
+    if (backend.trim().length === 0 || keyName.length === 0) {
       fail(
         ValidationErrorCode.INVALID_STRING,
         `${name} must be in 'backend:name' format`,
@@ -1188,7 +1205,10 @@ function normalizeVerifyingKeyId(value, name) {
     `${name}.name`,
     "name",
   );
-  const backend = assertNonBlankString(backendAlias.value, `${name}.backend`);
+  const backend = assertString(backendAlias.value, `${name}.backend`);
+  if (backend.trim().length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name}.backend must be a non-empty string`, `${name}.backend`);
+  }
   const keyName = assertNonBlankString(nameAlias.value, `${name}.name`);
   return { backend, name: keyName };
 }
@@ -1503,6 +1523,47 @@ function normalizePositiveU32(value, name) {
   return numeric;
 }
 
+function normalizeOptionalPrivacyMaxLimits(source, context) {
+  const maxProofAlias = readSingleAlias(
+    source,
+    ["maxProofBytes", "max_proof_bytes"],
+    `${context}.maxProofBytes`,
+    "max proof byte limit",
+  );
+  const maxPublicInputAlias = readSingleAlias(
+    source,
+    ["maxPublicInputBytes", "max_public_input_bytes"],
+    `${context}.maxPublicInputBytes`,
+    "max public input byte limit",
+  );
+  return {
+    maxProofBytes:
+      maxProofAlias.key === null
+        ? undefined
+        : normalizePositiveU32(maxProofAlias.value, `${context}.maxProofBytes`),
+    maxPublicInputBytes:
+      maxPublicInputAlias.key === null
+        ? undefined
+        : normalizePositiveU32(
+            maxPublicInputAlias.value,
+            `${context}.maxPublicInputBytes`,
+    ),
+  };
+}
+
+function normalizePositiveU32AliasOrDefault(
+  source,
+  aliases,
+  context,
+  description,
+  defaultValue,
+) {
+  const alias = readSingleAlias(source, aliases, context, description);
+  return alias.key === null
+    ? defaultValue
+    : normalizePositiveU32(alias.value, context);
+}
+
 function normalizeOptionalU64(value, name) {
   if (value === undefined || value === null) {
     return null;
@@ -1517,9 +1578,306 @@ function normalizeOptionalNonBlankString(value, name) {
   return assertNonBlankString(value, name);
 }
 
+const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
+  "halo2/pasta/kaigi-roster-v1",
+  "halo2/pasta/kaigi-usage-v1",
+  "halo2/pasta/ivm-overlay-bind",
+  "halo2/pasta/ivm-execution-v1",
+  "halo2/pasta/offline-note-recursive",
+  "halo2/pasta/kagemusha-folded-v1",
+  "halo2/pasta/kagemusha-recursive-aggregation-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+  "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+  "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+  "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
+  "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+]);
+
+const TRUSTED_SETUP_BACKEND_SEGMENTS = new Set([
+  "groth16",
+  "kzg",
+  "bn254",
+  "bn256",
+  "bls12",
+  "srs",
+  "crs",
+  "ptau",
+  "ceremony",
+  "powersoftau",
+]);
+
+const TRUSTED_SETUP_COMPACT_TOKENS = [
+  "groth16",
+  "kzg",
+  "bn254",
+  "bn256",
+  "bls12381",
+  "bls12",
+  "srs",
+  "crs",
+  "ptau",
+  "ceremony",
+  "trustedsetup",
+  "structuredreferencestring",
+  "universalsrs",
+  "powersoftau",
+];
+
+const PRODUCTION_CLAIM_BACKEND_FRAGMENTS = [
+  "productionready",
+  "productionhardened",
+  "productionenabled",
+  "productionapproved",
+  "productioncertified",
+  "productionclaim",
+  "claimedproduction",
+  "mainnetready",
+  "mainnetcomplete",
+  "mainnetclaim",
+  "claimedmainnet",
+  "auditedproduction",
+  "externallyaudited",
+  "auditpassed",
+  "auditapproved",
+  "auditsignoff",
+  "auditclaim",
+  "claimedaudit",
+  "securityreviewpassed",
+];
+
+function compactPrivacyBackendLabel(value) {
+  return String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isPendingProductionVerifierBackendLabel(value) {
+  const compact = compactPrivacyBackendLabel(value);
+  return PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES.has(compact);
+}
+
+const PENDING_PRODUCTION_VERIFIER_BACKEND_ALIASES = new Set([
+  "halo2ipaorchard",
+  "orchard",
+  "zcashorchard",
+  "groth16bls12377",
+  "groth16bls12377decaf377",
+  "bls12377",
+  "decaf377",
+  "masp",
+  "penumbra",
+  "penumbramasp",
+  "halo2ipapenumbra",
+  "halo2ipamasp",
+  "fcmppluspluscurvetree",
+  "fcmp",
+  "monero",
+  "monerofcmp",
+  "monerofcmpplusplus",
+  "curvetree",
+  "halo2ipamonero",
+  "halo2ipacurvetree",
+  "latticepcssis",
+  "latticepcszk",
+  "jindo",
+  "jindolatticepcszk",
+  "jindolatticepcszkv0",
+  "jindolatticepcssis",
+  "starkfrimiden",
+  "midenstark",
+  "aztecplonkishprivatekernel",
+  "aztecprivatekernel",
+  "pqmaspstarkfri",
+  "pqmaspstark",
+  "starkfripqmaspstarkfri",
+  "postquantummasp",
+  "anonymouspgc",
+  "anonymouspgckoutofn",
+  "anonymouspgckoutofnv1",
+  "verange",
+  "verangetransparentrange",
+  "verangetransparentrangev1",
+  "zkat",
+  "zkatpolicyprivateauthenticator",
+  "zkatpolicyprivateauthv1",
+  "recursiveanonymousadmission",
+  "recursiveanonymousadmissionv0",
+  "zkamsrecursiveadmission",
+  "zkamsrecursiveadmissionv0",
+  "vegaexistingcredentialzk",
+  "vegaexistingcredentialzkv0",
+  "silentthresholdanoncred",
+  "silentthresholdanoncredv0",
+  "silentthresholdanonymouscredential",
+  "thresholdanonymouscredentials",
+  "zkx509",
+  "zkvmx509identity",
+  "zkx509onchainidentity",
+  "zkx509onchainidentityv0",
+  "siswithhints",
+  "sishints",
+  "sishintsanoncredpqv0",
+  "latticeanonymouscredentials",
+]);
+
+function hasTrustedSetupBackendSegment(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .some((segment) => TRUSTED_SETUP_BACKEND_SEGMENTS.has(segment));
+}
+
+function isTrustedSetupVerifierBackendLabel(value) {
+  const backend = String(value).trim().toLowerCase();
+  const compact = compactPrivacyBackendLabel(value);
+  return (
+    hasTrustedSetupBackendSegment(value) ||
+    TRUSTED_SETUP_COMPACT_TOKENS.some((token) => compact.includes(token)) ||
+    backend === "groth16" ||
+    backend.startsWith("groth16/") ||
+    backend === "kzg" ||
+    backend.startsWith("kzg/") ||
+    backend === "bn254" ||
+    backend === "bn256" ||
+    backend === "bls12_381" ||
+    backend === "bls12-381" ||
+    backend === "halo2/bn254" ||
+    backend.startsWith("halo2/bn254/") ||
+    backend.includes("/bn254") ||
+    backend.includes(":bn254") ||
+    backend.includes("/bn256") ||
+    backend.includes(":bn256") ||
+    backend.includes("/bls12") ||
+    backend.includes(":bls12") ||
+    backend === "halo2/kzg" ||
+    backend.startsWith("halo2/kzg/") ||
+    backend.includes("/kzg") ||
+    backend.includes(":kzg")
+  );
+}
+
+function isDeveloperOnlyVerifierBackendLabel(value) {
+  const backend = String(value).trim().toLowerCase();
+  const embedded = ["debug", "mock", "fixture", "dev"];
+  const exact = new Set(["test", "dummy", "fake", "stub", "sample", "placeholder"]);
+  const isDeveloperOnlyRun = (run) => embedded.some((token) => run.includes(token)) || exact.has(run);
+  let letterRun = "";
+  for (const token of backend.split(/[^a-z0-9]+/u).filter(Boolean)) {
+    if (isDeveloperOnlyRun(token)) {
+      return true;
+    }
+    if (token.length === 1) {
+      letterRun += token;
+      continue;
+    }
+    if (isDeveloperOnlyRun(letterRun)) {
+      return true;
+    }
+    letterRun = "";
+  }
+  return isDeveloperOnlyRun(letterRun);
+}
+
+function isProductionClaimVerifierBackendLabel(value) {
+  const compact = compactPrivacyBackendLabel(value);
+  return PRODUCTION_CLAIM_BACKEND_FRAGMENTS.some((fragment) => compact.includes(fragment));
+}
+
+const STARK_FRI_PRODUCTION_BACKEND_LABELS = new Set([
+  "stark/fri",
+  "stark/fri/sha256-goldilocks",
+  "stark/fri/poseidon2-goldilocks",
+  "stark/fri/sha256_goldilocks.v1",
+]);
+
+function isStarkFriProductionBackendLabel(backend) {
+  return STARK_FRI_PRODUCTION_BACKEND_LABELS.has(backend);
+}
+
+function isPortableVerifierBackendLabel(backend) {
+  return /^[A-Za-z0-9/_.:-]+$/u.test(backend);
+}
+
+function normalizeNativeHalo2PastaBackendLabel(value) {
+  const backend = String(value);
+  if (backend.length === 0 || backend.trim() !== backend) {
+    return null;
+  }
+  for (const [prefix, targetPrefix] of [
+    ["halo2/pasta/ipa/", "halo2/pasta/"],
+    ["halo2/pasta/", "halo2/pasta/"],
+    ["halo2/ipa::", "halo2/pasta/"],
+    ["halo2/ipa:", "halo2/pasta/"],
+    ["halo2/ipa/", "halo2/pasta/"],
+  ]) {
+    if (backend.startsWith(prefix)) {
+      const rest = backend.slice(prefix.length);
+      return rest.length === 0 ? null : `${targetPrefix}${rest}`;
+    }
+  }
+  return null;
+}
+
+function isNativeHalo2PastaProductionBackendLabel(backend) {
+  const normalized = normalizeNativeHalo2PastaBackendLabel(backend);
+  return normalized !== null && PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.has(normalized);
+}
+
+function isProductionVerifyBackendLabel(value) {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const backend = value;
+  if (
+    backend.length === 0 ||
+    backend.trim() !== backend ||
+    !isPortableVerifierBackendLabel(backend) ||
+    isPendingProductionVerifierBackendLabel(backend) ||
+    isProductionClaimVerifierBackendLabel(backend) ||
+    isTrustedSetupVerifierBackendLabel(backend) ||
+    isDeveloperOnlyVerifierBackendLabel(backend)
+  ) {
+    return false;
+  }
+  return (
+    backend === "halo2/ipa" ||
+    isStarkFriProductionBackendLabel(backend) ||
+    isNativeHalo2PastaProductionBackendLabel(backend)
+  );
+}
+
+function assertProductionVerifyBackendLabel(value, name) {
+  const backend = assertString(value, name);
+  if (backend.trim().length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  if (!isProductionVerifyBackendLabel(backend)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} uses unsupported production verifier backend ${backend}`,
+      name,
+    );
+  }
+  return backend;
+}
+
 function normalizePrivacyBackendTag(value, name) {
-  const raw = assertNonBlankString(value, name);
-  const normalized = raw.toLowerCase().replace(/[-_/]/g, "");
+  const raw = assertString(value, name);
+  if (raw.trim().length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  if (raw.trim() !== raw || !isPortableVerifierBackendLabel(raw)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} uses a non-portable verifier backend label`,
+      name,
+    );
+  }
+  const backend = raw.trim().toLowerCase();
+  if (isProductionVerifyBackendLabel(backend) && isStarkFriProductionBackendLabel(backend)) {
+    return "Stark";
+  }
+  const normalized = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
   switch (normalized) {
     case "halo2ipapasta":
     case "halo2pasta":
@@ -1536,6 +1894,82 @@ function normalizePrivacyBackendTag(value, name) {
       return "Stark";
     case "unsupported":
       return "Unsupported";
+    case "halo2ipaorchard":
+    case "orchard":
+    case "zcashorchard":
+      return "Halo2IpaOrchard";
+    case "groth16bls12377":
+    case "groth16bls12377decaf377":
+    case "bls12377":
+    case "decaf377":
+    case "masp":
+    case "penumbra":
+    case "penumbramasp":
+    case "halo2ipapenumbra":
+    case "halo2ipamasp":
+      return "Groth16Bls12377";
+    case "fcmppluspluscurvetree":
+    case "fcmp":
+    case "monero":
+    case "monerofcmp":
+    case "monerofcmpplusplus":
+    case "curvetree":
+    case "halo2ipamonero":
+    case "halo2ipacurvetree":
+      return "FcmpPlusPlusCurveTree";
+    case "latticepcssis":
+    case "latticepcszk":
+    case "jindo":
+    case "jindolatticepcszk":
+    case "jindolatticepcszkv0":
+    case "jindolatticepcssis":
+      return "LatticePcsSis";
+    case "starkfrimiden":
+    case "midenstark":
+      return "MidenStark";
+    case "aztecplonkishprivatekernel":
+    case "aztecprivatekernel":
+      return "AztecPlonkishPrivateKernel";
+    case "pqmaspstarkfri":
+    case "pqmaspstark":
+    case "starkfripqmaspstarkfri":
+    case "postquantummasp":
+      return "PqMaspStarkFri";
+    case "anonymouspgc":
+    case "anonymouspgckoutofn":
+    case "anonymouspgckoutofnv1":
+      return "AnonymousPgc";
+    case "verange":
+    case "verangetransparentrange":
+    case "verangetransparentrangev1":
+      return "VeRange";
+    case "zkat":
+    case "zkatpolicyprivateauthenticator":
+    case "zkatpolicyprivateauthv1":
+      return "ZkAt";
+    case "recursiveanonymousadmission":
+    case "recursiveanonymousadmissionv0":
+    case "zkamsrecursiveadmission":
+    case "zkamsrecursiveadmissionv0":
+      return "RecursiveAnonymousAdmission";
+    case "vegaexistingcredentialzk":
+    case "vegaexistingcredentialzkv0":
+      return "VegaExistingCredentialZk";
+    case "silentthresholdanoncred":
+    case "silentthresholdanoncredv0":
+    case "silentthresholdanonymouscredential":
+    case "thresholdanonymouscredentials":
+      return "SilentThresholdAnoncred";
+    case "zkx509":
+    case "zkvmx509identity":
+    case "zkx509onchainidentity":
+    case "zkx509onchainidentityv0":
+      return "ZkX509";
+    case "siswithhints":
+    case "sishints":
+    case "sishintsanoncredpqv0":
+    case "latticeanonymouscredentials":
+      return "SisWithHints";
     default:
       fail(
         ValidationErrorCode.INVALID_STRING,
@@ -1652,6 +2086,132 @@ function normalizeBoundedByteArray(
   return bytes;
 }
 
+function normalizeOpenVerifyByteArray(
+  value,
+  name,
+  { maxBytes, allowEmpty = false } = {},
+) {
+  let bytes;
+  if (typeof value === "string") {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty base64 string`, name);
+    }
+    if (value.trim() !== value || /\s/.test(value)) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be a clean base64 string without whitespace`,
+        name,
+      );
+    }
+    bytes = Array.from(decodeBase64Strict(value, name).values());
+  } else if (Array.isArray(value)) {
+    if (!allowEmpty && value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+    }
+    bytes = value.map((byte, index) => {
+      if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+        fail(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name}[${index}] must be an integer between 0 and 255`,
+          `${name}[${index}]`,
+        );
+      }
+      return byte;
+    });
+  } else if (allowEmpty && (value === undefined || value === null)) {
+    bytes = [];
+  } else if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    bytes = Array.from(Buffer.from(value.buffer, value.byteOffset, value.byteLength).values());
+  } else if (value instanceof DataView) {
+    bytes = Array.from(Buffer.from(value.buffer, value.byteOffset, value.byteLength).values());
+  } else if (value instanceof ArrayBuffer) {
+    bytes = Array.from(Buffer.from(value).values());
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be a Buffer, Uint8Array, DataView, ArrayBuffer, or explicit byte array`,
+      name,
+    );
+  }
+  if (!allowEmpty && bytes.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
+  }
+  if (maxBytes !== undefined && bytes.length > maxBytes) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be no larger than ${maxBytes} bytes`,
+      name,
+    );
+  }
+  return bytes;
+}
+
+function normalizeOpenVerifyFixedBytes(value, name, length = 32, { nonzero = false } = {}) {
+  let buffer;
+  if (typeof value === "string") {
+    if (value.length === 0) {
+      fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    }
+    if (value.trim() !== value || /\s/.test(value)) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${name} must be clean and without whitespace`,
+        name,
+      );
+    }
+    if (/^[0-9A-Fa-f]+$/.test(value) && value.length === length * 2) {
+      buffer = Buffer.from(value, "hex");
+    } else {
+      buffer = decodeBase64Strict(value, name);
+    }
+  } else if (Array.isArray(value)) {
+    if (value.length !== length) {
+      fail(
+        ValidationErrorCode.VALUE_OUT_OF_RANGE,
+        `${name} must contain exactly ${length} elements`,
+        name,
+      );
+    }
+    buffer = Buffer.from(value.map((byte, index) => {
+      if (typeof byte !== "number" || !Number.isInteger(byte) || byte < 0 || byte > 0xff) {
+        fail(
+          ValidationErrorCode.VALUE_OUT_OF_RANGE,
+          `${name}[${index}] must be an integer between 0 and 255`,
+          `${name}[${index}]`,
+        );
+      }
+      return byte;
+    }));
+  } else if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  } else if (value instanceof DataView) {
+    buffer = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  } else if (value instanceof ArrayBuffer) {
+    buffer = Buffer.from(value);
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be a Buffer, Uint8Array, DataView, ArrayBuffer, or explicit byte array`,
+      name,
+    );
+  }
+  if (buffer.length !== length) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be ${length} bytes; received ${buffer.length}`,
+      name,
+    );
+  }
+  if (nonzero && buffer.every((byte) => byte === 0)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be nonzero`,
+      name,
+    );
+  }
+  return Array.from(buffer.values());
+}
+
 function normalizeVeRangeVersion(value, name) {
   const version = normalizePositiveU32(value ?? 1, name);
   if (version !== 1) {
@@ -1738,9 +2298,12 @@ function normalizeVeRangePayloadDigest(source, name) {
     `${name}.payload`,
     "payload",
   );
-  const maxPayloadBytes = normalizePositiveU32(
-    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
-    `${name}.maxPayloadBytes`,
+  const maxPayloadBytes = normalizePositiveU32AliasOrDefault(
+    source,
+    ["maxPayloadBytes", "max_payload_bytes"],
+    `.maxPayloadBytes`,
+    "max payload byte limit",
+    VERANGE_MAX_PAYLOAD_BYTES,
   );
   const explicitDigest =
     digestAlias.value === undefined
@@ -1841,9 +2404,12 @@ function normalizeAnonymousPgcPayloadDigest(source, name) {
     `${name}.payload`,
     "payload",
   );
-  const maxPayloadBytes = normalizePositiveU32(
-    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
-    `${name}.maxPayloadBytes`,
+  const maxPayloadBytes = normalizePositiveU32AliasOrDefault(
+    source,
+    ["maxPayloadBytes", "max_payload_bytes"],
+    `.maxPayloadBytes`,
+    "max payload byte limit",
+    VERANGE_MAX_PAYLOAD_BYTES,
   );
   const explicitDigest =
     digestAlias.value === undefined
@@ -2253,9 +2819,12 @@ function normalizeZkAtPayloadDigest(source, name) {
     `${name}.payload`,
     "payload",
   );
-  const maxPayloadBytes = normalizePositiveU32(
-    source.maxPayloadBytes ?? source.max_payload_bytes ?? VERANGE_MAX_PAYLOAD_BYTES,
-    `${name}.maxPayloadBytes`,
+  const maxPayloadBytes = normalizePositiveU32AliasOrDefault(
+    source,
+    ["maxPayloadBytes", "max_payload_bytes"],
+    `.maxPayloadBytes`,
+    "max payload byte limit",
+    VERANGE_MAX_PAYLOAD_BYTES,
   );
   const explicitDigest =
     digestAlias.value === undefined
@@ -2418,6 +2987,7 @@ function normalizeZkAtAuthenticatorParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const policyEpoch = normalizeZkAtPolicyEpoch(
     source.policyEpoch ?? source.policy_epoch,
     `${context}.policyEpoch`,
@@ -2466,16 +3036,10 @@ function normalizeZkAtAuthenticatorParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -2717,11 +3281,12 @@ function normalizeZkAmsRecursiveProofDigest(source, context) {
                   proofAlias.value,
                   `${context}.recursiveProof`,
                   {
-                    maxBytes: normalizePositiveU32(
-                      source.maxRecursiveProofBytes ??
-                        source.max_recursive_proof_bytes ??
-                        ZK_AMS_MAX_RECURSIVE_PROOF_BYTES,
+                    maxBytes: normalizePositiveU32AliasOrDefault(
+                      source,
+                      ["maxRecursiveProofBytes", "max_recursive_proof_bytes"],
                       `${context}.maxRecursiveProofBytes`,
+                      "max recursive proof byte limit",
+                      ZK_AMS_MAX_RECURSIVE_PROOF_BYTES,
                     ),
                   },
                 ),
@@ -2815,9 +3380,12 @@ function normalizeZkAmsAdmissionBatchParts(source, context) {
     `${context}.domainSeparator`,
     "domain separator",
   );
-  const maxBatchSize = normalizePositiveU32(
-    source.maxBatchSize ?? source.max_batch_size ?? ZK_AMS_MAX_ADMISSIONS,
+  const maxBatchSize = normalizePositiveU32AliasOrDefault(
+    source,
+    ["maxBatchSize", "max_batch_size"],
     `${context}.maxBatchSize`,
+    "max admission batch size",
+    ZK_AMS_MAX_ADMISSIONS,
   );
   if (maxBatchSize > ZK_AMS_MAX_ADMISSIONS) {
     fail(
@@ -3022,6 +3590,7 @@ function normalizeZkAmsAdmissionProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const batch = normalizeZkAmsAdmissionBatchParts(source, context);
   const publicInputs = {
     version: batch.version,
@@ -3056,16 +3625,10 @@ function normalizeZkAmsAdmissionProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -3163,9 +3726,12 @@ function ensureZkAmsVerificationExpectations(source, publicInputs, context) {
     `${context}.admissionNullifiers`,
     "admission nullifiers",
   );
-  const maxBatchSize = normalizePositiveU32(
-    source.maxBatchSize ?? source.max_batch_size ?? ZK_AMS_MAX_ADMISSIONS,
+  const maxBatchSize = normalizePositiveU32AliasOrDefault(
+    source,
+    ["maxBatchSize", "max_batch_size"],
     `${context}.maxBatchSize`,
+    "max admission batch size",
+    ZK_AMS_MAX_ADMISSIONS,
   );
   if (maxBatchSize > ZK_AMS_MAX_ADMISSIONS) {
     fail(
@@ -3399,11 +3965,12 @@ function normalizeVegaPredicateCommitmentFromSource(source, context) {
           context,
           `${context}.predicateJson`,
           `${context}.predicate`,
-          normalizePositiveU32(
-            source.maxPredicateBytes ??
-              source.max_predicate_bytes ??
-              VEGA_MAX_PREDICATE_BYTES,
+          normalizePositiveU32AliasOrDefault(
+            source,
+            ["maxPredicateBytes", "max_predicate_bytes"],
             `${context}.maxPredicateBytes`,
+            "max predicate byte limit",
+            VEGA_MAX_PREDICATE_BYTES,
           ),
         );
   if (explicitCommitment === null && predicateBytes === null) {
@@ -3486,9 +4053,12 @@ function normalizeVegaIssuerCommitmentFromSource(source, context) {
           context,
           `${context}.issuerJson`,
           `${context}.issuer`,
-          normalizePositiveU32(
-            source.maxIssuerBytes ?? source.max_issuer_bytes ?? VEGA_MAX_ISSUER_BYTES,
+          normalizePositiveU32AliasOrDefault(
+            source,
+            ["maxIssuerBytes", "max_issuer_bytes"],
             `${context}.maxIssuerBytes`,
+            "max issuer byte limit",
+            VEGA_MAX_ISSUER_BYTES,
           ),
         );
   if (explicitCommitment === null && issuerBytes === null) {
@@ -3709,6 +4279,7 @@ function normalizeVegaProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const domainAlias = readSingleAlias(
     source,
     ["domainSeparator", "domain_separator"],
@@ -3781,16 +4352,10 @@ function normalizeVegaProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -4143,10 +4708,13 @@ function silentThresholdIssuerSetField(source, context) {
     dataDescription: "issuer-set commitment",
     digestLabel: "issuer-set-commitment",
     kindLabel: "issuer-set-digest",
-    maxBytes:
-      source.maxIssuerSetBytes ??
-      source.max_issuer_set_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxIssuerSetBytes", "max_issuer_set_bytes"],
+      `${context}.maxIssuerSetBytes`,
+      "max issuer-set byte limit",
       SILENT_THRESHOLD_MAX_ISSUER_SET_BYTES,
+    ),
   });
 }
 
@@ -4168,10 +4736,13 @@ function silentThresholdPolicyHashField(source, context) {
     dataDescription: "threshold policy hash",
     digestLabel: "threshold-policy-hash",
     kindLabel: "threshold-policy-digest",
-    maxBytes:
-      source.maxPolicyBytes ??
-      source.max_policy_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxPolicyBytes", "max_policy_bytes"],
+      `${context}.maxPolicyBytes`,
+      "max policy byte limit",
       SILENT_THRESHOLD_MAX_POLICY_BYTES,
+    ),
   });
 }
 
@@ -4203,10 +4774,13 @@ function silentThresholdShowingCommitmentField(source, context) {
     dataDescription: "credential showing commitment",
     digestLabel: "credential-showing-commitment",
     kindLabel: "credential-showing-digest",
-    maxBytes:
-      source.maxShowingBytes ??
-      source.max_showing_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxShowingBytes", "max_showing_bytes"],
+      `${context}.maxShowingBytes`,
+      "max showing byte limit",
       SILENT_THRESHOLD_MAX_SHOWING_BYTES,
+    ),
   });
 }
 
@@ -4239,10 +4813,13 @@ function silentThresholdShowingNullifierField(source, context) {
     dataDescription: "credential showing nullifier",
     digestLabel: "credential-showing-nullifier",
     kindLabel: "credential-showing-nullifier",
-    maxBytes:
-      source.maxShowingBytes ??
-      source.max_showing_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxShowingBytes", "max_showing_bytes"],
+      `${context}.maxShowingBytes`,
+      "max showing byte limit",
       SILENT_THRESHOLD_MAX_SHOWING_BYTES,
+    ),
   });
 }
 
@@ -4264,10 +4841,13 @@ function silentThresholdVerifierPolicyHashField(source, context) {
     dataDescription: "verifier policy hash",
     digestLabel: "verifier-policy-hash",
     kindLabel: "verifier-policy-digest",
-    maxBytes:
-      source.maxPolicyBytes ??
-      source.max_policy_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxPolicyBytes", "max_policy_bytes"],
+      `${context}.maxPolicyBytes`,
+      "max policy byte limit",
       SILENT_THRESHOLD_MAX_POLICY_BYTES,
+    ),
   });
 }
 
@@ -4443,6 +5023,7 @@ function normalizeSilentThresholdProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const parts = normalizeSilentThresholdCommitmentParts(source, context);
   const publicInputs = {
     version: parts.version,
@@ -4476,16 +5057,10 @@ function normalizeSilentThresholdProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -4860,10 +5435,13 @@ function zkX509CaRootField(source, context) {
     description: "CA root commitment",
     digestLabel: "ca-root-commitment",
     kindLabel: "ca-root-digest",
-    maxBytes:
-      source.maxCaRootBytes ??
-      source.max_ca_root_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxCaRootBytes", "max_ca_root_bytes"],
+      `${context}.maxCaRootBytes`,
+      "max CA root byte limit",
       ZK_X509_MAX_CA_ROOT_BYTES,
+    ),
   });
 }
 
@@ -4885,10 +5463,13 @@ function zkX509CertificatePolicyField(source, context) {
     description: "certificate policy hash",
     digestLabel: "certificate-policy-hash",
     kindLabel: "certificate-policy-digest",
-    maxBytes:
-      source.maxPolicyBytes ??
-      source.max_policy_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxPolicyBytes", "max_policy_bytes"],
+      `${context}.maxPolicyBytes`,
+      "max policy byte limit",
       ZK_X509_MAX_POLICY_BYTES,
+    ),
   });
 }
 
@@ -4925,10 +5506,13 @@ function zkX509RevocationRootField(source, context) {
     description: "revocation root",
     digestLabel: "revocation-root",
     kindLabel: "revocation-root-digest",
-    maxBytes:
-      source.maxRevocationBytes ??
-      source.max_revocation_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxRevocationBytes", "max_revocation_bytes"],
+      `${context}.maxRevocationBytes`,
+      "max revocation byte limit",
       ZK_X509_MAX_REVOCATION_BYTES,
+    ),
   });
 }
 
@@ -4953,10 +5537,13 @@ function zkX509SubjectCommitmentField(source, context) {
     description: "subject commitment",
     digestLabel: "subject-commitment",
     kindLabel: "subject-digest",
-    maxBytes:
-      source.maxSubjectBytes ??
-      source.max_subject_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxSubjectBytes", "max_subject_bytes"],
+      `${context}.maxSubjectBytes`,
+      "max subject byte limit",
       ZK_X509_MAX_SUBJECT_BYTES,
+    ),
   });
 }
 
@@ -5199,6 +5786,7 @@ function normalizeZkX509ProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const parts = normalizeZkX509CommitmentParts(source, context);
   const publicInputs = {
     version: parts.version,
@@ -5229,16 +5817,10 @@ function normalizeZkX509ProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -5570,10 +6152,13 @@ function jindoCommitmentField(source, context) {
     description: "polynomial commitment",
     digestLabel: "commitment",
     kindLabel: "commitment-digest",
-    maxBytes:
-      source.maxPolynomialBytes ??
-      source.max_polynomial_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxPolynomialBytes", "max_polynomial_bytes"],
+      `${context}.maxPolynomialBytes`,
+      "max polynomial byte limit",
       JINDO_MAX_POLYNOMIAL_BYTES,
+    ),
   });
 }
 
@@ -5615,10 +6200,13 @@ function jindoOpeningClaimField(source, context) {
     description: "opening claim",
     digestLabel: "opening-claim",
     kindLabel: "opening-claim-digest",
-    maxBytes:
-      source.maxOpeningClaimBytes ??
-      source.max_opening_claim_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxOpeningClaimBytes", "max_opening_claim_bytes"],
+      `${context}.maxOpeningClaimBytes`,
+      "max opening-claim byte limit",
       JINDO_MAX_OPENING_CLAIM_BYTES,
+    ),
   });
 }
 
@@ -5648,10 +6236,13 @@ function jindoQuerySetField(source, context) {
     description: "query set",
     digestLabel: "query-set",
     kindLabel: "query-set-digest",
-    maxBytes:
-      source.maxQuerySetBytes ??
-      source.max_query_set_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxQuerySetBytes", "max_query_set_bytes"],
+      `${context}.maxQuerySetBytes`,
+      "max query-set byte limit",
       JINDO_MAX_QUERY_SET_BYTES,
+    ),
   });
 }
 
@@ -5691,10 +6282,13 @@ function jindoParameterHashField(source, context) {
     description: "parameter hash",
     digestLabel: "parameter-hash",
     kindLabel: "parameter-hash",
-    maxBytes:
-      source.maxParameterBytes ??
-      source.max_parameter_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxParameterBytes", "max_parameter_bytes"],
+      `${context}.maxParameterBytes`,
+      "max parameter byte limit",
       JINDO_MAX_PARAMETER_BYTES,
+    ),
   });
 }
 
@@ -5845,6 +6439,7 @@ function normalizeJindoProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const parts = normalizeJindoPublicInputParts(source, context);
   const publicInputs = {
     version: parts.version,
@@ -5874,16 +6469,10 @@ function normalizeJindoProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -6210,10 +6799,13 @@ function sisHintsIssuerField(source, context) {
     description: "issuer commitment",
     digestLabel: "issuer-commitment",
     kindLabel: "issuer-digest",
-    maxBytes:
-      source.maxIssuerBytes ??
-      source.max_issuer_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxIssuerBytes", "max_issuer_bytes"],
+      `${context}.maxIssuerBytes`,
+      "max issuer byte limit",
       SIS_HINTS_MAX_ISSUER_BYTES,
+    ),
   });
 }
 
@@ -6251,10 +6843,13 @@ function sisHintsCredentialField(source, context) {
     description: "credential commitment",
     digestLabel: "credential-commitment",
     kindLabel: "credential-digest",
-    maxBytes:
-      source.maxCredentialBytes ??
-      source.max_credential_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxCredentialBytes", "max_credential_bytes"],
+      `${context}.maxCredentialBytes`,
+      "max credential byte limit",
       SIS_HINTS_MAX_CREDENTIAL_BYTES,
+    ),
   });
 }
 
@@ -6298,10 +6893,13 @@ function sisHintsShowingPolicyField(source, context) {
     description: "showing policy hash",
     digestLabel: "showing-policy-hash",
     kindLabel: "showing-policy-hash",
-    maxBytes:
-      source.maxPolicyBytes ??
-      source.max_policy_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxPolicyBytes", "max_policy_bytes"],
+      `${context}.maxPolicyBytes`,
+      "max policy byte limit",
       SIS_HINTS_MAX_POLICY_BYTES,
+    ),
   });
 }
 
@@ -6345,10 +6943,13 @@ function sisHintsParameterHashField(source, context) {
     description: "parameter hash",
     digestLabel: "parameter-hash",
     kindLabel: "parameter-hash",
-    maxBytes:
-      source.maxParameterBytes ??
-      source.max_parameter_bytes ??
+    maxBytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxParameterBytes", "max_parameter_bytes"],
+      `${context}.maxParameterBytes`,
+      "max parameter byte limit",
       SIS_HINTS_MAX_PARAMETER_BYTES,
+    ),
   });
 }
 
@@ -6500,6 +7101,7 @@ function normalizeSisHintsProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const parts = normalizeSisHintsCommitmentParts(source, context);
   const publicInputs = {
     version: parts.version,
@@ -6529,16 +7131,10 @@ function normalizeSisHintsProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -7052,6 +7648,7 @@ function normalizeVeRangeProofEnvelopeParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const aggregationAlias = readSingleAlias(
     source,
     ["aggregationCount", "aggregation_count"],
@@ -7123,16 +7720,10 @@ function normalizeVeRangeProofEnvelopeParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -7538,6 +8129,7 @@ function normalizeAnonymousPgcProofParts(
       `${context}.proofBytes`,
     );
   }
+  const maxLimits = normalizeOptionalPrivacyMaxLimits(source, context);
   const receiverSet = normalizeAnonymousPgcReceiverSetFromSource(source, context);
   const anonymityRoot = normalizeNonZeroFixedBytes(
     source.anonymitySetRoot ?? source.anonymity_set_root,
@@ -7605,16 +8197,10 @@ function normalizeAnonymousPgcProofParts(
       proofAlias.value === undefined
         ? null
         : normalizeBoundedByteArray(proofAlias.value, `${context}.proofBytes`, {
-            maxBytes: normalizePositiveU32(
-              source.maxProofBytes ??
-                source.max_proof_bytes ??
-                DEFAULT_PRIVACY_MAX_PROOF_BYTES,
-              `${context}.maxProofBytes`,
-            ),
+            maxBytes: maxLimits.maxProofBytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
           }),
-    maxProofBytes: source.maxProofBytes ?? source.max_proof_bytes,
-    maxPublicInputBytes:
-      source.maxPublicInputBytes ?? source.max_public_input_bytes,
+    maxProofBytes: maxLimits.maxProofBytes,
+    maxPublicInputBytes: maxLimits.maxPublicInputBytes,
   };
 }
 
@@ -7821,12 +8407,19 @@ function normalizePrivacyVerifierKeyIdFromOptions(source, name) {
   if (id === null) {
     fail(ValidationErrorCode.INVALID_OBJECT, `${name}.id is required`, `${name}.id`);
   }
-  return id;
+  return {
+    ...id,
+    backend: assertProductionVerifyBackendLabel(id.backend, `${name}.id.backend`),
+  };
 }
 
 function normalizePrivacyVerifyingKeyBox(value, id, name) {
   if (value === undefined || value === null) {
-    return null;
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} is required when a verifying key alias is present`,
+      name,
+    );
   }
   let backend = id.backend;
   let bytesValue = value;
@@ -7837,12 +8430,30 @@ function normalizePrivacyVerifyingKeyBox(value, id, name) {
       new Set(["backend", "backendId", "bytes", "keyBytes", "verifyingKeyBytes", "vkBytes"]),
       name,
     );
-    backend = assertNonBlankString(
-      source.backend ?? source.backendId ?? id.backend,
+    const backendAlias = readSingleAlias(
+      source,
+      ["backend", "backendId"],
       `${name}.backend`,
+      "verifying key backend",
     );
-    bytesValue =
-      source.bytes ?? source.keyBytes ?? source.verifyingKeyBytes ?? source.vkBytes;
+    const bytesAlias = readSingleAlias(
+      source,
+      ["bytes", "keyBytes", "verifyingKeyBytes", "vkBytes"],
+      `${name}.bytes`,
+      "verifying key bytes",
+    );
+    backend =
+      backendAlias.key === null
+        ? id.backend
+        : assertNonBlankString(backendAlias.value, `${name}.backend`);
+    if (bytesAlias.key === null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name}.bytes is required`,
+        `${name}.bytes`,
+      );
+    }
+    bytesValue = bytesAlias.value;
   }
   if (backend !== id.backend) {
     fail(
@@ -7926,7 +8537,7 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
     "backend tag",
   );
   const backendTag =
-    backendAlias.value === undefined
+    backendAlias.key === null
       ? inferPrivacyBackendTagFromVerifierId(id, `${context}.backendTag`)
       : normalizePrivacyBackendTag(backendAlias.value, `${context}.backendTag`);
   assertRegisterablePrivacyBackendTag(backendTag, `${context}.backendTag`);
@@ -7956,7 +8567,10 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
     `${context}.key`,
     "verifying key bytes",
   );
-  const key = normalizePrivacyVerifyingKeyBox(keyAlias.value, id, `${context}.key`);
+  const key =
+    keyAlias.key === null
+      ? null
+      : normalizePrivacyVerifyingKeyBox(keyAlias.value, id, `${context}.key`);
   const vkLenAlias = readSingleAlias(
     source,
     ["vkLen", "vk_len", "verifyingKeyLength"],
@@ -7964,7 +8578,7 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
     "verifying key length",
   );
   const vkLen =
-    vkLenAlias.value === undefined
+    vkLenAlias.key === null
       ? key?.bytes.length ?? 0
       : normalizeU32(vkLenAlias.value, `${context}.vkLen`);
   if (key && vkLen !== key.bytes.length) {
@@ -7974,12 +8588,6 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
       `${context}.vkLen`,
     );
   }
-  const maxProofAlias = readSingleAlias(
-    source,
-    ["maxProofBytes", "max_proof_bytes"],
-    `${context}.maxProofBytes`,
-    "maximum proof byte length",
-  );
   const status = options.forceStatus ?? normalizeConfidentialStatus(
     source.status,
     `${context}.status`,
@@ -8045,6 +8653,21 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
     `${context}.withdrawHeight`,
     "withdraw height",
   );
+  const activationHeight = normalizeOptionalU64(
+    activationAlias.value,
+    `${context}.activationHeight`,
+  );
+  const withdrawHeight = normalizeOptionalU64(
+    withdrawAlias.value,
+    `${context}.withdrawHeight`,
+  );
+  if (activationHeight !== null && withdrawHeight !== null && withdrawHeight < activationHeight) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${context}.withdrawHeight must be >= activationHeight`,
+      `${context}.withdrawHeight`,
+    );
+  }
   return {
     version: normalizePositiveU32(source.version, `${context}.version`),
     circuit_id: assertNonBlankString(
@@ -8069,10 +8692,13 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
       32,
     ),
     vk_len: vkLen,
-    max_proof_bytes:
-      maxProofAlias.value === undefined
-        ? DEFAULT_PRIVACY_MAX_PROOF_BYTES
-        : normalizePositiveU32(maxProofAlias.value, `${context}.maxProofBytes`),
+    max_proof_bytes: normalizePositiveU32AliasOrDefault(
+      source,
+      ["maxProofBytes", "max_proof_bytes"],
+      `${context}.maxProofBytes`,
+      "maximum proof byte length",
+      DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+    ),
     gas_schedule_id: gasScheduleId,
     metadata_uri_cid: normalizeOptionalNonBlankString(
       metadataAlias.value,
@@ -8082,14 +8708,8 @@ function normalizePrivacyVerifierKeyRecord(sourceValue, id, context, options = {
       vkBytesCidAlias.value,
       `${context}.vkBytesCid`,
     ),
-    activation_height: normalizeOptionalU64(
-      activationAlias.value,
-      `${context}.activationHeight`,
-    ),
-    withdraw_height: normalizeOptionalU64(
-      withdrawAlias.value,
-      `${context}.withdrawHeight`,
-    ),
+    activation_height: activationHeight,
+    withdraw_height: withdrawHeight,
     key,
     status,
   };
@@ -10909,9 +11529,12 @@ export function buildZkAtPolicyCommitment(options, context = "zkAtPolicyCommitme
           policyAlias.value,
           policyAlias.key,
           context,
-          normalizePositiveU32(
-            source.maxPolicyBytes ?? source.max_policy_bytes ?? ZKAT_MAX_POLICY_BYTES,
+          normalizePositiveU32AliasOrDefault(
+            source,
+            ["maxPolicyBytes", "max_policy_bytes"],
             `${context}.maxPolicyBytes`,
+            "max policy byte limit",
+            ZKAT_MAX_POLICY_BYTES,
           ),
         );
   if (explicitCommitment === null && policyBytes === null) {
@@ -11025,7 +11648,7 @@ export function buildZkAtAuthenticatorEnvelope(options) {
     source,
     "zkAtAuthenticatorEnvelope",
   );
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -11105,7 +11728,7 @@ export function buildZkAtDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = zkatDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -11369,7 +11992,7 @@ export function buildZkAmsAdmissionProofEnvelope(options) {
     source,
     "zkAmsAdmissionProofEnvelope",
   );
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -11443,7 +12066,7 @@ export function buildZkAmsAdmissionDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = zkamDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -11699,7 +12322,7 @@ export function buildVegaCredentialProofEnvelope(options) {
     "vegaCredentialProofEnvelope",
   );
   const parts = normalizeVegaProofParts(source, "vegaCredentialProofEnvelope");
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -11783,7 +12406,7 @@ export function buildVegaCredentialDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = vegaDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12074,7 +12697,7 @@ export function buildSilentThresholdCredentialEnvelope(options) {
     source,
     "silentThresholdCredentialEnvelope",
   );
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12126,7 +12749,7 @@ export function buildSilentThresholdCredentialDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = silentThresholdDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12396,7 +13019,7 @@ export function buildZkX509IdentityEnvelope(options) {
     "zkX509IdentityEnvelope",
   );
   const parts = normalizeZkX509ProofParts(source, "zkX509IdentityEnvelope");
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12445,7 +13068,7 @@ export function buildZkX509IdentityDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = zkX509DevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12716,7 +13339,7 @@ export function buildJindoLatticeProofEnvelope(options) {
     "jindoLatticeProofEnvelope",
   );
   const parts = normalizeJindoProofParts(source, "jindoLatticeProofEnvelope");
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -12765,7 +13388,7 @@ export function buildJindoLatticeDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = jindoDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13040,7 +13663,7 @@ export function buildSisHintsCredentialEnvelope(options) {
     source,
     "sisHintsCredentialEnvelope",
   );
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13092,7 +13715,7 @@ export function buildSisHintsCredentialDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = sisHintsDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13359,7 +13982,7 @@ export function buildAnonymousPgcDevProofFixture(options) {
     "anonymousPgcDevProofFixture",
   );
   const proofBytes = anonymousPgcDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13664,7 +14287,7 @@ export function buildVeRangeProofEnvelope(options) {
     source,
     "veRangeProofEnvelope",
   );
-  return buildPrivacyProofEnvelope({
+  return buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13740,7 +14363,7 @@ export function buildVeRangeDevProofFixture(options) {
     { requireProofBytes: false },
   );
   const proofBytes = veRangeDevProofBytes(parts);
-  const envelope = buildPrivacyProofEnvelope({
+  const envelope = buildPrivacyProofEnvelopeWithOptionalLimits({
     backend: parts.backend,
     circuitId: parts.circuitId,
     vkHash: parts.vkHash,
@@ -13883,6 +14506,13 @@ export function verifyVeRangeProofLocally(options) {
  * @returns {Buffer}
  */
 export function buildPrivacyProofEnvelope(options) {
+  return buildPrivacyProofEnvelopeInternal(options);
+}
+
+function buildPrivacyProofEnvelopeInternal(
+  options,
+  { allowUnsupportedBackend = false } = {},
+) {
   const source = assertPlainObject(options, "privacyProofEnvelope");
   assertAllowedFields(
     source,
@@ -13939,46 +14569,99 @@ export function buildPrivacyProofEnvelope(options) {
     "privacyProofEnvelope.proofBytes",
     "proof bytes",
   );
+  const maxProofAlias = readSingleAlias(
+    source,
+    ["maxProofBytes", "max_proof_bytes"],
+    "privacyProofEnvelope.maxProofBytes",
+    "max proof byte limit",
+  );
+  const maxPublicInputAlias = readSingleAlias(
+    source,
+    ["maxPublicInputBytes", "max_public_input_bytes"],
+    "privacyProofEnvelope.maxPublicInputBytes",
+    "max public input byte limit",
+  );
   const maxProofBytes = normalizePositiveU32(
-    source.maxProofBytes ?? source.max_proof_bytes ?? DEFAULT_PRIVACY_MAX_PROOF_BYTES,
+    maxProofAlias.key === null
+      ? DEFAULT_PRIVACY_MAX_PROOF_BYTES
+      : maxProofAlias.value,
     "privacyProofEnvelope.maxProofBytes",
   );
   const maxPublicInputBytes = normalizePositiveU32(
-    source.maxPublicInputBytes ??
-      source.max_public_input_bytes ??
-      DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES,
+    maxPublicInputAlias.key === null
+      ? DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES
+      : maxPublicInputAlias.value,
     "privacyProofEnvelope.maxPublicInputBytes",
   );
-  const envelope = {
-    backend: normalizePrivacyBackendTag(
-      backendAlias.value,
-      "privacyProofEnvelope.backendTag",
-    ),
-    circuit_id: assertNonBlankString(
-      circuitAlias.value,
+  const circuitId = assertString(
+    circuitAlias.value,
+    "privacyProofEnvelope.circuitId",
+  );
+  if (circuitId.trim().length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "privacyProofEnvelope.circuitId must be a non-empty string",
       "privacyProofEnvelope.circuitId",
-    ),
-    vk_hash: normalizeNonZeroFixedBytes(
+    );
+  }
+  if (circuitId.trim() !== circuitId) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "privacyProofEnvelope.circuitId must be clean and already trimmed",
+      "privacyProofEnvelope.circuitId",
+    );
+  }
+  const backend = normalizePrivacyBackendTag(
+    backendAlias.value,
+    "privacyProofEnvelope.backendTag",
+  );
+  if (backend === "Unsupported" && !allowUnsupportedBackend) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      "privacyProofEnvelope.backendTag uses unsupported privacy verifier backend unsupported",
+      "privacyProofEnvelope.backendTag",
+    );
+  }
+  const envelope = {
+    backend,
+    circuit_id: circuitId,
+    vk_hash: normalizeOpenVerifyFixedBytes(
       vkHashAlias.value,
       "privacyProofEnvelope.vkHash",
       32,
+      { nonzero: true },
     ),
-    public_inputs: normalizeBoundedByteArray(
+    public_inputs: normalizeOpenVerifyByteArray(
       publicInputsAlias.value,
       "privacyProofEnvelope.publicInputs",
       { maxBytes: maxPublicInputBytes },
     ),
-    proof_bytes: normalizeBoundedByteArray(
+    proof_bytes: normalizeOpenVerifyByteArray(
       proofAlias.value,
       "privacyProofEnvelope.proofBytes",
       { maxBytes: maxProofBytes },
     ),
-    aux: normalizeBoundedByteArray(source.aux, "privacyProofEnvelope.aux", {
+    aux: normalizeOpenVerifyByteArray(source.aux, "privacyProofEnvelope.aux", {
       maxBytes: DEFAULT_PRIVACY_MAX_AUX_BYTES,
       allowEmpty: true,
     }),
   };
   return noritoEncodePrivacyProofEnvelope(envelope);
+}
+
+function buildPrivacyProofEnvelopeWithOptionalLimits(options) {
+  const envelopeOptions = { ...options };
+  if (envelopeOptions.maxProofBytes === undefined) {
+    delete envelopeOptions.maxProofBytes;
+  }
+  if (envelopeOptions.maxPublicInputBytes === undefined) {
+    delete envelopeOptions.maxPublicInputBytes;
+  }
+  return buildPrivacyProofEnvelopeInternal(envelopeOptions, {
+    allowUnsupportedBackend:
+      envelopeOptions.backend === JINDO_BACKEND ||
+      envelopeOptions.backend === SIS_HINTS_BACKEND,
+  });
 }
 
 /**
@@ -13999,7 +14682,7 @@ export function buildRegisterPrivacyVerifierKeyInstruction(options) {
     "verifier key record",
   );
   const record = normalizePrivacyVerifierKeyRecord(
-    recordAlias.value ?? source,
+    recordAlias.key === null ? source : recordAlias.value,
     id,
     "registerPrivacyVerifierKey.record",
     { defaultStatus: "Proposed", allowWithdrawn: false },
@@ -14029,7 +14712,7 @@ export function buildRetirePrivacyVerifierKeyInstruction(options) {
     "verifier key record",
   );
   const record = normalizePrivacyVerifierKeyRecord(
-    recordAlias.value ?? source,
+    recordAlias.key === null ? source : recordAlias.value,
     id,
     "retirePrivacyVerifierKey.record",
     { defaultStatus: "Withdrawn", allowWithdrawn: true, forceStatus: "Withdrawn" },
@@ -14294,7 +14977,7 @@ export function buildRevokeZkAceIdentityCommitmentInstruction(options) {
  * @param {object} options
  * @returns {{public_inputs: object, proof: object}}
  */
-export function buildZkAceAuthorizationProofV1(options) {
+function buildZkAceAuthorizationProofV1(options) {
   const source = assertPlainObject(options, "zkAceAuthorizationProof");
   const publicInputs = normalizeZkAcePublicInputs(
     source.publicInputs ?? source.public_inputs,

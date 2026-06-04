@@ -551,7 +551,25 @@ function sampleVerifyingKeyRegisterPayload() {
     circuit_id: "halo2/ipa::transfer_v1",
     public_inputs_schema_hex: "0xdeadbeef",
     gas_schedule_id: "default",
+    vk_bytes: Buffer.from("abc"),
   };
+}
+
+function verifyingKeyCommitmentHex(backend, bytes) {
+  const backendBytes = Buffer.from(backend, "utf8");
+  return crypto.createHash("sha256")
+    .update(Buffer.from("iroha:zk:v1:vk", "utf8"))
+    .update(u64BeBuffer(backendBytes.length))
+    .update(backendBytes)
+    .update(u64BeBuffer(bytes.length))
+    .update(bytes)
+    .digest("hex");
+}
+
+function u64BeBuffer(value) {
+  const buffer = Buffer.alloc(8);
+  buffer.writeBigUInt64BE(BigInt(value));
+  return buffer;
 }
 
 function bufferToBase64Url(buffer) {
@@ -1131,6 +1149,167 @@ test("listVerifyingKeysTyped normalizes records", async () => {
   assert.equal(invoked.searchParams.get("order"), "asc");
 });
 
+test("verifying key read paths reject unsupported production backends before fetch", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const backend of [
+    " halo2/ipa",
+    "halo2/ipa ",
+    "\thalo2/ipa",
+    "halo2/ipa\n",
+    "halo2\uFF0Fipa",
+    "halo2/\u200Bipa",
+    "h\u0430lo2/ipa",
+    "stark/fri/miden",
+    "stark/fri/latest",
+    "stark/fri/attestation",
+    "stark/fri/contest",
+    "stark/fri/random-profile",
+    "stark/fri/sha512-goldilocks",
+    "stark/fri/audit-proof-v1",
+    "halo2/ipa:production-ready",
+    "halo2/ipa:claimed-production",
+    "halo2/ipa:mainnet-ready",
+    "stark/fri/audit-signoff",
+    "stark/fri/externally-audited",
+    "stark/fri/security-review-passed",
+    "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+    "stark/fri/a-u-d-i-t-c-l-a-i-m",
+    "halo2/ipa/penumbra",
+    "halo2/ipa/masp",
+    "halo2/ipa/monero",
+    "halo2/ipa/curve-tree",
+    "halo2/pasta/tiny-add",
+    "halo2/ipa/tiny-add",
+    "halo2/ipa:tiny-add",
+    "halo2/pasta/tiny-commit-open",
+    "halo2/pasta/anon-transfer-2x2",
+    "halo2/ipa/anon-transfer-2x2",
+    "halo2/ipa:anon-transfer-2x2",
+    "halo2/pasta/anon-transfer-2x2-merkle2",
+    "halo2/ipa/anon-transfer-2x2-merkle8",
+    "halo2/ipa:anon-transfer-2x2-merkle16",
+    "halo2/pasta/vote-bool-commit",
+    "halo2/ipa/vote-bool-commit",
+    "halo2/ipa:vote-bool-commit",
+    "halo2/pasta/vote-bool-commit-merkle2",
+    "halo2/ipa/vote-bool-commit-merkle8",
+    "halo2/ipa:vote-bool-commit-merkle16",
+    "halo2/pasta/asset-hidden-transfer-public-test",
+    "halo2/ipa/asset-hidden-transfer-public-test",
+    "halo2/ipa:asset-hidden-transfer-public-test",
+    "stark/fri/dev-fixture",
+    "stark/fri/d-e-v-f-i-x-t-u-r-e",
+    "stark/fri/dev",
+    "stark/fri/d-e-v",
+    "stark/fri/test",
+    "stark/fri/t-e-s-t",
+    "stark/fri/placeholder",
+    " stark/fri/sha256-goldilocks",
+    "stark/fri/sha256-goldilocks ",
+    "halo2/ipa/orchard",
+    "halo2/kzg",
+    "halo2/ipa\0",
+    "halo2/ipa:dev-fixture",
+    "halo2/ipa:dev",
+    "halo2/ipa:d-e-v",
+    "halo2/ipa:dummy",
+    "halo2/ipa:f-a-k-e",
+    "halo2/ipa:stub",
+    "halo2/ipa:s-a-m-p-l-e",
+    "mock/dev",
+  ]) {
+    await assert.rejects(
+      () => client.getVerifyingKey(backend, "vk_main"),
+      /unsupported production verifier backend/,
+    );
+    await assert.rejects(
+      () => client.listVerifyingKeys({ backend }),
+      /unsupported production verifier backend/,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("verifying key read paths reject unstable STARK profile aliases before fetch", async () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const backend of ["stark/fri/latest", "stark/fri/attestation", "stark/fri/contest"]) {
+    await assert.rejects(
+      () => client.getVerifyingKey(backend, "vk_main"),
+      /unsupported production verifier backend/,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("listVerifyingKeysTyped rejects noncanonical response backends", async () => {
+  const baseRecord = {
+    version: 1,
+    circuit_id: "halo2/ipa::transfer_v1",
+    backend: "halo2/ipa",
+    curve: "pallas",
+    public_inputs_schema_hash: "deadbeef",
+    commitment: "1234",
+    vk_len: 32,
+    max_proof_bytes: 4096,
+    status: "Active",
+  };
+  for (const entry of [
+    { backend: " halo2/ipa", name: "flat_vk" },
+    { id: { backend: "halo2/ipa ", name: "object_vk" } },
+    { backend: "halo2\uFF0Fipa", name: "fullwidth_slash_vk" },
+    { id: { backend: "h\u0430lo2/ipa", name: "cyrillic_a_vk" } },
+    {
+      id: { backend: "halo2/ipa", name: "record_vk" },
+      record: { ...baseRecord, backend: "\thalo2/ipa" },
+    },
+    {
+      id: { backend: "halo2/ipa", name: "inline_vk" },
+      record: {
+        ...baseRecord,
+        key: {
+          backend: "halo2/ipa\n",
+          bytes_b64: Buffer.from("vk").toString("base64"),
+        },
+      },
+    },
+    {
+      id: { backend: "halo2/ipa", name: "zero_width_vk" },
+      record: {
+        ...baseRecord,
+        key: {
+          backend: "halo2/\u200Bipa",
+          bytes_b64: Buffer.from("vk").toString("base64"),
+        },
+      },
+    },
+  ]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: { items: [entry] },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    await assert.rejects(
+      () => client.listVerifyingKeysTyped(),
+      /unsupported production verifier backend/,
+    );
+  }
+});
+
 test("iterateVerifyingKeys paginates and forwards filters", async () => {
   const seenOffsets = [];
   const fetchImpl = async (url) => {
@@ -1257,6 +1436,39 @@ test("getVerifyingKeyTyped decodes payload", async () => {
   assert.equal(detail.record.inline_key, null);
 });
 
+test("getVerifyingKeyTyped rejects withdraw height before activation height", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        id: { backend: "halo2/ipa", name: "vk_main" },
+        record: {
+          version: 1,
+          circuit_id: "halo2/ipa::transfer_v1",
+          backend: "halo2/ipa",
+          curve: "pallas",
+          public_inputs_schema_hash: "abc123",
+          commitment: "0xdead",
+          vk_len: 1024,
+          max_proof_bytes: 512,
+          gas_schedule_id: null,
+          metadata_uri_cid: null,
+          vk_bytes_cid: null,
+          activation_height: 10,
+          withdraw_height: 9,
+          status: "Proposed",
+          key: null,
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getVerifyingKeyTyped("halo2/ipa", "vk_main"),
+    /withdraw_height must be >= activation_height/,
+  );
+});
+
 test("registerVerifyingKey canonicalizes payload", async () => {
   let captured;
   const canonicalAuthority =
@@ -1335,6 +1547,194 @@ test("registerVerifyingKey rejects mismatched vk_len", async () => {
     () => client.registerVerifyingKey(payload),
     /vk_len/,
   );
+});
+
+test("verifying key registration rejects mismatched inline key commitment", async () => {
+  let fetchCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return createResponse({ status: 202 });
+    },
+  });
+  const bytes = Buffer.from("abc");
+  const matchingCommitment = verifyingKeyCommitmentHex("halo2/ipa", bytes);
+
+  await assert.rejects(
+    () =>
+      client.registerVerifyingKey({
+        ...sampleVerifyingKeyRegisterPayload(),
+        vk_bytes: bytes,
+        commitment_hex: "00".repeat(32),
+    }),
+    /commitment_hex must match domain-separated SHA-256 of backend and vk_bytes/,
+  );
+  assert.equal(fetchCount, 0);
+  await assert.doesNotReject(() =>
+    client.registerVerifyingKey({
+      ...sampleVerifyingKeyRegisterPayload(),
+      vk_bytes: bytes,
+      commitment_hex: matchingCommitment,
+    }),
+  );
+  assert.equal(fetchCount, 1);
+});
+
+test("verifying key registration rejects length-only verifier material", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("unexpected fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.registerVerifyingKey({
+        ...sampleVerifyingKeyRegisterPayload(),
+        vk_bytes: null,
+        vk_len: 3,
+        commitment_hex: null,
+      }),
+    /commitment_hex is required when vk_bytes is omitted/,
+  );
+});
+
+test("verifying key requests reject withdraw height before activation height", async () => {
+  let fetchCount = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      fetchCount += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  const payload = {
+    ...sampleVerifyingKeyRegisterPayload(),
+    activation_height: 10,
+    withdraw_height: 9,
+  };
+
+  await assert.rejects(
+    () => client.registerVerifyingKey(payload),
+    /withdraw_height must be >= activation_height/,
+  );
+  await assert.rejects(
+    () => client.updateVerifyingKey({ ...payload, version: 2 }),
+    /withdraw_height must be >= activation_height/,
+  );
+  assert.equal(fetchCount, 0);
+});
+
+test("verifying key registration rejects unsupported production backends before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("unexpected fetch");
+    },
+  });
+  const base = sampleVerifyingKeyRegisterPayload();
+  const cases = [
+    ["register unknown native", () => client.registerVerifyingKey({ ...base, backend: "halo2/unknown-native-v1" })],
+    ["register unknown IPA suffix", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:unknown-native-v1" })],
+    ["register leading-space backend", () => client.registerVerifyingKey({ ...base, backend: " halo2/ipa" })],
+    ["register trailing-space backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa " })],
+    ["register leading-tab backend", () => client.registerVerifyingKey({ ...base, backend: "\thalo2/ipa" })],
+    ["register trailing-newline backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa\n" })],
+    ["register fullwidth-slash backend", () => client.registerVerifyingKey({ ...base, backend: "halo2\uFF0Fipa" })],
+    ["register zero-width backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/\u200Bipa" })],
+    ["register Cyrillic-a backend", () => client.registerVerifyingKey({ ...base, backend: "h\u0430lo2/ipa" })],
+    ["register pending Orchard", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/orchard" })],
+    ["register unstable STARK latest alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/latest" })],
+    ["register unstable STARK attestation alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/attestation" })],
+    ["register unstable STARK contest alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/contest" })],
+    ["register unknown STARK profile", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/random-profile" })],
+    ["register unknown STARK hash", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/sha512-goldilocks" })],
+    ["register claimed audited STARK profile", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/audit-proof-v1" })],
+    ["register claimed production IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:production-ready" })],
+    ["register claimed mainnet IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:mainnet-ready" })],
+    ["register claimed audit STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/audit-signoff" })],
+    ["register spliced security review STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/S.e.c.u.r.i.t.yReviewPassed" })],
+    ["register pending Penumbra splice", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/penumbra" })],
+    ["register pending MASP splice", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/masp" })],
+    ["register toy native Halo2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/tiny-add" })],
+    ["register toy native Halo2 slash alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/tiny-add" })],
+    ["register toy native Halo2 colon alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:tiny-add" })],
+    ["register toy native Halo2 helper profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/tiny-commit-open" })],
+    ["register legacy anon-transfer native Halo2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/anon-transfer-2x2" })],
+    ["register legacy anon-transfer native Halo2 slash alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/anon-transfer-2x2" })],
+    ["register legacy anon-transfer native Halo2 colon alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:anon-transfer-2x2" })],
+    ["register legacy anon-transfer native Halo2 merkle2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/anon-transfer-2x2-merkle2" })],
+    ["register legacy anon-transfer native Halo2 merkle8 alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/anon-transfer-2x2-merkle8" })],
+    ["register legacy anon-transfer native Halo2 merkle16 alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:anon-transfer-2x2-merkle16" })],
+    ["register legacy vote native Halo2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/vote-bool-commit" })],
+    ["register legacy vote native Halo2 slash alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/vote-bool-commit" })],
+    ["register legacy vote native Halo2 colon alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:vote-bool-commit" })],
+    ["register legacy vote native Halo2 merkle2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/vote-bool-commit-merkle2" })],
+    ["register legacy vote native Halo2 merkle8 alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/vote-bool-commit-merkle8" })],
+    ["register legacy vote native Halo2 merkle16 alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:vote-bool-commit-merkle16" })],
+    ["register dev-named native Halo2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/asset-hidden-transfer-public-test" })],
+    ["register dev-named native Halo2 slash alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/asset-hidden-transfer-public-test" })],
+    ["register dev-named native Halo2 colon alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:asset-hidden-transfer-public-test" })],
+    ["register trusted setup", () => client.registerVerifyingKey({ ...base, backend: "halo2/kzg" })],
+    ["register NUL-suffixed backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa\0" })],
+    ["update pending STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/miden" })],
+    ["update unstable STARK latest alias", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/latest" })],
+    ["update unstable STARK attestation alias", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/attestation" })],
+    ["update unstable STARK contest alias", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/contest" })],
+    ["update unknown STARK profile", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/random-profile" })],
+    ["update unknown STARK hash", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/sha512-goldilocks" })],
+    ["update claimed audited STARK profile", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/audit-proof-v1" })],
+    ["update claimed production IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:production-ready" })],
+    ["update claimed mainnet IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:mainnet-ready" })],
+    ["update claimed audit STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/audit-signoff" })],
+    ["update spliced audit claim STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/a-u-d-i-t-c-l-a-i-m" })],
+    ["update pending Monero splice", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/monero" })],
+    ["update pending curve-tree splice", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/curve-tree" })],
+    ["update toy native Halo2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/tiny-add" })],
+    ["update toy native Halo2 slash alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/tiny-add" })],
+    ["update toy native Halo2 colon alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:tiny-add" })],
+    ["update toy native Halo2 helper profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/tiny-commit-open" })],
+    ["update legacy anon-transfer native Halo2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/anon-transfer-2x2" })],
+    ["update legacy anon-transfer native Halo2 slash alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/anon-transfer-2x2" })],
+    ["update legacy anon-transfer native Halo2 colon alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:anon-transfer-2x2" })],
+    ["update legacy anon-transfer native Halo2 merkle2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/anon-transfer-2x2-merkle2" })],
+    ["update legacy anon-transfer native Halo2 merkle8 alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/anon-transfer-2x2-merkle8" })],
+    ["update legacy anon-transfer native Halo2 merkle16 alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:anon-transfer-2x2-merkle16" })],
+    ["update legacy vote native Halo2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/vote-bool-commit" })],
+    ["update legacy vote native Halo2 slash alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/vote-bool-commit" })],
+    ["update legacy vote native Halo2 colon alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:vote-bool-commit" })],
+    ["update legacy vote native Halo2 merkle2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/vote-bool-commit-merkle2" })],
+    ["update legacy vote native Halo2 merkle8 alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/vote-bool-commit-merkle8" })],
+    ["update legacy vote native Halo2 merkle16 alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:vote-bool-commit-merkle16" })],
+    ["update dev-named native Halo2 profile", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/asset-hidden-transfer-public-test" })],
+    ["update dev-named native Halo2 slash alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/asset-hidden-transfer-public-test" })],
+    ["update dev-named native Halo2 colon alias", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:asset-hidden-transfer-public-test" })],
+    ["update dev fixture STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/dev-fixture" })],
+    ["update spliced dev fixture STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/d-e-v-f-i-x-t-u-r-e" })],
+    ["update dev STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/dev" })],
+    ["update spliced dev STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/d-e-v" })],
+    ["update test STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/test" })],
+    ["update spliced test STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/t-e-s-t" })],
+    ["update placeholder STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/placeholder" })],
+    ["update dev fixture IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:dev-fixture" })],
+    ["update dev IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:dev" })],
+    ["update spliced dev IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:d-e-v" })],
+    ["update dummy IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:dummy" })],
+    ["update spliced fake IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:f-a-k-e" })],
+    ["update stub IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:stub" })],
+    ["update spliced sample IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:s-a-m-p-l-e" })],
+    ["update unknown STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/unknown-native-v1" })],
+    ["update leading-space STARK", () => client.updateVerifyingKey({ ...base, backend: " stark/fri/sha256-goldilocks" })],
+    ["update trailing-space STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/sha256-goldilocks " })],
+    ["update fullwidth-slash backend", () => client.updateVerifyingKey({ ...base, backend: "halo2\uFF0Fipa" })],
+    ["update zero-width backend", () => client.updateVerifyingKey({ ...base, backend: "halo2/\u200Bipa" })],
+    ["update Cyrillic-a backend", () => client.updateVerifyingKey({ ...base, backend: "h\u0430lo2/ipa" })],
+    ["update NUL-suffixed backend", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa\0" })],
+  ];
+  for (const [label, action] of cases) {
+    await assert.rejects(
+      action,
+      /unsupported production verifier backend/,
+      label,
+    );
+  }
 });
 
 test("verifying key endpoints reject unsupported option fields", async () => {
@@ -2081,6 +2481,164 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
   assert.deepEqual(result, { status: "queued", manifest_digest_hex: manifestHex });
 });
 
+function sorafsPinRegisterInput(overrides = {}) {
+  return {
+    authority: FIXTURE_ALICE_ID,
+    privateKey: "ed25519:deadbeef",
+    chunker: {
+      profileId: 1,
+      namespace: "sorafs",
+      name: "sf1",
+      semver: "1.0.0",
+      multihashCode: 0,
+    },
+    pinPolicy: { minReplicas: 3, storageClass: "hot", retentionEpoch: 72 },
+    manifestDigestHex: "a".repeat(64),
+    chunkDigestSha3_256Hex: "b".repeat(64),
+    contentLength: 4096,
+    submittedEpoch: 42,
+    ...overrides,
+  };
+}
+
+test("registerSorafsPinManifest accepts snake case successor digest", async () => {
+  const successorHex = "c".repeat(64);
+  let captured = null;
+  const fetchImpl = async (url, init) => {
+    captured = { url, init };
+    return createResponse({
+      status: 200,
+      jsonData: { status: "queued", manifest_digest_hex: "a".repeat(64) },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await client.registerSorafsPinManifest(
+    sorafsPinRegisterInput({
+      pinPolicy: undefined,
+      pin_policy: { min_replicas: 3, storage_class: "warm", retention_epoch: 72 },
+      successor_of_hex: successorHex.toUpperCase(),
+    }),
+  );
+
+  const body = JSON.parse(captured?.init?.body ?? "{}");
+  assert.equal(body.pin_policy?.storage_class?.type, "Warm");
+  assert.equal(body.successor_of_hex, successorHex);
+});
+
+test("registerSorafsPinManifest rejects ambiguous request field aliases before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+  const cases = [
+    {
+      label: "manifest digest",
+      input: sorafsPinRegisterInput({ manifest_digest_hex: "a".repeat(64) }),
+      pattern: /manifestDigestHex.*ambiguous aliases/i,
+    },
+    {
+      label: "chunk digest",
+      input: sorafsPinRegisterInput({ chunk_digest_sha3_256_hex: "b".repeat(64) }),
+      pattern: /chunkDigestSha3_256Hex.*ambiguous aliases/i,
+    },
+    {
+      label: "content length",
+      input: sorafsPinRegisterInput({ content_length: 4096 }),
+      pattern: /contentLength.*ambiguous aliases/i,
+    },
+    {
+      label: "submitted epoch",
+      input: sorafsPinRegisterInput({ submitted_epoch: 42 }),
+      pattern: /submittedEpoch.*ambiguous aliases/i,
+    },
+    {
+      label: "successor digest",
+      input: sorafsPinRegisterInput({
+        successorOfHex: "c".repeat(64),
+        successor_of_hex: "d".repeat(64),
+      }),
+      pattern: /successorOfHex.*ambiguous aliases/i,
+    },
+    {
+      label: "pin policy",
+      input: sorafsPinRegisterInput({
+        pin_policy: { min_replicas: 3, storage_class: "hot" },
+      }),
+      pattern: /pinPolicy.*ambiguous aliases/i,
+    },
+    {
+      label: "chunker profile",
+      input: sorafsPinRegisterInput({
+        chunker: {
+          profileId: 1,
+          profile_id: 1,
+          namespace: "sorafs",
+          name: "sf1",
+          semver: "1.0.0",
+        },
+      }),
+      pattern: /chunker\.profileId.*ambiguous aliases/i,
+    },
+  ];
+
+  for (const { label, input, pattern } of cases) {
+    await assert.rejects(
+      () => client.registerSorafsPinManifest(input),
+      pattern,
+      label,
+    );
+  }
+});
+
+test("registerSorafsPinManifest rejects ambiguous alias fields before fetch", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: () => {
+      throw new Error("fetch should not be called");
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest(
+        sorafsPinRegisterInput({
+          alias: { namespace: "docs", name: "main", proof: Buffer.from("alias-proof") },
+          aliasNamespace: "docs",
+          aliasName: "main",
+          aliasProof: Buffer.from("alias-proof"),
+        }),
+      ),
+    /alias must not be combined with flat alias fields/i,
+  );
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest(
+        sorafsPinRegisterInput({
+          aliasNamespace: "docs",
+          alias_namespace: "docs",
+          aliasName: "main",
+          aliasProof: Buffer.from("alias-proof"),
+        }),
+      ),
+    /aliasNamespace.*ambiguous aliases/i,
+  );
+  await assert.rejects(
+    () =>
+      client.registerSorafsPinManifest(
+        sorafsPinRegisterInput({
+          alias: {
+            namespace: "docs",
+            name: "main",
+            proof: Buffer.from("alias-proof"),
+            proofB64: Buffer.from("alias-proof").toString("base64"),
+          },
+        }),
+      ),
+    /alias\.proof.*ambiguous aliases/i,
+  );
+});
+
 test("registerSorafsPinManifest validates storage class input", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: () => {
@@ -2641,6 +3199,30 @@ test("registerSorafsPinManifestTyped rejects response alias without proof", asyn
         submittedEpoch: 42,
       }),
     /alias\.proof/i,
+  );
+});
+
+test("registerSorafsPinManifestTyped rejects ambiguous response aliases", async () => {
+  const manifestHex = "a".repeat(64);
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        manifest_digest_hex: manifestHex,
+        manifestDigestHex: manifestHex,
+        chunkerHandle: "sorafs.sf1@1.0.0",
+        submittedEpoch: "42",
+        contentLength: 4096,
+        pinFeeNano: "500000000",
+        pinFeeAssetId: "xor#universal",
+        pinFeeTreasuryAccountId: FIXTURE_ALICE_ID,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.registerSorafsPinManifestTyped(sorafsPinRegisterInput()),
+    /manifest_digest_hex.*ambiguous aliases/i,
   );
 });
 
@@ -17377,6 +17959,198 @@ test("streamEvents yields parsed SSE payloads", async () => {
   });
   const second = await iterator.next();
   assert.equal(second.done, true);
+});
+
+test("streamEvents rejects unsupported production backend event filters before fetch", () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const backend of [
+    " halo2/ipa",
+    "halo2/ipa ",
+    "\thalo2/ipa",
+    "halo2/ipa\n",
+    "stark/fri/miden",
+    "stark/fri/latest",
+    "stark/fri/attestation",
+    "stark/fri/contest",
+    "stark/fri/random-profile",
+    "stark/fri/sha512-goldilocks",
+    "stark/fri/audit-proof-v1",
+    "halo2/ipa:production-ready",
+    "halo2/ipa:claimed-production",
+    "halo2/ipa:mainnet-ready",
+    "stark/fri/audit-signoff",
+    "stark/fri/externally-audited",
+    "stark/fri/security-review-passed",
+    "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+    "stark/fri/a-u-d-i-t-c-l-a-i-m",
+    "stark/fri/sha256-goldilocks ",
+    "halo2/ipa/orchard",
+    "halo2/kzg",
+    "halo2/ipa\0",
+    "halo2/pasta/tiny-add",
+    "halo2/ipa/tiny-add",
+    "halo2/ipa:tiny-add",
+    "halo2/pasta/tiny-commit-open",
+    "halo2/pasta/anon-transfer-2x2",
+    "halo2/ipa/anon-transfer-2x2",
+    "halo2/ipa:anon-transfer-2x2",
+    "halo2/pasta/anon-transfer-2x2-merkle2",
+    "halo2/ipa/anon-transfer-2x2-merkle8",
+    "halo2/ipa:anon-transfer-2x2-merkle16",
+    "halo2/pasta/vote-bool-commit",
+    "halo2/ipa/vote-bool-commit",
+    "halo2/ipa:vote-bool-commit",
+    "halo2/pasta/vote-bool-commit-merkle2",
+    "halo2/ipa/vote-bool-commit-merkle8",
+    "halo2/ipa:vote-bool-commit-merkle16",
+    "halo2/pasta/asset-hidden-transfer-public-test",
+    "halo2/ipa/asset-hidden-transfer-public-test",
+    "halo2/ipa:asset-hidden-transfer-public-test",
+    "mock/dev",
+  ]) {
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: {
+            VerifyingKey: {
+              id_matcher: { backend, name: "vk_main" },
+              event_set: { Registered: true, Updated: true },
+            },
+          },
+        }),
+      /unsupported production verifier backend/,
+    );
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: {
+            Proof: {
+              id_matcher: { backend, hash_hex: "a".repeat(64) },
+              event_set: { Verified: true, Rejected: true },
+            },
+          },
+        }),
+      /unsupported production verifier backend/,
+    );
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: JSON.stringify({
+            Proof: {
+              id_matcher: { backend, hash_hex: "a".repeat(64) },
+              event_set: { Verified: true, Rejected: true },
+            },
+          }),
+        }),
+      /unsupported production verifier backend/,
+    );
+  }
+  assert.equal(calls, 0);
+});
+
+test("streamEvents rejects malformed verifying key event names before fetch", () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const name of ["", "   ", "\t", "\n", "vk:main", 42]) {
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: {
+            VerifyingKey: {
+              id_matcher: { backend: "halo2/ipa", name },
+              event_set: { Registered: true, Updated: true },
+            },
+          },
+        }),
+      /id_matcher\.name.*(must not be empty|must be a string|must not contain ':')/,
+    );
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: JSON.stringify({
+            VerifyingKey: {
+              id_matcher: { backend: "halo2/ipa", name },
+              event_set: { Registered: true, Updated: true },
+            },
+          }),
+        }),
+      /id_matcher\.name.*(must not be empty|must be a string|must not contain ':')/,
+    );
+  }
+
+  const iterator = client.streamEvents({
+    filter: {
+      VerifyingKey: {
+        id_matcher: { backend: "halo2/ipa", name: " vk_main " },
+        event_set: { Registered: true, Updated: true },
+      },
+    },
+  });
+  assert.equal(typeof iterator.next, "function");
+  assert.equal(calls, 0);
+});
+
+test("streamEvents rejects malformed proof event hashes before fetch", () => {
+  let calls = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      calls += 1;
+      throw new Error("unexpected fetch");
+    },
+  });
+  for (const hashHex of [
+    "",
+    "abc",
+    "z".repeat(64),
+    "a".repeat(63),
+    `0x${"a".repeat(63)}`,
+  ]) {
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: {
+            Proof: {
+              id_matcher: { backend: "halo2/ipa", hash_hex: hashHex },
+              event_set: { Verified: true, Rejected: true },
+            },
+          },
+        }),
+      /hash_hex.*(32-byte hex string|not be empty)/,
+    );
+    assert.throws(
+      () =>
+        client.streamEvents({
+          filter: JSON.stringify({
+            Proof: {
+              id_matcher: { backend: "halo2/ipa", hash_hex: hashHex },
+              event_set: { Verified: true, Rejected: true },
+            },
+          }),
+        }),
+      /hash_hex.*(32-byte hex string|not be empty)/,
+    );
+  }
+  const iterator = client.streamEvents({
+    filter: {
+      Proof: {
+        id_matcher: { backend: "halo2/ipa", hash_hex: `0x${"A".repeat(64)}` },
+        event_set: { Verified: true, Rejected: true },
+      },
+    },
+  });
+  assert.equal(typeof iterator.next, "function");
+  assert.equal(calls, 0);
 });
 
 test("streamContractEvents encodes selector params", async () => {

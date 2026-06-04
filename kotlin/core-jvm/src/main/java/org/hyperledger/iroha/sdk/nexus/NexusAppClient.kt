@@ -300,7 +300,10 @@ class NexusAppClient @JvmOverloads constructor(
 }
 
 private fun ensureEd25519(algorithm: String) {
-    if (!algorithm.equals(NEXUS_SIGNATURE_ALGORITHM_ED25519, ignoreCase = true)) {
+    if (
+        !algorithm.all { it.code in 0x20..0x7E } ||
+        !(algorithm.equals(NEXUS_SIGNATURE_ALGORITHM_ED25519, ignoreCase = true) || algorithm == "0")
+    ) {
         throw NexusAppError(
             "unsupported_signature_algorithm",
             "Nexus App Facade V1 supports Ed25519 signatures only",

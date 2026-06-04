@@ -2,8 +2,10 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Typed builder for the {@code RegisterPinManifest} instruction.
@@ -15,6 +17,7 @@ import java.util.Objects;
 public final class RegisterPinManifestInstruction implements InstructionTemplate {
 
   public static final String ACTION = "RegisterPinManifest";
+  private static final Pattern HEX_PATTERN = Pattern.compile("^[0-9a-fA-F]+$");
 
   private final String digestHex;
   private final ChunkerProfile chunkerProfile;
@@ -170,7 +173,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     private Builder() {}
 
     public Builder setDigestHex(final String digestHex) {
-      this.digestHex = Objects.requireNonNull(digestHex, "digestHex");
+      this.digestHex = requireHex(digestHex, "digestHex", 32);
       return this;
     }
 
@@ -180,7 +183,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
 
     public Builder setChunkDigestSha3Hex(final String chunkDigestSha3Hex) {
-      this.chunkDigestSha3Hex = Objects.requireNonNull(chunkDigestSha3Hex, "chunkDigestSha3Hex");
+      this.chunkDigestSha3Hex = requireHex(chunkDigestSha3Hex, "chunkDigestSha3Hex", 32);
       return this;
     }
 
@@ -206,7 +209,10 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
     }
 
     public Builder setSuccessorOfHex(final String successorOfHex) {
-      this.successorOfHex = successorOfHex;
+      this.successorOfHex =
+          successorOfHex == null || successorOfHex.isBlank()
+              ? null
+              : requireHex(successorOfHex, "successorOfHex", 32);
       return this;
     }
 
@@ -356,22 +362,25 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       private Builder() {}
 
       public Builder setProfileId(final int profileId) {
+        if (profileId <= 0) {
+          throw new IllegalArgumentException("profileId must be positive");
+        }
         this.profileId = profileId;
         return this;
       }
 
       public Builder setNamespace(final String namespace) {
-        this.namespace = Objects.requireNonNull(namespace, "namespace");
+        this.namespace = requireNonBlank(namespace, "namespace");
         return this;
       }
 
       public Builder setName(final String name) {
-        this.name = Objects.requireNonNull(name, "name");
+        this.name = requireNonBlank(name, "name");
         return this;
       }
 
       public Builder setSemver(final String semver) {
-        this.semver = Objects.requireNonNull(semver, "semver");
+        this.semver = requireNonBlank(semver, "semver");
         return this;
       }
 
@@ -381,6 +390,9 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       }
 
       public Builder setMultihashCode(final long multihashCode) {
+        if (multihashCode < 0) {
+          throw new IllegalArgumentException("multihashCode must be non-negative");
+        }
         this.multihashCode = multihashCode;
         return this;
       }
@@ -482,7 +494,7 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       }
 
       public Builder setStorageClass(final String storageClass) {
-        this.storageClass = Objects.requireNonNull(storageClass, "storageClass");
+        this.storageClass = requireStorageClass(storageClass, "storageClass");
         return this;
       }
 
@@ -588,17 +600,17 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
       private Builder() {}
 
       public Builder setName(final String name) {
-        this.name = Objects.requireNonNull(name, "name");
+        this.name = requireNonBlank(name, "alias.name");
         return this;
       }
 
       public Builder setNamespace(final String namespace) {
-        this.namespace = Objects.requireNonNull(namespace, "namespace");
+        this.namespace = requireNonBlank(namespace, "alias.namespace");
         return this;
       }
 
       public Builder setProofHex(final String proofHex) {
-        this.proofHex = Objects.requireNonNull(proofHex, "proofHex");
+        this.proofHex = requireHex(proofHex, "alias.proofHex", 0);
         return this;
       }
 
@@ -615,5 +627,44 @@ public final class RegisterPinManifestInstruction implements InstructionTemplate
         return new AliasBinding(this);
       }
     }
+  }
+
+  private static String requireNonBlank(final String value, final String fieldName) {
+    if (value == null || value.isBlank()) {
+      throw new IllegalArgumentException(fieldName + " must not be blank");
+    }
+    return value;
+  }
+
+  private static String requireHex(
+      final String value, final String fieldName, final int expectedBytes) {
+    final String nonBlank = requireNonBlank(value, fieldName);
+    final String normalized =
+        nonBlank.startsWith("0x") || nonBlank.startsWith("0X") ? nonBlank.substring(2) : nonBlank;
+    if (normalized.isEmpty() || normalized.length() % 2 != 0) {
+      throw new IllegalArgumentException(fieldName + " must be even-length hex");
+    }
+    if (!HEX_PATTERN.matcher(normalized).matches()) {
+      throw new IllegalArgumentException(fieldName + " must be hexadecimal: " + value);
+    }
+    if (expectedBytes > 0 && normalized.length() != expectedBytes * 2) {
+      throw new IllegalArgumentException(
+          fieldName
+              + " must be "
+              + (expectedBytes * 2)
+              + " hex chars, found "
+              + normalized.length());
+    }
+    return normalized.toLowerCase(Locale.ROOT);
+  }
+
+  private static String requireStorageClass(final String value, final String fieldName) {
+    final String normalized = requireNonBlank(value, fieldName).toLowerCase(Locale.ROOT);
+    return switch (normalized) {
+      case "hot" -> "Hot";
+      case "warm" -> "Warm";
+      case "cold" -> "Cold";
+      default -> throw new IllegalArgumentException(fieldName + " must be Hot, Warm, or Cold");
+    };
   }
 }

@@ -2,5 +2,8 @@
   "instruments": ["US0378331005"],
   "bics": ["DEUTDEFF"],
   "leis": ["5493001KJTIIGC8Y1R12"],
-  "mics": ["XNAS"]
+  "mics": ["XNAS"],
+  "csd_venues": ["XNAS"],
+  "securities_accounts": ["DLVRY-ACC", "RCVG-ACC"],
+  "cash_legs": ["USD:APMT"]
 }

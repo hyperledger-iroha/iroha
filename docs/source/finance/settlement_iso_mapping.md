@@ -40,7 +40,7 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
     absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
 - **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` (collateral management)
 
 - Follow the same instrument rules as `sese.*` (ISIN preferred).
 - Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
@@ -322,7 +322,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo Collateral Substitution → `colr.007`
+### Repo Collateral Substitution → `colr.012`
 
 | Repo field / context                            | ISO 20022 path                     | Notes |
 |-------------------------------------------------|-----------------------------------|-------|
@@ -404,65 +404,65 @@ iroha app settlement dvp \
 
 ### Scenario A — Collateral Substitution (Repo / Pledge)
 
-**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S  
+**Participants:** collateral giver/taker (and/or agents), custodian(s), CSD/T2S
 **Timing:** per market cut-offs and T2S day/night cycles; orchestrate the two legs so they complete within the same settlement window.
 
 #### Message choreography
-1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.  
-2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).  
-3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.  
-4. `sese.023` instructions (two legs):  
-   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).  
-   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).  
-   Link the pair (see below).  
-5. `sese.024` status advices (accepted, matched, pending, failing, rejected).  
-6. `sese.025` confirmations once booked.  
+1. `colr.010` Collateral Substitution Request → collateral giver/taker or agent.
+2. `colr.011` Collateral Substitution Response → accept/reject (optional rejection reason).
+3. `colr.012` Collateral Substitution Confirmation → confirms substitution agreement.
+4. `sese.023` instructions (two legs):
+   - Return original collateral (`SctiesMvmntTp=DELI`, `Pmt=FREE`, `SctiesTxTp=COLO`).
+   - Deliver substitute collateral (`SctiesMvmntTp=RECE`, `Pmt=FREE`, `SctiesTxTp=COLI`).
+   Link the pair (see below).
+5. `sese.024` status advices (accepted, matched, pending, failing, rejected).
+6. `sese.025` confirmations once booked.
 7. Optional cash delta (fees/haircut) → `pacs.009` FI-to-FI Credit Transfer with `CtgyPurp/Cd = SECU`; status via `pacs.002`, returns via `pacs.004`.
 
 #### Required acknowledgements / statuses
-- Transport level: gateways may emit `admi.007` or rejects before business processing.  
-- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).  
+- Transport level: gateways may emit `admi.007` or rejects before business processing.
+- Settlement lifecycle: `sese.024` (processing statuses + reason codes), `sese.025` (final).
 - Cash side: `pacs.002` (`PDNG`, `ACSC`, `RJCT` etc.), `pacs.004` for returns.
 
 #### Conditionality / unwind fields
-- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.  
-- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).  
-- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).  
-- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).  
+- `SctiesSttlmTxInstr/Lnkgs` (`WITH`/`BEFO`/`AFTE`) to chain the two instructions.
+- `SttlmParams/HldInd` to hold until criteria met; release via `sese.030` (`sese.031` status).
+- `SttlmParams/PrtlSttlmInd` to control partial settlement (`NPAR`, `PART`, `PARC`, `PARQ`).
+- `SttlmParams/SttlmTxCond/Cd` for market-specific conditions (`NOMC`, etc.).
 - Optional T2S Conditional Securities Delivery (CoSD) rules when supported.
 
 #### References
-- SWIFT collateral management MDR (`colr.010/011/012`).  
-- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.  
+- SWIFT collateral management MDR (`colr.010/011/012`).
+- CSD/T2S usage guides (e.g., DNB, ECB Insights) for linking and statuses.
 - SMPG settlement practice, Clearstream DCP manuals, ASX ISO workshops.
 
 ### Scenario B — FX Window Breach (PvP Funding Failure)
 
-**Participants:** counterparties and cash agents, securities custodian, CSD/T2S  
+**Participants:** counterparties and cash agents, securities custodian, CSD/T2S
 **Timing:** FX PvP windows (CLS/bilateral) and CSD cut-offs; keep securities legs on hold pending cash confirmation.
 
 #### Message choreography
-1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.  
-2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.  
-3. Lifecycle `sese.024` notices (accepted/matched/pending).  
-4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).  
+1. `pacs.009` FI-to-FI Credit Transfer per currency with `CtgyPurp/Cd = SECU`; status via `pacs.002`; recall/cancel via `camt.056`/`camt.029`; if already settled, `pacs.004` return.
+2. `sese.023` DvP instruction(s) with `HldInd=true` so the securities leg waits for cash confirmation.
+3. Lifecycle `sese.024` notices (accepted/matched/pending).
+4. If both `pacs.009` legs reach `ACSC` before the window expires → release with `sese.030` → `sese.031` (mod status) → `sese.025` (confirmation).
 5. If the FX window is breached → cancel/recall cash (`camt.056/029` or `pacs.004`) and cancel securities (`sese.020` + `sese.027`, or `sese.026` reversal if already confirmed per market rule).
 
 #### Required acknowledgements / statuses
-- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.  
-- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.  
+- Cash: `pacs.002` (`PDNG`, `ACSC`, `RJCT`), `pacs.004` for returns.
+- Securities: `sese.024` (pending/failing reasons like `NORE`, `ADEA`), `sese.025`.
 - Transport: `admi.007` / gateway rejects before business processing.
 
 #### Conditionality / unwind fields
-- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.  
-- `Lnkgs` to tie securities instructions to the cash leg.  
-- T2S CoSD rule if using conditional delivery.  
-- `PrtlSttlmInd` to prevent unintended partials.  
+- `SttlmParams/HldInd` + `sese.030` release/cancel on success/failure.
+- `Lnkgs` to tie securities instructions to the cash leg.
+- T2S CoSD rule if using conditional delivery.
+- `PrtlSttlmInd` to prevent unintended partials.
 - On `pacs.009`, `CtgyPurp/Cd = SECU` flags securities-related funding.
 
 #### References
-- PMPG / CBPR+ guidance for payments in securities processes.  
-- SMPG settlement practices, T2S insights on linking/holds.  
+- PMPG / CBPR+ guidance for payments in securities processes.
+- SMPG settlement practices, T2S insights on linking/holds.
 - Clearstream DCP manuals, ECMS documentation for maintenance messages.
 
 ### pacs.004 return mapping notes
@@ -543,10 +543,10 @@ iroha app settlement dvp \
   fail closed until complete canonical XML or OCSP policy coverage is available.
 
 ### Operational checklist for the bridge
-- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).  
-- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.  
-- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.  
-- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.  
+- Enforce the choreography above (collateral: `colr.010/011/012 → sese.023/024/025`; FX breach: `pacs.009 (+pacs.002) → sese.023 held → release/cancel`).
+- Treat `sese.024`/`sese.025` statuses and `pacs.002` outcomes as gating signals; `ACSC` triggers release, `RJCT` forces unwind.
+- Encode conditional delivery via `HldInd`, `Lnkgs`, `PrtlSttlmInd`, `SttlmTxCond`, and optional CoSD rules.
+- Use `SupplementaryData` to correlate external IDs (e.g., UETR for the `pacs.009`) when required.
 - Parameterise hold/unwind timing by market calendar/cut-offs; issue `sese.030`/`camt.056` before cancellation deadlines, fallback to returns when necessary.
 
 ### Sample ISO 20022 Payloads (Annotated)

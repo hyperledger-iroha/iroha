@@ -305,3 +305,17 @@ jobs:
           name: sccp-production-corridor-core-admission
           path: dist/sccp-production-corridor/core-admission.log
           if-no-files-found: error
+
+  sccp-production-corridor:
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all') }}
+    needs: [runner-self-check, rust-sccp, evidence-scripts, js-sdk, python-sdk, swift-sdk, kotlin-sdk, java-android, dotnet-sdk, contract-smoke, core-admission]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every SCCP corridor phase
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: |
+          echo "One or more SCCP production corridor phases failed, were cancelled, or were skipped."
+          exit 1
+      - name: SCCP production corridor aggregate
+        run: echo "All SCCP production corridor phases completed successfully."

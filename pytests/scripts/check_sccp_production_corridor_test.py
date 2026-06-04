@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +28,86 @@ EXPECTED_PHASES = {
     "contract-smoke",
     "core-admission",
 }
+AGGREGATE_JOB = "sccp-production-corridor"
+AGGREGATE_NEEDS = [
+    "runner-self-check",
+    "rust-sccp",
+    "evidence-scripts",
+    "js-sdk",
+    "python-sdk",
+    "swift-sdk",
+    "kotlin-sdk",
+    "java-android",
+    "dotnet-sdk",
+    "contract-smoke",
+    "core-admission",
+]
+PHASE_TEST_PATH_PATTERNS = {
+    "evidence-scripts": (r"pytests/scripts/[A-Za-z0-9_]+_test\.py",),
+    "js-sdk": (r"javascript/iroha_js/test/[A-Za-z0-9_.-]+\.js",),
+    "python-sdk": (r"python/iroha_torii_client/tests/[A-Za-z0-9_]+_test\.py",),
+    "contract-smoke": (
+        r"contracts/evm/sccp/test/[A-Za-z0-9_.-]+\.js",
+        r"scripts/sccp_evm_contract_smoke\.sh",
+    ),
+}
+
+
+def workflow_job(workflow: str, job: str) -> str:
+    """Return a top-level job block from the workflow text."""
+
+    marker = f"  {job}:\n"
+    start = workflow.find(marker)
+    assert start >= 0, f"workflow missing job {job}"
+    rest = workflow[start + len(marker) :]
+    end = len(workflow)
+    for candidate in EXPECTED_PHASES | {AGGREGATE_JOB}:
+        next_marker = f"\n  {candidate}:\n"
+        index = rest.find(next_marker)
+        if index >= 0:
+            end = min(end, start + len(marker) + index)
+    return workflow[start:end]
+
+
+def assert_sccp_aggregate_gate(workflow: str) -> None:
+    """Assert that the aggregate job requires every phase result."""
+
+    aggregate = workflow_job(workflow, AGGREGATE_JOB)
+    expected_needs = f"    needs: [{', '.join(AGGREGATE_NEEDS)}]"
+    assert expected_needs in aggregate
+    assert "if: ${{ always() &&" in aggregate
+    assert "github.event.inputs.phase == 'all'" in aggregate
+    assert "contains(needs.*.result, 'failure')" in aggregate
+    assert "contains(needs.*.result, 'cancelled')" in aggregate
+    assert "contains(needs.*.result, 'skipped')" in aggregate
+    assert "exit 1" in aggregate
+    assert "All SCCP production corridor phases completed successfully." in aggregate
+
+
+def assert_phase_artifact_uploads_are_strict(workflow: str) -> None:
+    """Assert every phase uploads a phase-local transcript as required evidence."""
+
+    for phase in EXPECTED_PHASES:
+        job = workflow_job(workflow, phase)
+        assert "    needs: runner-self-check" in job
+        assert f"bash scripts/check_sccp_production_corridor.sh --phase {phase}" in job
+        assert f"tee dist/sccp-production-corridor/{phase}.log" in job
+        assert "      - uses: actions/upload-artifact@v4" in job
+        assert "        if: always()" in job
+        assert f"          name: sccp-production-corridor-{phase}" in job
+        assert f"          path: dist/sccp-production-corridor/{phase}.log" in job
+        assert "          if-no-files-found: error" in job
+
+
+def assert_mobile_workflow_uses_jdk21(workflow: str) -> None:
+    """Assert mobile SCCP jobs install JDK 21 before running Gradle phases."""
+
+    for phase in ("kotlin-sdk", "java-android"):
+        job = workflow_job(workflow, phase)
+        assert "      - uses: actions/setup-java@v4" in job
+        assert "          distribution: temurin" in job
+        assert '          java-version: "21"' in job
+        assert f"bash scripts/check_sccp_production_corridor.sh --phase {phase}" in job
 
 
 def load_report_module():
@@ -79,6 +162,84 @@ def test_sccp_production_corridor_workflow_tracks_runner_phases() -> None:
         assert f"tee dist/sccp-production-corridor/{phase}.log" in workflow
         assert f"name: sccp-production-corridor-{phase}" in workflow
         assert f"path: dist/sccp-production-corridor/{phase}.log" in workflow
+
+
+def test_sccp_production_corridor_workflow_has_aggregate_phase_gate() -> None:
+    """The PR/scheduled corridor must not pass unless every phase job passed."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+
+    assert_sccp_aggregate_gate(workflow)
+    assert_phase_artifact_uploads_are_strict(workflow)
+    assert_mobile_workflow_uses_jdk21(workflow)
+
+
+def test_sccp_production_corridor_aggregate_rejects_missing_phase_need() -> None:
+    """A dropped phase dependency must fail the workflow self-check."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace(", dotnet-sdk", "", 1)
+
+    with pytest.raises(AssertionError):
+        assert_sccp_aggregate_gate(mutated)
+
+
+def test_sccp_production_corridor_aggregate_rejects_skipped_phase_tolerance() -> None:
+    """The aggregate job must treat skipped phase jobs as a failure."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace(
+        " || contains(needs.*.result, 'skipped')",
+        "",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        assert_sccp_aggregate_gate(mutated)
+
+
+def test_sccp_production_corridor_aggregate_rejects_single_phase_dispatch_gate() -> None:
+    """The aggregate job must not require all phases during a single-phase dispatch."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace(
+        " && (github.event_name != 'workflow_dispatch' || github.event.inputs.phase == 'all')",
+        "",
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        assert_sccp_aggregate_gate(mutated)
+
+
+def test_sccp_production_corridor_artifact_guard_rejects_optional_transcripts() -> None:
+    """Phase transcripts must remain required release evidence artifacts."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace("          if-no-files-found: error", "", 1)
+
+    with pytest.raises(AssertionError):
+        assert_phase_artifact_uploads_are_strict(mutated)
+
+
+def test_sccp_production_corridor_mobile_jobs_reject_missing_jdk21_pin() -> None:
+    """Mobile workflow jobs must stay pinned to JDK 21."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace('          java-version: "21"\n', "", 1)
+
+    with pytest.raises(AssertionError):
+        assert_mobile_workflow_uses_jdk21(mutated)
+
+
+def test_sccp_production_corridor_mobile_jobs_reject_wrong_jdk_major() -> None:
+    """Mobile workflow jobs must not drift to another Java major version."""
+
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    mutated = workflow.replace('          java-version: "21"', '          java-version: "25"', 1)
+
+    with pytest.raises(AssertionError):
+        assert_mobile_workflow_uses_jdk21(mutated)
 
 
 def test_sccp_production_corridor_java_android_phase_matches_test_surfaces() -> None:
@@ -162,6 +323,31 @@ def test_sccp_production_corridor_swift_dry_run_prints_bridge_materialization() 
     )
 
 
+def test_sccp_production_corridor_kotlin_phase_covers_sccp_package() -> None:
+    """The Kotlin phase must keep the JVM SCCP package test selector."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "kotlin-sdk",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "==> SCCP production corridor: kotlin-sdk" in completed.stdout
+    assert "JAVA_HOME=" in completed.stdout
+    assert "java -version" in completed.stdout
+    assert "./gradlew :core-jvm:test --console=plain --tests" in completed.stdout
+    assert "org.hyperledger.iroha.sdk.sccp." in completed.stdout
+    assert "SCCP production corridor dry run completed." in completed.stdout
+
+
 def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> None:
     """The release runner can print selected heavyweight phases without running them."""
 
@@ -190,6 +376,81 @@ def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> No
     assert "SCCP production corridor dry run completed." in completed.stdout
 
 
+def test_sccp_production_corridor_dry_run_honors_script_runtime_overrides() -> None:
+    """The runner must honor explicit Node/Python binaries for reproducible local reruns."""
+
+    env = os.environ.copy()
+    env["SCCP_CORRIDOR_NODE_BIN"] = "/tmp/iroha-node20"
+    env["SCCP_CORRIDOR_PYTHON_BIN"] = "/tmp/iroha-python-pytest"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "evidence-scripts,js-sdk,python-sdk,contract-smoke",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+
+    assert "+ /tmp/iroha-python-pytest -m pytest -q pytests/scripts/" in (
+        completed.stdout
+    )
+    assert "+ /tmp/iroha-node20 --test javascript/iroha_js/test/" in completed.stdout
+    assert (
+        "+ /tmp/iroha-python-pytest -m pytest -q "
+        "python/iroha_torii_client/tests/sccp_test.py"
+    ) in completed.stdout
+    assert (
+        "+ /tmp/iroha-node20 --check "
+        "contracts/evm/sccp/test/sccp_message_bridge_smoke.js"
+    ) in completed.stdout
+
+
+def test_sccp_production_corridor_override_dry_run_matches_release_fragments() -> None:
+    """Runtime-overridden command traces must still satisfy release evidence."""
+
+    report = load_report_module()
+    phases = ("evidence-scripts", "js-sdk", "python-sdk", "contract-smoke")
+    env = os.environ.copy()
+    env["SCCP_CORRIDOR_NODE_BIN"] = "/tmp/iroha-node20"
+    env["SCCP_CORRIDOR_PYTHON_BIN"] = "/tmp/iroha-python-pytest"
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            ",".join(phases),
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    output = completed.stdout
+
+    for index, phase in enumerate(phases):
+        marker = f"==> SCCP production corridor: {phase}"
+        assert marker in output
+        start = output.index(marker)
+        if index + 1 < len(phases):
+            end = output.index(
+                f"==> SCCP production corridor: {phases[index + 1]}",
+                start + len(marker),
+            )
+        else:
+            end = len(output)
+        phase_output = output[start:end]
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
+            assert fragment in phase_output
+
+
 def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> None:
     """Release evidence command fragments must stay synced to the runner output."""
 
@@ -197,12 +458,16 @@ def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> N
     assert set(report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS) == EXPECTED_PHASES
     assert set(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS) == EXPECTED_PHASES
 
+    env = os.environ.copy()
+    env.pop("SCCP_CORRIDOR_NODE_BIN", None)
+    env.pop("SCCP_CORRIDOR_PYTHON_BIN", None)
     completed = subprocess.run(
         ["bash", str(SCRIPT), "--dry-run"],
         check=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     output = completed.stdout
 
@@ -221,6 +486,78 @@ def test_sccp_production_corridor_dry_run_matches_release_phase_fragments() -> N
         phase_output = output[start:end]
         for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]:
             assert fragment in phase_output
+
+
+def test_sccp_production_corridor_evidence_phase_has_no_untracked_pytests() -> None:
+    """Every evidence-script pytest path must be present in release evidence."""
+
+    report = load_report_module()
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "evidence-scripts",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    required_fragments = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+    pytest_paths = sorted(
+        set(
+            re.findall(
+                r"pytests/scripts/[A-Za-z0-9_]+_test\.py",
+                completed.stdout,
+            )
+        )
+    )
+    missing = [
+        path
+        for path in pytest_paths
+        if not any(path in fragment for fragment in required_fragments)
+    ]
+
+    assert missing == [], f"untracked evidence-scripts pytest paths: {missing}"
+
+
+def test_sccp_production_corridor_test_paths_are_release_inventory_tracked() -> None:
+    """Path-based corridor test commands must be present in release evidence."""
+
+    report = load_report_module()
+
+    for phase, patterns in PHASE_TEST_PATH_PATTERNS.items():
+        completed = subprocess.run(
+            [
+                "bash",
+                str(SCRIPT),
+                "--dry-run",
+                "--phase",
+                phase,
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        required_fragments = report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[phase]
+        command_paths = sorted(
+            {
+                match
+                for pattern in patterns
+                for match in re.findall(pattern, completed.stdout)
+            }
+        )
+        assert command_paths, f"{phase} dry-run exposed no tracked test paths"
+
+        missing = [
+            path
+            for path in command_paths
+            if not any(path in fragment for fragment in required_fragments)
+        ]
+        assert missing == [], f"{phase} has untracked release test paths: {missing}"
 
 
 def test_sccp_production_corridor_log_dir_dry_run_is_explicit(tmp_path: Path) -> None:
@@ -275,6 +612,7 @@ def test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution() ->
 
     assert "./gradlew :core-jvm:test --console=plain --tests" in completed.stdout
     assert "./gradlew :core:test --console=plain --tests" in completed.stdout
+    assert "java -version" in completed.stdout
     assert "ANDROID_HOME=" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
 
@@ -315,8 +653,11 @@ def test_sccp_production_corridor_java_home_resolver_handles_homebrew_jdk() -> N
 
     script = SCRIPT.read_text(encoding="utf-8")
 
+    assert 'if [[ -n "${JAVA_HOME:-}" ]] && is_java_21_home "$JAVA_HOME"; then' in script
+    assert 'version[[:space:]]+\\"21(\\.|\\")' in script
+    assert "run_java_version_check \"$java_home\"" in script
     assert 'macos_java_home="$(/usr/libexec/java_home -v 21 2>/dev/null)"' in script
-    assert '[[ -x "$macos_java_home/bin/java" ]]' in script
+    assert '&& is_java_21_home "$macos_java_home"; then' in script
     assert "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
     assert "/usr/local/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" in script
     assert "/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home" in (

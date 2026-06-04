@@ -29653,6 +29653,44 @@ async fn handler_iso_sese025_submit(
     .await
 }
 
+async fn handler_iso_colr007_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "colr.007",
+        "v1/iso20022/colr007",
+    )
+    .await
+}
+
+async fn handler_iso_colr012_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
+    handler_iso_lifecycle_submit(
+        app,
+        headers,
+        query,
+        remote,
+        body,
+        "colr.012",
+        "v1/iso20022/colr012",
+    )
+    .await
+}
+
 async fn handler_iso_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -29794,6 +29832,58 @@ async fn handler_iso_status(
         json_string_or_null(status.security_instrument_id().map(str::to_string)),
     );
     payload.insert(
+        "collateral_obligation_id".into(),
+        json_string_or_null(status.collateral_obligation_id().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_original_amount".into(),
+        json_string_or_null(status.collateral_original_amount().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_original_currency".into(),
+        json_string_or_null(status.collateral_original_currency().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_original_instrument_id".into(),
+        json_string_or_null(
+            status
+                .collateral_original_instrument_id()
+                .map(str::to_string),
+        ),
+    );
+    payload.insert(
+        "collateral_substitute_amount".into(),
+        json_string_or_null(status.collateral_substitute_amount().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_substitute_currency".into(),
+        json_string_or_null(status.collateral_substitute_currency().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_substitute_instrument_id".into(),
+        json_string_or_null(
+            status
+                .collateral_substitute_instrument_id()
+                .map(str::to_string),
+        ),
+    );
+    payload.insert(
+        "collateral_effective_date".into(),
+        json_string_or_null(status.collateral_effective_date().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_substitution_type".into(),
+        json_string_or_null(status.collateral_substitution_type().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_haircut".into(),
+        json_string_or_null(status.collateral_haircut().map(str::to_string)),
+    );
+    payload.insert(
+        "collateral_reason_code".into(),
+        json_string_or_null(status.collateral_reason_code().map(str::to_string)),
+    );
+    payload.insert(
         "plan_execution_order".into(),
         json_string_or_null(status.plan_execution_order().map(str::to_string)),
     );
@@ -29806,6 +29896,30 @@ async fn handler_iso_status(
         StatusCode::OK,
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
+}
+
+async fn handler_iso_audit_messages(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<(StatusCode, JsonBody<norito::json::Value>), Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/iso20022/audit/messages",
+    )
+    .await?;
+    let runtime = match &app.iso_bridge {
+        Some(rt) => rt.clone(),
+        None => {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::NotPermitted("iso20022 bridge disabled".into()),
+            ));
+        }
+    };
+    Ok((StatusCode::OK, JsonBody(runtime.audit_index())))
 }
 
 async fn handler_iso_pacs002(
@@ -35740,8 +35854,14 @@ impl Torii {
                 .route("/v1/iso20022/sese023", post(handler_iso_sese023_submit))
                 .route("/v1/iso20022/sese024", post(handler_iso_sese024_submit))
                 .route("/v1/iso20022/sese025", post(handler_iso_sese025_submit))
+                .route("/v1/iso20022/colr007", post(handler_iso_colr007_submit))
+                .route("/v1/iso20022/colr012", post(handler_iso_colr012_submit))
                 .route("/v1/iso20022/status/{msg_id}", get(handler_iso_status))
                 .route("/v1/iso20022/messages/{msg_id}", get(handler_iso_status))
+                .route(
+                    "/v1/iso20022/audit/messages",
+                    get(handler_iso_audit_messages),
+                )
                 .route(
                     "/v1/iso20022/messages/{msg_id}/pacs002",
                     get(handler_iso_pacs002),
@@ -58848,6 +58968,7 @@ mod tests {
         permission::account::{AccountAliasPermissionScope, CanResolveAccountAlias},
         permission::sorafs::CanOperateSorafsRepair,
     };
+    use iroha_test_samples::ALICE_ID;
     #[cfg(feature = "app_api")]
     use jsonwebtoken::{EncodingKey, Header, encode};
     use nonzero_ext::nonzero;
@@ -58971,6 +59092,11 @@ mod tests {
             default_profile: "generic-iso20022".to_owned(),
             profiles: Vec::new(),
             store_dir: None,
+            store_retention_secs:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_RETENTION_SECS,
+            store_max_records:
+                iroha_config::parameters::defaults::torii::ISO_BRIDGE_STORE_MAX_RECORDS,
+            audit_export_dir: None,
             embedded_signature_policy: None,
             signer: Some(actual::IsoBridgeSigner {
                 account_id: account_id.to_string(),
@@ -58983,6 +59109,67 @@ mod tests {
             currency_assets: Vec::new(),
             reference_data: actual::IsoReferenceData::default(),
         }
+    }
+
+    fn local_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+        axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+    }
+
+    #[tokio::test]
+    async fn iso_audit_messages_endpoint_exports_digest_bound_manifest() {
+        let app = mk_app_state_for_tests_with_iso_bridge(Some(sample_iso_bridge_config(
+            "DE89370400440532013000",
+            &ALICE_ID,
+        )));
+        let runtime = app.iso_bridge.as_ref().expect("iso bridge enabled");
+        runtime.mark_accepted("handler-audit", "handler-tx");
+
+        let (status, JsonBody(body)) =
+            handler_iso_audit_messages(State(app), HeaderMap::new(), local_connect_info())
+                .await
+                .expect("audit endpoint");
+        assert_eq!(status, StatusCode::OK);
+        let body = body.as_object().expect("audit manifest object");
+        assert_eq!(
+            body.get("record_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert!(
+            body.get("index_sha256")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        let records = body
+            .get("records")
+            .and_then(norito::json::Value::as_array)
+            .expect("audit records");
+        assert_eq!(
+            records[0]
+                .as_object()
+                .and_then(|entry| entry.get("message_id"))
+                .and_then(norito::json::Value::as_str),
+            Some("handler-audit")
+        );
+    }
+
+    #[tokio::test]
+    async fn iso_audit_messages_endpoint_rejects_disabled_bridge() {
+        let err = handler_iso_audit_messages(
+            State(mk_app_state_for_tests()),
+            HeaderMap::new(),
+            local_connect_info(),
+        )
+        .await
+        .expect_err("disabled bridge should reject audit export");
+        assert!(
+            matches!(
+                &err,
+                Error::Query(iroha_data_model::ValidationFail::NotPermitted(message))
+                    if message.contains("iso20022 bridge disabled")
+            ),
+            "unexpected error: {err:?}"
+        );
     }
 
     pub(crate) fn test_inrou_manifest() -> iroha_data_model::soracloud::SoraInrouManifestV1 {

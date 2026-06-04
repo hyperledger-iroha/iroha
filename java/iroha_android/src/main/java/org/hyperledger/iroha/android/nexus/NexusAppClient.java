@@ -235,11 +235,25 @@ public final class NexusAppClient {
   }
 
   private static void ensureEd25519(final String algorithm) {
-    if (!SIGNATURE_ALGORITHM_ED25519.equalsIgnoreCase(algorithm)) {
+    if (!isPrintableAscii(algorithm)
+        || !(SIGNATURE_ALGORITHM_ED25519.equalsIgnoreCase(algorithm) || "0".equals(algorithm))) {
       throw new NexusAppError(
           "unsupported_signature_algorithm",
           "Nexus App Facade V1 supports Ed25519 signatures only");
     }
+  }
+
+  private static boolean isPrintableAscii(final String value) {
+    if (value == null) {
+      return false;
+    }
+    for (int i = 0; i < value.length(); i++) {
+      final char ch = value.charAt(i);
+      if (ch < 0x20 || ch > 0x7E) {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static void validateEd25519PublicKey(final byte[] publicKey) {

@@ -57,7 +57,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
     ),
     "js-sdk": (
-        "node --test",
+        "--test javascript/iroha_js/test/sccpSolanaProver.test.js",
         "javascript/iroha_js/test/sccpSolanaProver.test.js",
         "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
         "javascript/iroha_js/test/sccpBscMainnet.test.js",
@@ -65,16 +65,18 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "javascript/iroha_js/test/sccpPackageExports.test.js",
     ),
     "python-sdk": (
-        "python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py",
+        "-m pytest -q python/iroha_torii_client/tests/sccp_test.py",
     ),
     "swift-sdk": (
         "swift test --filter SccpSolanaProverTests --disable-swift-testing",
         "ToriiClientTests/testBridgeProofSubmitRequestBuildsSccpPayloadsFromSubmissions",
     ),
     "kotlin-sdk": (
+        "java -version",
         "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
     ),
     "java-android": (
+        "java -version",
         "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
@@ -84,7 +86,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "FullyQualifiedName~SccpEthereumMainnetTests\\|FullyQualifiedName~SccpBscMainnetTests",
     ),
     "contract-smoke": (
-        "node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
+        "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
         "bash scripts/sccp_evm_contract_smoke.sh",
     ),
     "core-admission": ("cargo test -p iroha_core --test bridge_proofs -- --nocapture",),
@@ -102,8 +104,8 @@ PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS: dict[str, tuple[str, ...]] = {
     ),
     "python-sdk": (" passed in ",),
     "swift-sdk": ("0 failures",),
-    "kotlin-sdk": ("BUILD SUCCESSFUL",),
-    "java-android": ("BUILD SUCCESSFUL",),
+    "kotlin-sdk": ("version \"21", "BUILD SUCCESSFUL"),
+    "java-android": ("version \"21", "BUILD SUCCESSFUL"),
     "dotnet-sdk": ("Passed!",),
     "contract-smoke": ("sccp_message_bridge_smoke: ok",),
     "core-admission": ("test result: ok",),

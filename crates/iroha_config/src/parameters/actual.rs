@@ -63,6 +63,7 @@ use iroha_data_model::{
     },
     oracle::KeyedHash,
     peer::{Peer, PeerId},
+    smart_contract::{ContractAddress, ContractAlias},
     sorafs::{
         capacity::ProviderId, pin_registry::StorageClass as SorafsStorageClass,
         pricing::PricingScheduleRecord,
@@ -2585,6 +2586,19 @@ pub struct NexusFees {
     pub settlement_mode: NexusFeeSettlementMode,
     /// Authorities allowed to submit fee-free successful SORA v2 XOR claim mint transactions.
     pub successful_claim_fee_exempt_authorities: Vec<String>,
+    /// Contract calls eligible for fee sponsorship.
+    pub sponsored_contract_operation_allowlist: Vec<SponsoredContractOperationAllowlistEntry>,
+}
+
+/// Sponsored contract operation allowlist entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SponsoredContractOperationAllowlistEntry {
+    /// Contract alias that must match the call target, if set.
+    pub contract_alias: Option<ContractAlias>,
+    /// Contract address that must match the call target, if set.
+    pub contract_address: Option<ContractAddress>,
+    /// Contract entrypoints eligible for sponsorship under this target rule.
+    pub entrypoints: BTreeSet<String>,
 }
 
 /// Settlement mode for Nexus fee debits.
@@ -2603,6 +2617,21 @@ impl NexusFees {
         self.settlement_mode == NexusFeeSettlementMode::LaneRelayBurn
             && block_height >= self.fee_receipts_activation_height
     }
+}
+
+fn default_sponsored_contract_operation_allowlist() -> Vec<SponsoredContractOperationAllowlistEntry>
+{
+    vec![SponsoredContractOperationAllowlistEntry {
+        contract_alias: Some(
+            defaults::nexus::fees::DPN_SPONSORED_CONTRACT_ALIAS
+                .parse()
+                .expect("default DPN sponsored contract alias must be valid"),
+        ),
+        contract_address: None,
+        entrypoints: defaults::nexus::fees::dpn_sponsored_contract_entrypoints()
+            .into_iter()
+            .collect(),
+    }]
 }
 
 impl Default for NexusFees {
@@ -2625,6 +2654,8 @@ impl Default for NexusFees {
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),
+            sponsored_contract_operation_allowlist: default_sponsored_contract_operation_allowlist(
+            ),
         }
     }
 }
@@ -7590,6 +7621,12 @@ pub struct IsoBridge {
     pub profiles: Vec<IsoBridgeProfile>,
     /// Directory where ISO bridge message state is persisted.
     pub store_dir: Option<PathBuf>,
+    /// Age retention window for durable ISO records (seconds); zero disables age pruning.
+    pub store_retention_secs: u64,
+    /// Maximum durable ISO records to retain; zero disables count pruning.
+    pub store_max_records: u64,
+    /// Optional external audit export directory for manifest/notary preimages.
+    pub audit_export_dir: Option<PathBuf>,
     /// Optional global embedded XML signature policy override.
     pub embedded_signature_policy: Option<String>,
     /// Optional signer configuration when enabled.
@@ -7698,7 +7735,7 @@ pub struct IsoCurrencyAsset {
     pub asset_definition: String,
 }
 
-/// Reference data inputs (ISIN/CUSIP, BIC↔LEI, MIC).
+/// Reference data inputs (ISIN/CUSIP, BIC↔LEI, MIC, securities ledger maps).
 #[derive(Debug, Clone)]
 pub struct IsoReferenceData {
     /// Refresh cadence for reference snapshot ingestion.
@@ -7709,6 +7746,12 @@ pub struct IsoReferenceData {
     pub bic_lei_path: Option<PathBuf>,
     /// Optional path to a MIC directory snapshot.
     pub mic_directory_path: Option<PathBuf>,
+    /// Optional path to a CSD venue to ledger-domain crosswalk snapshot.
+    pub csd_venue_path: Option<PathBuf>,
+    /// Optional path to a securities settlement-account crosswalk snapshot.
+    pub securities_account_path: Option<PathBuf>,
+    /// Optional path to a securities cash-leg crosswalk snapshot.
+    pub cash_leg_path: Option<PathBuf>,
     /// Directory where loaded snapshots and provenance metadata should be cached.
     pub cache_dir: Option<PathBuf>,
 }
@@ -7722,6 +7765,9 @@ impl Default for IsoReferenceData {
             isin_crosswalk_path: None,
             bic_lei_path: None,
             mic_directory_path: None,
+            csd_venue_path: None,
+            securities_account_path: None,
+            cash_leg_path: None,
             cache_dir: None,
         }
     }

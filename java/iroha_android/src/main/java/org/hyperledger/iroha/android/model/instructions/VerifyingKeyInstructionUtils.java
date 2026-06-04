@@ -12,10 +12,22 @@ final class VerifyingKeyInstructionUtils {
 
   static String require(final Map<String, String> arguments, final String key) {
     final String value = arguments.get(key);
-    if (value == null || value.trim().isEmpty()) {
+    if (value == null || trimWhitespace(value).isEmpty()) {
       throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
     }
-    return value.trim();
+    return trimWhitespace(value);
+  }
+
+  static String requireProductionBackend(final Map<String, String> arguments, final String key) {
+    final String value = arguments.get(key);
+    if (value == null || trimWhitespace(value).isEmpty()) {
+      throw new IllegalArgumentException("Instruction argument '" + key + "' is required");
+    }
+    return requireProductionBackend(value, key);
+  }
+
+  static String requireProductionBackend(final String value, final String context) {
+    return VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(value, context);
   }
 
   static String optional(final Map<String, String> arguments, final String key) {
@@ -23,7 +35,7 @@ final class VerifyingKeyInstructionUtils {
     if (value == null) {
       return null;
     }
-    final String trimmed = value.trim();
+    final String trimmed = trimWhitespace(value);
     return trimmed.isEmpty() ? null : trimmed;
   }
 
@@ -81,5 +93,17 @@ final class VerifyingKeyInstructionUtils {
       builder.setStatus(VerifyingKeyStatus.parse(statusValue));
     }
     return builder.build(backend);
+  }
+
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 }

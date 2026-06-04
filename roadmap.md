@@ -701,13 +701,57 @@ and completed history lives in [`status.md`](./status.md).
   be non-empty, whitespace/control-free, and duplicate-free per endpoint.
 - Keep hardening the ISO 20022 bridge after the new inbound lifecycle endpoints
   and durable outbox helpers for `pacs.002`, `pacs.004`, `camt.029`, `camt.056`,
-  `sese.023`, `sese.024`, and `sese.025`; remaining TradFi work is tracked in
-  the engineering backlog for deeper XMLDSig/XAdES path-policy processing
+  `sese.023`, `sese.024`, `sese.025`, and `colr.012`; remaining TradFi work is
+  tracked in the engineering backlog for deeper XMLDSig/XAdES path-policy processing
   beyond the implemented trust-anchor, signer-admission, key-identifier, and
   revocation corridor; official XMLDSig/XAdES trust-anchor packages; CRL/OCSP
   or rail revocation-feed fixtures; complete canonical XML coverage; and
   broader MDR/XSD validation breadth beyond the checked-in live-profile fixture
-  corridor.
+  corridor, which now covers `pacs.002`, `pacs.004`, `camt.056`, `sese.023`,
+  `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
+  lifecycle XML. An offline XSD/XML fixture-manifest preflight now pins checked-in
+  schema target namespaces, `Document` payload roots, fixture namespaces, and
+  reviewed missing-schema exceptions; all checked-in payment XSDs now have
+  standalone XML fixtures, and remaining MDR/XSD work is making the strict
+  schema-backed release flag pass. The legacy `colr.007` collateral parser and
+  route are now local-compatibility only; operator receipt/evidence/readiness
+  gates reject the explicit `--allow-legacy-colr007` override for production. An
+  aggregate ISO production-readiness rollup now combines strict XSD proof and
+  operator evidence summaries plus digest-bound direct receipt-archive
+  verification with per-receipt digests into one release gate; remaining
+  readiness work is making that gate pass without diagnostic overrides and
+  with real provider evidence. Durable ISO state now has
+  versioned per-record digests plus a local
+  tamper-evident audit index exposed through the
+  `GET /v1/iso20022/audit/messages` route, with config-backed age/count
+  retention/compaction, an `audit_export_dir` manifest/notary-preimage spool,
+  and an operator adapter that verifies and publishes those preimages to clean
+  HTTPS archival/notary endpoints with local receipts; a read-only receipt
+  verifier now gates those receipts for canary use and emits a digest-bound
+  summary with per-receipt `receipt_sha256` entries, and a strict JSON-runbook
+  canary runner executes the rail/notary/verify path with one bounded summary.
+  An offline
+  evidence gate now recomputes canary/trust/receipt summary digests and rejects
+  plan-only, dry-run, insecure-HTTP, default-profile, secret-leaking,
+  smuggled-URL, synthetic-trust, record-only, or receipt-verifier-output-free
+  evidence before archival, and requires trust-summary and receipt-summary
+  policy booleans plus trust revocation and plan-only status booleans to be
+  present explicitly so omissions cannot become production defaults. The repository also
+  carries plan-valid templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst,
+  and securities CSD operator canaries. Remaining persistence work is
+  provider-specific live service canaries and vendor evidence that passes the
+  aggregate production-readiness gate.
+  ISO rail ingress now has
+  an operator file-drop adapter that verifies sidecar-pinned message
+  type/profile/payload digests before submitting to clean Torii base URLs and
+  writing receipts, plus the same receipt verifier and runbook runner for
+  canary evidence.
+  Remaining rail-connectivity work is provider-specific live gateway canaries
+  and archived rail evidence. Live
+  securities lifecycle profile admission now checks
+  local ISIN/CUSIP, MIC, BIC/LEI, CSD venue, settlement-account, and cash-leg
+  snapshots before durable `sese.023` recording; remaining securities work is
+  live-rail adapter coverage around production CSD/account/cash-leg sources.
   `require-verified` profiles now require profile-specific public-key pins or
   linked terminal CA trust-anchor DER SHA-256 pins before a P-256/SHA-256
   enveloped signature can pass, with deterministic leaf/issuer
@@ -722,7 +766,14 @@ and completed history lives in [`status.md`](./status.md).
   bytes, unsupported-critical-extension rejection, and validity-at-signing checks
   for X.509 chains, explicit certificate revocation pins, configured and
   signature-scoped embedded CRL/OCSP signer revocation checks evaluated against verified XAdES
-  `SigningTime` or BAH `CreDt` rather than local wall clock, canonical
+  `SigningTime` or BAH `CreDt` rather than local wall clock, plus an offline
+  trust-bundle verifier with semantic DER-shape checks, clean provenance URL
+  and retrieval-time validation, duplicate-label rejection, and profile-family
+  templates for operator PKI preflight. The templates are schema/CI scaffolding
+  only, require an explicit synthetic-template flag, and cannot emit profile
+  overrides; remaining trust work is replacing them with official rail packages
+  and archiving live provenance evidence that passes the production evidence
+  gate. Canonical
   lowercase SHA-256 trust/revocation pin admission, shortest-form DER
   length/minimal positive-integer admission for parsed OCSP responses,
   fail-closed rejection of unsupported OCSP response/single-response extensions, low-S
@@ -786,6 +837,100 @@ and completed history lives in [`status.md`](./status.md).
   camelCase/snake_case names inside nested validator-set transition proofs,
   including the transition-signature hash committed into the transition-chain
   witness.
+- Keep SoraFS paid-pin SDK builders fail-closed before submit. Java/Kotlin
+  pin-manifest builders now validate manifest digest, chunk digest, optional
+  successor digest, alias-proof hex shape, and `Hot`/`Warm`/`Cold`
+  storage-class policy values in both builder and argument decoding paths,
+  alongside the existing content length, epoch, replica, and partial-alias
+  guards. Python now also exposes raw and typed
+  `register_sorafs_pin_manifest` helpers that validate/canonicalize manifest,
+  chunk, successor, pin-policy, chunker, alias-proof, and credential-alias
+  inputs before the Torii register request is emitted, and rejects duplicate
+  camelCase/snake_case paid-pin request and typed-response aliases before any
+  precedence rule can hide conflicting caller data. C# now exposes the same
+  Torii register path through typed models and validates/canonicalizes request
+  and response digest, policy, chunker, alias-proof, and fee-receipt fields.
+  Swift now exposes matching async/completion register helpers and typed
+  request/response models with the same digest, policy, chunker, alias-proof,
+  and typed-response normalization before SDK callers observe a paid-pin
+  receipt. The JavaScript Torii register helper now also rejects contradictory
+  camelCase/snake_case paid-pin request and response aliases before submit or
+  typed decoding, while accepting canonical snake_case successor and policy
+  inputs. Torii gateway policy admission now also treats only an explicit,
+  signed `X-SoraFS-Manifest-Envelope` bound to a paid-pin registry record as
+  manifest-envelope evidence, so alias proof headers, malformed envelopes, and
+  missing registry records cannot satisfy `require_manifest_envelope`, and a
+  stale envelope no longer passes after registry chunk/profile metadata or
+  approved envelope-digest rotation.
+- Keep standalone JVM SDK guard scripts on the same toolchain contract as CI:
+  privacy, Kagemusha recursive spend, and SoraFS pin-register JVM guards now
+  reject inherited non-21 `JAVA_HOME` values, accept documented per-lane
+  Java-home override variables, resolve JDK 21 explicitly, and print
+  `java -version` before Gradle or `javac` runs. Their meta-guards and
+  workflows now run negative controls that mutate the workflow away from
+  Temurin/Java 21, move JVM tests before Java setup, remove the
+  selected-Java-version evidence, rename the Java-home override variables, or
+  remove inherited non-21 `JAVA_HOME` rejection evidence, and require the drift
+  to be rejected before the main guard passes. The JavaScript meta-tests also
+  derive each workflow's required negative-control modes and pull-request path
+  coverage from the guard inventories, so newly added guard modes or guarded
+  files cannot be omitted from workflow execution silently, and duplicate
+  negative-control mode entries or guarded path inventory entries now fail the
+  meta-test. They must also exercise fake non-21 JDK homes against the
+  standalone JVM runners so the early Java runtime gate is proven behaviorally.
+- Keep standalone Swift SDK parse scripts on the same selected-compiler
+  evidence contract: privacy, Kagemusha recursive spend, and SoraFS
+  pin-register guards now require `"${SWIFTC_BIN}" --version` before parsing,
+  keep their documented compiler override variables stable, prove
+  override-variable drift is rejected, and SoraFS fails closed instead of
+  skipping Swift parsing when the compiler is unavailable. The JS meta-tests
+  must also exercise fake `swiftc` parse failures against the standalone Swift
+  runners so compiler-version evidence and parse-failure propagation are proven
+  behaviorally.
+- Keep privacy, Kagemusha, and SoraFS C# SDK workflow lanes on the .NET 8
+  contract; their guards now reject missing setup-dotnet, non-8.0.x SDK pins,
+  C# test commands that run before the .NET setup step, and standalone C# SDK
+  scripts that stop printing the selected `dotnet --version` evidence before
+  filtered tests run. The standalone scripts must also reject non-8.0.x
+  `dotnet` selections before restore/test, keep their documented `dotnet`
+  override variables stable, and prove matcher or override drift is detected.
+  The JS meta-tests must exercise fake `.NET` 7 commands against those runners
+  so the early runtime gate is proven behaviorally.
+- Keep privacy, Kagemusha, and SoraFS JavaScript workflow lanes on the Node 20
+  package-lock cache contract; their guards now reject Node-version drift,
+  cache-dependency-path drift, and `npm ci` running before setup-node. The
+  standalone JavaScript SDK runners must also print the selected Node runtime
+  and reject non-`v20.*` runtimes before focused tests, keep their documented
+  Node override environment variables stable, prefer override variables and
+  known Node 20 candidates before falling back to `node` for the fail-closed
+  major-version check, and prove override-variable or resolver drift is
+  rejected. The JS meta-tests must also exercise fake non-20 Node overrides
+  against the standalone runners so the early runtime gate is proven
+  behaviorally, with Kagemusha using a dedicated runner instead of an inline
+  workflow test command. The focused Kagemusha and SoraFS JS runner patterns
+  must include their runtime-gate meta tests so those lane checks prove the
+  runtime preflights directly.
+- Keep privacy, Kagemusha, and SoraFS Python workflow lanes on the Python 3.11
+  contract; their guards now reject Python-version drift and Python SDK test
+  commands that run before setup-python, and the standalone Python SDK scripts
+  must keep printing both selected and venv interpreter versions while rejecting
+  non-3.11 interpreters before pytest. They now prefer documented Python
+  override variables, then available `python3.11`/Homebrew Python 3.11
+  candidates before falling back to `python3` for the existing fail-closed
+  version check, with override and resolver drift pinned by negative controls.
+  The JS meta-tests must also exercise fake non-3.11 Python overrides against
+  the standalone runners so the early interpreter gate is proven before any
+  venv setup or native build can run.
+  All three Python SDK lanes also rebuild stale non-3.11 venvs after selecting
+  a valid 3.11 interpreter, with rebuild drift pinned by the guard workflows.
+  Privacy and Kagemusha native-backed
+  Python lanes must also build the PyO3 extension with that selected venv via
+  `maturin develop --release`, cache Rust artifacts, and keep 45-minute
+  workflow timeouts for native builds. All standalone Python SDK scripts must
+  also suppress bytecode writes during validation so generated cache files do
+  not dirty tracked artifacts, and CI must reject ignored Python bytecode files
+  if they are tracked. The Python native loader must keep stale macOS extension
+  artifacts fail-closed instead of aborting package imports.
 - Keep public SCCP release evidence tied to every UI-side full-light-client
   role helper, not only aggregate request builders; Solana and TON readiness
   rows now require the per-role audit proof request symbols across web, Python,
@@ -1029,12 +1174,13 @@ and completed history lives in [`status.md`](./status.md).
   and Rust runtime now all reject finality-height replay across TRON v3
   route-canary hash roles before full rollout TOML or launch readiness can pass.
 - Keep SCCP linked-prover callback snapshots immutable across production
-  destinations; JavaScript, Python, Swift, Kotlin/JVM, and Java Android
+  destinations; JavaScript, Python, Swift, Kotlin/JVM, Java Android, and .NET
   callback regressions now assert frozen request metadata where exposed and
   copy-backed bundle and source-proof bytes across EVM-family, TRON, TON, and
-  Substrate-family proof engines, including the Java Android Ethereum/BSC
-  mainnet facade witness-provider path, before app-linked callbacks return
-  proof bytes.
+  Substrate-family proof engines, including the Java Android and .NET
+  Ethereum/BSC mainnet facade witness-provider paths. The .NET Ethereum/BSC
+  inbound callback snapshots now also clone nested mutable dictionary and
+  enumerable evidence values before app-linked callbacks return proof bytes.
 - Keep TAIRA-to-TRON XOR source records economically bound at consensus
   admission; `taira_tron_xor` record overlays must include same-overlay
   whole-unit XOR burns by the payload sender, with the TAIRA burn-record
@@ -1560,23 +1706,44 @@ and completed history lives in [`status.md`](./status.md).
   transfer/unshield wrappers, IVM-proved overlays, IVM host registered-key
   verify syscalls, Kaigi privacy proofs, RAM-LFE proof receipts, identifier
   proof receipts, confidential-transfer-v2 transfer/unshield admission, and
-  the Offline/Kagemusha flows. Private Kaigi fee admission validates its
+  the Offline/Kagemusha flows. The common chain proof metadata helper used by
+  voting, generic proof records, and STARK shielded wrappers now also runs the
+  shared envelope validator before circuit/schema/commitment matching. Private
+  confidential-transfer-v2 transfer and unshield v2/v3 admission paths run the
+  same shared shape gate before confidential schema/circuit interpretation, with
+  matched adversarial coverage for blank circuit ids, empty or oversized public
+  inputs, empty proof bytes, auxiliary metadata, verifier-key hashes, and active
+  circuit indexes. ZK-ACE authorized-transfer admission runs it before
+  public-input decoding or STARK wrapper checks.
+  Private Kaigi fee admission validates its
   fee-binding auxiliary metadata at the transaction boundary and then
   canonicalizes the internal `ZkTransfer` proof to empty auxiliary bytes, while
   anonymous escrow close prechecks validate the confidential-transfer-v2 proof
-  envelope before trusting parsed input commitments. The shared Halo2 IPA
-  backend verifier also rejects non-empty auxiliary bytes and zero or mismatched
-  envelope verifier-key hashes before proof verification, so direct verifier
-  callers inherit the same fail-closed baseline; low-level backend dispatch
-  also rejects proof boxes whose embedded backend label differs from the
-  requested verifier backend. The lightweight preverify/dedup cache also
-  decodes recognized `OpenVerifyEnvelope` wrappers and rejects malformed
-  backend tags, auxiliary bytes, zero verifier-key hashes, and verifier-key
-  commitment mismatches before cache insertion, while Groth16, Halo2/BN254, and
-  Halo2/KZG labels remain unsupported before dedup insertion, preventing failed
-  preverify attempts from poisoning later valid proofs. The checked verifier
-  guardrail wrapper rejects the same trusted-setup labels before backend
-  dispatch.
+  envelope before trusting parsed input commitments. IVM-proved overlay
+  admission now reuses the shared envelope validator with node and
+  verifier-record proof-byte bounds before semantic replay or verifier dispatch.
+  IVM host registered-key verify syscalls also run the same shared validator
+  before registry binding, schema matching, and backend verifier dispatch while
+  preserving the syscall error-code contract. The generic verifier guardrail
+  wrapper now runs the shared envelope validator for decoded Halo2/STARK
+  `OpenVerifyEnvelope` payloads before verifier dispatch, while preserving raw
+  Halo2 best-effort behavior and STARK inner-proof byte-limit semantics. Direct
+  Halo2 IPA and STARK/FRI backend verifier dispatch now also runs the shared
+  envelope validator before verifier-key matching and proof verification,
+  rejecting blank circuit ids, empty or oversized public inputs, empty proof
+  bytes, forbidden auxiliary metadata, zero verifier-key hashes, and mismatched
+  verifier-key hashes while preserving the STARK inner-native-proof byte-limit
+  split; low-level backend dispatch also rejects proof boxes whose embedded
+  backend label differs from the requested verifier backend. The lightweight
+  preverify/dedup cache also
+  runs the shared envelope validator for recognized `OpenVerifyEnvelope`
+  wrappers and rejects malformed backend tags, blank circuit ids, empty or
+  oversized public inputs, empty proof bytes, auxiliary bytes, zero verifier-key
+  hashes, and verifier-key commitment mismatches before cache insertion, while
+  Groth16, Halo2/BN254, and Halo2/KZG labels remain unsupported before dedup
+  insertion, preventing failed preverify attempts from poisoning later valid
+  proofs. The checked verifier guardrail wrapper rejects the same trusted-setup
+  labels before backend dispatch.
   The production audit path is now topup-anchored and rejects unbound input
   claims, exact-claim mutations under an issued topup certificate, hidden output
   commitments, cross-asset audits, and public amount mismatches; audit output
@@ -1605,8 +1772,9 @@ and completed history lives in [`status.md`](./status.md).
   explicit trusted-setup backend labels such as Groth16, Halo2/BN254,
   Halo2/BLS12, and Halo2/KZG before they can enter registry or proof-attachment
   admission; standalone setup labels such as `kzg`, `bn254`, `bn256`, and
-  `bls12_381`, plus colon-delimited profiles such as `halo2/ipa:kzg`, are now
-  caught by the same shared classifier before broad allowlists can admit them.
+  `bls12_381`, explicit SRS/CRS/PTAU/ceremony labels, and colon-delimited
+  profiles such as `halo2/ipa:kzg` or `halo2/ipa:universal-srs`, are now caught
+  by the same shared classifier before broad allowlists can admit them.
   Generic proof attachments also reject developer-only labels before
   envelope matching, and STARK/FRI registry admission applies the same
   trusted-setup label rejection even for keyless records. Verifier-key
@@ -1636,8 +1804,8 @@ and completed history lives in [`status.md`](./status.md).
   `halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified` circuit id,
   schema, and verifier-key hash against the active asset binding, rejects
   normalized confidential-transfer-v2 circuit aliases before proof decoding,
-  requires inline verifier-key bytes with matching length, commitment, non-zero
-  proof-size cap, active circuit/version index, and the canonical
+  requires inline verifier-key bytes with matching length, commitment, canonical
+  `pallas` curve label, non-zero proof-size cap, active circuit/version index, and the canonical
   confidential-transfer-v2 semantic circuit key before proof envelope decoding,
   and caches canonical confidential-transfer-v2/unshield verifier and proving
   keys so production guard/prover paths do not repeatedly regenerate
@@ -2105,16 +2273,20 @@ and completed history lives in [`status.md`](./status.md).
   `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`
   so private hops are tied to active WSV-style confidential-transfer-v2 verifier
   metadata, including canonical `offline_kagemusha` namespace, backend tag,
-  circuit id, schema hash, verifier-key commitment, key length, proof-size cap,
-  optional inline-key consistency, and exact record-set matching with no
+  canonical curve label, circuit id, schema hash, verifier-key commitment, key
+  length, proof-size cap, optional inline-key consistency, and exact record-set
+  matching with no
   unrelated records at the FFI boundary, while raw folded-input proof
   construction stays crate-local. The final folded-token record verifier applies
   the same canonical namespace and registry metadata gate before backend proof
-  verification. The older unanchored C
+  verification, and recursive final redeem/unshield verifier records apply the
+  same namespace/backend/curve, active circuit/version, and canonical inline
+  unshield-key gate before the public mint path runs. The older unanchored C
   symbol and Rust compact-token proving entry points remain present for ABI
   compatibility but reject even valid `KagemushaVerifiedFoldBundle` input
   without returning a token.
-  Bridge ABI 6 adds recursive spend `init`, `append`, lineage-witness assembly,
+  Bridge ABI 6 adds recursive spend `init`, `append`, both transition-profile
+  helpers, append-boundary derivation, both lineage-witness assembly helpers,
   `verify`, and `redeem` entry points over raw Norito archives, and the C header
   plus Swift, Kotlin/JVM, Java Android/JNI, JavaScript/Node NAPI, Python/PyO3,
   and C# surfaces mirror them with empty-input and malformed-archive rejection.
@@ -2151,19 +2323,19 @@ and completed history lives in [`status.md`](./status.md).
   before nullifier consumption or public minting. Semantic v1 spend proofs
   without that witness still fail closed as admission-neutral, because they do
   not prove every private hop and accumulator
-  transition in-circuit. The reserved chain-admission circuit id for the future
-  constant-size proof is
-  `kagemusha-recursive-spend-lineage-v1`; profile attempts under that id still
-  fail closed until the verifier is wired, but first they must stay in the
-  transparent `halo2/ipa` corridor, carry non-empty proof bytes, bind the
-  accumulator-derived recursive public inputs through a fresh public-input
-  hash, include a non-zero recursive verifier scalar-projection digest, and
-  expose an inner `OpenVerifyEnvelope` whose backend tag, lineage circuit id,
-  schema, empty auxiliary metadata, non-zero verifier-key hash, and public
-  instance columns match that reserved profile. Those instance columns must now
-  come from a strict ZK1 no-trusted-setup inner proof envelope; legacy Halo2
-  proof-envelope wrappers remain accepted only for semantic v1 preverification
-  and are rejected under the reserved lineage id. Record-backed preverification
+  transition in-circuit. The reserved chain-admission circuit id for the
+  witnessless constant-size proof is
+  `kagemusha-recursive-spend-lineage-v1`; profile attempts under that id must
+  stay in the transparent `halo2/ipa` corridor, carry non-empty proof bytes,
+  bind the accumulator-derived recursive public inputs through a fresh
+  public-input hash, include a non-zero recursive verifier scalar-projection
+  digest, and expose an inner `OpenVerifyEnvelope` whose backend tag, lineage
+  circuit id, schema, empty auxiliary metadata, non-zero verifier-key hash, and
+  public instance columns match that reserved profile. Those instance columns
+  must now come from a strict ZK1 no-trusted-setup inner proof envelope; legacy
+  Halo2 proof-envelope wrappers remain accepted only for semantic v1
+  preverification and are rejected under the reserved lineage id.
+  Record-backed preverification
   also requires the inline verifier-key envelope to be a strict
   no-trusted-setup Halo2 IPA ZK1 key container: exactly one matching lineage
   `CID1`, exactly one bounded `IPAK` degree, exactly one non-empty `H2VK`, and
@@ -2174,58 +2346,149 @@ and completed history lives in [`status.md`](./status.md).
   fixed-column commitments so truncated processed verifier keys fail during
   cheap preflight. It also rejects zero verifier-record commitments explicitly
   and pins the lineage proof envelope verifier-key hash to the verifier-record
-  commitment. That
-  preverification remains admission-neutral: a well-formed reserved lineage
-  profile can pass registry and envelope checks, but only the chain-admission
-  guard emits the explicit unwired-verifier error after final redeem
-  public-input validation and before proof verification, nullifier consumption,
-  or minting. Missing `IPAK`, missing `H2VK`, wrong IPA degree, duplicate
+	  commitment. That preverification remains admission-neutral for registry-only
+	  callers. Chain admission validates the current Reserved-lineage profile and
+	  admits witnessless redemption for profile-valid bundles inside the configured
+	  64-hop cap after the active lineage verifier record, final proof, root,
+	  asset, commitment, and nullifier checks pass.
+  Missing `IPAK`,
+  missing `H2VK`, wrong IPA degree, duplicate
   verifier-key `CID1` tags, unexpected verifier-key TLVs, malformed trailing
   TLV material, truncated fixed-column commitments, and legacy semantic inner
   proof envelopes now reject as malformed instead of allowing last-tag-wins,
   prefix-only circuit identity, or cross-profile proof payload replay.
-  The recursive spend accumulator, append proof-artifact digest, and bridge
-  redeem request validation now understand both semantic v1 and reserved
-  lineage proof ids, so lineage-profile states can be represented in the
-  accumulator and serialized for redeem through the native bridge and Node host.
-  Recursive spend proof generation and append verification still use the
-  semantic v1 verifier until the production lineage verifier is wired; append
-  attempts from a previous reserved-lineage bundle now fail with an explicit
-  lineage-verifier-not-wired diagnostic, and the C bridge, JavaScript host, and
-  Python PyO3 host now pin the same path as a no-output ABI failure. Bridge,
-  JavaScript host, and Python PyO3 recursive-spend verification now report
-  offline spendability separately from chain admission: a locally verifying
-  semantic v1 recursive proof without a record-backed lineage witness returns
-  `valid = true` for receiver-side offline acceptance, while
+	  The recursive spend accumulator, append proof-artifact digest, and bridge
+	  redeem request validation now understand both semantic v1 and reserved
+	  lineage proof ids, so lineage-profile states can be represented in the
+		  accumulator and verified as D2D payloads. Direct redeem instruction
+		  serialization still requires a record-backed lineage witness for semantic v1
+		  bundles, while metadata-valid Reserved-lineage bundles redeem witnesslessly
+		  inside the configured 64-hop cap after active lineage-verifier-record and
+		  final-proof verification.
+  Recursive spend append requests now carry an optional previous-lineage
+  verifier record. Semantic v1 previous proofs must leave it empty and continue
+  through the canonical recursive aggregation verifier; reserved-lineage
+  previous proofs must provide the active lineage verifier record, while
+  missing records, semantic verifier records, malformed records, and tampered
+  previous proofs fail closed before the next hop is folded. Recursive spend
+  verify requests likewise carry an optional `lineage_verifier_record` for the
+  received bundle: reserved-lineage D2D payloads require it, semantic v1
+  payloads must omit it, and the bridge, JavaScript host, and Python PyO3 host
+  return diagnostic `valid = false` archives for missing or mismatched records.
+  Data-model init/append request validation now runs before the recursive
+  prover in the C bridge, JavaScript host, and Python PyO3 host. Init preflight
+  rejects malformed one-hop fragments, Pallas envelope archive count mismatches,
+  bad verifier-record sets, and spendable-note output/nullifier splices. Append
+  preflight rejects previous-proof attachment drift, missing or forbidden
+  previous lineage records, malformed lineage record metadata, chain/asset/root
+  discontinuity, amount drift, missing previous-note nullifier consumption, and
+  top-up-anchor output reuse before Halo2 proving starts.
+  Rust-facing recursive spend init wrappers and ABI-6 native spend init now
+  default to the reserved `kagemusha-recursive-spend-lineage-v1` first-hop
+  prover in core, the native bridge, JavaScript host, and Python PyO3 host. The
+  core wrapper derives the Pallas open-envelope width from the raw Norito
+  archive, selects the matching no-trusted-setup one-hop lineage verifier key,
+  and emits bundles whose public scalar-projection digest is bound to the
+  embedded IPA verifier slice. ABI-6 native append now reads the append
+  request's defaulted `output_proof_circuit_id`: missing or semantic selectors
+  preserve the legacy semantic `kagemusha-recursive-aggregation-v1` output, while
+  explicit Reserved-lineage selectors derive the lineage verifier key from the
+  hop's Pallas open-envelope archive and enter the guarded Reserved-lineage
+  output path. This keeps SDK-facing D2D payloads hop-count-independent across
+  offline re-spends, and witnessless multi-hop Reserved-lineage output is
+  available for supported transitions inside the configured 64-hop cap.
+  The same init/append preflight now runs inside record-backed lineage-witness
+  assembly before the helpers merge hop envelopes or carry previous recursive
+  proofs, so the redeem-side witness cannot be assembled from a request that
+  recursive proving would reject.
+  Bridge, JavaScript host, and Python PyO3 recursive-spend verification now
+  report offline spendability separately from chain admission: a locally
+  verifying semantic v1 recursive proof without a record-backed lineage witness
+  returns `valid = true` for receiver-side offline acceptance, while
   `chain_admissible = false` carries the private-hop-lineage diagnostic that
   redeem would emit.
   The recursive-spend redeem bridge, JavaScript host, and Python PyO3 host now
   apply the same gate after public-binding validation: semantic v1 requests with
   a verified record-backed lineage witness and a verifying final recursive proof
-  serialize instructions, while witnessless semantic v1, tampered final
-  recursive-proof, and unwired reserved-lineage bundles return no instruction
-  bytes.
+  serialize instructions. Metadata-valid Reserved-lineage requests serialize
+  witnessless redeem instructions inside
+  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` when the
+  transition circuit flag is wired, the active lineage verifier record matches,
+  and chain/asset, root, final commitment, proof, and nullifier checks pass.
+  Witnessless semantic v1 requests, Reserved-lineage requests missing or
+  mismatching that record, tampered final recursive-proof requests, malformed
+  Reserved-lineage requests, and over-cap Reserved-lineage requests return no
+  instruction bytes.
+  Ledger recursive redeem execution now checks the final unshield/redeem proof
+  public binding before reserved-lineage chain-admission and backend proof
+  verification, preserving the final-note mismatch diagnostic even when a
+  reserved-lineage verifier-record fixture is malformed.
   Rust data-model helpers and all SDK wrappers now assemble the separate
   record-backed redeem witness alongside recursive spend `init` and `append`:
   they validate the recursive bundle public-input binding, one-hop fragments,
-  exact verifier-record sets, Pallas envelope archive decoding/counts, carry
-  ordered semantic previous recursive proofs forward, merge the archive, and
-  reject verifier record conflicts before the witness is attached to redeem.
-  Direct redeem-request validation applies the same archive decode/count guard
-  and previous-proof semantic/hop-order guard so malformed, count-mismatched,
-  reserved-lineage, scalar-spliced, or out-of-order lineage witnesses fail at
-  the data-model boundary. Core record-backed replay also preflights previous
-  proof backend/profile/hash/scalar/hop-order invariants before reconstructing
-  Pallas hop evidence. Recursive spend availability
+  exact verifier-record sets, Pallas envelope archive decoding/counts, root
+  continuity, duplicate or overlapping lineage nullifiers/commitments,
+  accumulator initial/final root binding, current-note/output collisions, and
+  proof-attachment/backend/inline-key shape, plus inactive, missing-key,
+  over-proof-cap, commitment-mismatched, key-length-mismatched,
+  namespace-mismatched, backend/curve-mismatched, empty-circuit, and
+  zero-schema verifier-record snapshots. They carry ordered semantic previous
+  recursive proofs forward, merge the archive, and reject verifier record
+  conflicts, chain/asset-spliced append fragments, stale previous bundles, and
+  stale appended bundle results before the witness is attached to redeem.
+  Reserved-lineage previous proofs are accepted at this helper boundary only
+  when the append or redeem request carries the active lineage verifier record;
+  append attempts that select the Reserved-lineage output circuit through
+  `output_proof_circuit_id` also require the previous-proof opening archive that
+  the production witnessless lineage circuit will consume. Unsupported output
+  selectors fail at request preflight. Native append preflight now treats that
+  archive as bounded Pallas IPA witness material and rejects oversized archives
+  before decode, missing or zero metadata, non-Pallas curves, opening-shape
+  mismatches, over-count archives, and IPA proof tampering before append proving
+  starts.
+  The same 8 MiB archive cap is enforced at the data-model request boundary and
+  exposed by every SDK recursive-spend helper. Witnessless Reserved-lineage
+  redeem serialization is enabled inside the 64-hop cap, and all SDKs now expose
+  `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1 = 64` so wallets can
+  branch without duplicating the chain-admission rule.
+  SDKs also expose matching circuit-id/hop-count helpers
+  (`canRedeem...Witnessless` / `requires...LineageWitnessForRedeem`) so wallet
+  code does not duplicate the current Reserved-lineage branch. Native verify
+  results now carry defaulted `witnessless_redeem_supported` and
+  `lineage_witness_required_for_redeem` booleans for SDKs that only consume raw
+  Norito verify-result archives.
+  Witnessless Reserved-lineage redeem serialization is available inside the
+  configured 64-hop cap.
+  Direct redeem-request
+  validation applies the same archive decode/count, transcript-shape, note-binding,
+  record-snapshot, attachment-shape, and previous-proof
+  semantic/hop-order guards so malformed, count-mismatched, root-spliced,
+  duplicate-output, inactive-record, missing-key, backend-spliced,
+  namespace/curve-spliced, empty-circuit, zero-schema, forged-lineage-record,
+  scalar-spliced, or out-of-order lineage witnesses fail at the data-model
+  boundary. Core record-backed replay also preflights previous proof
+  backend/profile/hash/scalar/hop-order
+  invariants before reconstructing Pallas
+  hop evidence. Chain execution now also has adversarial coverage proving that
+  missing registered lineage verifier records, stale WSV record snapshots,
+  missing witness records, duplicate witness records, and unreferenced witness
+  records all reject through `invalid_recursive_lineage` before final-note or
+  top-up-anchor nullifiers are consumed and before public balances are minted.
+  Recursive spend availability
   probes now require the complete ABI-6 native surface - init, append, both
-  lineage-witness helpers, verify, and redeem - so old native libraries cannot claim
-  `recursive_spend_v1` support without the witness path needed for safe
-  redemption. Python direct helper calls and the optional C# P/Invoke wrapper
-  now apply the same complete-surface guard before producing recursive spend
-  output, and Python/Kotlin/JVM/Java Android availability probes now fail closed
-  on malformed native loading or ABI-version probes before symbol probing.
-  Kotlin/JVM, Java Android, and C# also reject a native probe that accepts empty
-  archives instead of producing the expected Kagemusha empty-archive rejection.
+  transition-profile helpers, append-boundary derivation, both lineage-witness
+  helpers, verify, and redeem - so old native libraries cannot claim
+  `recursive_spend_v1` support without the witness path and append-boundary
+  surface needed for safe redemption. Python direct helper calls and the
+  optional C# P/Invoke wrapper now apply the same complete-surface guard before
+  producing recursive spend output, and Python/Kotlin/JVM/Java Android
+  availability probes now fail closed on malformed native loading or ABI-version
+  probes before symbol probing.
+  JavaScript/Node, Python, Swift, Kotlin/JVM, Java Android, and C# also reject
+  a native probe that accepts empty or malformed archives instead of producing
+  the expected Kagemusha rejection without output bytes, and their focused tests
+  now assert native recursive-spend redeem/output rejection is propagated rather
+  than converted into fallback bytes.
   Swift exposes the witness helpers as
   `lineageWitnessFromInitResult` and `lineageWitnessAppendResult`; Kotlin/JVM,
   Java Android, JavaScript/Node, Python, and C# expose matching raw-archive
@@ -5996,7 +6259,12 @@ or ABI behavior.
   transparent transfer fields before an instruction is emitted. Core
   chain-admission tests now cover rotated and revoked identity commitments,
   unsupported action classes, transaction digest/account substitution, and
-  mutated ZK-ACE/STARK public inputs.
+  mutated ZK-ACE/STARK public inputs. The shared data-model
+  `OpenVerifyEnvelope` now exposes reusable admission validation with
+  JS-aligned default bounds for proof bytes, public-input metadata, and
+  auxiliary metadata, rejecting unsupported backends, blank circuits, zero
+  verifier-key hashes, empty payloads, oversized payloads, and admission
+  auxiliary bytes before backend-specific proof logic runs.
 - Fold focused ZK/FHE adversarial tests into the long workspace validation
   corridor.
 

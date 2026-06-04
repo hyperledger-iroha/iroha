@@ -301,3 +301,16 @@ public struct ConnectWalletSignature: Codable, Equatable, Sendable {
         self.signature = signature
     }
 }
+
+enum ConnectWalletSignatureAlgorithm {
+    static func normalize(_ algorithm: String) -> String? {
+        let normalized = algorithm.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return nil }
+        guard normalized.unicodeScalars.allSatisfy({ scalar in
+            scalar.value >= 0x20 && scalar.value <= 0x7E
+        }) else {
+            return nil
+        }
+        return normalized.lowercased() == "ed25519" ? "ed25519" : nil
+    }
+}

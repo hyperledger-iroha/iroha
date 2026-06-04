@@ -10614,10 +10614,10 @@ mod tests {
             BfvCiphertext, BfvEvaluationKeyBundle, BfvIdentifierCiphertext,
             BfvIdentifierPublicParameters, apply_galois_automorphism_ciphertext,
             bootstrap_key_from_seed, bootstrap_key_with_max_refresh_rounds_from_seed,
-            decode_packed_plaintext_slots, decrypt, decrypt_identifier, encode_packed_plaintext_slots,
-            encrypt_from_seed, encrypt_identifier_from_seed, galois_key_from_seed,
-            keygen_from_seed, packed_galois_slot_permutation, registered_bfv_rns_modulus_chain,
-            rotation_key_from_seed,
+            decode_packed_plaintext_slots, decrypt, decrypt_identifier,
+            encode_packed_plaintext_slots, encrypt_from_seed, encrypt_identifier_from_seed,
+            galois_key_from_seed, keygen_from_seed, packed_galois_slot_permutation,
+            registered_bfv_rns_modulus_chain, rotation_key_from_seed,
         },
     };
     use iroha_data_model::{

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.nonEmptyString
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.parseRecord
+import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.productionBackend
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescription
 
 private const val ACTION = "RegisterVerifyingKey"
@@ -19,10 +20,10 @@ class RegisterVerifyingKeyInstruction private constructor(
         name: String,
         record: VerifyingKeyRecordDescription,
     ) : this(
-        backend = validatedNotBlank(backend, "backend"),
+        backend = productionBackend(backend),
         name = validatedNotBlank(name, "name"),
         record = record,
-        arguments = buildArguments(backend.trim(), name.trim(), record),
+        arguments = buildArguments(productionBackend(backend), name.trim(), record),
     )
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
@@ -48,7 +49,7 @@ class RegisterVerifyingKeyInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterVerifyingKeyInstruction {
-            val backend = arguments.nonEmptyString("backend")
+            val backend = arguments.productionBackend("backend")
             val name = arguments.nonEmptyString("name")
             val record = arguments.parseRecord(backend)
             return RegisterVerifyingKeyInstruction(backend, name, record)
@@ -80,8 +81,7 @@ class RegisterVerifyingKeyInstruction private constructor(
         private var record: VerifyingKeyRecordDescription? = null
 
         fun setBackend(backend: String) = apply {
-            require(backend.trim().isNotEmpty()) { "backend must not be blank" }
-            this.backend = backend.trim()
+            this.backend = productionBackend(backend)
         }
 
         fun setName(name: String) = apply {

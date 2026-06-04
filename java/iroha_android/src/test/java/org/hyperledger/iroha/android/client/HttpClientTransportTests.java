@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -182,6 +183,8 @@ public final class HttpClientTransportTests {
     vpnProfileRequestParsesNativeLeaseFields();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
+    verifierKeyRegisterAndUpdatePostSignedPayloads();
+    verifierKeyRequestsRejectMalformedInputsBeforeRequest();
     deployContractRequestParsesResponse();
     callContractRequestParsesResponse();
     proposeMultisigRequestParsesResponse();
@@ -197,6 +200,7 @@ public final class HttpClientTransportTests {
     identifierNormalizationCanonicalizesInputs();
     identifierBfvEnvelopeBuilderMatchesSharedSoracloudVectors();
     sharedSoracloudBfvKeyBundleComponentVectorsAreComplete();
+    sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift();
     identifierBfvEnvelopeBuilderProducesDeterministicCiphertext();
     identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters();
     identifierReceiptVerifierAcceptsEd25519Receipt();
@@ -2619,6 +2623,208 @@ public final class HttpClientTransportTests {
         : "VPN receipt list URI mismatch";
   }
 
+  private static void verifierKeyRegisterAndUpdatePostSignedPayloads() throws Exception {
+    final String backend = "halo2/ipa";
+    final byte[] registerBytes = new byte[] {1, 2, 3};
+    final byte[] updateBytes = new byte[] {10};
+    final QueueResponseExecutor executor =
+        new QueueResponseExecutor(
+            List.of(new QueuedResponse(202, ""), new QueuedResponse(202, "")));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final ClientResponse registerResponse =
+        transport
+            .registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder()
+                    .authority(" alice ")
+                    .privateKey(" privkey ")
+                    .backend(backend)
+                    .name(" transfer_vk ")
+                    .publicInputsSchemaHashHex("0x" + "AA".repeat(32))
+                    .gasScheduleId(" halo2-default ")
+                    .activationHeight(10L)
+                    .withdrawHeight(10L)
+                    .commitmentHex(verifierKeyCommitment(backend, registerBytes).toUpperCase(Locale.ROOT))
+                    .verifyingKeyBytes(registerBytes)
+                    .status("active")
+                    .build())
+            .join();
+    final ClientResponse updateResponse =
+        transport
+            .updateVerifyingKey(
+                verifierKeyUpdateRequestBuilder()
+                    .backend(backend)
+                    .name("transfer_vk")
+                    .version(2L)
+                    .commitmentHex(verifierKeyCommitment(backend, updateBytes))
+                    .verifyingKeyBytes(updateBytes)
+                    .verifyingKeyLength(1L)
+                    .status("withdrawn")
+                    .build())
+            .join();
+
+    assert registerResponse.statusCode() == 202 : "VK register status mismatch";
+    assert updateResponse.statusCode() == 202 : "VK update status mismatch";
+    assert executor.requests().size() == 2 : "VK request count mismatch";
+
+    final TransportRequest registerRequest = executor.requests().get(0);
+    assert "POST".equals(registerRequest.method()) : "VK register must use POST";
+    assert registerRequest.uri().toString().equals("https://torii.example/api/v1/zk/vk/register")
+        : "VK register URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> registerPayload =
+        (Map<String, Object>) JsonParser.parse(readBody(registerRequest));
+    assert "alice".equals(registerPayload.get("authority")) : "VK register authority mismatch";
+    assert "privkey".equals(registerPayload.get("private_key")) : "VK register private key mismatch";
+    assert backend.equals(registerPayload.get("backend")) : "VK register backend mismatch";
+    assert "transfer_vk".equals(registerPayload.get("name")) : "VK register name mismatch";
+    assert Long.valueOf(1L).equals(((Number) registerPayload.get("version")).longValue())
+        : "VK register version mismatch";
+    assert "transfer-v1".equals(registerPayload.get("circuit_id")) : "VK register circuit mismatch";
+    assert "aa".repeat(32).equals(registerPayload.get("public_inputs_schema_hash_hex"))
+        : "VK register schema hash mismatch";
+    assert "halo2-default".equals(registerPayload.get("gas_schedule_id"))
+        : "VK register gas schedule mismatch";
+    assert Long.valueOf(10L).equals(((Number) registerPayload.get("activation_height")).longValue())
+        : "VK register activation height mismatch";
+    assert Long.valueOf(10L).equals(((Number) registerPayload.get("withdraw_height")).longValue())
+        : "VK register withdraw height mismatch";
+    assert verifierKeyCommitment(backend, registerBytes).equals(registerPayload.get("commitment_hex"))
+        : "VK register commitment mismatch";
+    assert Base64.getEncoder().encodeToString(registerBytes).equals(registerPayload.get("vk_bytes"))
+        : "VK register inline bytes mismatch";
+    assert Long.valueOf(3L).equals(((Number) registerPayload.get("vk_len")).longValue())
+        : "VK register vk_len mismatch";
+    assert "Active".equals(registerPayload.get("status")) : "VK register status mismatch";
+
+    final TransportRequest updateRequest = executor.requests().get(1);
+    assert "POST".equals(updateRequest.method()) : "VK update must use POST";
+    assert updateRequest.uri().toString().equals("https://torii.example/api/v1/zk/vk/update")
+        : "VK update URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> updatePayload =
+        (Map<String, Object>) JsonParser.parse(readBody(updateRequest));
+    assert "alice".equals(updatePayload.get("authority")) : "VK update authority mismatch";
+    assert "privkey".equals(updatePayload.get("private_key")) : "VK update private key mismatch";
+    assert backend.equals(updatePayload.get("backend")) : "VK update backend mismatch";
+    assert "transfer_vk".equals(updatePayload.get("name")) : "VK update name mismatch";
+    assert Long.valueOf(2L).equals(((Number) updatePayload.get("version")).longValue())
+        : "VK update version mismatch";
+    assert "transfer-v1".equals(updatePayload.get("circuit_id")) : "VK update circuit mismatch";
+    assert "aa".repeat(32).equals(updatePayload.get("public_inputs_schema_hash_hex"))
+        : "VK update schema hash mismatch";
+    assert !updatePayload.containsKey("gas_schedule_id")
+        : "VK update gas_schedule_id should be optional";
+    assert verifierKeyCommitment(backend, updateBytes).equals(updatePayload.get("commitment_hex"))
+        : "VK update commitment mismatch";
+    assert Base64.getEncoder().encodeToString(updateBytes).equals(updatePayload.get("vk_bytes"))
+        : "VK update inline bytes mismatch";
+    assert Long.valueOf(1L).equals(((Number) updatePayload.get("vk_len")).longValue())
+        : "VK update vk_len mismatch";
+    assert "Withdrawn".equals(updatePayload.get("status")) : "VK update status mismatch";
+  }
+
+  private static void verifierKeyRequestsRejectMalformedInputsBeforeRequest() throws Exception {
+    final String backend = "halo2/ipa";
+    final byte[] bytes = new byte[] {1, 2, 3};
+    final String commitment = verifierKeyCommitment(backend, bytes);
+    final CapturingExecutor executor = new CapturingExecutor();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    expectVerifierReject(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().backend("mock/dev").build()),
+        executor,
+        "VK register must reject non-production backend");
+    expectVerifierReject(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().authority(" ").build()),
+        executor,
+        "VK register must reject blank authority");
+    expectVerifierReject(
+        () -> transport.updateVerifyingKey(verifierKeyUpdateRequestBuilder().privateKey(" ").build()),
+        executor,
+        "VK update must reject blank private key");
+    expectVerifierReject(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().name("scope:vk").build()),
+        executor,
+        "VK register must reject names with separators");
+    expectVerifierReject(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().version(0L).build()),
+        executor,
+        "VK register must reject version zero");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder().publicInputsSchemaHashHex("abc").build()),
+        executor,
+        "VK register must reject malformed schema hashes");
+    expectVerifierReject(
+        () -> transport.registerVerifyingKey(verifierKeyRegisterRequestBuilder().gasScheduleId(" ").build()),
+        executor,
+        "VK register must reject blank gas schedules");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder().verifyingKeyBytes(new byte[0]).build()),
+        executor,
+        "VK register must reject empty inline verifier bytes");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder()
+                    .verifyingKeyBytes(bytes)
+                    .verifyingKeyLength(2L)
+                    .build()),
+        executor,
+        "VK register must reject inline verifier length drift");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder()
+                    .backend(backend)
+                    .verifyingKeyBytes(bytes)
+                    .commitmentHex("00".repeat(32))
+                    .build()),
+        executor,
+        "VK register must reject mismatched commitments");
+    expectVerifierReject(
+        () ->
+            transport.updateVerifyingKey(
+                verifierKeyUpdateRequestBuilder().activationHeight(8L).withdrawHeight(7L).build()),
+        executor,
+        "VK update must reject withdrawn-before-active heights");
+    expectVerifierReject(
+        () -> transport.updateVerifyingKey(verifierKeyUpdateRequestBuilder().status("retired").build()),
+        executor,
+        "VK update must reject unknown status values");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder()
+                    .verifyingKeyBytes(null)
+                    .verifyingKeyLength(3L)
+                    .commitmentHex(null)
+                    .build()),
+        executor,
+        "VK register must reject length-only verifier material");
+    expectVerifierReject(
+        () ->
+            transport.registerVerifyingKey(
+                verifierKeyRegisterRequestBuilder()
+                    .backend(backend)
+                    .verifyingKeyBytes(bytes)
+                    .commitmentHex(commitment)
+                    .maxProofBytes(4_294_967_296L)
+                    .build()),
+        executor,
+        "VK register must reject u32 overflow proof limits");
+  }
+
   private static void deployContractRequestParsesResponse() {
     final StubResponseExecutor executor =
         new StubResponseExecutor(
@@ -3228,6 +3434,76 @@ public final class HttpClientTransportTests {
     assertBfvOperationKeyComponentVectors(object(loadSharedBfvFixture(), "operation_vectors"));
   }
 
+  private static void sharedSoracloudBfvKeyBundleComponentVectorsRejectAdversarialDrift()
+      throws Exception {
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> evaluationKey =
+              object(operationVectors, "evaluation_key_bundle");
+          objectList(evaluationKey, "relinearization_entries").get(0).remove("b_sha256");
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "missing relinearization component digest must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> evaluationKey =
+              object(operationVectors, "evaluation_key_bundle");
+          final List<Map<String, Object>> entries =
+              objectList(evaluationKey, "relinearization_entries");
+          entries.get(1).put("a_sha256", string(entries.get(0), "b_sha256"));
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "duplicate BFV component digest must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> evaluationKey =
+              object(operationVectors, "evaluation_key_bundle");
+          final List<Map<String, Object>> entries =
+              objectList(evaluationKey, "relinearization_entries");
+          entries.get(0).put("b_sha256", string(entries.get(0), "b_sha256").toLowerCase(Locale.ROOT));
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "noncanonical lowercase component digest must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> components =
+              object(objectList(operationVectors, "rotation_keys").get(0), "zero_refresh_components");
+          components.put("c1_sha256", "0".repeat(64));
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "zero rotation refresh component digest must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> bootstrap = object(operationVectors, "bootstrap_key");
+          object(bootstrap, "zero_refresh_components").put("coefficient_count", 63);
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "bootstrap refresh coefficient-count drift must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          object(operationVectors, "evaluation_key_bundle").put("rotation_key_count", 99);
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "rotation key count drift must be rejected");
+  }
+
   private static void identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters() {
     final byte[] seed = hexToBytes("00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF");
     final IdentifierBfvPublicParameters base = sampleIdentifierBfvPublicParameters();
@@ -3499,6 +3775,47 @@ public final class HttpClientTransportTests {
 
   private static String sha256Hex(final byte[] bytes) throws Exception {
     return hex(MessageDigest.getInstance("SHA-256").digest(bytes));
+  }
+
+  private static String verifierKeyCommitment(final String backend, final byte[] bytes)
+      throws Exception {
+    final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    final byte[] backendBytes = backend.getBytes(StandardCharsets.UTF_8);
+    digest.update("iroha:zk:v1:vk".getBytes(StandardCharsets.UTF_8));
+    updateU64Be(digest, backendBytes.length);
+    digest.update(backendBytes);
+    updateU64Be(digest, bytes.length);
+    digest.update(bytes);
+    return hex(digest.digest()).toLowerCase(Locale.ROOT);
+  }
+
+  private static void updateU64Be(final MessageDigest digest, final long value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+      digest.update((byte) (value >>> shift));
+    }
+  }
+
+  private static VerifyingKeyRegisterRequest.Builder verifierKeyRegisterRequestBuilder() {
+    return VerifyingKeyRegisterRequest.builder()
+        .authority("alice")
+        .privateKey("privkey")
+        .backend("halo2/ipa")
+        .name("transfer_vk")
+        .version(1L)
+        .circuitId("transfer-v1")
+        .publicInputsSchemaHashHex("aa".repeat(32))
+        .gasScheduleId("halo2-default");
+  }
+
+  private static VerifyingKeyUpdateRequest.Builder verifierKeyUpdateRequestBuilder() {
+    return VerifyingKeyUpdateRequest.builder()
+        .authority("alice")
+        .privateKey("privkey")
+        .backend("halo2/ipa")
+        .name("transfer_vk")
+        .version(1L)
+        .circuitId("transfer-v1")
+        .publicInputsSchemaHashHex("aa".repeat(32));
   }
 
   private static void assertBfvOperationKeyComponentVectors(
@@ -3792,6 +4109,30 @@ public final class HttpClientTransportTests {
     try {
       action.run();
     } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : message;
+  }
+
+  private static void expectVerifierReject(
+      final Runnable action, final CapturingExecutor executor, final String message) {
+    final TransportRequest before = executor.lastRequest;
+    expectIllegalArgument(action, message);
+    assert executor.lastRequest == before : message + " before sending an HTTP request";
+  }
+
+  @FunctionalInterface
+  private interface CheckedRunnable {
+    void run() throws Exception;
+  }
+
+  private static void expectAssertionOrIllegalArgument(
+      final CheckedRunnable action, final String message)
+      throws Exception {
+    boolean failed = false;
+    try {
+      action.run();
+    } catch (final AssertionError | IllegalArgumentException expected) {
       failed = true;
     }
     assert failed : message;

@@ -1,0 +1,45 @@
+<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.004.001.10">
+  <pacs:PmtRtr>
+    <pacs:GrpHdr>
+      <pacs:MsgId>ISO-SAMPLE-004-V10</pacs:MsgId>
+      <pacs:CreDtTm>2025-11-06T12:42:25Z</pacs:CreDtTm>
+      <pacs:BtchBookg>false</pacs:BtchBookg>
+      <pacs:NbOfTxs>1</pacs:NbOfTxs>
+      <pacs:SttlmInf><pacs:SttlmMtd>CLRG</pacs:SttlmMtd></pacs:SttlmInf>
+      <pacs:InstdAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>OMEGBANK</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:InstdAgt>
+    </pacs:GrpHdr>
+    <pacs:OrgnlGrpInf>
+      <pacs:OrgnlMsgId>ISO-SAMPLE-001</pacs:OrgnlMsgId>
+      <pacs:OrgnlMsgNmId>pacs.008.001.08</pacs:OrgnlMsgNmId>
+      <pacs:OrgnlCreDtTm>2025-11-06T12:42:07Z</pacs:OrgnlCreDtTm>
+    </pacs:OrgnlGrpInf>
+    <pacs:TxInf>
+      <pacs:RtrId>RETURN-5310-V10</pacs:RtrId>
+      <pacs:OrgnlInstrId>ORIGINAL-INSTR-008</pacs:OrgnlInstrId>
+      <pacs:OrgnlEndToEndId>ORIGINAL-E2E-008</pacs:OrgnlEndToEndId>
+      <pacs:OrgnlTxId>ORIGINAL-TX-008</pacs:OrgnlTxId>
+      <pacs:OrgnlIntrBkSttlmDt>2025-11-06</pacs:OrgnlIntrBkSttlmDt>
+      <pacs:RtrdIntrBkSttlmAmt Ccy="USD">10.00</pacs:RtrdIntrBkSttlmAmt>
+      <pacs:IntrBkSttlmDt>2025-11-06</pacs:IntrBkSttlmDt>
+      <pacs:ChrgBr>SHAR</pacs:ChrgBr>
+      <pacs:InstgAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>ALPHBANK</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:InstgAgt>
+      <pacs:InstdAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>OMEGBANK</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:InstdAgt>
+      <pacs:RtrRsnInf><pacs:Rsn><pacs:Prtry>PR01</pacs:Prtry></pacs:Rsn></pacs:RtrRsnInf>
+      <pacs:OrgnlTxRef>
+        <pacs:IntrBkSttlmAmt Ccy="USD">10.00</pacs:IntrBkSttlmAmt>
+        <pacs:PmtTpInf>
+          <pacs:ClrChanl>RTNS</pacs:ClrChanl>
+          <pacs:SvcLvl><pacs:Prtry>0100</pacs:Prtry></pacs:SvcLvl>
+          <pacs:LclInstrm><pacs:Prtry>CTAA</pacs:Prtry></pacs:LclInstrm>
+          <pacs:CtgyPurp><pacs:Prtry>001</pacs:Prtry></pacs:CtgyPurp>
+        </pacs:PmtTpInf>
+        <pacs:Dbtr><pacs:Pty><pacs:Nm>Debtor One</pacs:Nm></pacs:Pty></pacs:Dbtr>
+        <pacs:DbtrAcct><pacs:Id><pacs:IBAN>GB82WEST12345698765432</pacs:IBAN></pacs:Id></pacs:DbtrAcct>
+        <pacs:DbtrAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>ALPHBANK</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:DbtrAgt>
+        <pacs:CdtrAgt><pacs:FinInstnId><pacs:ClrSysMmbId><pacs:MmbId>OMEGBANK</pacs:MmbId></pacs:ClrSysMmbId></pacs:FinInstnId></pacs:CdtrAgt>
+        <pacs:Cdtr><pacs:Pty><pacs:Nm>Creditor One</pacs:Nm></pacs:Pty></pacs:Cdtr>
+        <pacs:CdtrAcct><pacs:Id><pacs:IBAN>GB33BUKB20201555555555</pacs:IBAN></pacs:Id></pacs:CdtrAcct>
+      </pacs:OrgnlTxRef>
+    </pacs:TxInf>
+  </pacs:PmtRtr>
+</pacs:Document>

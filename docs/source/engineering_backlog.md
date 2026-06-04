@@ -77,9 +77,11 @@ track detailed unfinished engineering work.
   the registered chain, while JavaScript, Swift, Kotlin/JVM, and Java Android
   validate the descriptor and residue-hash shape. JavaScript, Swift,
   Kotlin/JVM, and Java Android now validate those component-vector fields from
-  the shared fixture, and the JavaScript lane also carries adversarial fixture
-  mutations for missing, duplicate, zeroed, count-drifted, and malformed RNS
-  metadata. A shared
+  the shared fixture and carry adversarial fixture mutations for missing,
+  noncanonical-case, duplicate, zeroed, coefficient-count-drifted, and
+  key-count-drifted component metadata; the JavaScript lane also carries
+  adversarial RNS mutations for missing, duplicate, zeroed, count-drifted, and
+  malformed metadata. A shared
   signed/proof-attestation identifier receipt fixture now pins canonical payload
   bytes, Iroha prehash, resolver signature, signed/proof attestation bytes, and
   adversarial receipt/policy mutations across the Rust data model, JavaScript,
@@ -824,9 +826,9 @@ track detailed unfinished engineering work.
   durable ISO record model, rejects duplicate payload, business-message-id, and
   UETR replays, applies `pacs.002`/`pacs.004`/`camt.056` and
   `sese.024`/`sese.025` updates only when the referenced durable record is
-  known, and keeps `sese.023` as a recorded settlement instruction until all
-  account, instrument, venue, CSD, and
-  cash-leg crosswalks are configured for ledger instruction mapping.
+  known, and records `sese.023` as a settlement instruction. The 2026-06-04
+  ledger-crosswalk gate below now requires account, instrument, venue, CSD, and
+  cash-leg mappings before live securities instructions are durably accepted.
 - Completed 2026-06-01: added durable-record outbox helpers for `pacs.004`,
   `camt.029`, `sese.024`, and `sese.025`. Payment returns require recorded
   settlement amount/currency from the original payment message; securities
@@ -1012,6 +1014,27 @@ track detailed unfinished engineering work.
   rejects BAH `MsgDefIdr` values outside the selected profile's version set, and
   covers known-original `pacs.004` return plus `camt.056` cancellation paths down
   to durable original-message and lifecycle-message status fields.
+- Completed 2026-06-04: added a checked-in `sese.024` securities status-advice
+  XML fixture and pinned it at both the IVM parser layer and the Torii
+  lifecycle layer. The Torii regressions now cover known-original pending
+  updates, unknown-original recording without synthetic record creation,
+  wrong-family originals, and conflicting settlement references.
+- Completed 2026-06-04: added checked-in `pacs.004` payment-return and
+  `camt.056` cancellation-request XML fixtures. IVM parser tests pin the
+  canonical return/cancellation fields, and Torii tests prove those fixtures
+  drive known-original rejected/pending transitions without synthetic original
+  creation.
+- Completed 2026-06-04: added a checked-in `pacs.002` payment-status XML
+  fixture. IVM parser tests pin the canonical status/original/additional-info
+  fields, and Torii tests prove the fixture settles a known original payment.
+- Completed 2026-06-04: added adversarial `pacs.002` lifecycle coverage proving
+  `TxInfAndSts/StsId` cannot shadow `GrpHdr/MsgId` for durable lifecycle ids or
+  audit business-message ids.
+- Completed 2026-06-04: added Apache-2.0 mirrored Standards Editor XSD
+  fixtures for `pacs.002.001.10`, `pacs.004.001.10`, and `camt.056.001.08`.
+  The MDR/XSD live-profile matrix now validates BAH status, return, and
+  cancellation reports with rail-specific version and business-service controls
+  wherever the default profiles allow those exact versions.
 - Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
   generated certificate-chain material, including complete canonical XML
   coverage for broader signed ISO envelopes, official
@@ -1022,6 +1045,58 @@ track detailed unfinished engineering work.
   `require-verified` profiles only accept the C14N 1.0 + single enveloped
   transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,
   extra transforms, and duplicate `Sgntr` blocks now fail closed.
+- Completed 2026-06-02: bound XAdES `QualifyingProperties` objects to their
+  enclosing XMLDSig signature id. When a `QualifyingProperties` element is
+  present, the supported subset now requires exactly one such element inside a
+  single `Object`, requires a non-empty `Target="#..."`, and requires that
+  target to match the `Signature`/`Sgntr` `Id`; copied, duplicate,
+  mis-targeted, targetless, idless, or out-of-object XAdES properties fail
+  closed before signature admission.
+- Completed 2026-06-02: required XAdES `SignedProperties` to be
+  cryptographically referenced from `SignedInfo`. XAdES-bearing signatures now
+  need exactly one payload reference plus exactly one `Reference` whose URI
+  targets the `SignedProperties` `Id`, whose `Type` is the XAdES
+  SignedProperties reference type, and whose SHA-256 digest matches the
+  `SignedProperties` XML in the target-bound `QualifyingProperties` object.
+  Missing, wrong-URI, wrong-Type, digest-tampered, content-tampered, or
+  missing-element XAdES property references fail closed.
+- Completed 2026-06-02: bound XAdES `SigningCertificateV2` to X.509 signer
+  material. X.509 `KeyInfo` signatures with XAdES signed properties now require
+  a single `SigningCertificateV2` / `Cert` / `CertDigest` entry using the
+  supported SHA-256 digest method, and that digest must match the exact signer
+  leaf DER certificate admitted from `KeyInfo`. Missing, duplicate,
+  wrong-algorithm, wrong-digest, or raw-public-key-with-certificate-property
+  cases fail closed.
+- Completed 2026-06-02: made known `SigningCertificateV2` issuer/serial
+  metadata fail closed until the verifier binds it semantically. Digest-valid
+  `IssuerSerial`, `IssuerSerialV2`, prefixed `xades:IssuerSerialV2`, and
+  `X509IssuerSerial` material inside the XAdES certificate entry now fails
+  before X.509 signer admission.
+- Completed 2026-06-02: required the supported XAdES `SignedProperties`
+  structure to carry exactly one `SignedSignatureProperties` block with one
+  non-empty `SigningTime`. X.509 `SigningCertificateV2` signer evidence is now
+  accepted only from inside that `SignedSignatureProperties` block; missing or
+  duplicate signature-properties blocks, missing or duplicate signing times, and
+  `SigningCertificateV2` material outside `SignedSignatureProperties` fail
+  closed.
+- Completed 2026-06-02: tightened XAdES `SigningTime` admission to the
+  supported canonical UTC `YYYY-MM-DDTHH:MM:SSZ` subset with real calendar and
+  clock bounds. Whitespace-spliced values, offsets, fractional seconds,
+  non-ASCII digits, malformed widths, year zero, invalid leap days, invalid
+  month lengths, and out-of-range hours/minutes/seconds now fail closed even
+  when the `SignedProperties` digest and signature are otherwise internally
+  consistent.
+- Completed 2026-06-02: made the supported XAdES property subset fail closed
+  for property classes the verifier does not semantically process. The bridge
+  now rejects `SignedDataObjectProperties` and data-object transform metadata,
+  signed signature policy/place/role properties, and unsigned timestamp,
+  counter-signature, revocation, and archive property families even when the
+  `SignedProperties` digest and XMLDSig signature are internally consistent.
+- Completed 2026-06-02: added namespace-prefixed XMLDSig/XAdES fixture coverage.
+  The `require-verified` verifier now has a positive `ds:`/`xades:` signed
+  P-256 fixture whose prefixed `SignedInfo` is signed directly, plus a prefixed
+  unsupported-property negative case to prove local-name matching does not let
+  namespaced XAdES policy/place/role properties bypass the fail-closed subset.
 - Completed 2026-06-01: added profile-level
   `signature_public_key_sha256_pins` for `require-verified` XMLDSig/XAdES
   profiles. The verifier now fails closed without configured pins, accepts raw
@@ -1066,6 +1141,11 @@ track detailed unfinished engineering work.
   delegated responders, checks producedAt/thisUpdate/nextUpdate freshness, and
   rejects missing, revoked, unknown, duplicate, stale, malformed, or unauthored
   responses before using the X.509 leaf key.
+- Completed 2026-06-01: required delegated OCSP responder certificates in
+  X.509 XMLDSig revocation paths to mark KeyUsage critical when authorizing
+  `digitalSignature`. Otherwise-valid delegated responses whose embedded
+  responder certificate carries non-critical digitalSignature KeyUsage now fail
+  closed before OCSP coverage can satisfy the rail profile.
 - Completed 2026-06-01: added X.509 path-length constraint enforcement for
   trust-anchor-authorized XMLDSig key-info chains. The verifier now evaluates
   BasicConstraints `pathLenConstraint` values across intermediate CAs and
@@ -1091,6 +1171,10 @@ track detailed unfinished engineering work.
   the document-signing OID before either direct public-key pins or trust-anchor
   chains can authorize the XMLDSig key; incompatible server-auth-only signer
   leaves fail closed on both paths.
+- Completed 2026-06-01: required X.509 XMLDSig signer certificates to mark
+  KeyUsage critical when authorizing `digitalSignature`. Direct leaf public-key
+  pins and trust-anchor chains now both reject signer leaves whose KeyUsage
+  extension carries `digitalSignature` as a non-critical advisory extension.
 - Completed 2026-06-01: added X.509 Authority Key Identifier / Subject Key
   Identifier binding for trust-anchor XMLDSig chains. When a subordinate
   certificate presents an AKI key identifier and the issuer presents an SKI, the
@@ -1115,6 +1199,34 @@ track detailed unfinished engineering work.
   validation now also has regression coverage proving recorded metadata carries
   the exact reference-data snapshot checksum and that checksum changes when the
   loaded reference snapshot provenance changes.
+- Completed 2026-06-02: tightened live-profile UETR admission and replay
+  coverage. Present UETR values now need the canonical UUID hyphen layout and
+  ASCII hex digits before profile metadata is produced; Swift CBPR+ coverage
+  rejects missing and malformed UETRs, exercises padded/malformed direct
+  validator inputs, and proves validated live-profile submissions still reject
+  duplicate Business Application Header `BizMsgIdr` values and case-drifted
+  duplicate UETRs across different durable message identifiers.
+- Completed 2026-06-02: tightened inbound lifecycle reference handling for
+  payment returns, cancellation requests, and securities settlement
+  confirmations. `pacs.004`, `camt.056`, and `sese.025` payloads that carry
+  conflicting original-message references now fail lifecycle id derivation and
+  inbound application before any candidate original record is mutated.
+- Completed 2026-06-02: tightened securities lifecycle durable identifiers and
+  fixture coverage. BAH-wrapped `sese.023`, `sese.024`, and `sese.025`
+  messages are now durably keyed by their transaction `TxId` with a message
+  type prefix, while `BizMsgIdr` remains profile/idempotency metadata; this lets
+  confirmations find the referenced `sese.023:<TxId>` record. Torii tests now
+  wrap the checked-in `sese.023`/`sese.025` XML fixtures in AppHdrs, validate
+  them through a securities CSD live profile with required reference datasets,
+  apply lifecycle state, and reject unsupported version and document-root drift.
+- Completed 2026-06-04: moved the default collateral substitution confirmation
+  surface to the ISO `colr.012` family. Torii now exposes
+  `/v1/iso20022/colr012`, the default generic and securities profiles advertise
+  `colr.012.001.05`, the checked-in `colr.012` fixture validates through the
+  generic profile and is durably keyed by `colr.012:<TxId>`, and the XSD
+  manifest tracks the remaining official `colr.012.001.05` schema gap. The
+  older `colr.007` parser/route remains as a legacy local compatibility path,
+  not the production default; operator evidence must not rely on it.
 - Completed 2026-06-01: broadened live-profile mismatch and lifecycle
   transition coverage. Swift CBPR+ validation now has negative tests for
   unsupported message-definition versions and business services, while
@@ -1141,12 +1253,167 @@ track detailed unfinished engineering work.
   and `trusted_certificate_sha256` profile aliases while normalizing them into
   the stricter `signature_public_key_sha256_pins` and
   `x509_trust_anchor_sha256_pins` verifier inputs.
-- Broaden XMLDSig/XAdES fixture coverage beyond pinned P-256 key/certificate
-  material, including full certificate-chain fixtures and official
-  rail/profile-specific trust-anchor packages.
-- Add official MDR/XSD fixture coverage per profile and broaden Torii tests for
-  profile mismatch, cancellation/return transitions, reference snapshot
-  checksum expectations, and replay by business message id/UETR.
+- Completed 2026-06-04: bound durable ISO message JSON records to a
+  deterministic `record_sha256` digest. Persisted records now carry a versioned
+  digest over the record body, and reload rejects missing, malformed, or
+  mismatched digests without rebuilding message status or replay indexes.
+- Completed 2026-06-04: added a deterministic durable ISO audit index at
+  `store_dir/audit/messages.index.json`. The index is sorted by message id,
+  carries `index_sha256`, links each entry to the corresponding message file and
+  `record_sha256`, and is regenerated from only valid records on reload so
+  forged persisted files are excluded from the audit manifest.
+- Completed 2026-06-04: exposed the durable ISO audit manifest through Torii at
+  `GET /v1/iso20022/audit/messages`, backed by the same deterministic index
+  builder used for `store_dir/audit/messages.index.json`, and added endpoint
+  coverage for successful export plus disabled-bridge rejection.
+- Completed 2026-06-04: added config-backed durable ISO store retention and
+  compaction. Operators can set `store_retention_secs` or `store_max_records`;
+  zero defaults retain all records. Compaction is independent from dedupe TTL,
+  removes expired or oldest overflow records from memory and disk, clears replay
+  indexes, and regenerates the audit manifest from survivors.
+- Completed 2026-06-04: added the config-backed ISO external audit export spool.
+  Operators can set `audit_export_dir`; each audit-index regeneration mirrors
+  `messages.index.json` into that external directory and writes digest-addressed
+  `.notary.json` preimages that bind `index_sha256`, source `store_dir`, record
+  count, the embedded manifest, and `anchor_sha256`.
+- Completed 2026-06-04: added `scripts/iso_audit_notary_adapter.py` for
+  operator-side archival/notary publication. The adapter consumes
+  `audit_export_dir`, verifies the anchor digest, embedded index digest,
+  top-level `index_sha256`, digest-addressed filename, local
+  `messages.index.json` equality, and record-count consistency before any
+  network delivery, rejects plaintext HTTP unless explicitly enabled for local
+  tests, rejects endpoint URLs with credentials, params, query strings,
+  fragments, or control characters, and writes bounded per-endpoint receipts.
+- Completed 2026-06-04: added `scripts/iso_rail_gateway_adapter.py` for
+  operator-side live rail file-drop ingress. Each XML payload requires a JSON
+  sidecar with `message_type`, explicit `profile` by default, and
+  `payload_sha256`; the adapter verifies the sidecar before posting to the
+  matching Torii ISO endpoint, rejects plaintext HTTP unless explicitly enabled
+  for local tests, rejects Torii base URLs with credentials, params, query
+  strings, fragments, or control characters, keeps explicit `--message` paths
+  inside the declared inbox, rejects legacy `colr.007` drops unless
+  `--allow-legacy-colr007` is set for local diagnostics, and writes bounded
+  submission receipts.
+- Completed 2026-06-04: added `scripts/iso_operator_receipt_verify.py` as a
+  read-only canary gate for rail/notary adapter receipts. It recomputes receipt
+  digests, requires successful 2xx receipts by default, rejects plaintext HTTP
+  evidence unless explicitly enabled for local tests, rejects leaked
+  authorization/token material and receipt endpoint URLs with credentials,
+  params, query strings, fragments, malformed hosts, or control characters, can
+  cross-check referenced XML or notary anchor source files, rejects legacy
+  `colr.007` rail source files unless `--allow-legacy-colr007` is set for local
+  diagnostics, and emits a digest-bound verifier summary with per-receipt file
+  paths, `receipt_sha256` values, and policy flags.
+- Completed 2026-06-04: added `scripts/iso_operator_canary.py` as the generic
+  provider canary runner. The runner consumes a strict JSON runbook with
+  explicit provider/environment labels, executes the rail file-drop adapter,
+  audit notary adapter, and receipt verifier as subprocesses, rejects unknown
+  runbook keys, rejects control characters in runbook strings, keeps relative
+  paths inside the runbook directory, rejects endpoint URLs with credentials,
+  params, query strings, or fragments, verifies generated receipts by default
+  with source-file cross-checks, redacts bearer-token file arguments in the
+  summary, and writes a single bounded JSON summary suitable for CI or operator
+  evidence archives.
+  `--plan-only` validates runbooks and prints redacted child commands without
+  contacting Torii or notary endpoints.
+- Completed 2026-06-04: added checked-in ISO operator canary runbook templates
+  under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
+  SEPA SCT Inst, and securities CSD profile families. The script tests validate
+  that each template plans successfully without network access.
+- Completed 2026-06-04: added `scripts/iso_trust_bundle_verify.py` as an
+  offline XMLDSig/XAdES trust-bundle preflight for operator rail PKI packages.
+  It verifies canonical lowercase nonzero SHA-256 pins, digest-bound base64 DER
+  envelopes with lightweight semantic shape checks for X.509 certificates,
+  X.509 CRLs, and OCSPResponse wrappers, duplicate material, contradictory
+  trust/revocation pins, explicit CRL/OCSP revocation policy booleans, required
+  CRL/OCSP material, HTTPS provenance without credentials, params, query
+  strings, fragments, malformed bracket syntax, control characters, localhost,
+  or local/private IP literals, timezone-aware non-future retrieval timestamps,
+  unique DER labels per material class, and secret-looking fields before
+  emitting Torii profile trust override JSON.
+- Completed 2026-06-04: added checked-in trust-bundle templates under
+  `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
+  Inst, and securities CSD profile families. The templates use synthetic DER
+  envelopes for CI/schema validation only, require `--allow-synthetic-der`,
+  cannot emit profile override JSON, and must be replaced with current rail PKI
+  material before production.
+- Completed 2026-06-04: added `scripts/iso_operator_evidence_verify.py` as an
+  offline production evidence gate for ISO operator archives. The verifier
+  recomputes canary and trust summary digests, requires successful
+  rail/notary/verify canary stages plus digest-bound receipt-verifier JSON with
+  positive rail/notary receipt evidence and per-receipt digests by default,
+  rejects plan-only or dry-run canaries, insecure HTTP evidence,
+  default-profile fallbacks, legacy `colr.007` local overrides, unredacted
+  bearer-token paths, secret-looking child output, smuggled trust-source URLs,
+  missing/malformed/future trust-source retrieval timestamps, smuggled child
+  command endpoint URLs, local-only child command flags in either `--flag` or
+  `--flag=value` form, unsupported child command flags outside the expected
+  rail/notary/receipt-verifier CLI surfaces, synthetic trust DER, and
+  record-only trust policy before an archive is accepted as production
+  evidence. Canary command redaction also handles
+  `--bearer-token-file=<path>` in addition to the separated argument form.
+- Completed 2026-06-04: added `fixtures/iso20022/xsd/fixture_manifest.json`
+  and `scripts/iso_xsd_fixture_verify.py` as an offline structural preflight for
+  checked-in ISO XSD/XML fixtures. The verifier checks schema target
+  namespaces, `Document` payload roots, XML fixture namespaces and payload
+  roots, canonical lowercase ISO message definition ids, schema path
+  containment under the manifest tree, fixture path containment under the ISO
+  fixture tree, manifest duplicates/path escapes, and digest-bound summaries
+  while making reviewed missing-schema fixture exceptions explicit. All
+  checked-in payment XSDs now have standalone XML fixtures, so the
+  `--require-fixture-for-schema` strict flag passes; the schema-backed strict
+  flag still rejects the current official-package gaps until the remaining
+  securities/collateral/legacy-return XSDs are checked in.
+- Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
+  aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
+  operator evidence summaries, requires strict schema-backed/fixture-backed XSD
+  proof by default, rejects non-production evidence policies, provider or
+  environment drift, missing rail/notary/verify canary stages, missing
+  rail/notary receipt kinds, missing or weak direct receipt-archive
+  verification, legacy `colr.007` local overrides, omitted XSD strict flags,
+  omitted evidence or nested receipt-summary policy flags, archived trust
+  summaries with omitted policy/profile revocation flags, omitted planned-stage
+  `dry_run` flags, omitted evidence status booleans, nested receipt-summary
+  tampering, weak trust profiles, and record-only
+  trust policy, and emits a digest-bound blocker report for valid but
+  not-yet-production summaries.
+- Completed 2026-06-04: hardened live securities lifecycle profile admission
+  against local reference snapshots. `sese.023`/`sese.025` profile validation now
+  rejects syntactically valid but unmapped settlement instrument ISIN/CUSIP
+  values, inactive or unknown place-of-settlement MICs, and unmapped delivering
+  or receiving party BICs before a durable settlement lifecycle record can be
+  accepted.
+- Completed 2026-06-04: gated live `securities-csd` `sese.023` ledger
+  instruction admission on configured CSD venue, securities settlement-account,
+  and cash-leg crosswalk snapshots. The gate now rejects missing snapshots,
+  incomplete rows, party/account mismatches, and unknown cash-leg currencies
+  before durable lifecycle recording, with checked-in sample snapshot schemas
+  under `fixtures/iso_bridge/`.
+- Broaden XMLDSig/XAdES fixture coverage beyond the current local fixture set,
+  including full certificate-chain fixtures and official rail/profile-specific
+  trust-anchor packages that replace the synthetic trust-bundle templates.
+- Run provider-specific production canaries for the selected archival/notary
+  vendors using `scripts/iso_operator_canary.py`, pass the archived summaries
+  and receipt files through `scripts/iso_operator_evidence_verify.py`, retain
+  the accepted evidence summary and receipts, include the accepted evidence in
+  `scripts/iso_production_readiness.py`, and document any vendor-specific
+  authentication, SLA, or response evidence required by the production runbook.
+- Run provider-specific live gateway canaries for selected
+  SWIFT/Fedwire/SEPA/CSD operator integrations using
+  `scripts/iso_operator_canary.py`, pass the archived summaries and receipt
+  files through `scripts/iso_operator_evidence_verify.py`, retain the accepted
+  evidence summary and receipts, include the accepted evidence in
+  `scripts/iso_production_readiness.py`, and document rail-specific file-drop,
+  retry, and acknowledgement handling.
+- Add official MDR/XSD fixture coverage beyond the current live-profile
+  `pacs.008`/`pacs.009` and checked-in lifecycle fixture corridors, make
+  the strict `scripts/iso_xsd_fixture_verify.py` schema-backed release flag
+  (`--require-schema-backed-fixtures`) pass,
+  make the aggregate `scripts/iso_production_readiness.py` gate pass without
+  diagnostic overrides, and keep broadening Torii tests for
+  additional live-rail profile edge cases beyond the current family-mismatch,
+  conflicting-reference, BAH securities-linking, and collateral-substitution
+  guards.
 
 ## Soracles follow-ups
 

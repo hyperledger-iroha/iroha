@@ -6843,7 +6843,7 @@ seiyaku Test {{
         assert!(peers.access_hints_skipped.is_empty());
         assert_taira_supported_access_keys(&peers.read_keys);
         assert_taira_supported_access_keys(&peers.write_keys);
-        assert_eq!(peers.read_keys, [peer_key.clone()]);
+        assert_eq!(peers.read_keys, std::slice::from_ref(&peer_key));
         assert_eq!(peers.write_keys, [peer_key]);
     }
 
@@ -15099,21 +15099,21 @@ impl Compiler {
             &hint_reports,
             &entrypoint_start_offsets,
         )?;
-        if self.opts.mode == CompilerMode::Production {
-            if let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
+        if self.opts.mode == CompilerMode::Production
+            && let Some(entrypoint) = entrypoint_descriptors.iter().find(|entrypoint| {
                 entrypoint.access_hints_complete == Some(false)
                     && !production_allows_incomplete_access_hints(&entrypoint.access_hints_skipped)
-            }) {
-                let reasons = if entrypoint.access_hints_skipped.is_empty() {
-                    "no reason recorded".to_owned()
-                } else {
-                    entrypoint.access_hints_skipped.join("; ")
-                };
-                return Err(format!(
-                    "E_ACCESS_INCOMPLETE: entrypoint `{}` has incomplete compiler-derived access metadata: {reasons}",
-                    entrypoint.name
-                ));
-            }
+            })
+        {
+            let reasons = if entrypoint.access_hints_skipped.is_empty() {
+                "no reason recorded".to_owned()
+            } else {
+                entrypoint.access_hints_skipped.join("; ")
+            };
+            return Err(format!(
+                "E_ACCESS_INCOMPLETE: entrypoint `{}` has incomplete compiler-derived access metadata: {reasons}",
+                entrypoint.name
+            ));
         }
         let state_descriptors = build_state_descriptors(&typed)?;
         let access_set_hints = build_access_set_hints(

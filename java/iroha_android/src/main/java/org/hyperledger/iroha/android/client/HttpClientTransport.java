@@ -37,6 +37,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
+import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
@@ -72,6 +73,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final String REDACTION_FAILURE_SIGNAL = "android.telemetry.redaction.failure";
   private static final int SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1 = 384;
   private static final int SCCP_DOMAIN_SORA = 0;
+  private static final long U32_MAX = 4_294_967_295L;
   private static final BigInteger SCCP_GROTH16_BN254_BASE_FIELD_MODULUS =
       new BigInteger("30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47", 16);
   private static final BigInteger SCCP_GROTH16_BN254_G2_B_C0 =
@@ -607,6 +609,22 @@ public final class HttpClientTransport implements IrohaClient {
       final ToriiCanonicalRequestAuth canonicalAuth) {
     final TransportRequest request = buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth);
     return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list");
+  }
+
+  /** Registers verifier metadata via {@code POST /v1/zk/vk/register}. */
+  public CompletableFuture<ClientResponse> registerVerifyingKey(
+      final VerifyingKeyRegisterRequest requestBody) {
+    final byte[] body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody));
+    final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/register", body);
+    return executeAccepted(request, "verifying key register", 202);
+  }
+
+  /** Updates verifier metadata via {@code POST /v1/zk/vk/update}. */
+  public CompletableFuture<ClientResponse> updateVerifyingKey(
+      final VerifyingKeyUpdateRequest requestBody) {
+    final byte[] body = encodeJsonBody(buildVerifyingKeyUpdatePayload(requestBody));
+    final TransportRequest request = buildJsonPostRequest("/v1/zk/vk/update", body);
+    return executeAccepted(request, "verifying key update", 202);
   }
 
   /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
@@ -2080,6 +2098,84 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
+  static Map<String, Object> buildVerifyingKeyRegisterPayload(
+      final VerifyingKeyRegisterRequest request) {
+    Objects.requireNonNull(request, "request");
+    final String backend =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend(), "backend");
+    final VerifyingKeyPayload vkPayload =
+        normalizeVerifierBytes(request.verifyingKeyBytes(), request.verifyingKeyLength());
+    final String commitmentHex = normalizeOptionalHex32(request.commitmentHex(), "commitmentHex");
+    validateVerifyingKeyMaterial(vkPayload, commitmentHex);
+    validateInlineVerifyingKeyCommitment(
+        backend, vkPayload == null ? null : vkPayload.bytes(), commitmentHex);
+    validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
+
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
+    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("backend", backend);
+    payload.put("name", normalizeVerifyingKeyName(request.name()));
+    payload.put("version", normalizePositiveU32(request.version(), "version"));
+    payload.put("circuit_id", normalizeNonBlank(request.circuitId(), "circuitId"));
+    payload.put(
+        "public_inputs_schema_hash_hex",
+        normalizeHex32(request.publicInputsSchemaHashHex(), "publicInputsSchemaHashHex"));
+    payload.put("gas_schedule_id", normalizeNonBlank(request.gasScheduleId(), "gasScheduleId"));
+    putOptionalVerifierFields(
+        payload,
+        request.curve(),
+        request.maxProofBytes(),
+        request.metadataUriCid(),
+        request.verifyingKeyBytesCid(),
+        request.activationHeight(),
+        request.withdrawHeight(),
+        commitmentHex,
+        vkPayload,
+        request.status());
+    return payload;
+  }
+
+  static Map<String, Object> buildVerifyingKeyUpdatePayload(
+      final VerifyingKeyUpdateRequest request) {
+    Objects.requireNonNull(request, "request");
+    final String backend =
+        VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(request.backend(), "backend");
+    final VerifyingKeyPayload vkPayload =
+        normalizeVerifierBytes(request.verifyingKeyBytes(), request.verifyingKeyLength());
+    final String commitmentHex = normalizeOptionalHex32(request.commitmentHex(), "commitmentHex");
+    validateVerifyingKeyMaterial(vkPayload, commitmentHex);
+    validateInlineVerifyingKeyCommitment(
+        backend, vkPayload == null ? null : vkPayload.bytes(), commitmentHex);
+    validateVerifyingKeyHeightRange(request.activationHeight(), request.withdrawHeight());
+
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(request.authority(), "authority"));
+    payload.put("private_key", normalizeNonBlank(request.privateKey(), "privateKey"));
+    payload.put("backend", backend);
+    payload.put("name", normalizeVerifyingKeyName(request.name()));
+    payload.put("version", normalizePositiveU32(request.version(), "version"));
+    payload.put("circuit_id", normalizeNonBlank(request.circuitId(), "circuitId"));
+    payload.put(
+        "public_inputs_schema_hash_hex",
+        normalizeHex32(request.publicInputsSchemaHashHex(), "publicInputsSchemaHashHex"));
+    if (request.gasScheduleId() != null) {
+      payload.put("gas_schedule_id", normalizeNonBlank(request.gasScheduleId(), "gasScheduleId"));
+    }
+    putOptionalVerifierFields(
+        payload,
+        request.curve(),
+        request.maxProofBytes(),
+        request.metadataUriCid(),
+        request.verifyingKeyBytesCid(),
+        request.activationHeight(),
+        request.withdrawHeight(),
+        commitmentHex,
+        vkPayload,
+        request.status());
+    return payload;
+  }
+
   static Map<String, String> buildContractTargetSelector(
       final String contractAddress, final String contractAlias) {
     final boolean hasContractAddress = contractAddress != null;
@@ -2125,6 +2221,14 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException(field + " must not be blank");
     }
     return trimmed;
+  }
+
+  static String normalizeVerifyingKeyName(final String value) {
+    final String normalized = normalizeNonBlank(value, "name");
+    if (normalized.indexOf(':') >= 0) {
+      throw new IllegalArgumentException("name must not contain ':' characters");
+    }
+    return normalized;
   }
 
   static String normalizeEvenLengthHex(final String value, final String field) {
@@ -2297,6 +2401,218 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException(field + " must contain 64 hex characters");
     }
     return normalized;
+  }
+
+  static String normalizeOptionalHex32(final String value, final String field) {
+    if (value == null || value.trim().isEmpty()) {
+      return null;
+    }
+    return normalizeHex32(value, field);
+  }
+
+  static long normalizePositiveU32(final long value, final String field) {
+    if (value <= 0L || value > U32_MAX) {
+      throw new IllegalArgumentException(field + " must be a positive u32");
+    }
+    return value;
+  }
+
+  static Long normalizeOptionalU32(final Long value, final String field) {
+    if (value == null) {
+      return null;
+    }
+    if (value.longValue() < 0L || value.longValue() > U32_MAX) {
+      throw new IllegalArgumentException(field + " must be a u32");
+    }
+    return value;
+  }
+
+  static Long normalizeOptionalNonNegative(final Long value, final String field) {
+    if (value == null) {
+      return null;
+    }
+    if (value.longValue() < 0L) {
+      throw new IllegalArgumentException(field + " must be non-negative");
+    }
+    return value;
+  }
+
+  static String normalizeVerifyingKeyStatus(final String value) {
+    final String normalized = normalizeOptionalNonBlank(value, "status");
+    if (normalized == null) {
+      return null;
+    }
+    if ("proposed".equalsIgnoreCase(normalized)) {
+      return "Proposed";
+    }
+    if ("active".equalsIgnoreCase(normalized)) {
+      return "Active";
+    }
+    if ("withdrawn".equalsIgnoreCase(normalized)) {
+      return "Withdrawn";
+    }
+    throw new IllegalArgumentException("status must be Proposed, Active, or Withdrawn");
+  }
+
+  private static VerifyingKeyPayload normalizeVerifierBytes(
+      final byte[] bytes, final Long explicitLength) {
+    if (bytes == null) {
+      final Long length =
+          explicitLength == null ? null : normalizePositiveU32(explicitLength, "vkLen");
+      return length == null ? null : new VerifyingKeyPayload(null, length);
+    }
+    if (bytes.length == 0) {
+      throw new IllegalArgumentException("vkBytes must not be empty");
+    }
+    final long actualLength = bytes.length;
+    if (actualLength > U32_MAX) {
+      throw new IllegalArgumentException("vkBytes length must fit in a u32");
+    }
+    if (explicitLength != null) {
+      final long expected = normalizePositiveU32(explicitLength, "vkLen");
+      if (expected != actualLength) {
+        throw new IllegalArgumentException("vkLen must match vkBytes length");
+      }
+    }
+    return new VerifyingKeyPayload(bytes, actualLength);
+  }
+
+  static void validateVerifyingKeyHeightRange(
+      final Long activationHeight, final Long withdrawHeight) {
+    final Long activation = normalizeOptionalNonNegative(activationHeight, "activationHeight");
+    final Long withdraw = normalizeOptionalNonNegative(withdrawHeight, "withdrawHeight");
+    if (activation != null && withdraw != null && withdraw.longValue() < activation.longValue()) {
+      throw new IllegalArgumentException(
+          "withdrawHeight must be greater than or equal to activationHeight");
+    }
+  }
+
+  static void validateVerifyingKeyMaterial(
+      final VerifyingKeyPayload vkPayload, final String commitmentHex) {
+    if (vkPayload == null || vkPayload.bytes() == null) {
+      if (commitmentHex == null) {
+        throw new IllegalArgumentException("commitmentHex is required when vkBytes is omitted");
+      }
+      if (vkPayload == null || vkPayload.length() == null) {
+        throw new IllegalArgumentException("vkLen is required when vkBytes is omitted");
+      }
+    }
+  }
+
+  static void validateInlineVerifyingKeyCommitment(
+      final String backend, final byte[] bytes, final String commitmentHex) {
+    if (bytes == null || commitmentHex == null) {
+      return;
+    }
+    final String expected = verifyingKeyCommitmentHex(backend, bytes);
+    if (!expected.equals(commitmentHex)) {
+      throw new IllegalArgumentException(
+          "commitmentHex must match domain-separated SHA-256 of backend and vkBytes");
+    }
+  }
+
+  private static String verifyingKeyCommitmentHex(final String backend, final byte[] bytes) {
+    try {
+      final MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      final byte[] backendBytes = backend.getBytes(StandardCharsets.UTF_8);
+      digest.update("iroha:zk:v1:vk".getBytes(StandardCharsets.UTF_8));
+      updateU64Be(digest, backendBytes.length);
+      digest.update(backendBytes);
+      updateU64Be(digest, bytes.length);
+      digest.update(bytes);
+      return hexLower(digest.digest());
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new IllegalStateException("SHA-256 is unavailable", ex);
+    }
+  }
+
+  private static void updateU64Be(final MessageDigest digest, final long value) {
+    for (int shift = 56; shift >= 0; shift -= 8) {
+      digest.update((byte) (value >>> shift));
+    }
+  }
+
+  private static void putOptionalVerifierFields(
+      final Map<String, Object> payload,
+      final String curve,
+      final Long maxProofBytes,
+      final String metadataUriCid,
+      final String verifyingKeyBytesCid,
+      final Long activationHeight,
+      final Long withdrawHeight,
+      final String commitmentHex,
+      final VerifyingKeyPayload vkPayload,
+      final String status) {
+    if (curve != null) {
+      payload.put("curve", normalizeNonBlank(curve, "curve"));
+    }
+    final Long normalizedMaxProofBytes = normalizeOptionalU32(maxProofBytes, "maxProofBytes");
+    if (normalizedMaxProofBytes != null) {
+      payload.put("max_proof_bytes", normalizedMaxProofBytes);
+    }
+    if (metadataUriCid != null) {
+      payload.put("metadata_uri_cid", normalizeNonBlank(metadataUriCid, "metadataUriCid"));
+    }
+    if (verifyingKeyBytesCid != null) {
+      payload.put(
+          "vk_bytes_cid", normalizeNonBlank(verifyingKeyBytesCid, "verifyingKeyBytesCid"));
+    }
+    final Long normalizedActivationHeight =
+        normalizeOptionalNonNegative(activationHeight, "activationHeight");
+    if (normalizedActivationHeight != null) {
+      payload.put("activation_height", normalizedActivationHeight);
+    }
+    final Long normalizedWithdrawHeight =
+        normalizeOptionalNonNegative(withdrawHeight, "withdrawHeight");
+    if (normalizedWithdrawHeight != null) {
+      payload.put("withdraw_height", normalizedWithdrawHeight);
+    }
+    if (commitmentHex != null) {
+      payload.put("commitment_hex", commitmentHex);
+    }
+    if (vkPayload != null) {
+      final byte[] bytes = vkPayload.bytes();
+      if (bytes != null) {
+        payload.put("vk_bytes", Base64.getEncoder().encodeToString(bytes));
+      }
+      if (vkPayload.length() != null) {
+        payload.put("vk_len", vkPayload.length());
+      }
+    }
+    final String normalizedStatus = normalizeVerifyingKeyStatus(status);
+    if (normalizedStatus != null) {
+      payload.put("status", normalizedStatus);
+    }
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final StringBuilder out = new StringBuilder(bytes.length * 2);
+    for (final byte b : bytes) {
+      final int value = b & 0xff;
+      if (value < 16) {
+        out.append('0');
+      }
+      out.append(Integer.toString(value, 16));
+    }
+    return out.toString();
+  }
+
+  private static final class VerifyingKeyPayload {
+    private final byte[] bytes;
+    private final Long length;
+
+    VerifyingKeyPayload(final byte[] bytes, final Long length) {
+      this.bytes = bytes == null ? null : bytes.clone();
+      this.length = length;
+    }
+
+    byte[] bytes() {
+      return bytes == null ? null : bytes.clone();
+    }
+
+    Long length() {
+      return length;
+    }
   }
 
   private static String abiWordU32Hex(final int value) {

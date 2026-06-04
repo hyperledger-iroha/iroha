@@ -7101,6 +7101,7 @@ pub fn sccp_substrate_route_allowlist_with_lane_canary_evidence_v1(
     )
 }
 
+#[allow(clippy::similar_names)]
 fn sccp_route_allowlist_matches_domain_profile(
     domain: u32,
     allowlist: &SccpRouteAllowlistReadinessV1,
@@ -13083,6 +13084,7 @@ pub fn sccp_source_chain_proof_adapter_verifier_commitment(
     Some(env.vk_hash)
 }
 
+#[allow(clippy::suspicious_operation_groupings)]
 pub fn sccp_source_chain_proof_matches_adapter_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
@@ -18225,13 +18227,7 @@ fn sccp_message_transparent_public_input_columns(
 }
 
 fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
-    match backend {
-        BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
-        BackendTag::Halo2Bn254 => "halo2-bn254",
-        BackendTag::Groth16 => "groth16",
-        BackendTag::Stark => "stark",
-        BackendTag::Unsupported => "unsupported",
-    }
+    backend.canonical_label()
 }
 
 fn saturating_u32(value: usize) -> u32 {
@@ -34270,6 +34266,7 @@ fn verify_sccp_source_adapter_verification_proof(
     fastpq_prover::verify(&batch, &raw_proof).is_ok()
 }
 
+#[allow(clippy::suspicious_operation_groupings)]
 fn verify_sccp_source_adapter_proof_binding(
     adapter: &SccpSourceAdapterProofV1,
     proof: &SccpSourceChainProofEnvelopeV1,
@@ -35518,17 +35515,17 @@ mod tests {
             extra.push(u8::try_from(addresses.len()).expect("sample validator count fits u8"));
             for (idx, address) in addresses.iter().enumerate() {
                 extra.extend_from_slice(address);
-                extra.extend(
-                    std::iter::repeat(u8::try_from(idx + 1).expect("sample BLS fill byte fits u8"))
-                        .take(SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES),
-                );
+                extra.extend(std::iter::repeat_n(
+                    u8::try_from(idx + 1).expect("sample BLS fill byte fits u8"),
+                    SCCP_BSC_PARLIA_VALIDATOR_BLS_KEY_BYTES,
+                ));
             }
         } else {
             for address in &addresses {
                 extra.extend_from_slice(address);
             }
         }
-        extra.extend(std::iter::repeat(0x99).take(SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES));
+        extra.extend(std::iter::repeat_n(0x99, SCCP_BSC_PARLIA_EXTRA_SEAL_BYTES));
         extra
     }
 
@@ -36522,7 +36519,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
             .expect("ETH aggregate sync committee signature");
@@ -36945,7 +36942,7 @@ mod tests {
                     .expect("valid TRON test key");
                 assert_eq!(algorithm, Algorithm::Secp256k1);
                 let public_key =
-                    EcdsaSecp256k1Sha256::parse_public_key(&bytes).expect("secp256k1 public key");
+                    EcdsaSecp256k1Sha256::parse_public_key(bytes).expect("secp256k1 public key");
                 sccp_tron_address_from_evm_address(EcdsaSecp256k1Sha256::evm_address(&public_key))
                     .to_vec()
             })
@@ -37586,19 +37583,22 @@ mod tests {
         sample_solana_validator_public_keys()
             .into_iter()
             .enumerate()
-            .map(|(index, authorized_voter)| SccpSolanaVoteAccountDataV1 {
-                node_pubkey: vec![0x51 + index as u8; 32],
-                authorized_voter,
-                authorized_withdrawer: vec![0x61 + index as u8; 32],
-                inflation_rewards_collector: vote_account_addresses[index].clone(),
-                block_revenue_collector: vec![0x51 + index as u8; 32],
-                inflation_rewards_commission_bps: u16::try_from(index * 100)
-                    .expect("sample index fits u16"),
-                block_revenue_commission_bps: SCCP_SOLANA_COMMISSION_BPS_MAX,
-                pending_delegator_rewards: 0,
-                bls_pubkey_compressed: Vec::new(),
-                root_slot: rooted_slot,
-                tower_vote_slots: tower_vote_slots.clone(),
+            .map(|(index, authorized_voter)| {
+                let index_byte = u8::try_from(index).expect("sample index fits u8");
+                SccpSolanaVoteAccountDataV1 {
+                    node_pubkey: vec![0x51 + index_byte; 32],
+                    authorized_voter,
+                    authorized_withdrawer: vec![0x61 + index_byte; 32],
+                    inflation_rewards_collector: vote_account_addresses[index].clone(),
+                    block_revenue_collector: vec![0x51 + index_byte; 32],
+                    inflation_rewards_commission_bps: u16::try_from(index * 100)
+                        .expect("sample index fits u16"),
+                    block_revenue_commission_bps: SCCP_SOLANA_COMMISSION_BPS_MAX,
+                    pending_delegator_rewards: 0,
+                    bls_pubkey_compressed: Vec::new(),
+                    root_slot: rooted_slot,
+                    tower_vote_slots: tower_vote_slots.clone(),
+                }
             })
             .collect()
     }
@@ -37654,16 +37654,19 @@ mod tests {
         vote_accounts
             .into_iter()
             .enumerate()
-            .map(|(index, voter_pubkey)| SccpSolanaStakeAccountDataV1 {
-                staker: vec![0x91 + index as u8; 32],
-                withdrawer: vec![0xA1 + index as u8; 32],
-                voter_pubkey,
-                delegated_stake: delegated_stakes[index],
-                activation_epoch: activation_epochs[index],
-                deactivation_epoch: deactivation_epochs[index],
-                warmup_cooldown_rate_bytes: warmup_cooldown_rate_bytes.to_vec(),
-                credits_observed: 10 + u64::try_from(index).expect("sample index fits u64"),
-                stake_flags: 1,
+            .map(|(index, voter_pubkey)| {
+                let index_byte = u8::try_from(index).expect("sample index fits u8");
+                SccpSolanaStakeAccountDataV1 {
+                    staker: vec![0x91 + index_byte; 32],
+                    withdrawer: vec![0xA1 + index_byte; 32],
+                    voter_pubkey,
+                    delegated_stake: delegated_stakes[index],
+                    activation_epoch: activation_epochs[index],
+                    deactivation_epoch: deactivation_epochs[index],
+                    warmup_cooldown_rate_bytes: warmup_cooldown_rate_bytes.to_vec(),
+                    credits_observed: 10 + u64::try_from(index).expect("sample index fits u64"),
+                    stake_flags: 1,
+                }
             })
             .collect()
     }
@@ -39462,7 +39465,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         commit_qc.bls_aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
@@ -39939,10 +39942,10 @@ mod tests {
                     transaction_count,
                     transaction_bytes,
                     transaction_merkle_branch,
-                ) = tron_transaction_source_proof
-                    .clone()
-                    .map(|(_, index, count, bytes, branch)| (index, count, bytes, branch))
-                    .unwrap_or((0, 0, Vec::new(), Vec::new()));
+                ) = tron_transaction_source_proof.clone().map_or(
+                    (0, 0, Vec::new(), Vec::new()),
+                    |(_, index, count, bytes, branch)| (index, count, bytes, branch),
+                );
                 let receipt_trie_proof_nodes = tron_receipt_mpt_proof
                     .clone()
                     .map(|(_, proof_nodes)| proof_nodes)
@@ -45274,7 +45277,7 @@ mod tests {
             .collect::<Vec<_>>();
         let signature_refs = signatures
             .iter()
-            .map(|signature| signature.payload().as_ref())
+            .map(iroha_crypto::Signature::payload)
             .collect::<Vec<_>>();
         insufficient_weight.sync_committee_proof.aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
@@ -51856,9 +51859,13 @@ mod tests {
         ));
 
         let mut oversized_transition_payload = adapter;
-        let mut transition = SccpTronWitnessScheduleTransitionProofV1::default();
-        transition.next_witness_schedule_payload =
-            vec![0xAA; SCCP_TRON_MAX_WITNESS_SCHEDULE_PAYLOAD_BYTES + 1];
+        let transition = SccpTronWitnessScheduleTransitionProofV1 {
+            next_witness_schedule_payload: vec![
+                0xAA;
+                SCCP_TRON_MAX_WITNESS_SCHEDULE_PAYLOAD_BYTES + 1
+            ],
+            ..Default::default()
+        };
         oversized_transition_payload.witness_schedule_transition_proofs = vec![transition];
         assert!(!sccp_source_adapter_proof_shape_is_bounded(
             &SccpSourceAdapterProofV1::TronDposReceipt(oversized_transition_payload),
@@ -52460,8 +52467,10 @@ mod tests {
         ));
 
         let mut too_many_tower_votes = adapter.clone();
+        let tower_vote_stack_depth =
+            sccp_solana_tower_vote_stack_depth_usize().expect("tower vote stack depth fits usize");
         too_many_tower_votes.finality_context.tower_vote_slots =
-            vec![1; SCCP_SOLANA_TOWER_VOTE_STACK_DEPTH as usize + 1];
+            vec![1; tower_vote_stack_depth + 1];
         assert!(!sccp_source_adapter_proof_shape_is_bounded(
             &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(too_many_tower_votes),
         ));
@@ -53245,8 +53254,11 @@ mod tests {
             address
         };
         assert!(
-            canonical_sccp_tron_witness_schedule_bytes(&[zero_tron_witness_address.clone()], &[1],)
-                .is_none()
+            canonical_sccp_tron_witness_schedule_bytes(
+                std::slice::from_ref(&zero_tron_witness_address),
+                &[1],
+            )
+            .is_none()
         );
         let mut zero_address_payload = Vec::new();
         push_u8(&mut zero_address_payload, 1);

@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -42,6 +44,12 @@ public final class ToriiEventStreamClientTests {
     observersReceiveLifecycleCallbacks();
     sseRejectsInsecureAuthorizationHeader();
     sseRequestPropagatesTimeout();
+    sseRejectsUnsupportedProductionBackendFiltersBeforeRequest();
+    sseRejectsMalformedVerifyingKeyEventNamesBeforeRequest();
+    sseRejectsMalformedProofEventHashesBeforeRequest();
+    sseRejectsPathQueryEventFiltersBeforeRequest();
+    sseCanonicalizesVerifyingKeyNameFiltersBeforeRequest();
+    sseCanonicalizesProofHashFiltersBeforeRequest();
     System.out.println("[IrohaAndroid] Torii SSE client tests passed.");
   }
 
@@ -284,11 +292,243 @@ public final class ToriiEventStreamClientTests {
     assertEquals(timeout, recorded.timeout(), "timeout should propagate to request");
   }
 
+  private static void sseRejectsUnsupportedProductionBackendFiltersBeforeRequest() {
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final TransportExecutor executor =
+        request -> {
+          requestSent.set(true);
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+
+    for (final String filter :
+        List.of(
+            "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa/orchard\",\"name\":\"vk\"},\"event_set\":{\"Registered\":true}}}",
+            "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\" halo2/ipa\",\"name\":\"vk\"},\"event_set\":{\"Registered\":true}}}",
+            "{\"Proof\":{\"id_matcher\":{\"backend\":\"mock/dev\",\"hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"event_set\":{\"Verified\":true}}}",
+            "{\"Proof\":{\"id_matcher\":{\"backend\":\"groth16/bls12-377\",\"hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"event_set\":{\"Verified\":true}}}")) {
+      try {
+        client.openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {});
+      } catch (final IllegalArgumentException expected) {
+        if (!expected.getMessage().contains("unsupported production verifier backend")) {
+          throw new AssertionError("unexpected backend rejection message: " + expected.getMessage());
+        }
+        assertEquals(false, requestSent.get(), "request must not be sent for rejected filters");
+        continue;
+      }
+      throw new AssertionError("Expected unsupported production backend filter rejection");
+    }
+  }
+
+  private static void sseRejectsMalformedVerifyingKeyEventNamesBeforeRequest() {
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final TransportExecutor executor =
+        request -> {
+          requestSent.set(true);
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+
+    for (final String nameJson :
+        List.of(
+            "\"\"",
+            "\"   \"",
+            "\"\\t\"",
+            "\"\\n\"",
+            "\"vk:main\"",
+            "42")) {
+      final String filter =
+          "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":"
+              + nameJson
+              + "},\"event_set\":{\"Registered\":true}}}";
+      try {
+        client.openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {});
+      } catch (final IllegalArgumentException expected) {
+        final String message = expected.getMessage();
+        if (!message.contains("non-empty string")
+            && !message.contains("must be a string")
+            && !message.contains("must not contain ':'")) {
+          throw new AssertionError("unexpected name rejection message: " + message);
+        }
+        assertEquals(false, requestSent.get(), "request must not be sent for rejected filters");
+        continue;
+      }
+      throw new AssertionError("Expected malformed verifying key name filter rejection");
+    }
+  }
+
+  private static void sseRejectsMalformedProofEventHashesBeforeRequest() {
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final TransportExecutor executor =
+        request -> {
+          requestSent.set(true);
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+
+    for (final String hashJson :
+        List.of(
+            "\"\"",
+            "\"abc\"",
+            "\"" + "z".repeat(64) + "\"",
+            "\"0x0x" + "a".repeat(64) + "\"",
+            "42")) {
+      final String filter =
+          "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":"
+              + hashJson
+              + "},\"event_set\":{\"Verified\":true}}}";
+      try {
+        client.openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {});
+      } catch (final IllegalArgumentException expected) {
+        final String message = expected.getMessage();
+        if (!message.contains("32-byte hex string") && !message.contains("must be a string")) {
+          throw new AssertionError("unexpected hash rejection message: " + message);
+        }
+        assertEquals(false, requestSent.get(), "request must not be sent for rejected filters");
+        continue;
+      }
+      throw new AssertionError("Expected malformed proof hash filter rejection");
+    }
+  }
+
+  private static void sseRejectsPathQueryEventFiltersBeforeRequest() {
+    final AtomicBoolean requestSent = new AtomicBoolean(false);
+    final TransportExecutor executor =
+        request -> {
+          requestSent.set(true);
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+    final String filter =
+        "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa/orchard\",\"hash_hex\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"event_set\":{\"Verified\":true}}}";
+    final String path =
+        "/v1/events/sse?filter=" + URLEncoder.encode(filter, StandardCharsets.UTF_8);
+
+    try {
+      client.openSseStream(path, ToriiEventStreamOptions.defaultOptions(), event -> {});
+    } catch (final IllegalArgumentException expected) {
+      if (!expected.getMessage().contains("unsupported production verifier backend")) {
+        throw new AssertionError("unexpected path-query rejection message: " + expected.getMessage());
+      }
+      assertEquals(false, requestSent.get(), "request must not be sent for rejected path filters");
+      return;
+    }
+    throw new AssertionError("Expected path-query event filter rejection");
+  }
+
+  private static void sseCanonicalizesVerifyingKeyNameFiltersBeforeRequest() throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final TransportExecutor executor =
+        request -> {
+          recorded[0] = request;
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+    final String filter =
+        "{\"VerifyingKey\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"name\":\" vk_main \"},\"event_set\":{\"Registered\":true}}}";
+
+    client
+        .openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {})
+        .completion()
+        .get(1, TimeUnit.SECONDS);
+
+    if (recorded[0] == null) {
+      throw new AssertionError("expected canonicalized request to be sent");
+    }
+    final String normalizedFilter = queryParameter(recorded[0].uri().getRawQuery(), "filter");
+    if (!normalizedFilter.contains("\"name\":\"vk_main\"")) {
+      throw new AssertionError("verifying key name filter was not canonicalized: " + normalizedFilter);
+    }
+  }
+
+  private static void sseCanonicalizesProofHashFiltersBeforeRequest() throws Exception {
+    final TransportRequest[] recorded = new TransportRequest[1];
+    final TransportExecutor executor =
+        request -> {
+          recorded[0] = request;
+          return okSseResponse();
+        };
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .build();
+    final String hash = "A".repeat(64);
+    final String proofHash = "B".repeat(64);
+    final String filter =
+        "{\"Proof\":{\"id_matcher\":{\"backend\":\"halo2/ipa\",\"hash_hex\":\"0x"
+            + hash
+            + "\",\"proof_hash_hex\":\""
+            + proofHash
+            + "\"},\"event_set\":{\"Verified\":true}}}";
+
+    client
+        .openSseStream("/v1/events/sse", eventFilterOptions(filter), event -> {})
+        .completion()
+        .get(1, TimeUnit.SECONDS);
+
+    if (recorded[0] == null) {
+      throw new AssertionError("expected canonicalized request to be sent");
+    }
+    final String normalizedFilter = queryParameter(recorded[0].uri().getRawQuery(), "filter");
+    if (!normalizedFilter.contains("\"hash_hex\":\"" + "a".repeat(64) + "\"")
+        || !normalizedFilter.contains("\"proof_hash_hex\":\"" + "b".repeat(64) + "\"")) {
+      throw new AssertionError("proof hash filters were not canonicalized: " + normalizedFilter);
+    }
+  }
+
   private static void assertEquals(
       final Object expected, final Object actual, final String message) {
     if (expected == null ? actual != null : !expected.equals(actual)) {
       throw new AssertionError(message + " (expected=" + expected + ", actual=" + actual + ")");
     }
+  }
+
+  private static ToriiEventStreamOptions eventFilterOptions(final String filter) {
+    return ToriiEventStreamOptions.builder().putQueryParameter("filter", filter).build();
+  }
+
+  private static CompletableFuture<TransportResponse> okSseResponse() {
+    return CompletableFuture.completedFuture(
+        TransportResponse.builder()
+            .setStatusCode(200)
+            .setBody(": keepalive\n\n".getBytes(StandardCharsets.UTF_8))
+            .setMessage("OK")
+            .addHeader("Content-Type", "text/event-stream")
+            .build());
+  }
+
+  private static String queryParameter(final String rawQuery, final String name) {
+    for (final String segment : rawQuery.split("&")) {
+      final int equals = segment.indexOf('=');
+      final String rawName = equals >= 0 ? segment.substring(0, equals) : segment;
+      if (!URLDecoder.decode(rawName, StandardCharsets.UTF_8).equals(name)) {
+        continue;
+      }
+      final String rawValue = equals >= 0 ? segment.substring(equals + 1) : "";
+      return URLDecoder.decode(rawValue.replace("+", " "), StandardCharsets.UTF_8);
+    }
+    throw new AssertionError("missing query parameter " + name);
   }
 
   private interface SseHandler {

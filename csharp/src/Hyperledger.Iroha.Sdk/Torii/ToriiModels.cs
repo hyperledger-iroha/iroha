@@ -108,6 +108,120 @@ public sealed record class ToriiAccountFaucetResponse
     public string Status { get; init; } = string.Empty;
 }
 
+public sealed record class ToriiVerifyingKeyRegisterRequest
+{
+    [JsonPropertyName("authority")]
+    public string? Authority { get; init; }
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("backend")]
+    public string? Backend { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("version")]
+    public uint? Version { get; init; }
+
+    [JsonPropertyName("circuit_id")]
+    public string? CircuitId { get; init; }
+
+    [JsonPropertyName("public_inputs_schema_hash_hex")]
+    public string? PublicInputsSchemaHashHex { get; init; }
+
+    [JsonPropertyName("curve")]
+    public string? Curve { get; init; }
+
+    [JsonPropertyName("gas_schedule_id")]
+    public string? GasScheduleId { get; init; }
+
+    [JsonPropertyName("vk_len")]
+    public uint? VerifyingKeyLength { get; init; }
+
+    [JsonPropertyName("max_proof_bytes")]
+    public uint? MaxProofBytes { get; init; }
+
+    [JsonPropertyName("metadata_uri_cid")]
+    public string? MetadataUriCid { get; init; }
+
+    [JsonPropertyName("vk_bytes_cid")]
+    public string? VerifyingKeyBytesCid { get; init; }
+
+    [JsonPropertyName("activation_height")]
+    public ulong? ActivationHeight { get; init; }
+
+    [JsonPropertyName("withdraw_height")]
+    public ulong? WithdrawHeight { get; init; }
+
+    [JsonPropertyName("commitment_hex")]
+    public string? CommitmentHex { get; init; }
+
+    [JsonPropertyName("vk_bytes")]
+    public byte[]? VerifyingKeyBytes { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+}
+
+public sealed record class ToriiVerifyingKeyUpdateRequest
+{
+    [JsonPropertyName("authority")]
+    public string? Authority { get; init; }
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("backend")]
+    public string? Backend { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("version")]
+    public uint? Version { get; init; }
+
+    [JsonPropertyName("circuit_id")]
+    public string? CircuitId { get; init; }
+
+    [JsonPropertyName("public_inputs_schema_hash_hex")]
+    public string? PublicInputsSchemaHashHex { get; init; }
+
+    [JsonPropertyName("curve")]
+    public string? Curve { get; init; }
+
+    [JsonPropertyName("gas_schedule_id")]
+    public string? GasScheduleId { get; init; }
+
+    [JsonPropertyName("commitment_hex")]
+    public string? CommitmentHex { get; init; }
+
+    [JsonPropertyName("vk_len")]
+    public uint? VerifyingKeyLength { get; init; }
+
+    [JsonPropertyName("max_proof_bytes")]
+    public uint? MaxProofBytes { get; init; }
+
+    [JsonPropertyName("metadata_uri_cid")]
+    public string? MetadataUriCid { get; init; }
+
+    [JsonPropertyName("vk_bytes_cid")]
+    public string? VerifyingKeyBytesCid { get; init; }
+
+    [JsonPropertyName("activation_height")]
+    public ulong? ActivationHeight { get; init; }
+
+    [JsonPropertyName("withdraw_height")]
+    public ulong? WithdrawHeight { get; init; }
+
+    [JsonPropertyName("vk_bytes")]
+    public byte[]? VerifyingKeyBytes { get; init; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; init; }
+}
+
 public sealed record class ToriiAccountFaucetPuzzle
 {
     [JsonPropertyName("algorithm")]
@@ -1485,6 +1599,119 @@ public sealed record class ToriiSoraFsCidLookupResponse
 
     [JsonPropertyName("files")]
     public IReadOnlyList<ToriiSoraFsFileEntry> Files { get; init; } = Array.Empty<ToriiSoraFsFileEntry>();
+}
+
+public sealed record class ToriiSoraFsChunkerHandle
+{
+    [JsonPropertyName("profile_id")]
+    public uint? ProfileId { get; init; }
+
+    [JsonPropertyName("namespace")]
+    public string? Namespace { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("semver")]
+    public string? Semver { get; init; }
+
+    [JsonPropertyName("multihash_code")]
+    public uint? MultihashCode { get; init; }
+}
+
+public sealed record class ToriiSoraFsStorageClass
+{
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
+
+    public static ToriiSoraFsStorageClass From(string type) => new() { Type = type };
+}
+
+public sealed record class ToriiSoraFsPinPolicy
+{
+    [JsonPropertyName("min_replicas")]
+    public uint? MinReplicas { get; init; }
+
+    [JsonPropertyName("storage_class")]
+    public ToriiSoraFsStorageClass? StorageClass { get; init; }
+
+    [JsonPropertyName("retention_epoch")]
+    public ulong? RetentionEpoch { get; init; }
+}
+
+public sealed record class ToriiSoraFsPinAlias
+{
+    [JsonPropertyName("namespace")]
+    public string? Namespace { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("proof_base64")]
+    public string? ProofBase64 { get; init; }
+}
+
+public sealed record class ToriiSoraFsPinRegisterRequest
+{
+    [JsonPropertyName("authority")]
+    public string? Authority { get; init; }
+
+    [JsonPropertyName("private_key")]
+    public string? PrivateKey { get; init; }
+
+    [JsonPropertyName("chunker")]
+    public ToriiSoraFsChunkerHandle? Chunker { get; init; }
+
+    [JsonPropertyName("pin_policy")]
+    public ToriiSoraFsPinPolicy? PinPolicy { get; init; }
+
+    [JsonPropertyName("manifest_digest_hex")]
+    public string? ManifestDigestHex { get; init; }
+
+    [JsonPropertyName("chunk_digest_sha3_256_hex")]
+    public string? ChunkDigestSha3_256Hex { get; init; }
+
+    [JsonPropertyName("content_length")]
+    public ulong? ContentLength { get; init; }
+
+    [JsonPropertyName("submitted_epoch")]
+    public ulong? SubmittedEpoch { get; init; }
+
+    [JsonPropertyName("alias")]
+    public ToriiSoraFsPinAlias? Alias { get; init; }
+
+    [JsonPropertyName("successor_of_hex")]
+    public string? SuccessorOfHex { get; init; }
+}
+
+public sealed record class ToriiSoraFsPinRegisterResponse
+{
+    [JsonPropertyName("manifest_digest_hex")]
+    public string? ManifestDigestHex { get; init; }
+
+    [JsonPropertyName("chunker_handle")]
+    public string? ChunkerHandle { get; init; }
+
+    [JsonPropertyName("submitted_epoch")]
+    public ulong? SubmittedEpoch { get; init; }
+
+    [JsonPropertyName("content_length")]
+    public ulong? ContentLength { get; init; }
+
+    [JsonPropertyName("pin_fee_nano")]
+    public ulong? PinFeeNano { get; init; }
+
+    [JsonPropertyName("pin_fee_asset_id")]
+    public string? PinFeeAssetId { get; init; }
+
+    [JsonPropertyName("pin_fee_treasury_account_id")]
+    public string? PinFeeTreasuryAccountId { get; init; }
+
+    [JsonPropertyName("alias")]
+    public ToriiSoraFsPinAlias? Alias { get; init; }
+
+    [JsonPropertyName("successor_of_hex")]
+    public string? SuccessorOfHex { get; init; }
 }
 
 public sealed record class ToriiSoraFsDenylistPackSummary

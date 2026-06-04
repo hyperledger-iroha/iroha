@@ -1,0 +1,25 @@
+{
+  "provider": "fedwire-funds-operator",
+  "environment": "preprod",
+  "rail": {
+    "inbox_dir": "fedwire-funds/inbox",
+    "torii_base_url": "https://torii.fedwire-funds.example.invalid",
+    "receipt_dir": "fedwire-funds/receipts/rail",
+    "bearer_token_file": "fedwire-funds/secrets/torii.bearer",
+    "max_payload_bytes": 4194304,
+    "timeout_secs": 10
+  },
+  "notary": {
+    "export_dir": "fedwire-funds/audit-export",
+    "endpoints": [
+      "https://notary.fedwire-funds.example.invalid/iso-anchor"
+    ],
+    "receipt_dir": "fedwire-funds/receipts/notary",
+    "bearer_token_file": "fedwire-funds/secrets/notary.bearer",
+    "timeout_secs": 10
+  },
+  "verify": {
+    "allow_insecure_http": false,
+    "require_source_files": true
+  }
+}

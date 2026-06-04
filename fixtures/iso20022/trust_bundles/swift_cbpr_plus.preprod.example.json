@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "profile_id": "swift-cbpr-plus",
+  "rail": "swift-cbpr-plus",
+  "environment": "preprod",
+  "source": {
+    "authority": "Swift CBPR+ operator PKI placeholder",
+    "version": "replace-before-production",
+    "retrieved_at": "2026-06-04T00:00:00Z",
+    "url": "https://pki.swift-cbpr-plus.example.invalid/iso20022"
+  },
+  "embedded_signature_policy": "require-verified",
+  "x509_trust_anchors": [
+    {
+      "label": "replace-with-swift-terminal-ca",
+      "der_base64": "MAMCAQE=",
+      "sha256": "1b65f68a522c858715f5dd951cd0402dc16691778814bf0759822b7a257421d0"
+    }
+  ],
+  "revoked_certificates": [
+    {
+      "label": "replace-with-retired-or-compromised-swift-cert",
+      "der_base64": "MAMCAQI=",
+      "sha256": "714f7108ae1387dc72ec6b79a0c0f8e596205dbc8159d2c538493ba664ed26a9"
+    }
+  ],
+  "x509_required_certificate_policy_oids": [
+    "1.3.6.1.4.1.55555.1"
+  ],
+  "x509_require_crl_revocation_check": true,
+  "x509_crls": [
+    {
+      "label": "replace-with-swift-crl",
+      "der_base64": "MAMCAQM=",
+      "sha256": "ba6846e4570f67ed57bf531329adee2c2ad905cfc86d9736a7638c5a96ebbcbf"
+    }
+  ],
+  "x509_require_ocsp_revocation_check": true,
+  "x509_ocsp_responses": [
+    {
+      "label": "replace-with-swift-ocsp-response",
+      "der_base64": "MAMCAQM=",
+      "sha256": "ba6846e4570f67ed57bf531329adee2c2ad905cfc86d9736a7638c5a96ebbcbf"
+    }
+  ]
+}
