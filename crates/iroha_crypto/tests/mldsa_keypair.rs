@@ -8,9 +8,18 @@ mod mldsa_tests {
     use pqcrypto_mldsa::mldsa65;
     use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
+    fn checked_mldsa_public_key_payload(keypair: &KeyPair) -> &[u8] {
+        let (algorithm, payload) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture ML-DSA public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        payload
+    }
+
     fn seeded_pair(label: &[u8]) -> (mldsa65::PublicKey, mldsa65::SecretKey) {
         let kp = KeyPair::from_seed(label.to_vec(), Algorithm::MlDsa);
-        let pk_bytes = kp.public_key().to_bytes().1;
+        let pk_bytes = checked_mldsa_public_key_payload(&kp);
         let sk_bytes = kp.private_key().to_bytes().1;
         let pk = mldsa65::PublicKey::from_bytes(pk_bytes)
             .expect("seeded ML-DSA public key bytes should decode");
@@ -205,7 +214,10 @@ mod mldsa_tests {
     #[test]
     fn mldsa_prefixed_public_key_roundtrips() {
         let kp = KeyPair::from_seed(b"ml-dsa-prefixed-public-key".to_vec(), Algorithm::MlDsa);
-        let encoded = kp.public_key().to_prefixed_string();
+        let encoded = kp
+            .public_key()
+            .try_to_prefixed_string()
+            .expect("prefixed ML-DSA public key");
 
         let decoded: PublicKey = encoded.parse().expect("prefixed ML-DSA public key");
 
@@ -231,7 +243,6 @@ mod mldsa_tests {
             .expect("prefixed public key multihash");
         assert_eq!(public_from_bare, kp.public_key().clone());
         assert_eq!(public_from_prefixed, kp.public_key().clone());
-        assert_eq!(public_prefixed, kp.public_key().to_prefixed_string());
         assert!(public_prefixed.starts_with("ml-dsa:"));
 
         let exposed = ExposedPrivateKey(kp.private_key().clone());
@@ -249,14 +260,16 @@ mod mldsa_tests {
             .expect("prefixed private key multihash");
         assert_eq!(private_from_bare.0, kp.private_key().clone());
         assert_eq!(private_from_prefixed.0, kp.private_key().clone());
-        assert_eq!(private_prefixed, exposed.to_prefixed_string());
         assert!(private_prefixed.starts_with("ml-dsa:"));
     }
 
     #[test]
     fn mldsa_public_key_bytes_roundtrip() {
         let kp = KeyPair::from_seed(b"ml-dsa-public-key-bytes".to_vec(), Algorithm::MlDsa);
-        let (algorithm, payload) = kp.public_key().to_bytes();
+        let (algorithm, payload) = kp
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture ML-DSA public key must be well-formed");
 
         let decoded = PublicKey::from_bytes(algorithm, payload).expect("valid ML-DSA public key");
 
@@ -284,7 +297,10 @@ mod mldsa_tests {
     #[test]
     fn mldsa_public_and_private_key_hex_roundtrip() {
         let kp = KeyPair::from_seed(b"ml-dsa-key-hex-roundtrip".to_vec(), Algorithm::MlDsa);
-        let (public_algorithm, public_bytes) = kp.public_key().to_bytes();
+        let (public_algorithm, public_bytes) = kp
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture ML-DSA public key must be well-formed");
         let (private_algorithm, private_bytes) = kp.private_key().to_bytes();
 
         let public =

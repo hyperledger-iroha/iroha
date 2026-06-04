@@ -25,17 +25,23 @@ enum HkdfVariant {
     Sha3_512(Hkdf<Sha3_512>),
 }
 
+const HKDF_LABEL_SEPARATOR: &[u8] = b"\0";
+
 impl HkdfVariant {
-    fn expand(self, info: &[u8], length: usize) -> Result<Zeroizing<Vec<u8>>, hkdf::InvalidLength> {
+    fn expand_multi_info(
+        self,
+        info_components: &[&[u8]],
+        length: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, hkdf::InvalidLength> {
         match self {
             HkdfVariant::Sha3_256(inner) => {
                 let mut okm = Zeroizing::new(vec![0_u8; length]);
-                inner.expand(info, &mut okm)?;
+                inner.expand_multi_info(info_components, &mut okm)?;
                 Ok(okm)
             }
             HkdfVariant::Sha3_512(inner) => {
                 let mut okm = Zeroizing::new(vec![0_u8; length]);
-                inner.expand(info, &mut okm)?;
+                inner.expand_multi_info(info_components, &mut okm)?;
                 Ok(okm)
             }
         }
@@ -93,15 +99,16 @@ pub fn derive_labeled_hkdf(
     context: &[u8],
     length: usize,
 ) -> Result<Zeroizing<Vec<u8>>, hkdf::InvalidLength> {
-    let mut info =
-        Vec::with_capacity(domain.namespace.len() + domain.label.len() + context.len() + 2);
-    info.extend_from_slice(domain.namespace.as_bytes());
-    info.push(0);
-    info.extend_from_slice(domain.label.as_bytes());
-    info.push(0);
-    info.extend_from_slice(context);
-
-    suite.expand(salt, ikm).expand(&info, length)
+    suite.expand(salt, ikm).expand_multi_info(
+        &[
+            domain.namespace.as_bytes(),
+            HKDF_LABEL_SEPARATOR,
+            domain.label.as_bytes(),
+            HKDF_LABEL_SEPARATOR,
+            context,
+        ],
+        length,
+    )
 }
 
 #[cfg(test)]
@@ -194,6 +201,29 @@ mod tests {
         .expect_err("HKDF-SHA3-256 output is limited to 255 hash blocks");
 
         assert!(err.to_string().contains("too large output"));
+    }
+
+    #[test]
+    fn labeled_hkdf_matches_legacy_contiguous_info_layout() {
+        let domain = HkdfDomain::soranet("KEM/final");
+        let context = b"transcript-hash";
+        let mut legacy_info = Vec::new();
+        legacy_info.extend_from_slice(domain.namespace().as_bytes());
+        legacy_info.push(0);
+        legacy_info.extend_from_slice(domain.label().as_bytes());
+        legacy_info.push(0);
+        legacy_info.extend_from_slice(context);
+
+        let labeled =
+            derive_labeled_hkdf(HkdfSuite::Sha3_512, Some(&SALT), &IKM, domain, context, 64)
+                .expect("labeled HKDF output");
+        let legacy = Hkdf::<Sha3_512>::new(Some(&SALT), &IKM);
+        let mut legacy_okm = [0_u8; 64];
+        legacy
+            .expand(&legacy_info, &mut legacy_okm)
+            .expect("legacy contiguous HKDF output");
+
+        assert_eq!(labeled.as_slice(), legacy_okm);
     }
 
     #[test]

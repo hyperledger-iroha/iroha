@@ -842,19 +842,36 @@ impl DeterministicNonceGenerator for StreebogNonceGenerator {
         let mut k = vec![0_u8; hash_len];
         let mut v = vec![0x01_u8; hash_len];
 
-        let mut seed = Vec::with_capacity(
-            self.domain_tag.len() + params.scalar_len * 2 + extra_entropy.map_or(0, <[u8]>::len),
-        );
-        seed.extend_from_slice(self.domain_tag);
-        seed.extend_from_slice(&int_to_octets(private_scalar, params.scalar_len));
-        seed.extend_from_slice(&bits_to_octets(params, message));
-        if let Some(extra) = extra_entropy {
-            seed.extend_from_slice(extra);
-        }
+        let private_octets = int_to_octets(private_scalar, params.scalar_len);
+        let message_octets = bits_to_octets(params, message);
 
-        k = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v, &[0x00], &seed]);
+        k = hmac_streebog_nonce_seed(
+            hash_len,
+            BLOCK_LEN,
+            &k,
+            NonceSeedParts {
+                v: &v,
+                marker: &[0x00],
+                domain_tag: self.domain_tag,
+                private_octets: &private_octets,
+                message_octets: &message_octets,
+                extra_entropy,
+            },
+        );
         v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
-        k = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v, &[0x01], &seed]);
+        k = hmac_streebog_nonce_seed(
+            hash_len,
+            BLOCK_LEN,
+            &k,
+            NonceSeedParts {
+                v: &v,
+                marker: &[0x01],
+                domain_tag: self.domain_tag,
+                private_octets: &private_octets,
+                message_octets: &message_octets,
+                extra_entropy,
+            },
+        );
         v = hmac_streebog(hash_len, BLOCK_LEN, &k, &[&v]);
 
         loop {
@@ -895,6 +912,55 @@ fn bits_to_octets(params: &CurveParams, message: &[u8]) -> Vec<u8> {
     int_to_octets(&scalar, params.scalar_len)
 }
 
+#[derive(Clone, Copy)]
+struct NonceSeedParts<'a> {
+    v: &'a [u8],
+    marker: &'a [u8],
+    domain_tag: &'a [u8],
+    private_octets: &'a [u8],
+    message_octets: &'a [u8],
+    extra_entropy: Option<&'a [u8]>,
+}
+
+fn hmac_streebog_nonce_seed(
+    digest_len: usize,
+    block_len: usize,
+    key: &[u8],
+    parts: NonceSeedParts<'_>,
+) -> Vec<u8> {
+    parts.extra_entropy.map_or_else(
+        || {
+            hmac_streebog(
+                digest_len,
+                block_len,
+                key,
+                &[
+                    parts.v,
+                    parts.marker,
+                    parts.domain_tag,
+                    parts.private_octets,
+                    parts.message_octets,
+                ],
+            )
+        },
+        |extra| {
+            hmac_streebog(
+                digest_len,
+                block_len,
+                key,
+                &[
+                    parts.v,
+                    parts.marker,
+                    parts.domain_tag,
+                    parts.private_octets,
+                    parts.message_octets,
+                    extra,
+                ],
+            )
+        },
+    )
+}
+
 fn hmac_streebog(digest_len: usize, block_len: usize, key: &[u8], data: &[&[u8]]) -> Vec<u8> {
     let mut key_block = vec![0_u8; block_len];
     if key.len() > block_len {
@@ -911,12 +977,30 @@ fn hmac_streebog(digest_len: usize, block_len: usize, key: &[u8], data: &[&[u8]]
         outer_pad[i] ^= key_block[i];
     }
 
-    let mut inner_segments = Vec::with_capacity(data.len() + 1);
-    inner_segments.push(inner_pad.as_slice());
-    inner_segments.extend_from_slice(data);
-
-    let inner_hash = streebog_hash(digest_len, &inner_segments);
+    let inner_hash = streebog_hash_prefixed(digest_len, inner_pad.as_slice(), data);
     streebog_hash(digest_len, &[outer_pad.as_slice(), inner_hash.as_slice()])
+}
+
+fn streebog_hash_prefixed(digest_len: usize, prefix: &[u8], parts: &[&[u8]]) -> Vec<u8> {
+    match digest_len {
+        32 => {
+            let mut hasher = Streebog256::new();
+            hasher.update(prefix);
+            for part in parts {
+                hasher.update(part);
+            }
+            hasher.finalize().to_vec()
+        }
+        64 => {
+            let mut hasher = Streebog512::new();
+            hasher.update(prefix);
+            for part in parts {
+                hasher.update(part);
+            }
+            hasher.finalize().to_vec()
+        }
+        _ => panic!("unsupported Streebog digest length: {digest_len}"),
+    }
 }
 
 fn streebog_hash(digest_len: usize, parts: &[&[u8]]) -> Vec<u8> {
@@ -1682,14 +1766,129 @@ pub fn verify(
 mod tests {
     use std::{hint::black_box, time::Instant};
 
-    use num_traits::{One, ToPrimitive};
+    use num_traits::{One, ToPrimitive, Zero as _};
     use rand::{RngCore, SeedableRng, rngs::StdRng};
 
     use super::*;
 
+    const LEGACY_HMAC_BLOCK_LEN: usize = 64;
+
     fn seed_pair() -> (PublicKey, PrivateKey) {
         let seed = b"iroha-gost-test-seed";
         generate_seeded_keypair(Algorithm::Gost3410_2012_256ParamSetA, seed).unwrap()
+    }
+
+    fn legacy_hmac_streebog(
+        digest_len: usize,
+        block_len: usize,
+        key: &[u8],
+        data: &[&[u8]],
+    ) -> Vec<u8> {
+        let mut key_block = vec![0_u8; block_len];
+        if key.len() > block_len {
+            let hashed = streebog_hash(digest_len, &[key]);
+            key_block[..hashed.len()].copy_from_slice(&hashed);
+        } else {
+            key_block[..key.len()].copy_from_slice(key);
+        }
+
+        let mut inner_pad = vec![0x36_u8; block_len];
+        let mut outer_pad = vec![0x5c_u8; block_len];
+        for i in 0..block_len {
+            inner_pad[i] ^= key_block[i];
+            outer_pad[i] ^= key_block[i];
+        }
+
+        let mut inner_segments = Vec::with_capacity(data.len() + 1);
+        inner_segments.push(inner_pad.as_slice());
+        inner_segments.extend_from_slice(data);
+
+        let inner_hash = streebog_hash(digest_len, &inner_segments);
+        streebog_hash(digest_len, &[outer_pad.as_slice(), inner_hash.as_slice()])
+    }
+
+    fn legacy_streebog_nonce(
+        params: &CurveParams,
+        domain_tag: &[u8],
+        private_scalar: &BigUint,
+        message: &[u8],
+        extra_entropy: Option<&[u8]>,
+    ) -> BigUint {
+        let hash_len = params.digest_len;
+        let mut k = vec![0_u8; hash_len];
+        let mut v = vec![0x01_u8; hash_len];
+
+        let mut seed = Vec::with_capacity(
+            domain_tag.len() + params.scalar_len * 2 + extra_entropy.map_or(0, <[u8]>::len),
+        );
+        seed.extend_from_slice(domain_tag);
+        seed.extend_from_slice(&int_to_octets(private_scalar, params.scalar_len));
+        seed.extend_from_slice(&bits_to_octets(params, message));
+        if let Some(extra) = extra_entropy {
+            seed.extend_from_slice(extra);
+        }
+
+        k = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v, &[0x00], &seed]);
+        v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
+        k = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v, &[0x01], &seed]);
+        v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
+
+        loop {
+            let mut t = Vec::with_capacity(params.scalar_len);
+            while t.len() < params.scalar_len {
+                v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
+                t.extend_from_slice(&v);
+            }
+            let candidate = BigUint::from_bytes_be(&t[..params.scalar_len]);
+            let nonce = candidate % &params.q;
+            if !nonce.is_zero() {
+                return nonce;
+            }
+            k = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v, &[0x00]]);
+            v = legacy_hmac_streebog(hash_len, LEGACY_HMAC_BLOCK_LEN, &k, &[&v]);
+        }
+    }
+
+    #[test]
+    fn hmac_streebog_streaming_matches_legacy_inner_segments() {
+        let key = [0xA5; 97];
+        let tail = [0x42, 0x43, 0x44];
+        let data: [&[u8]; 4] = [b"alpha", b"", b"beta", tail.as_slice()];
+
+        for digest_len in [32, 64] {
+            assert_eq!(
+                hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data),
+                legacy_hmac_streebog(digest_len, LEGACY_HMAC_BLOCK_LEN, &key, &data)
+            );
+        }
+    }
+
+    #[test]
+    fn deterministic_nonce_streaming_matches_legacy_contiguous_seed() {
+        let message = b"GOST nonce compatibility";
+        let private_scalar = BigUint::from(42u32);
+
+        for algorithm in [
+            Algorithm::Gost3410_2012_256ParamSetA,
+            Algorithm::Gost3410_2012_512ParamSetB,
+        ] {
+            let params = params_for_algorithm(algorithm).unwrap().curve();
+            let extra_entropy = vec![0x5A; params.scalar_len + 7];
+
+            for entropy in [None, Some(extra_entropy.as_slice())] {
+                let mut generator = StreebogNonceGenerator::new();
+                assert_eq!(
+                    generator.generate(params, &private_scalar, message, entropy),
+                    legacy_streebog_nonce(
+                        params,
+                        NONCE_DOMAIN_TAG,
+                        &private_scalar,
+                        message,
+                        entropy
+                    )
+                );
+            }
+        }
     }
 
     #[test]

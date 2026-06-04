@@ -250,6 +250,27 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("summary_sha256 mismatch", stderr)
 
+    def test_missing_xsd_strict_flags_are_malformed(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for flag in ("require_schema_backed_fixtures", "require_fixture_for_schema"):
+                with self.subTest(flag=flag):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    del xsd["strict"][flag]
+                    refresh_digest(xsd)
+                    mutated_path = write_json(root / f"missing-{flag}.xsd-summary.json", xsd)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(mutated_path), "--evidence-summary", str(evidence_summary)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"strict.{flag} must be a boolean", stderr)
+
     def test_evidence_policy_and_provider_environment_drift_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -303,6 +324,79 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("policy.allow_insecure_http must be a boolean", stderr)
+
+    def test_missing_evidence_status_booleans_are_malformed(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                ("summary-ok", [], "ok", "ok must be a boolean"),
+                (
+                    "canary-plan-only",
+                    ["canary_summaries", 0],
+                    "plan_only",
+                    "plan_only must be a boolean",
+                ),
+            )
+            for name, path_parts, key, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    target = evidence
+                    for part in path_parts:
+                        target = target[part]
+                    del target[key]
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"missing-{name}.summary.json", evidence)
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_missing_nested_receipt_policy_flag_is_malformed(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "canary",
+                    ["canary_summaries", 0, "receipt_summary"],
+                    "receipt_summary.allow_insecure_http must be a boolean",
+                ),
+                (
+                    "archive",
+                    ["receipt_verification"],
+                    "receipt_verification.allow_insecure_http must be a boolean",
+                ),
+            )
+            for name, path_parts, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = evidence
+                    for part in path_parts:
+                        receipt_summary = receipt_summary[part]
+                    del receipt_summary["allow_insecure_http"]
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"missing-{name}-receipt-policy-flag.summary.json",
+                        evidence,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_missing_canary_stage_and_receipt_kind_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:

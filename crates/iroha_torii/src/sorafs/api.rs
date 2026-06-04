@@ -6232,7 +6232,13 @@ mod gateway_policy_violation_tests {
         sig_entry.insert("algorithm".into(), Value::from("ed25519"));
         sig_entry.insert(
             "signer".into(),
-            Value::from(hex::encode(keypair.public_key().to_bytes().1)),
+            Value::from(hex::encode(
+                keypair
+                    .public_key()
+                    .try_to_bytes()
+                    .expect("fixture public key must be valid")
+                    .1,
+            )),
         );
         sig_entry.insert(
             "signature".into(),
@@ -7956,7 +7962,13 @@ fn alias_proof_b64(alias: &str) -> String {
     let keypair = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
     let signature = Signature::new(keypair.private_key(), message.as_ref());
     let mut signer = [0u8; 32];
-    signer.copy_from_slice(keypair.public_key().to_bytes().1);
+    signer.copy_from_slice(
+        keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid")
+            .1,
+    );
     bundle.council_signatures.push(CouncilSignature {
         signer,
         signature: signature.payload().to_vec(),

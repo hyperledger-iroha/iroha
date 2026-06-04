@@ -7,8 +7,12 @@ use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 #[test]
 fn mldsa_public_key_multihash_roundtrip() {
     let kp = KeyPair::from_seed(b"iroha:ml-dsa:multihash:pk".to_vec(), Algorithm::MlDsa);
-    let pk = mldsa65::PublicKey::from_bytes(kp.public_key().to_bytes().1)
-        .expect("seeded ML-DSA public key");
+    let (algorithm, public_bytes) = kp
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture ML-DSA public key must be well-formed");
+    assert_eq!(algorithm, Algorithm::MlDsa);
+    let pk = mldsa65::PublicKey::from_bytes(public_bytes).expect("seeded ML-DSA public key");
     let pubkey = PublicKey::from_bytes(iroha_crypto::Algorithm::MlDsa, pk.as_bytes())
         .expect("mldsa pk from bytes");
     // Serialize to multihash string
@@ -16,8 +20,16 @@ fn mldsa_public_key_multihash_roundtrip() {
     // Parse back from string
     let parsed: PublicKey = s.parse().expect("parse public key multihash");
     // Compare algorithm and payload bytes
-    assert_eq!(pubkey.algorithm(), parsed.algorithm());
-    assert_eq!(pubkey.to_bytes().1, parsed.to_bytes().1);
+    assert_eq!(
+        pubkey
+            .try_algorithm()
+            .expect("fixture public key algorithm"),
+        parsed.try_algorithm().expect("parsed public key algorithm")
+    );
+    assert_eq!(
+        pubkey.try_to_bytes().expect("fixture public key bytes").1,
+        parsed.try_to_bytes().expect("parsed public key bytes").1
+    );
 }
 
 #[test]

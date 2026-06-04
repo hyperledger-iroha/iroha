@@ -24,7 +24,7 @@ fn dump_mlkem() {
             HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(1); 32]),
             b"dump-kat:mlkem:encapsulate",
         );
-        let keys = generate_mlkem_keypair(suite, &mut key_rng);
+        let keys = generate_mlkem_keypair(suite, &mut key_rng).expect("keypair");
         let (shared, ct) =
             soranet_pq::encapsulate_mlkem(suite, keys.public_key(), &mut enc_rng).unwrap();
         println!("mlkem suite={suite:?}");

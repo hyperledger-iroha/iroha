@@ -896,6 +896,7 @@ _ROUTE_CANARY_TRANSACTION_FIELDS = (
     "route_canary_proof_version",
     "route_canary_proof_source_domain",
     "route_canary_used_message_proof",
+    "route_canary_receipt_block_finalized",
 )
 
 
@@ -974,6 +975,10 @@ def _route_canary_transaction_toml_lines(args: argparse.Namespace) -> list[str]:
             "evm_route_canary_used_message_proof",
             values["used_message_proof"],
         ),
+        _toml_line(
+            "evm_route_canary_receipt_block_finalized",
+            values["receipt_block_finalized"],
+        ),
     ]
 
 
@@ -1024,6 +1029,11 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
         raise ValueError(
             "EVM route canary transaction metadata requires "
             "--route-canary-used-message-proof=true from live bridge state"
+        )
+    if getattr(args, "route_canary_receipt_block_finalized") is not True:
+        raise ValueError(
+            "EVM route canary transaction metadata requires "
+            "--route-canary-receipt-block-finalized=true from finalized live reads"
         )
     receipt_block_number = parse_u64_decimal(
         str(getattr(args, "route_canary_receipt_block_number")),
@@ -1110,6 +1120,10 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
         "proof_version": proof_version,
         "proof_source_domain": proof_source_domain,
         "used_message_proof": getattr(args, "route_canary_used_message_proof"),
+        "receipt_block_finalized": getattr(
+            args,
+            "route_canary_receipt_block_finalized",
+        ),
     }
     _require_distinct_hash_roles(
         tuple(
@@ -1199,6 +1213,8 @@ def _route_canary_transaction_comment_lines(args: argparse.Namespace) -> list[st
         + json.dumps(str(values["proof_source_domain"])),
         "# sccp_evm_route_canary_used_message_proof = "
         + json.dumps("true" if values["used_message_proof"] is True else "false"),
+        "# sccp_evm_route_canary_receipt_block_finalized = "
+        + json.dumps("true" if values["receipt_block_finalized"] is True else "false"),
     ]
 
 
@@ -1267,6 +1283,7 @@ def _route_canary_summary(
                 "proof_version": values["proof_version"],
                 "proof_source_domain": values["proof_source_domain"],
                 "message_proof_used": values["used_message_proof"],
+                "receipt_block_finalized": values["receipt_block_finalized"],
             }
         )
     return summary
@@ -1951,6 +1968,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Assert live bridge state returned usedMessageProofs(messageId) = true "
             "for the canary transaction."
+        ),
+    )
+    parser.add_argument(
+        "--route-canary-receipt-block-finalized",
+        type=lambda value: parse_bool_literal(
+            value,
+            label="route canary receipt block finalized",
+        ),
+        help=(
+            "Assert live finalized execution head proved the canary receipt block "
+            "was finalized."
         ),
     )
     parser.add_argument(

@@ -25,23 +25,27 @@
 
 #![allow(clippy::size_of_ref)]
 use core::convert::TryInto;
+#[cfg(test)]
 use std::vec::Vec;
 
-use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
-};
+use blake2::Digest;
 use group::{Curve, prime::PrimeCurveAffine};
 #[allow(unused_imports)]
 use w3f_bls::SerializableToBytes as _;
 
-use crate::signature::bls::{
-    BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
+use crate::{
+    Blake2b256,
+    signature::bls::{
+        BlsNormalPrivateKey, BlsNormalPublicKey, BlsSmallPrivateKey, BlsSmallPublicKey,
+    },
 };
 
 // Domain separation tags (DST) for VRF hash_to_curve operations
 const DST_G2: &[u8] = b"BLS12381G2_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
 const DST_G1: &[u8] = b"BLS12381G1_XMD:SHA-256_SSWU_RO_IROHA_VRF_V1";
+const VRF_INPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:input|";
+const VRF_INPUT_HASH_SEPARATOR: &[u8] = b"|";
+const VRF_OUTPUT_HASH_DOMAIN: &[u8] = b"iroha:vrf:v1:output";
 
 /// VRF proof: variant-tagged, fixed-size BLS signature bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
@@ -82,29 +86,30 @@ pub enum VrfBlsVariant {
     Small,
 }
 
-fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> Vec<u8> {
-    // DS: "iroha:vrf:v1:input|<chain_id>|<input>"
-    let mut buf =
-        Vec::with_capacity(b"iroha:vrf:v1:input|".len() + chain_id.len() + 1 + input.len());
-    buf.extend_from_slice(b"iroha:vrf:v1:input|");
-    buf.extend_from_slice(chain_id);
-    buf.push(b'|');
-    buf.extend_from_slice(input);
-    blake2b_256(&buf).to_vec()
+fn prehash_input_with_chain(chain_id: &[u8], input: &[u8]) -> [u8; 32] {
+    blake2b_256_chunks(&[
+        VRF_INPUT_HASH_DOMAIN,
+        chain_id,
+        VRF_INPUT_HASH_SEPARATOR,
+        input,
+    ])
 }
 
 fn output_from_sigma(sigma: &[u8]) -> VrfOutput {
-    let mut buf = Vec::with_capacity(b"iroha:vrf:v1:output".len() + sigma.len());
-    buf.extend_from_slice(b"iroha:vrf:v1:output");
-    buf.extend_from_slice(sigma);
-    VrfOutput(blake2b_256(&buf))
+    VrfOutput(blake2b_256_chunks(&[VRF_OUTPUT_HASH_DOMAIN, sigma]))
 }
 
+#[cfg(test)]
 fn blake2b_256(bytes: &[u8]) -> [u8; 32] {
-    let vec_hash = Blake2bVar::new(32)
-        .expect("Failed to initialize variable size hash")
-        .chain(bytes)
-        .finalize_boxed();
+    blake2b_256_chunks(&[bytes])
+}
+
+fn blake2b_256_chunks(chunks: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Blake2b256::new();
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    let vec_hash = hasher.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&vec_hash);
     out
@@ -343,12 +348,14 @@ mod tests {
 
     #[test]
     fn vrf_normal_roundtrip() {
-        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+            .expect("BLS keypair");
         let input = b"vrf:test:normal";
         let chain = b"test-chain";
         let (y1, pi) = prove_normal_with_chain(&sk, chain, input).expect("normal VRF proof");
         // Re-derive pk from sk for verification
-        let (pk2, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
+        let (pk2, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
+            .expect("BLS keypair");
         let y2 = verify_normal_with_chain(&pk2, chain, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
         // Output-only derivation is consistent
@@ -357,11 +364,13 @@ mod tests {
 
     #[test]
     fn vrf_small_roundtrip() {
-        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
+        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
+            .expect("BLS keypair");
         let input = b"vrf:test:small";
         let chain = b"test-chain";
         let (y1, pi) = prove_small_with_chain(&sk, chain, input).expect("small VRF proof");
-        let (pk2, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
+        let (pk2, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
+            .expect("BLS keypair");
         let y2 = verify_small_with_chain(&pk2, chain, input, &pi).expect("valid proof");
         assert_eq!(y1, y2);
         assert_eq!(y1, output_from_proof(&pi));
@@ -370,13 +379,15 @@ mod tests {
     #[test]
     fn cross_protocol_vrf_not_regular_bls() {
         // Normal variant
-        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![9, 9, 9]));
+        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![9, 9, 9]))
+            .expect("BLS keypair");
         let chain = b"chain-A";
         let input = b"input";
         let (y, pi) =
             prove_normal_with_chain(&sk, chain, input).expect("normal cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
-        let (pk, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
+        let (pk, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
+            .expect("BLS keypair");
         // Attempt to verify VRF proof as a regular BLS signature
         if let VrfProof::SigInG2(sig) = pi {
             // Use the VRF prehash as the "message"; w3f-bls still uses a different DST.
@@ -392,13 +403,15 @@ mod tests {
     #[test]
     fn cross_protocol_regular_bls_not_vrf() {
         // Normal variant
-        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![7, 7, 7]));
+        let (_pk, sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![7, 7, 7]))
+            .expect("BLS keypair");
         let msg = b"regular-sign";
-        let sig = bls::BlsNormal::sign(msg, &sk);
+        let sig = bls::BlsNormal::sign(msg, &sk).expect("BLS sign");
         let mut arr = [0u8; 96];
         arr.copy_from_slice(&sig);
         let proof = VrfProof::SigInG2(arr);
-        let (pk, _sk2) = bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk));
+        let (pk, _sk2) =
+            bls::BlsNormal::keypair(crate::KeyGenOption::FromPrivateKey(sk)).expect("BLS keypair");
         let chain = b"chain-A";
         let input = b"input";
         let out = verify_normal_with_chain(&pk, chain, input, &proof);
@@ -411,13 +424,15 @@ mod tests {
     #[test]
     fn cross_protocol_vrf_not_regular_bls_small() {
         // Small variant (SigInG1)
-        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![3, 3, 3]));
+        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![3, 3, 3]))
+            .expect("BLS keypair");
         let chain = b"chain-B";
         let input = b"inputB";
         let (y, pi) =
             prove_small_with_chain(&sk, chain, input).expect("small cross-protocol VRF proof");
         assert!(y.0 != [0u8; 32]);
-        let (pk, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()));
+        let (pk, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk.clone()))
+            .expect("BLS keypair");
         if let VrfProof::SigInG1(sig) = pi {
             let msg = prehash_input_with_chain(chain, input);
             let ok = bls::BlsSmall::verify(&msg, &sig, &pk).is_ok();
@@ -430,13 +445,15 @@ mod tests {
 
     #[test]
     fn cross_protocol_regular_bls_not_vrf_small() {
-        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![4, 4, 4]));
+        let (_pk, sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![4, 4, 4]))
+            .expect("BLS keypair");
         let msg = b"regular-sign-small";
-        let sig = bls::BlsSmall::sign(msg, &sk);
+        let sig = bls::BlsSmall::sign(msg, &sk).expect("BLS sign");
         let mut arr = [0u8; 48];
         arr.copy_from_slice(&sig);
         let proof = VrfProof::SigInG1(arr);
-        let (pk, _sk2) = bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk));
+        let (pk, _sk2) =
+            bls::BlsSmall::keypair(crate::KeyGenOption::FromPrivateKey(sk)).expect("BLS keypair");
         let chain = b"chain-B";
         let input = b"inputB";
         let out = verify_small_with_chain(&pk, chain, input, &proof);
@@ -448,7 +465,8 @@ mod tests {
 
     #[test]
     fn vrf_rejects_identity_signature_normal() {
-        let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        let (pk, _sk) = bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+            .expect("BLS keypair");
         let identity = G2Affine::identity().to_compressed();
         let mut sig = [0u8; 96];
         sig.copy_from_slice(&identity);
@@ -459,7 +477,8 @@ mod tests {
 
     #[test]
     fn vrf_rejects_identity_signature_small() {
-        let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
+        let (pk, _sk) = bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
+            .expect("BLS keypair");
         let identity = G1Affine::identity().to_compressed();
         let mut sig = [0u8; 48];
         sig.copy_from_slice(&identity);
@@ -483,12 +502,14 @@ mod tests {
     #[test]
     fn vrf_rejects_malformed_compressed_signatures() {
         let (normal_pk, _normal_sk) =
-            bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+            bls::BlsNormal::keypair(crate::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+                .expect("BLS keypair");
         let normal_proof = VrfProof::SigInG2([0xFF; 96]);
         assert!(verify_normal_with_chain(&normal_pk, b"chain", b"input", &normal_proof).is_none());
 
         let (small_pk, _small_sk) =
-            bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]));
+            bls::BlsSmall::keypair(crate::KeyGenOption::UseSeed(vec![5, 6, 7, 8]))
+                .expect("BLS keypair");
         let small_proof = VrfProof::SigInG1([0xFF; 48]);
         assert!(verify_small_with_chain(&small_pk, b"chain", b"input", &small_proof).is_none());
     }
@@ -508,6 +529,31 @@ mod tests {
             prove_small_with_chain(&invalid_small, b"chain", b"input"),
             Err(VrfProofError::InvalidSecretKey)
         );
+    }
+
+    #[test]
+    fn vrf_hash_helpers_match_legacy_contiguous_layout() {
+        let chain_id = b"chain|with|separator";
+        let input = b"input\x00with|separator";
+        let mut legacy_input =
+            Vec::with_capacity(VRF_INPUT_HASH_DOMAIN.len() + chain_id.len() + 1 + input.len());
+        legacy_input.extend_from_slice(VRF_INPUT_HASH_DOMAIN);
+        legacy_input.extend_from_slice(chain_id);
+        legacy_input.extend_from_slice(VRF_INPUT_HASH_SEPARATOR);
+        legacy_input.extend_from_slice(input);
+        assert_eq!(
+            prehash_input_with_chain(chain_id, input),
+            blake2b_256(&legacy_input)
+        );
+
+        let mut sigma = [0u8; 96];
+        for (index, byte) in sigma.iter_mut().enumerate() {
+            *byte = u8::try_from(index).expect("sigma fixture index fits in u8");
+        }
+        let mut legacy_output = Vec::with_capacity(VRF_OUTPUT_HASH_DOMAIN.len() + sigma.len());
+        legacy_output.extend_from_slice(VRF_OUTPUT_HASH_DOMAIN);
+        legacy_output.extend_from_slice(&sigma);
+        assert_eq!(output_from_sigma(&sigma).0, blake2b_256(&legacy_output));
     }
 
     #[test]
@@ -531,7 +577,7 @@ mod tests {
             assert!(tries < 256, "failed to find raw digest with LSB=0");
         };
         let prehashed = prehash_input_with_chain(chain_id, &input);
-        assert_eq!(prehashed, expected.to_vec());
+        assert_eq!(prehashed, expected);
         assert_eq!(prehashed[31] & 1, 0);
     }
 

@@ -207,7 +207,8 @@ async fn offline_note_v2_issue_audit_redeem_real_proofs_on_four_peers() -> Resul
 
 fn signed_certificate(seed: u8, key_id: &str) -> Result<OfflineNoteKeyCertificateV2> {
     let note_key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    let (_algorithm, public_key) = note_key.public_key().to_bytes();
+    let (algorithm, public_key) = note_key.public_key().try_to_bytes()?;
+    eyre::ensure!(algorithm == Algorithm::Ed25519, "note key must be Ed25519");
     let mut certificate = OfflineNoteKeyCertificateV2 {
         version: 2,
         platform: "integration-test".to_owned(),

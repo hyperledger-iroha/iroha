@@ -191,6 +191,23 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(emitted[0]["x509_require_crl_revocation_check"], True)
             self.assertEqual(emitted[0]["x509_require_ocsp_revocation_check"], True)
 
+    def test_revocation_policy_flags_are_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            for flag in (
+                "x509_require_crl_revocation_check",
+                "x509_require_ocsp_revocation_check",
+            ):
+                with self.subTest(flag=flag):
+                    bundle = valid_bundle()
+                    del bundle[flag]
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{flag} must be a boolean", stderr)
+
     def test_declared_der_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

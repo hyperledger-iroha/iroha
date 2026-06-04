@@ -62,6 +62,8 @@ const BFV_PROGRAM_MIN_CIPHERTEXT_MODULUS: u64 = 1_u64 << 52;
 const BFV_PROGRAM_REGISTER_COUNT_U16: u16 = 4;
 const BFV_PROGRAM_STATE_WIDTH_U16: u16 = 32;
 const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT: usize = 64;
+const BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16: u16 = 64;
+const BFV_PROGRAM_MAX_INSTRUCTIONS: usize = BFV_PROGRAM_IDENTIFIER_SLOT_COUNT * 4;
 const RAM_LFE_PROOF_BACKEND_MAX_BYTES: usize = 128;
 const RAM_LFE_PROOF_CIRCUIT_ID_MAX_BYTES: usize = 256;
 const RAM_LFE_PROOF_VERIFYING_KEY_MAX_BYTES: usize = 1_048_576;
@@ -184,7 +186,7 @@ impl HiddenRamFheProgram {
     /// Returns the underlying Norito encoding error when serialization fails.
     pub fn digest(&self) -> Result<Hash, norito::core::Error> {
         self.to_bytes()
-            .map(|bytes| Hash::new([BFV_PROGRAM_DIGEST_DOMAIN, bytes.as_slice()].concat()))
+            .map(|bytes| Hash::new_from_chunks(&[BFV_PROGRAM_DIGEST_DOMAIN, bytes.as_slice()]))
     }
 }
 
@@ -375,14 +377,12 @@ pub const fn bfv_program_profile() -> BfvRamProgramProfile {
 /// Return the canonical hidden program used by the historical identifier-programmed backend.
 #[must_use]
 pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
-    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT)
+    let instructions = (0..BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16)
         .flat_map(|slot| {
-            let slot_u16 = u16::try_from(slot).expect("identifier slot index fits into u16");
-            let lane_u16 =
-                u16::try_from(slot % BFV_PROGRAM_STATE_WIDTH).expect("state lane fits into u16");
+            let lane = slot % BFV_PROGRAM_STATE_WIDTH_U16;
             [
-                HiddenRamFheInstruction::LoadInput(0, slot_u16),
-                HiddenRamFheInstruction::LoadState(1, lane_u16),
+                HiddenRamFheInstruction::LoadInput(0, slot),
+                HiddenRamFheInstruction::LoadState(1, lane),
                 HiddenRamFheInstruction::Add(2, 0, 1),
                 HiddenRamFheInstruction::Output(2),
             ]
@@ -399,7 +399,7 @@ pub fn default_bfv_programmed_hidden_program() -> HiddenRamFheProgram {
 /// Hash arbitrary RAM-LFE output bytes into a stable digest.
 #[must_use]
 pub fn ram_lfe_output_hash(output: &[u8]) -> Hash {
-    Hash::new([RAM_FHE_OUTPUT_HASH_DOMAIN, output].concat())
+    Hash::new_from_chunks(&[RAM_FHE_OUTPUT_HASH_DOMAIN, output])
 }
 
 /// Derive the identifier-facing opaque id and receipt hash from engine output bytes.
@@ -411,23 +411,17 @@ pub fn identifier_hashes_from_program_output(program_id: &[u8], output: &[u8]) -
 /// Derive the identifier-facing opaque id and receipt hash from a precomputed output hash.
 #[must_use]
 pub fn identifier_hashes_from_output_hash(program_id: &[u8], output_hash: &Hash) -> (Hash, Hash) {
-    let opaque_id = Hash::new(
-        [
-            IDENTIFIER_OUTPUT_OPAQUE_HASH_DOMAIN,
-            program_id,
-            output_hash.as_ref(),
-        ]
-        .concat(),
-    );
-    let receipt_hash = Hash::new(
-        [
-            IDENTIFIER_OUTPUT_RECEIPT_HASH_DOMAIN,
-            program_id,
-            output_hash.as_ref(),
-            opaque_id.as_ref(),
-        ]
-        .concat(),
-    );
+    let opaque_id = Hash::new_from_chunks(&[
+        IDENTIFIER_OUTPUT_OPAQUE_HASH_DOMAIN,
+        program_id,
+        output_hash.as_ref(),
+    ]);
+    let receipt_hash = Hash::new_from_chunks(&[
+        IDENTIFIER_OUTPUT_RECEIPT_HASH_DOMAIN,
+        program_id,
+        output_hash.as_ref(),
+        opaque_id.as_ref(),
+    ]);
     (opaque_id, receipt_hash)
 }
 
@@ -610,10 +604,10 @@ fn build_policy_commitment(
     backend: RamLfeBackend,
 ) -> Result<PolicyCommitment, RamLfeError> {
     validate_secret(secret)?;
-    let secret_commitment = Hash::new([SECRET_COMMITMENT_DOMAIN, secret].concat());
+    let secret_commitment = Hash::new_from_chunks(&[SECRET_COMMITMENT_DOMAIN, secret]);
     let transcript = norito::to_bytes(&(backend, public_parameters.clone(), secret_commitment))
         .map_err(|err| RamLfeError::TranscriptEncoding(err.to_string()))?;
-    let policy_hash = Hash::new([POLICY_DOMAIN, transcript.as_slice()].concat());
+    let policy_hash = Hash::new_from_chunks(&[POLICY_DOMAIN, transcript.as_slice()]);
     Ok(PolicyCommitment {
         backend,
         policy_hash,
@@ -705,7 +699,7 @@ fn evaluate_hkdf_prf(
     hkdf.expand(&opaque_info, &mut opaque_material)
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
-    let opaque_id = Hash::new([OPAQUE_HASH_DOMAIN, opaque_material.as_slice()].concat());
+    let opaque_id = Hash::new_from_chunks(&[OPAQUE_HASH_DOMAIN, opaque_material.as_slice()]);
 
     let mut receipt_material = [0_u8; Hash::LENGTH];
     let receipt_info = [
@@ -717,14 +711,11 @@ fn evaluate_hkdf_prf(
     hkdf.expand(&receipt_info, &mut receipt_material)
         .map_err(|_| RamLfeError::DerivationFailed)?;
 
-    let receipt_hash = Hash::new(
-        [
-            RECEIPT_HASH_DOMAIN,
-            receipt_material.as_slice(),
-            opaque_id.as_ref(),
-        ]
-        .concat(),
-    );
+    let receipt_hash = Hash::new_from_chunks(&[
+        RECEIPT_HASH_DOMAIN,
+        receipt_material.as_slice(),
+        opaque_id.as_ref(),
+    ]);
     Ok(EvalResponse {
         output: request.normalized_input.clone(),
         opaque_id,
@@ -764,23 +755,17 @@ fn evaluate_bfv_affine(
         evaluate_affine_circuit(&public_parameters.parameters, &circuit, &ciphertext.slots)
             .map_err(|err| map_bfv_error(&err))?;
     let output_bytes = decrypt_affine_outputs(&public_parameters, &secret_key, &outputs)?;
-    let opaque_id = Hash::new(
-        [
-            BFV_AFFINE_OPAQUE_HASH_DOMAIN,
-            commitment.policy_hash.as_ref(),
-            output_bytes.as_slice(),
-        ]
-        .concat(),
-    );
-    let receipt_hash = Hash::new(
-        [
-            BFV_AFFINE_RECEIPT_HASH_DOMAIN,
-            commitment.policy_hash.as_ref(),
-            output_bytes.as_slice(),
-            opaque_id.as_ref(),
-        ]
-        .concat(),
-    );
+    let opaque_id = Hash::new_from_chunks(&[
+        BFV_AFFINE_OPAQUE_HASH_DOMAIN,
+        commitment.policy_hash.as_ref(),
+        output_bytes.as_slice(),
+    ]);
+    let receipt_hash = Hash::new_from_chunks(&[
+        BFV_AFFINE_RECEIPT_HASH_DOMAIN,
+        commitment.policy_hash.as_ref(),
+        output_bytes.as_slice(),
+        opaque_id.as_ref(),
+    ]);
     Ok(EvalResponse {
         output: output_bytes,
         opaque_id,
@@ -841,23 +826,17 @@ fn evaluate_bfv_programmed(
         evaluation_keys: &public_parameters.evaluation_keys,
     };
     let output_bytes = execute_hidden_program(&execution, program, &ciphertext.slots, &mut state)?;
-    let opaque_id = Hash::new(
-        [
-            BFV_PROGRAM_OPAQUE_HASH_DOMAIN,
-            commitment.policy_hash.as_ref(),
-            output_bytes.as_slice(),
-        ]
-        .concat(),
-    );
-    let receipt_hash = Hash::new(
-        [
-            BFV_PROGRAM_RECEIPT_HASH_DOMAIN,
-            commitment.policy_hash.as_ref(),
-            output_bytes.as_slice(),
-            opaque_id.as_ref(),
-        ]
-        .concat(),
-    );
+    let opaque_id = Hash::new_from_chunks(&[
+        BFV_PROGRAM_OPAQUE_HASH_DOMAIN,
+        commitment.policy_hash.as_ref(),
+        output_bytes.as_slice(),
+    ]);
+    let receipt_hash = Hash::new_from_chunks(&[
+        BFV_PROGRAM_RECEIPT_HASH_DOMAIN,
+        commitment.policy_hash.as_ref(),
+        output_bytes.as_slice(),
+        opaque_id.as_ref(),
+    ]);
     Ok(EvalResponse {
         output: output_bytes,
         opaque_id,
@@ -936,6 +915,12 @@ fn validate_programmed_evaluation_keys(
     if !evaluation_keys.rotation_keys.is_empty() {
         return Err(RamLfeError::Bfv(
             "programmed BFV public parameters must not publish rotation refresh keys".to_owned(),
+        ));
+    }
+    if !evaluation_keys.galois_keys.is_empty() {
+        return Err(RamLfeError::Bfv(
+            "programmed BFV public parameters must not publish Galois key-switching keys"
+                .to_owned(),
         ));
     }
     if evaluation_keys.bootstrap_key.is_some() {
@@ -1063,21 +1048,17 @@ fn derive_program_rng(
     secret: &[u8],
     commitment: &PolicyCommitment,
     request: &ClientRequest,
-    step: usize,
+    step: u64,
     domain: &[u8],
 ) -> ChaCha20Rng {
-    let seed: [u8; Hash::LENGTH] = Hash::new(
-        [
-            domain,
-            secret,
-            commitment.policy_hash.as_ref(),
-            request.associated_data.as_slice(),
-            &u64::try_from(step)
-                .expect("step fits into u64")
-                .to_le_bytes(),
-        ]
-        .concat(),
-    )
+    let step_bytes = step.to_le_bytes();
+    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+        domain,
+        secret,
+        commitment.policy_hash.as_ref(),
+        request.associated_data.as_slice(),
+        &step_bytes,
+    ])
     .into();
     ChaCha20Rng::from_seed(seed)
 }
@@ -1345,6 +1326,11 @@ fn validate_hidden_program(program: &HiddenRamFheProgram) -> Result<(), RamLfeEr
             "program instruction tape must not be empty",
         ));
     }
+    if program.instructions.len() > BFV_PROGRAM_MAX_INSTRUCTIONS {
+        return Err(invalid_program_error(&format!(
+            "program instruction tape exceeds maximum {BFV_PROGRAM_MAX_INSTRUCTIONS} instructions"
+        )));
+    }
     if !program
         .instructions
         .iter()
@@ -1511,15 +1497,12 @@ fn derive_secret_affine_circuit(
     request: &ClientRequest,
 ) -> Result<BfvAffineCircuit, RamLfeError> {
     let input_count = usize::from(public_parameters.max_input_bytes).saturating_add(1);
-    let seed: [u8; Hash::LENGTH] = Hash::new(
-        [
-            BFV_AFFINE_CIRCUIT_DOMAIN,
-            secret,
-            commitment.policy_hash.as_ref(),
-            request.associated_data.as_slice(),
-        ]
-        .concat(),
-    )
+    let seed: [u8; Hash::LENGTH] = Hash::new_from_chunks(&[
+        BFV_AFFINE_CIRCUIT_DOMAIN,
+        secret,
+        commitment.policy_hash.as_ref(),
+        request.associated_data.as_slice(),
+    ])
     .into();
     let mut rng = ChaCha20Rng::from_seed(seed);
     let mut weights = Vec::with_capacity(BFV_AFFINE_OUTPUT_BYTES);
@@ -1617,6 +1600,115 @@ mod tests {
     }
 
     #[test]
+    fn ram_lfe_chunked_transcripts_match_legacy_contiguous_layout() {
+        let program = default_bfv_programmed_hidden_program();
+        let program_bytes = program.to_bytes().expect("encode hidden program");
+        assert_eq!(
+            program.digest().expect("hidden program digest"),
+            Hash::new([BFV_PROGRAM_DIGEST_DOMAIN, program_bytes.as_slice()].concat())
+        );
+
+        let output = b"ram-lfe-output";
+        let output_hash = ram_lfe_output_hash(output);
+        assert_eq!(
+            output_hash,
+            Hash::new([RAM_FHE_OUTPUT_HASH_DOMAIN, &output[..]].concat())
+        );
+
+        let program_id = b"phone#retail";
+        let (opaque_id, receipt_hash) =
+            identifier_hashes_from_output_hash(program_id, &output_hash);
+        let legacy_opaque_id = Hash::new(
+            [
+                IDENTIFIER_OUTPUT_OPAQUE_HASH_DOMAIN,
+                &program_id[..],
+                output_hash.as_ref(),
+            ]
+            .concat(),
+        );
+        let legacy_receipt_hash = Hash::new(
+            [
+                IDENTIFIER_OUTPUT_RECEIPT_HASH_DOMAIN,
+                &program_id[..],
+                output_hash.as_ref(),
+                legacy_opaque_id.as_ref(),
+            ]
+            .concat(),
+        );
+        assert_eq!(opaque_id, legacy_opaque_id);
+        assert_eq!(receipt_hash, legacy_receipt_hash);
+
+        let secret = b"resolver-secret";
+        let public_parameters = b"phone#retail".to_vec();
+        let commitment =
+            policy_commitment(secret, public_parameters.clone()).expect("policy commitment");
+        let legacy_secret_commitment = Hash::new([SECRET_COMMITMENT_DOMAIN, &secret[..]].concat());
+        let legacy_transcript = norito::to_bytes(&(
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            public_parameters,
+            legacy_secret_commitment,
+        ))
+        .expect("encode policy transcript");
+        assert_eq!(
+            commitment.policy_hash,
+            Hash::new([POLICY_DOMAIN, legacy_transcript.as_slice()].concat())
+        );
+    }
+
+    #[test]
+    fn program_rng_derivation_binds_step_without_conversion() {
+        let commitment = PolicyCommitment {
+            backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+            policy_hash: Hash::new(b"program-rng-policy"),
+            public_parameters: Vec::new(),
+        };
+        let request = ClientRequest {
+            normalized_input: Vec::new(),
+            associated_data: b"phone#retail".to_vec(),
+        };
+
+        let mut first = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            1,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let mut second = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            1,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let mut other_step = derive_program_rng(
+            b"secret",
+            &commitment,
+            &request,
+            2,
+            BFV_PROGRAM_MEMORY_DOMAIN,
+        );
+        let first_value = first.random::<u64>();
+        assert_eq!(first_value, second.random::<u64>());
+        assert_ne!(first_value, other_step.random::<u64>());
+
+        let step_bytes = 1_u64.to_le_bytes();
+        let legacy_seed: [u8; Hash::LENGTH] = Hash::new(
+            [
+                BFV_PROGRAM_MEMORY_DOMAIN,
+                b"secret".as_slice(),
+                commitment.policy_hash.as_ref(),
+                request.associated_data.as_slice(),
+                step_bytes.as_slice(),
+            ]
+            .concat(),
+        )
+        .into();
+        let mut legacy = <ChaCha20Rng as rand::SeedableRng>::from_seed(legacy_seed);
+        assert_eq!(first_value, legacy.random::<u64>());
+    }
+
+    #[test]
     fn bfv_affine_policy_commitment_roundtrip_evaluates() {
         let secret = b"resolver-secret";
         let params = ram_lfe_bfv_parameters_v1();
@@ -1658,6 +1750,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let programmed =
@@ -1707,6 +1800,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
 
@@ -1738,16 +1832,44 @@ mod tests {
     }
 
     #[test]
+    fn default_bfv_programmed_hidden_program_uses_profile_indexes() {
+        let program = default_bfv_programmed_hidden_program();
+        validate_hidden_ram_fhe_program(&program).expect("default program validates");
+        assert_eq!(program.register_count, BFV_PROGRAM_REGISTER_COUNT_U16);
+        assert_eq!(program.memory_lane_count, BFV_PROGRAM_STATE_WIDTH_U16);
+        assert_eq!(
+            program.instructions.len(),
+            BFV_PROGRAM_IDENTIFIER_SLOT_COUNT * 4
+        );
+        assert_eq!(
+            program.instructions.first(),
+            Some(&HiddenRamFheInstruction::LoadInput(0, 0))
+        );
+        assert_eq!(
+            program.instructions.get(4),
+            Some(&HiddenRamFheInstruction::LoadInput(0, 1))
+        );
+        assert_eq!(
+            program.instructions.get(4 * BFV_PROGRAM_STATE_WIDTH),
+            Some(&HiddenRamFheInstruction::LoadInput(
+                0,
+                BFV_PROGRAM_STATE_WIDTH_U16
+            ))
+        );
+        assert_eq!(
+            program.instructions.last(),
+            Some(&HiddenRamFheInstruction::Output(2))
+        );
+    }
+
+    #[test]
     fn hidden_program_validation_rejects_static_index_overflow() {
         let program = HiddenRamFheProgram {
             version: 1,
             register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
             memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
             instructions: vec![
-                HiddenRamFheInstruction::LoadInput(
-                    0,
-                    u16::try_from(BFV_PROGRAM_IDENTIFIER_SLOT_COUNT).expect("slot count fits"),
-                ),
+                HiddenRamFheInstruction::LoadInput(0, BFV_PROGRAM_IDENTIFIER_SLOT_COUNT_U16),
                 HiddenRamFheInstruction::Output(0),
             ],
         };
@@ -1807,6 +1929,23 @@ mod tests {
         let err = validate_hidden_ram_fhe_program(&program)
             .expect_err("programs cannot emit more output slots than the profile admits");
         assert!(err.to_string().contains("too many output slots"));
+    }
+
+    #[test]
+    fn hidden_program_validation_rejects_oversized_instruction_tape() {
+        let program = HiddenRamFheProgram {
+            version: 1,
+            register_count: BFV_PROGRAM_REGISTER_COUNT_U16,
+            memory_lane_count: BFV_PROGRAM_STATE_WIDTH_U16,
+            instructions: vec![
+                HiddenRamFheInstruction::LoadConst(0, 1);
+                BFV_PROGRAM_MAX_INSTRUCTIONS + 1
+            ],
+        };
+
+        let err = validate_hidden_ram_fhe_program(&program)
+            .expect_err("oversized instruction tapes must be rejected before execution");
+        assert!(err.to_string().contains("maximum"));
     }
 
     #[test]
@@ -1892,6 +2031,7 @@ mod tests {
             BfvEvaluationKeyBundle {
                 relinearization_key,
                 rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
                 bootstrap_key: None,
             },
             &program,
@@ -1939,6 +2079,7 @@ mod tests {
             BfvEvaluationKeyBundle {
                 relinearization_key,
                 rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
                 bootstrap_key: None,
             },
             &program,
@@ -2070,7 +2211,7 @@ mod tests {
         let params = ram_lfe_bfv_parameters_v1();
         let associated_data = b"phone#retail";
         let program = default_bfv_programmed_hidden_program();
-        let (public_parameters, _, relinearization_key) =
+        let (public_parameters, secret_key, relinearization_key) =
             derive_identifier_key_material_from_seed(&params, 63, secret, associated_data)
                 .expect("derive BFV public parameters");
         let programmed = bfv_programmed_public_parameters_with_program(
@@ -2078,6 +2219,7 @@ mod tests {
             BfvEvaluationKeyBundle {
                 relinearization_key,
                 rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
                 bootstrap_key: None,
             },
             &program,
@@ -2104,6 +2246,26 @@ mod tests {
         )
         .expect_err("programmed public parameters must reject unused rotation keys");
         assert!(err.to_string().contains("rotation refresh keys"));
+
+        let mut with_galois = programmed.clone();
+        with_galois.evaluation_keys.galois_keys.push(
+            crate::galois_key_from_seed(
+                &params,
+                &secret_key,
+                3,
+                b"bfv-programmed-unused-galois-key",
+            )
+            .expect("Galois key"),
+        );
+        with_galois.evaluation_key_digest = with_galois
+            .evaluation_keys
+            .digest(&params)
+            .expect("updated evaluation-key digest");
+        let err = decode_bfv_programmed_public_parameters(
+            &norito::to_bytes(&with_galois).expect("encode Galois-key abuse"),
+        )
+        .expect_err("programmed public parameters must reject unused Galois keys");
+        assert!(err.to_string().contains("Galois key-switching keys"));
 
         let mut with_bootstrap = programmed;
         with_bootstrap.evaluation_keys.bootstrap_key = Some(
@@ -2140,6 +2302,7 @@ mod tests {
             BfvEvaluationKeyBundle {
                 relinearization_key,
                 rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
                 bootstrap_key: None,
             },
             &program,
@@ -2196,6 +2359,7 @@ mod tests {
             BfvEvaluationKeyBundle {
                 relinearization_key,
                 rotation_keys: Vec::new(),
+                galois_keys: Vec::new(),
                 bootstrap_key: None,
             },
             &program,
@@ -2261,6 +2425,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let debug_verifier = RamLfeProofVerifierMetadata {
@@ -2300,6 +2465,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let programmed =

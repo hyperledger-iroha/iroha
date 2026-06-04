@@ -23,12 +23,14 @@ use soranet_pq::{MlDsaError, MlDsaSuite, sign_mldsa_from_os, verify_mldsa};
 use thiserror::Error;
 
 const TOKEN_MAGIC: &[u8; 4] = b"SNTK";
-const BODY_DOMAIN: &[u8] = b"soranet.token.body.v1";
+const BODY_DOMAIN: &[u8; 21] = b"soranet.token.body.v1";
 const ID_DOMAIN: &[u8] = b"soranet.token.id.v1";
 const ISSUER_DOMAIN: &[u8] = b"soranet.token.issuer.v1";
 
-/// Length of the serialized token body (excluding magic, version, and signature).
+/// Length of the version-prefixed token body (excluding magic and signature).
 const BODY_LEN: usize = 1 + 1 + 8 + 8 + 32 + 32 + 16 + 32;
+/// Length of the domain-separated body signed by the issuer.
+const SIGNING_BODY_LEN: usize = BODY_DOMAIN.len() + BODY_LEN - 1;
 /// Minimum envelope length (magic + version + body + signature length prefix).
 const MIN_FRAME_LEN: usize = TOKEN_MAGIC.len() + 1 + BODY_LEN + 2;
 /// Flags defined for v1 tokens (all bits reserved).
@@ -206,8 +208,9 @@ impl AdmissionToken {
     #[must_use]
     pub fn token_id(&self) -> [u8; 32] {
         let mut hasher = Hasher::new();
+        let body = self.body_bytes();
         hasher.update(ID_DOMAIN);
-        hasher.update(&self.body_bytes());
+        hasher.update(&body);
         hasher.update(self.signature());
         hasher.finalize().into()
     }
@@ -274,7 +277,7 @@ impl AdmissionToken {
         })
     }
 
-    fn body_bytes(&self) -> Vec<u8> {
+    fn body_bytes(&self) -> [u8; SIGNING_BODY_LEN] {
         encode_body(
             self.flags,
             self.issued_at,
@@ -463,14 +466,9 @@ impl AdmissionTokenVerifier {
 
         self.preflight_crypto_material(token)?;
 
-        verify_mldsa(
-            self.suite,
-            &self.public_key,
-            &[],
-            &token.body_bytes(),
-            token.signature(),
-        )
-        .map_err(VerifyError::Signature)?;
+        let body = token.body_bytes();
+        verify_mldsa(self.suite, &self.public_key, &[], &body, token.signature())
+            .map_err(VerifyError::Signature)?;
 
         if let Some(store) = &self.replay_store {
             let token_id = token.token_id();
@@ -961,16 +959,28 @@ fn encode_body(
     transcript_hash: &[u8; 32],
     nonce: &[u8; 16],
     issuer_fingerprint: &[u8; 32],
-) -> Vec<u8> {
-    let mut body = Vec::with_capacity(BODY_DOMAIN.len() + BODY_LEN);
-    body.extend_from_slice(BODY_DOMAIN);
-    body.push(flags);
-    body.extend_from_slice(&issued_at.to_be_bytes());
-    body.extend_from_slice(&expires_at.to_be_bytes());
-    body.extend_from_slice(relay_id);
-    body.extend_from_slice(transcript_hash);
-    body.extend_from_slice(nonce);
-    body.extend_from_slice(issuer_fingerprint);
+) -> [u8; SIGNING_BODY_LEN] {
+    let mut body = [0u8; SIGNING_BODY_LEN];
+    let mut cursor = 0;
+
+    body[cursor..cursor + BODY_DOMAIN.len()].copy_from_slice(BODY_DOMAIN);
+    cursor += BODY_DOMAIN.len();
+    body[cursor] = flags;
+    cursor += 1;
+    body[cursor..cursor + 8].copy_from_slice(&issued_at.to_be_bytes());
+    cursor += 8;
+    body[cursor..cursor + 8].copy_from_slice(&expires_at.to_be_bytes());
+    cursor += 8;
+    body[cursor..cursor + relay_id.len()].copy_from_slice(relay_id);
+    cursor += relay_id.len();
+    body[cursor..cursor + transcript_hash.len()].copy_from_slice(transcript_hash);
+    cursor += transcript_hash.len();
+    body[cursor..cursor + nonce.len()].copy_from_slice(nonce);
+    cursor += nonce.len();
+    body[cursor..cursor + issuer_fingerprint.len()].copy_from_slice(issuer_fingerprint);
+    cursor += issuer_fingerprint.len();
+    debug_assert_eq!(cursor, SIGNING_BODY_LEN);
+
     body
 }
 
@@ -1141,6 +1151,40 @@ mod tests {
             }
             other => panic!("expected ML-DSA bad encoding error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn signing_body_matches_legacy_contiguous_layout() {
+        let token = AdmissionToken {
+            flags: 0,
+            issued_at: 1_700_000_000,
+            expires_at: 1_700_000_600,
+            relay_id: RELAY_ID,
+            transcript_hash: TRANSCRIPT,
+            nonce: [0xAB; 16],
+            issuer_fingerprint: [0xEF; 32],
+            signature: vec![0x55; 128],
+        };
+
+        let mut legacy = Vec::with_capacity(BODY_DOMAIN.len() + BODY_LEN);
+        legacy.extend_from_slice(BODY_DOMAIN);
+        legacy.push(token.flags);
+        legacy.extend_from_slice(&token.issued_at.to_be_bytes());
+        legacy.extend_from_slice(&token.expires_at.to_be_bytes());
+        legacy.extend_from_slice(&token.relay_id);
+        legacy.extend_from_slice(&token.transcript_hash);
+        legacy.extend_from_slice(&token.nonce);
+        legacy.extend_from_slice(&token.issuer_fingerprint);
+
+        assert_eq!(legacy.len(), SIGNING_BODY_LEN);
+        assert_eq!(token.body_bytes().as_slice(), legacy.as_slice());
+
+        let mut legacy_id = Hasher::new();
+        legacy_id.update(ID_DOMAIN);
+        legacy_id.update(&legacy);
+        legacy_id.update(token.signature());
+        let expected_id: [u8; 32] = legacy_id.finalize().into();
+        assert_eq!(token.token_id(), expected_id);
     }
 
     #[test]

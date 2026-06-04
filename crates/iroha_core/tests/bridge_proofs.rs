@@ -53,7 +53,10 @@ fn solana_vote_public_keys(signers: &[iroha_crypto::KeyPair; 4]) -> Vec<Vec<u8>>
     signers
         .iter()
         .map(|signer| {
-            let (algorithm, bytes) = signer.public_key().to_bytes();
+            let (algorithm, bytes) = signer
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture Solana vote public key must be well-formed");
             assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
             bytes.to_vec()
         })
@@ -704,7 +707,10 @@ fn bsc_validator_public_keys(signers: &[iroha_crypto::KeyPair; 4]) -> Vec<Vec<u8
     signers
         .iter()
         .map(|signer| {
-            let (algorithm, bytes) = signer.public_key().to_bytes();
+            let (algorithm, bytes) = signer
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture BSC validator public key must be well-formed");
             assert_eq!(algorithm, iroha_crypto::Algorithm::Secp256k1);
             bytes.to_vec()
         })

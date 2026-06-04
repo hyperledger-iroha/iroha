@@ -647,7 +647,7 @@ fn validate_native_amx_attestation_qc(
             }
             signer_count = signer_count.saturating_add(1);
             let signer = &qc.validator_set[signer_index];
-            if signer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+            if !crate::sumeragi::is_bls_normal_public_key(signer.public_key()) {
                 return Err("native AMX attestation signer is not a BLS normal key".to_owned());
             }
             let Some(pop) =
@@ -4585,6 +4585,10 @@ pub(crate) mod valid {
             Ok(())
         }
 
+        fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
+            crate::sumeragi::is_bls_normal_public_key(public_key)
+        }
+
         fn verify_leader_signature(
             block: &SignedBlock,
             topology: &Topology,
@@ -4592,7 +4596,7 @@ pub(crate) mod valid {
             use SignatureVerificationError::{LeaderMissing, UnknownSignature};
 
             // Enforce BLS-normal for leader
-            if topology.leader().public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+            if !Self::is_bls_normal_public_key(topology.leader().public_key()) {
                 return Err(LeaderMissing);
             }
 
@@ -4628,7 +4632,7 @@ pub(crate) mod valid {
                         usize::try_from(signature.index()).map_err(|_err| UnknownSignatory)?;
                     let signatory: &PeerId =
                         topology.as_ref().get(signatory).ok_or(UnknownSignatory)?;
-                    if signatory.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+                    if !Self::is_bls_normal_public_key(signatory.public_key()) {
                         return Err(UnknownSignature);
                     }
 
@@ -4712,7 +4716,7 @@ pub(crate) mod valid {
                 let role = topology.role(peer);
                 match role {
                     Role::Leader | Role::ValidatingPeer | Role::ProxyTail | Role::SetBValidator => {
-                        if peer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+                        if !Self::is_bls_normal_public_key(peer.public_key()) {
                             return Err(SignatureVerificationError::UnknownSignature);
                         }
                         signature
@@ -4745,7 +4749,7 @@ pub(crate) mod valid {
                 let role = topology.role(peer);
                 match role {
                     Role::Leader | Role::ValidatingPeer | Role::ProxyTail | Role::SetBValidator => {
-                        if peer.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+                        if !Self::is_bls_normal_public_key(peer.public_key()) {
                             return Err(SignatureVerificationError::UnknownSignature);
                         }
                         let pop = pops
@@ -4825,20 +4829,17 @@ pub(crate) mod valid {
                 if !record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks) {
                     continue;
                 }
-                match record.public_key.algorithm() {
-                    iroha_crypto::Algorithm::BlsNormal => {
-                        let Some(pop) = record.pop.as_ref() else {
-                            return Err(SignatureVerificationError::MissingPop);
-                        };
-                        if let Some(existing) = pops.get(&record.public_key) {
-                            if existing.as_slice() != pop.as_slice() {
-                                return Err(SignatureVerificationError::Other);
-                            }
-                            continue;
+                if Self::is_bls_normal_public_key(&record.public_key) {
+                    let Some(pop) = record.pop.as_ref() else {
+                        return Err(SignatureVerificationError::MissingPop);
+                    };
+                    if let Some(existing) = pops.get(&record.public_key) {
+                        if existing.as_slice() != pop.as_slice() {
+                            return Err(SignatureVerificationError::Other);
                         }
-                        pops.insert(record.public_key.clone(), pop.clone());
+                        continue;
                     }
-                    _ => {}
+                    pops.insert(record.public_key.clone(), pop.clone());
                 }
             }
             Ok(pops)
@@ -6322,7 +6323,10 @@ pub(crate) mod valid {
                 let AccountController::Single(signatory) = tx.authority().controller() else {
                     continue;
                 };
-                let small = match signatory.algorithm() {
+                let Ok((algorithm, pk_bytes)) = signatory.try_to_bytes() else {
+                    continue;
+                };
+                let small = match algorithm {
                     iroha_crypto::Algorithm::BlsNormal => false,
                     iroha_crypto::Algorithm::BlsSmall => true,
                     _ => continue,
@@ -6356,7 +6360,7 @@ pub(crate) mod valid {
                 let item = BlsItem {
                     idx,
                     pk: signatory.clone(),
-                    pk_bytes: signatory.to_bytes().1.to_vec(),
+                    pk_bytes: pk_bytes.to_vec(),
                     pop,
                     msg,
                     sig,
@@ -7638,9 +7642,11 @@ pub(crate) mod valid {
                         else {
                             continue;
                         };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                        let Ok((iroha_crypto::Algorithm::Ed25519, pk_bytes)) =
+                            signatory.try_to_bytes()
+                        else {
                             continue;
-                        }
+                        };
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
                             prechecked_signature_results[idx] =
@@ -7648,7 +7654,6 @@ pub(crate) mod valid {
                             continue;
                         }
                         let Some(public_key) = prepared.metadata.single_ed25519_key else {
-                            let (_algo, pk_bytes) = signatory.to_bytes();
                             if pk_bytes.len() != 32 {
                                 prechecked_signature_results[idx] =
                                     Some(malformed_signature(tx, "bad signature or key length"));
@@ -7700,10 +7705,11 @@ pub(crate) mod valid {
                         else {
                             continue;
                         };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::Secp256k1 {
+                        let Ok((iroha_crypto::Algorithm::Secp256k1, pk_bytes)) =
+                            signatory.try_to_bytes()
+                        else {
                             continue;
-                        }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
+                        };
                         let sig_bytes = tx.signature().payload().payload();
                         if sig_bytes.len() != 64 {
                             prechecked_signature_results[idx] =
@@ -7793,10 +7799,11 @@ pub(crate) mod valid {
                         else {
                             continue;
                         };
-                        if signatory.algorithm() != iroha_crypto::Algorithm::MlDsa {
+                        let Ok((iroha_crypto::Algorithm::MlDsa, pk_bytes)) =
+                            signatory.try_to_bytes()
+                        else {
                             continue;
-                        }
-                        let (_algo, pk_bytes) = signatory.to_bytes();
+                        };
                         let h = prepared_txs[idx].metadata.payload_hash;
                         let mut msg = [0u8; 32];
                         msg.copy_from_slice(h.as_ref());
@@ -7887,8 +7894,10 @@ pub(crate) mod valid {
                         else {
                             continue;
                         };
-                        let algo = signatory.algorithm();
-                        let small = match algo {
+                        let Ok((algorithm, pk_bytes)) = signatory.try_to_bytes() else {
+                            continue;
+                        };
+                        let small = match algorithm {
                             iroha_crypto::Algorithm::BlsNormal => false,
                             iroha_crypto::Algorithm::BlsSmall => true,
                             _ => continue,
@@ -7925,7 +7934,7 @@ pub(crate) mod valid {
                         let item = BlsItem {
                             idx,
                             pk: signatory.clone(),
-                            pk_bytes: signatory.to_bytes().1.to_vec(),
+                            pk_bytes: pk_bytes.to_vec(),
                             pop,
                             msg,
                             sig: sig_bytes,
@@ -11789,7 +11798,11 @@ pub(crate) mod valid {
                 ConsensusKeyRole::Validator,
                 Ident::from_str(name).expect("consensus key name parses"),
             );
-            let pop = match keypair.public_key().algorithm() {
+            let pop = match keypair
+                .public_key()
+                .try_algorithm()
+                .expect("fixture public key must be valid")
+            {
                 Algorithm::BlsNormal => Some(
                     iroha_crypto::bls_normal_pop_prove(keypair.private_key())
                         .expect("pop for consensus key"),
@@ -11816,6 +11829,19 @@ pub(crate) mod valid {
                 .consensus_keys_by_pk
                 .insert(pk_label, vec![id.clone()]);
             id
+        }
+
+        #[cfg(feature = "bls")]
+        #[test]
+        fn bls_normal_public_key_check_uses_checked_algorithm_access() {
+            let bls_key = KeyPair::from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal);
+            let ed25519_key =
+                KeyPair::from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519);
+
+            assert!(ValidBlock::is_bls_normal_public_key(bls_key.public_key()));
+            assert!(!ValidBlock::is_bls_normal_public_key(
+                ed25519_key.public_key()
+            ));
         }
 
         #[derive(Clone, Default)]

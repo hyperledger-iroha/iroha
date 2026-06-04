@@ -1545,12 +1545,12 @@ impl<'tx> AcceptedTransaction<'tx> {
         else {
             return None;
         };
-        if signatory.algorithm() != iroha_crypto::Algorithm::Ed25519
-            || tx.signature().payload().payload().len() != ED25519_SIGNATURE_LENGTH
-        {
+        let Ok((iroha_crypto::Algorithm::Ed25519, public_key)) = signatory.try_to_bytes() else {
+            return None;
+        };
+        if tx.signature().payload().payload().len() != ED25519_SIGNATURE_LENGTH {
             return None;
         }
-        let (_algorithm, public_key) = signatory.to_bytes();
         iroha_crypto::ed25519_parse_public_key(public_key).ok()
     }
 
@@ -1729,7 +1729,9 @@ impl<'tx> AcceptedTransaction<'tx> {
         matches!(
             tx.authority().controller(),
             iroha_data_model::account::AccountController::Single(signatory)
-                if signatory.algorithm() == iroha_crypto::Algorithm::Ed25519
+                if signatory
+                    .try_to_bytes()
+                    .is_ok_and(|(algorithm, _)| algorithm == iroha_crypto::Algorithm::Ed25519)
                     && tx.signature().payload().payload().len() == ED25519_SIGNATURE_LENGTH
         )
     }
@@ -1785,7 +1787,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         let signature = tx.signature().clone();
         match tx.authority().controller() {
             iroha_data_model::account::AccountController::Single(signatory) => {
-                let algo = signatory.algorithm();
+                let algo =
+                    Self::signature_public_key_algorithm(&signature, signatory, "signatory")?;
                 if !crypto.allowed_signing.contains(&algo) {
                     return Err(AcceptTransactionFail::SignatureVerification(
                         SignatureVerificationFail::new(
@@ -1799,7 +1802,11 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
             iroha_data_model::account::AccountController::Multisig(policy) => {
                 for member in policy.members() {
-                    let algo = member.public_key().algorithm();
+                    let algo = Self::signature_public_key_algorithm(
+                        &signature,
+                        member.public_key(),
+                        "multisig member",
+                    )?;
                     if !crypto.allowed_signing.contains(&algo) {
                         return Err(AcceptTransactionFail::SignatureVerification(
                             SignatureVerificationFail::new(
@@ -1814,7 +1821,11 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
                 if let Some(bundle) = tx.multisig_signatures() {
                     for entry in &bundle.signatures {
-                        let algo = entry.signer.algorithm();
+                        let algo = Self::signature_public_key_algorithm(
+                            &signature,
+                            &entry.signer,
+                            "multisig signer",
+                        )?;
                         if !crypto.allowed_signing.contains(&algo) {
                             return Err(AcceptTransactionFail::SignatureVerification(
                                 SignatureVerificationFail::new(
@@ -1832,6 +1843,20 @@ impl<'tx> AcceptedTransaction<'tx> {
                 Ok(())
             }
         }
+    }
+
+    fn signature_public_key_algorithm(
+        signature: &TransactionSignature,
+        public_key: &iroha_crypto::PublicKey,
+        context: &str,
+    ) -> Result<iroha_crypto::Algorithm, AcceptTransactionFail> {
+        public_key.try_algorithm().map_err(|err| {
+            AcceptTransactionFail::SignatureVerification(SignatureVerificationFail::new(
+                signature.clone(),
+                SignatureRejectionCode::MalformedSignature,
+                format!("{context} public key is malformed: {err}"),
+            ))
+        })
     }
 
     fn signature_rejection_code(err: &TransactionSignatureError) -> SignatureRejectionCode {
@@ -5411,11 +5436,6 @@ pub(crate) fn enforce_fraud_policy(
         return Ok(());
     }
 
-    eprintln!(
-        "[debug] fraud config applied: enabled={}, required_minimum_band={:?}, missing_grace_secs={:?}",
-        config.enabled, config.required_minimum_band, config.missing_assessment_grace
-    );
-
     let lane_id = routing.lane_id;
     let dataspace_id = routing.dataspace_id;
     let dataspace_label = routing.dataspace_label();
@@ -5761,7 +5781,17 @@ pub(crate) fn enforce_fraud_policy(
         let attester_label = attester.engine_label();
         let mut unsigned = assessment.clone();
         unsigned.signature = None;
-        if attester.public_key.algorithm() == iroha_crypto::Algorithm::Ed25519
+        let attester_algorithm = attester.public_key.try_algorithm().map_err(|_| {
+            #[cfg(feature = "telemetry")]
+            if let Some(ctx) = fraud_ctx.as_ref() {
+                ctx.record_invalid("attestation_signature");
+                ctx.record_attestation(attester_label, "public_key");
+            }
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                "fraud assessment attester public key is malformed".into(),
+            ))
+        })?;
+        if attester_algorithm == iroha_crypto::Algorithm::Ed25519
             && signature_bytes.len() != ED25519_SIGNATURE_LENGTH
         {
             #[cfg(feature = "telemetry")]
@@ -7043,6 +7073,30 @@ pub mod tests {
     }
 
     #[test]
+    fn single_authority_rejects_disallowed_algorithm() {
+        let chain: ChainId = "single-disallowed".parse().unwrap();
+        let keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let authority = AccountId::new(keypair.public_key().clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "single disallowed algorithm".into())])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        crypto_cfg
+            .allowed_signing
+            .retain(|algo| *algo == Algorithm::Ed25519);
+
+        match AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg) {
+            Err(AcceptTransactionFail::SignatureVerification(fail)) => {
+                assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
+            }
+            other => panic!("expected AlgorithmNotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
         let chain: ChainId = "multisig-disallowed".parse().unwrap();
         let member = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
@@ -7265,6 +7319,40 @@ pub mod tests {
             .signed_bytes()
             .expect("clone should preserve signed bytes");
         assert!(Arc::ptr_eq(&signed_bytes, &cloned_bytes));
+    }
+
+    #[test]
+    fn single_ed25519_fast_path_requires_ed25519_key_and_signature_shape() {
+        let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let signed = TransactionBuilder::new(chain.clone(), authority)
+            .with_instructions([Log::new(Level::INFO, "ed25519-fast-path".into())])
+            .sign(keypair.private_key());
+
+        assert!(AcceptedTransaction::has_single_ed25519_signature(&signed));
+        assert!(AcceptedTransaction::parsed_single_ed25519_key(&signed).is_some());
+
+        let secp_keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let secp_authority = AccountId::new(secp_keypair.public_key().clone());
+        let secp_signed = TransactionBuilder::new(chain.clone(), secp_authority)
+            .with_instructions([Log::new(Level::INFO, "secp256k1-fast-path".into())])
+            .sign(secp_keypair.private_key());
+
+        assert!(!AcceptedTransaction::has_single_ed25519_signature(
+            &secp_signed
+        ));
+        assert!(AcceptedTransaction::parsed_single_ed25519_key(&secp_signed).is_none());
+
+        let mut short_signature_tx = signed.clone();
+        let short_signature = iroha_crypto::Signature::from_bytes(&[0_u8; 1]);
+        short_signature_tx.set_signature(TransactionSignature(
+            iroha_crypto::SignatureOf::from_signature(short_signature),
+        ));
+
+        assert!(!AcceptedTransaction::has_single_ed25519_signature(
+            &short_signature_tx
+        ));
+        assert!(AcceptedTransaction::parsed_single_ed25519_key(&short_signature_tx).is_none());
     }
 
     #[test]
@@ -8273,6 +8361,85 @@ pub mod tests {
                 assert!(
                     reason.contains("inconsistent"),
                     "unexpected error message: {reason}"
+                );
+            }
+            other => panic!("expected Validation::NotPermitted, got {other:?}"),
+        }
+    }
+
+    fn fraud_metadata_with_assessment(assessment: &FraudAssessment) -> Metadata {
+        use iroha_primitives::json::Json;
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("fraud_assessment_band").expect("static name"),
+            Json::new("high"),
+        );
+        metadata.insert(
+            Name::from_str("fraud_assessment_score_bps").expect("static name"),
+            Json::new(u64::from(assessment.risk_score_bps)),
+        );
+        metadata.insert(
+            Name::from_str("fraud_assessment_tenant").expect("static name"),
+            Json::new("tenant-eu"),
+        );
+        metadata.insert(
+            Name::from_str("fraud_assessment_latency_ms").expect("static name"),
+            Json::new(95_u64),
+        );
+
+        let mut unsigned = assessment.clone();
+        unsigned.signature = None;
+        let unsigned_bytes = norito::codec::Encode::encode(&unsigned);
+        let digest_bytes: [u8; 32] = iroha_crypto::Hash::new(&unsigned_bytes).into();
+        metadata.insert(
+            Name::from_str("fraud_assessment_digest").expect("static name"),
+            Json::new(hex::encode_upper(digest_bytes)),
+        );
+        metadata.insert(
+            Name::from_str("fraud_assessment_envelope").expect("static name"),
+            Json::new(BASE64_STANDARD.encode(norito::codec::Encode::encode(assessment))),
+        );
+
+        metadata
+    }
+
+    #[test]
+    fn fraud_policy_attester_signature_precheck_uses_checked_public_key_algorithm() {
+        let attester = KeyPair::from_seed(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
+        let assessment = FraudAssessment::new(
+            Vec::new(),
+            iroha_data_model::fraud::types::FraudAssessmentParts {
+                query_id: [0xFA; 32],
+                engine_id: "risk-engine-eu".to_owned(),
+                risk_score_bps: 650,
+                confidence_bps: 9_000,
+                decision: iroha_data_model::fraud::types::AssessmentDecision::Allow,
+                generated_at_ms: 1,
+                signature: Some(vec![0xAA, 0xBB, 0xCC]),
+            },
+        );
+        let metadata = fraud_metadata_with_assessment(&assessment);
+        let cfg = iroha_config::parameters::actual::FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
+            attesters: vec![iroha_config::parameters::actual::FraudAttester {
+                engine_id: "risk-engine-eu".to_owned(),
+                public_key: attester.public_key().clone(),
+            }],
+            ..Default::default()
+        };
+        let catalog = DataSpaceCatalog::default();
+        let assignment = single_lane_assignment(&catalog);
+
+        let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+            .expect_err("short Ed25519 attestation signature must be rejected");
+
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                assert!(
+                    reason.contains("64 bytes"),
+                    "unexpected rejection reason: {reason}"
                 );
             }
             other => panic!("expected Validation::NotPermitted, got {other:?}"),

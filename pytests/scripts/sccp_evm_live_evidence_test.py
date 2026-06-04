@@ -145,6 +145,8 @@ def fake_opener_for(
     route_canary_block_response_hash=None,
     route_canary_block_response_number=None,
     route_canary_block_receipts_root=None,
+    route_canary_finalized_block_number=None,
+    route_canary_finalized_block_hash=None,
     route_canary_log_transaction_hash=None,
     route_canary_log_block_hash=None,
     route_canary_log_block_number=None,
@@ -221,6 +223,12 @@ def fake_opener_for(
     )
     route_canary_block_receipts_root = route_canary_block_receipts_root or (
         "0x" + "bb" * 32
+    )
+    route_canary_finalized_block_number = (
+        route_canary_finalized_block_number or route_canary_receipt_block_number
+    )
+    route_canary_finalized_block_hash = (
+        route_canary_finalized_block_hash or route_canary_receipt_block_hash
     )
     route_canary_call_data = evm_route_canary_submit_call_data(
         module,
@@ -359,6 +367,19 @@ def fake_opener_for(
                 }
             )
         if method == "eth_getBlockByNumber":
+            assert params[1] is False
+            if params[0] == "finalized":
+                return FakeResponse(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "result": {
+                            "hash": route_canary_finalized_block_hash,
+                            "number": route_canary_finalized_block_number,
+                            "receiptsRoot": route_canary_block_receipts_root,
+                        },
+                    }
+                )
             assert params == [route_canary_receipt_block_number, False]
             return FakeResponse(
                 {
@@ -667,6 +688,11 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
         "0x" + fake.route_canary_finality_block_hash.hex()
     )
     assert summary["route_canary_transaction"]["receipt_block_matches"] is True
+    assert summary["route_canary_transaction"]["receipt_block_finalized"] is True
+    assert summary["route_canary_transaction"]["finalized_block_number"] == 0x1234
+    assert summary["route_canary_transaction"]["finalized_block_hash"] == (
+        "0x" + fake.route_canary_receipt_block_hash.hex()
+    )
     assert summary["route_canary_transaction"]["transaction_block_matches"] is True
     assert summary["route_canary_transaction"]["transaction_block_number"] == 0x1234
     assert summary["route_canary_transaction"]["transaction_block_hash"] == (
@@ -727,8 +753,10 @@ def test_live_evm_evidence_collects_destination_and_offline_toml():
     assert "# sccp_evm_route_canary_finality_block_hash" in rendered
     assert "# sccp_evm_route_canary_proof_version" in rendered
     assert "# sccp_evm_route_canary_proof_source_domain" in rendered
+    assert "# sccp_evm_route_canary_receipt_block_finalized" in rendered
     assert "evm_route_canary_transaction_hash = " in rendered
     assert "evm_route_canary_transaction_block_hash = " in rendered
+    assert "evm_route_canary_receipt_block_finalized = true" in rendered
     for key in (
         "# sccp_evm_block_tag = ",
         "# sccp_evm_rpc_chain_id = ",
@@ -779,13 +807,75 @@ def test_live_evm_eth_toml_requires_finalized_block_tag():
     )
 
     assert summary["block_tag"] == "latest"
+    assert "route_canary" not in summary
+    assert summary["route_canary_transaction"]["receipt_block_finalized"] is False
     assert "offline_toml_sha256" not in summary
+    offline_args = summary["offline_evidence_args"]
+    assert "--route-canary-receipt-block-finalized" in offline_args
+    finalized_index = offline_args.index("--route-canary-receipt-block-finalized")
+    assert offline_args[finalized_index + 1] == "false"
     try:
         module.render_offline_toml(summary)
     except ValueError as exc:
         assert "--block-tag finalized" in str(exc)
     else:
         raise AssertionError("Ethereum destination TOML rendered from non-finalized block tag")
+
+
+def test_live_evm_bsc_default_latest_route_canary_stays_diagnostic():
+    module = load_live_module()
+    fake = fake_opener_for(
+        module,
+        rpc_chain_id=56,
+        target_domain=module.evidence.SCCP_DOMAIN_BSC,
+    )
+    route_allowlist_hash = module.evidence.evm_route_allowlist_hash(
+        domain=module.evidence.SCCP_DOMAIN_BSC,
+        source_verifier_material_hash=bytes.fromhex(EVM_SOURCE_VERIFIER_MATERIAL_HASH),
+        source_adapter_engine_deployment_hash=bytes.fromhex(
+            EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+        ),
+        destination_binding_hash=fake.destination_binding,
+    )
+    route_canary_hash = route_canary_hash_for(module, fake, route_allowlist_hash)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            rpc_url="https://bsc.example",
+            domain=module.evidence.SCCP_DOMAIN_BSC,
+            bridge_address=fake.bridge,
+            expected_network_id=fake.network_id,
+            expected_bridge_code_hash=fake.bridge_code_hash,
+            expected_destination_binding_hash=fake.destination_binding,
+            route_allowlist_hash=route_allowlist_hash,
+            route_canary_evidence_hash=route_canary_hash,
+            route_canary_transaction_hash=fake.route_canary_transaction_hash,
+            route_canary_log_index=fake.route_canary_log_index,
+            source_verifier_material_hash=bytes.fromhex(
+                EVM_SOURCE_VERIFIER_MATERIAL_HASH
+            ),
+            source_adapter_engine_deployment_hash=bytes.fromhex(
+                EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+            ),
+            block_tag="latest",
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    assert summary["block_tag"] == "latest"
+    assert "route_canary" not in summary
+    assert summary["route_canary_transaction"]["receipt_block_finalized"] is False
+    assert "offline_toml_sha256" not in summary
+    try:
+        module.render_offline_toml(summary)
+    except ValueError as exc:
+        message = str(exc)
+        assert "--block-tag finalized" not in message
+        assert "--route-canary-evidence-hash" in message
+        assert "--route-canary-transaction-hash" in message
+    else:
+        raise AssertionError("BSC destination TOML rendered from unfinalized route canary")
 
 
 def test_live_evm_evidence_rejects_aliased_verifier_and_bridge():
@@ -883,7 +973,7 @@ def test_live_evm_full_toml_requires_route_canary_evidence():
 def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
     module = load_live_module()
 
-    def collect_with(fake, *, evidence_hash=None):
+    def collect_with(fake, *, evidence_hash=None, block_tag="latest"):
         route_allowlist_hash = bytes.fromhex(EVM_LIVE_ROUTE_ALLOWLIST_HASH_VECTOR)
         if evidence_hash is None:
             try:
@@ -910,7 +1000,7 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
                 source_adapter_engine_deployment_hash=bytes.fromhex(
                     EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
                 ),
-                block_tag="latest",
+                block_tag=block_tag,
                 timeout=1.0,
             ),
             opener=fake.opener,
@@ -1013,9 +1103,24 @@ def test_live_evm_route_canary_rejects_unverified_transaction_metadata():
             "transaction blockNumber does not match receipt blockNumber",
             None,
         ),
+        (
+            fake_opener_for(module, route_canary_finalized_block_number="0x1233"),
+            "receipt block is newer than the finalized execution block",
+            None,
+        ),
+        (
+            fake_opener_for(module, route_canary_finalized_block_hash="0x" + "ac" * 32),
+            "receipt block hash does not match the finalized execution block",
+            None,
+        ),
     ):
         try:
-            collect_with(fake, evidence_hash=evidence_hash)
+            finality_expected = "finalized execution block" in expected_message
+            collect_with(
+                fake,
+                evidence_hash=evidence_hash,
+                block_tag="finalized" if finality_expected else "latest",
+            )
         except RuntimeError as exc:
             assert expected_message in str(exc)
         else:

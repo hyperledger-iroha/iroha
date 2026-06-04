@@ -8193,6 +8193,13 @@ fn sccp_message_lane_disabled_message(
     })
 }
 
+fn sccp_signer_has_secp256k1_public_key(signer: &KeyPair) -> bool {
+    matches!(
+        signer.public_key().try_algorithm(),
+        Ok(Algorithm::Secp256k1)
+    )
+}
+
 fn sccp_message_proof_build_error_message(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
@@ -8212,7 +8219,7 @@ fn sccp_message_proof_build_error_message(
                 == iroha_sccp::SccpVerifierBackendFamilyV1::EvmSecp256k1Keccak
         })
         .unwrap_or(false);
-    if needs_evm_attestation && signer.algorithm() != Algorithm::Secp256k1 {
+    if needs_evm_attestation && !sccp_signer_has_secp256k1_public_key(signer) {
         message.push_str(": EVM/BSC SCCP proofs require da_receipt_signer to use secp256k1");
     }
     let needs_external_groth16_proof = sccp_message_manifest_for_bundle(bundle)
@@ -11969,6 +11976,21 @@ mod sccp_message_backend_tests {
     }
 
     #[test]
+    fn sccp_signer_classifier_uses_checked_public_key_algorithm() {
+        let secp256k1_signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:secp256k1-sccp-signer".to_vec(),
+            Algorithm::Secp256k1,
+        );
+        let ed25519_signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:wrong-evm-sccp-signer".to_vec(),
+            Algorithm::Ed25519,
+        );
+
+        assert!(sccp_signer_has_secp256k1_public_key(&secp256k1_signer));
+        assert!(!sccp_signer_has_secp256k1_public_key(&ed25519_signer));
+    }
+
+    #[test]
     fn bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed() {
         let bundle = sample_taira_tron_xor_diagnostic_message_bundle(51);
         let signer = KeyPair::from_seed(
@@ -13373,7 +13395,10 @@ pub async fn handle_v1_sumeragi_bls_keys(
         std::collections::BTreeMap::new();
     for p in peers {
         let net_pk = p.public_key().to_string();
-        let bls_pk_val = if p.public_key().algorithm() == iroha_crypto::Algorithm::BlsNormal {
+        let bls_pk_val = if matches!(
+            p.public_key().try_algorithm(),
+            Ok(iroha_crypto::Algorithm::BlsNormal)
+        ) {
             Some(p.public_key().to_string())
         } else {
             None
@@ -25521,7 +25546,13 @@ seiyaku BlobPayloadNormalizeTest {
         assert!(expect_conversion(err).contains("invalid public_key_hex"));
 
         let other_keypair = KeyPair::random();
-        let other_public_key_hex = hex::encode(other_keypair.public_key().to_bytes().1);
+        let other_public_key_hex = hex::encode(
+            other_keypair
+                .public_key()
+                .try_to_bytes()
+                .expect("fixture public key must be valid")
+                .1,
+        );
         let err = handle_post_multisig_propose(
             Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),
@@ -25542,7 +25573,11 @@ seiyaku BlobPayloadNormalizeTest {
         .expect_err("mismatched public key must be rejected");
         assert!(expect_conversion(err).contains("public_key_hex does not match signer_account_id"));
 
-        let signer_public_key_hex = hex::encode(signer_two_id.signatory().to_bytes().1);
+        let (_, signer_public_key) = signer_two_id
+            .signatory()
+            .try_to_bytes()
+            .expect("fixture signer public key must be well-formed");
+        let signer_public_key_hex = hex::encode(signer_public_key);
         let err = handle_post_multisig_propose(
             Arc::new("multisig-generic-propose-test".parse().expect("chain id")),
             build_queue(),

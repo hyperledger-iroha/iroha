@@ -5121,7 +5121,10 @@ mod tests {
 
     fn sample_offline_certificate(account_id: AccountId) -> OfflineNoteKeyCertificate {
         let keypair = KeyPair::from_seed(vec![0xAA; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),

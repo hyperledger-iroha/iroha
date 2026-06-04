@@ -164,13 +164,19 @@ fn verify_public_encodings(case_id: &str, public_sec1: &[u8], case: &FixtureCase
         let derived = PublicKey::from_bytes(Algorithm::Sm2, &payload)
             .unwrap_or_else(|err| panic!("case {case_id}: cannot derive multihash: {err}"));
         assert_eq!(
-            derived.to_string(),
+            derived
+                .try_to_multihash_string()
+                .unwrap_or_else(|err| panic!("case {case_id}: cannot format multihash: {err}")),
             multihash_expected.as_str(),
             "case {case_id}: public key multihash mismatch"
         );
         if let Some(prefixed_expected) = &case.public_key_prefixed {
             assert_eq!(
-                derived.to_prefixed_string(),
+                derived
+                    .try_to_prefixed_string()
+                    .unwrap_or_else(|err| panic!(
+                        "case {case_id}: cannot format prefixed multihash: {err}"
+                    )),
                 prefixed_expected.as_str(),
                 "case {case_id}: prefixed public key mismatch"
             );

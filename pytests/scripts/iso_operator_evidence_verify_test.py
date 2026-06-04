@@ -657,6 +657,28 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_plan_only_stage_dry_run_flag_is_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            body = plan_only_canary_summary()
+            del body["planned_stages"][0]["dry_run"]
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-plan-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("planned_stages[0].dry_run must be a boolean", stderr)
+
     def test_smuggled_canary_stage_command_urls_are_rejected(self):
         def rail_url(body, url):
             body["stages"][0]["command"][5] = url
@@ -820,6 +842,35 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_receipt_verifier_stdout_policy_flags_are_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            for flag in (
+                "allow_failed",
+                "allow_insecure_http",
+                "allow_legacy_colr007",
+                "require_source_files",
+            ):
+                with self.subTest(flag=flag):
+                    receipt_summary = json.loads(receipt_stdout())
+                    del receipt_summary[flag]
+                    stdout = json.dumps(
+                        digest_receipt_summary(receipt_summary),
+                        sort_keys=True,
+                    ) + "\n"
+                    body = valid_canary_summary()
+                    body["stages"][2]["stdout_preview"] = stdout
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"stdout_preview.{flag} must be a boolean", stderr)
+
     def test_expected_provider_environment_and_trust_digest_are_enforced(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -879,6 +930,56 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_trust_summary_policy_flags_are_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "trust")
+            for flag in (
+                "allow_synthetic_der",
+                "allow_record_only",
+                "allow_insecure_source_url",
+                "profile_json_emittable",
+            ):
+                with self.subTest(flag=flag):
+                    trust = json.loads(trust_path.read_text(encoding="utf-8"))
+                    del trust[flag]
+                    mutated_path = write_json(
+                        root / f"missing-{flag}.trust.summary.json",
+                        digest_summary(trust),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{flag} must be a boolean", stderr)
+
+    def test_trust_profile_revocation_flags_are_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root)
+            trust_path = write_trust_summary(root / "trust")
+            for flag in (
+                "x509_require_crl_revocation_check",
+                "x509_require_ocsp_revocation_check",
+            ):
+                with self.subTest(flag=flag):
+                    trust = json.loads(trust_path.read_text(encoding="utf-8"))
+                    del trust["bundles"][0]["profile_overrides"][flag]
+                    mutated_path = write_json(
+                        root / f"missing-{flag}.trust.summary.json",
+                        digest_summary(trust),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"profile_overrides.{flag} must be a boolean", stderr)
 
 
 if __name__ == "__main__":

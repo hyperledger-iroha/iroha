@@ -14,6 +14,7 @@ import {
   bscMainnetSccpDestinationBinding,
   bscSccpReceiptProofHash,
   buildBscMainnetSccpLocalAdmissionSubmission,
+  evmSccpSourceEventTopic,
   wrapBscMainnetSccpDestinationProofResult,
 } from "../src/sccp.js";
 
@@ -21,6 +22,8 @@ const hex32 = (byte) => `0x${byte.repeat(32)}`;
 const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const RECEIPTS_ROOT = hex32("cc");
+const SOURCE_EVENT_DIGEST = hex32("34");
+const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
 
 const sampleParliaFinality = (overrides = {}) => ({
   executionBlockNumber: "0x1234",
@@ -34,11 +37,13 @@ const sampleParliaFinality = (overrides = {}) => ({
 const sampleInboundEvidence = () => ({
   sourceDomain: SCCP_DOMAIN_BSC,
   targetDomain: SCCP_DOMAIN_SORA,
+  sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
   receipt: {
     transactionHash: TX_HASH,
     blockHash: BLOCK_HASH,
     blockNumber: "0x1234",
     status: "0x1",
+    logs: [sourceEventLog()],
   },
   block: {
     hash: BLOCK_HASH,
@@ -50,7 +55,7 @@ const sampleInboundEvidence = () => ({
 
 const sampleReceiptProof = {
   sourceDomain: SCCP_DOMAIN_BSC,
-  sourceEventDigest: hex32("34"),
+  sourceEventDigest: SOURCE_EVENT_DIGEST,
   validatorEpoch: "36",
   blockNumber: "4660",
   blockHash: BLOCK_HASH,
@@ -61,6 +66,16 @@ const sampleReceiptProof = {
   receiptTrieProofNodes: [[0xe4, 0x82, 0x20, 0x80, ...new Array(32).fill(0xbb)]],
   inclusionBranch: [hex32("f1")],
 };
+
+const sourceEventLog = (overrides = {}) => ({
+  address: SOURCE_BRIDGE_ADDRESS,
+  transactionHash: TX_HASH,
+  blockHash: BLOCK_HASH,
+  blockNumber: "0x1234",
+  topics: [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST],
+  data: "0x",
+  ...overrides,
+});
 
 const samplePublicInputs = {
   messageId: hex32("11"),
@@ -397,6 +412,15 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
 
   assert.throws(
     () =>
+      wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, {
+        ...request,
+        destinationBindingHash: hex32("99"),
+      }),
+    /canonical|destinationBinding/u,
+  );
+
+  assert.throws(
+    () =>
       sdk.buildBscCalldata({
         publicInputs: samplePublicInputs,
         proofBytes: GROTH16_PROOF_BYTES,
@@ -611,7 +635,7 @@ test("BscMainnetSccp inbound proving rejects foreign EVM domains before callback
   assert.equal(called, false);
 });
 
-test("BscMainnetSccp accepts hash-only receipt proof evidence", async () => {
+test("BscMainnetSccp requires full receipt proof evidence before inbound proving", async () => {
   const receiptProofHash = hex32("ee");
   const evidence = await new BscMainnetSccp().collectInboundEvidenceFromReceipt({
     receiptProofHash,
@@ -625,6 +649,23 @@ test("BscMainnetSccp accepts hash-only receipt proof evidence", async () => {
   assert.equal(evidence.receipt, undefined);
   assert.equal(evidence.block, undefined);
 
+  let calledWithHashOnly = false;
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp({
+        proveInbound() {
+          calledWithHashOnly = true;
+          return [7, 8, 9];
+        },
+      }).proveInboundToSora({
+        receipt_proof_hash: receiptProofHash,
+        finalityEvidence: sampleParliaFinality(),
+      }),
+    /requires receiptProof/u,
+  );
+  assert.equal(calledWithHashOnly, false);
+
+  const fullProofHash = bscSccpReceiptProofHash(sampleReceiptProof);
   let callbackEvidence;
   assert.deepEqual(
     [
@@ -634,21 +675,114 @@ test("BscMainnetSccp accepts hash-only receipt proof evidence", async () => {
           return [7, 8, 9];
         },
       }).proveInboundToSora({
-        receipt_proof_hash: receiptProofHash,
-        finalityEvidence: sampleParliaFinality(),
+        ...sampleInboundEvidence(),
+        receiptProof: sampleReceiptProof,
+        receipt_proof_hash: fullProofHash,
       })),
     ],
     [7, 8, 9],
   );
-  assert.equal(callbackEvidence.receiptProofHash, receiptProofHash);
+  assert.equal(callbackEvidence.receiptProofHash, fullProofHash);
+  assert.equal(callbackEvidence.receiptProof.blockHash, BLOCK_HASH);
+  assert.equal(callbackEvidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
+  assert.equal(callbackEvidence.sourceBridgeEmitterAddress, SOURCE_BRIDGE_ADDRESS);
 
-  const fullProofHash = bscSccpReceiptProofHash(sampleReceiptProof);
   const fullProofEvidence = await new BscMainnetSccp().collectInboundEvidenceFromReceipt({
+    ...sampleInboundEvidence(),
     receiptProof: sampleReceiptProof,
     receiptProofHash: fullProofHash,
     parliaFinality: sampleParliaFinality(),
   });
   assert.equal(fullProofEvidence.receiptProofHash, fullProofHash);
+  assert.equal(fullProofEvidence.sourceEventDigest, SOURCE_EVENT_DIGEST);
+
+  let calledWithoutSourceEvent = false;
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp({
+        proveInbound() {
+          calledWithoutSourceEvent = true;
+          return [7, 8, 9];
+        },
+      }).proveInboundToSora({
+        receiptProof: sampleReceiptProof,
+        receiptProofHash: fullProofHash,
+        parliaFinality: sampleParliaFinality(),
+      }),
+    /requires receipt source event validation/u,
+  );
+  assert.equal(calledWithoutSourceEvent, false);
+
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp().collectInboundEvidenceFromReceipt({
+        ...sampleInboundEvidence(),
+        receipt: {
+          ...sampleInboundEvidence().receipt,
+          logs: [sourceEventLog({ topics: [evmSccpSourceEventTopic(), hex32("35")] })],
+        },
+        receiptProof: sampleReceiptProof,
+        receiptProofHash: fullProofHash,
+        parliaFinality: sampleParliaFinality(),
+      }),
+    /receiptProof\.sourceEventDigest must match receipt source event/u,
+  );
+
+  const malformedSourceLogCases = [
+    [
+      "extra topic",
+      [sourceEventLog({ topics: [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST, hex32("66")] })],
+      /SCCP source event log must contain exactly 2 topics/u,
+    ],
+    [
+      "non-empty data",
+      [sourceEventLog({ data: "0x01" })],
+      /SCCP source event log data must be 0x/u,
+    ],
+    [
+      "zero digest",
+      [sourceEventLog({ topics: [evmSccpSourceEventTopic(), hex32("00")] })],
+      /SCCP source event digest must not be zero/u,
+    ],
+    [
+      "duplicate events",
+      [sourceEventLog(), sourceEventLog()],
+      /exactly one matching SCCP source event/u,
+    ],
+    [
+      "removed event",
+      [sourceEventLog({ removed: true })],
+      /removed logs/u,
+    ],
+  ];
+  for (const [label, logs, message] of malformedSourceLogCases) {
+    await assert.rejects(
+      () =>
+        new BscMainnetSccp().collectInboundEvidenceFromReceipt({
+          ...sampleInboundEvidence(),
+          receipt: {
+            ...sampleInboundEvidence().receipt,
+            logs,
+          },
+        }),
+      message,
+      label,
+    );
+  }
+
+  const missingTransactionHashLog = sourceEventLog();
+  delete missingTransactionHashLog.transactionHash;
+  await assert.rejects(
+    () =>
+      new BscMainnetSccp().collectInboundEvidenceFromReceipt({
+        ...sampleInboundEvidence(),
+        receipt: {
+          ...sampleInboundEvidence().receipt,
+          logs: [missingTransactionHashLog],
+        },
+      }),
+    /receipt\.logs\[0\]\.transactionHash/u,
+  );
 
   await assert.rejects(
     () =>
@@ -744,12 +878,14 @@ test("BscMainnetSccp inbound proving rejects empty or all-zero proof output", as
       return Uint8Array.from([7, 8, 9]);
     },
   });
+  const inboundEvidence = { ...sampleInboundEvidence(), receiptProof: sampleReceiptProof };
 
   assert.deepEqual(
-    [...(await sdk.proveInboundToSora(sampleInboundEvidence()))],
+    [...(await sdk.proveInboundToSora(inboundEvidence))],
     [7, 8, 9],
   );
   assert.equal(callbackEvidence.receipt.blockHash, BLOCK_HASH);
+  assert.equal(callbackEvidence.receiptProof.blockHash, BLOCK_HASH);
   assert.equal(callbackEvidence.parliaFinality.commitSealHash, hex32("dd"));
 
   await assert.rejects(
@@ -758,7 +894,7 @@ test("BscMainnetSccp inbound proving rejects empty or all-zero proof output", as
         proveInbound() {
           return new Uint8Array();
         },
-      }).proveInboundToSora(sampleInboundEvidence()),
+      }).proveInboundToSora(inboundEvidence),
     /proofBytes must not be empty/u,
   );
   await assert.rejects(
@@ -767,7 +903,7 @@ test("BscMainnetSccp inbound proving rejects empty or all-zero proof output", as
         proveInbound() {
           return Uint8Array.from([0, 0]);
         },
-      }).proveInboundToSora(sampleInboundEvidence()),
+      }).proveInboundToSora(inboundEvidence),
     /proofBytes must not be all zero/u,
   );
 });

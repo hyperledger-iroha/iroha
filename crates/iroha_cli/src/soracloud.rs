@@ -9843,7 +9843,10 @@ fn attach_sorafs_release_governance(
     });
     let (_unsigned_manifest_bytes, unsigned_manifest_digest) =
         encode_sorafs_manifest_for_storage(&manifest)?;
-    let (_, signer_bytes) = key_pair.public_key().to_bytes();
+    let (_, signer_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .wrap_err("SoraFS release governance signer public key is malformed")?;
     let signer: [u8; 32] = signer_bytes.try_into().map_err(|_| {
         eyre!(
             "SoraFS release governance proof requires a 32-byte Ed25519 public key, got {} bytes",

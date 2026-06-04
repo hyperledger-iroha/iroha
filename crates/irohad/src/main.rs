@@ -140,8 +140,12 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
 fn torii_receipt_signer_or_ephemeral(receipt_signer: Option<KeyPair>) -> KeyPair {
     receipt_signer.unwrap_or_else(|| {
         let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let algorithm = key
+            .public_key()
+            .try_algorithm()
+            .map_or("malformed", |algorithm| algorithm.as_static_str());
         iroha_logger::info!(
-            algorithm = ?key.public_key().algorithm(),
+            algorithm,
             "torii receipt signer not configured; generated ephemeral secp256k1 key"
         );
         key
@@ -8622,7 +8626,7 @@ fn npos_validator_status_counts<'a>(
             PublicLaneValidatorStatus::Active => {
                 active_total = active_total.saturating_add(1);
                 if let Some(pk) = record.validator.try_signatory()
-                    && pk.algorithm() == Algorithm::BlsNormal
+                    && matches!(pk.try_algorithm(), Ok(Algorithm::BlsNormal))
                 {
                     active_bls = active_bls.saturating_add(1);
                 }
@@ -8652,7 +8656,7 @@ fn effective_npos_validator_status_counts(state: &State) -> (usize, usize, usize
     let active_total = roster.len();
     let active_bls = roster
         .iter()
-        .filter(|peer| peer.public_key().algorithm() == Algorithm::BlsNormal)
+        .filter(|peer| matches!(peer.public_key().try_algorithm(), Ok(Algorithm::BlsNormal)))
         .count();
     let pending = raw_counts.2;
     let total = raw_counts.3.max(active_total.saturating_add(pending));
@@ -8909,9 +8913,17 @@ fn verify_genesis_metadata(
             })?;
 
         let bls_pk = peer_id.public_key();
-        if bls_pk.algorithm() != Algorithm::BlsNormal {
-            return Err(Report::new(MainError::Config)
-                .attach(format!("trusted peer {peer_id} must use a BLS-normal key")));
+        match bls_pk.try_algorithm() {
+            Ok(Algorithm::BlsNormal) => {}
+            Ok(_) => {
+                return Err(Report::new(MainError::Config)
+                    .attach(format!("trusted peer {peer_id} must use a BLS-normal key")));
+            }
+            Err(err) => {
+                return Err(Report::new(MainError::Config).attach(format!(
+                    "trusted peer {peer_id} has malformed public key: {err}"
+                )));
+            }
         }
         if let Some(expected_pop) = trusted.pops.get(bls_pk) {
             if &entry.pop != expected_pop {

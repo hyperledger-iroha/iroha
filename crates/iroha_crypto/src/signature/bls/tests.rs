@@ -14,8 +14,10 @@ const SEED: &[u8; 10] = &[1u8; 10];
 
 #[allow(clippy::similar_names)]
 fn test_keypair_generation_from_seed<C: BlsConfiguration>() {
-    let (pk_1, sk_1) = BlsImpl::<C>::keypair(KeyGenOption::UseSeed(SEED.to_vec()));
-    let (pk_2, sk_2) = BlsImpl::<C>::keypair(KeyGenOption::UseSeed(SEED.to_vec()));
+    let (pk_1, sk_1) =
+        BlsImpl::<C>::keypair(KeyGenOption::UseSeed(SEED.to_vec())).expect("BLS keypair");
+    let (pk_2, sk_2) =
+        BlsImpl::<C>::keypair(KeyGenOption::UseSeed(SEED.to_vec())).expect("BLS keypair");
 
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     {
@@ -33,10 +35,33 @@ fn test_keypair_generation_from_seed<C: BlsConfiguration>() {
     }
 }
 
-fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAccess>() {
-    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random);
+#[allow(clippy::similar_names)]
+fn test_try_keypair_generation_from_seed<C: BlsConfiguration>() {
+    let (pk_1, sk_1) =
+        BlsImpl::<C>::try_keypair(KeyGenOption::UseSeed(SEED.to_vec())).expect("checked keypair");
+    let (pk_2, sk_2) =
+        BlsImpl::<C>::keypair(KeyGenOption::UseSeed(SEED.to_vec())).expect("BLS keypair");
 
-    let signature_1 = BlsImpl::<C>::sign(MESSAGE_1, &sk);
+    #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+    {
+        assert!(
+            (pk_1, sk_1.to_bytes()) == (pk_2, sk_2.to_bytes()),
+            "Checked keypair does not match compatibility keypair"
+        );
+    }
+    #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
+    {
+        assert!(
+            (pk_1.to_bytes(), sk_1.to_bytes()) == (pk_2.to_bytes(), sk_2.to_bytes()),
+            "Checked keypair does not match compatibility keypair"
+        );
+    }
+}
+
+fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAccess>() {
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+
+    let signature_1 = BlsImpl::<C>::sign(MESSAGE_1, &sk).expect("BLS sign");
     BlsImpl::<C>::verify(MESSAGE_1, &signature_1, &pk)
         .expect("Signature verification should succeed");
 }
@@ -44,9 +69,9 @@ fn test_signature_verification<C: BlsConfiguration + PreparedPublicKeyCacheAcces
 fn test_signature_verification_different_messages<
     C: BlsConfiguration + PreparedPublicKeyCacheAccess,
 >() {
-    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random);
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
 
-    let signature = BlsImpl::<C>::sign(MESSAGE_1, &sk);
+    let signature = BlsImpl::<C>::sign(MESSAGE_1, &sk).expect("BLS sign");
     BlsImpl::<C>::verify(MESSAGE_2, &signature, &pk)
         .expect_err("Signature verification for wrong message should fail");
 }
@@ -55,12 +80,30 @@ fn test_signature_verification_different_messages<
 fn test_signature_verification_different_keys<
     C: BlsConfiguration + PreparedPublicKeyCacheAccess,
 >() {
-    let (_pk_1, sk_1) = BlsImpl::<C>::keypair(KeyGenOption::Random);
-    let (pk_2, _sk_2) = BlsImpl::<C>::keypair(KeyGenOption::Random);
+    let (_pk_1, sk_1) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let (pk_2, _sk_2) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
 
-    let signature = BlsImpl::<C>::sign(MESSAGE_1, &sk_1);
+    let signature = BlsImpl::<C>::sign(MESSAGE_1, &sk_1).expect("BLS sign");
     BlsImpl::<C>::verify(MESSAGE_1, &signature, &pk_2)
         .expect_err("Signature verification for wrong public key should fail");
+}
+
+fn test_aggregate_rejects_duplicate_public_key_content<C: BlsConfiguration>() {
+    let (pk, sk) = BlsImpl::<C>::keypair(KeyGenOption::Random).expect("BLS keypair");
+    let msg = b"aggregate-duplicate-pk-content";
+    let sig = BlsImpl::<C>::sign(msg, &sk).expect("BLS sign");
+    let pk_bytes = pk.to_bytes();
+    let pk_bytes_clone = pk_bytes.clone();
+    let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
+    let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes_clone.as_slice()];
+
+    BlsImpl::<C>::verify_aggregate_same_message(msg, &signatures, &public_keys)
+        .expect_err("duplicate public-key bytes must reject same-message aggregate");
+
+    let aggregate = BlsImpl::<C>::aggregate_signatures(&[sig.as_slice(), sig.as_slice()])
+        .expect("aggregate signatures");
+    BlsImpl::<C>::verify_preaggregated_same_message(msg, &aggregate, &public_keys)
+        .expect_err("duplicate public-key bytes must reject preaggregated verification");
 }
 
 #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
@@ -70,6 +113,7 @@ fn test_fallible_paths_reject_corrupted_stored_secret<C: BlsConfiguration>() {
 
     assert!(BlsImpl::<C>::try_sign(MESSAGE_1, &key).is_err());
     assert!(BlsImpl::<C>::derive_public_key(&key).is_err());
+    assert!(BlsImpl::<C>::try_keypair(KeyGenOption::FromPrivateKey(key)).is_err());
 }
 
 mod normal {
@@ -81,9 +125,10 @@ mod normal {
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
     fn detect_hash_variant_normal_matches_concat() {
-        let (pk, sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, sk) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg = b"diagnostic-normal";
-        let sig = BlsImpl::<NormalConfiguration>::sign(msg, &sk);
+        let sig = BlsImpl::<NormalConfiguration>::sign(msg, &sk).expect("BLS sign");
         let (concat_ok, aug_ok) = implementation::detect_variant_normal(msg, &sig, &pk.to_bytes());
         assert!(concat_ok ^ aug_ok, "exactly one variant should succeed");
         assert!(
@@ -95,6 +140,11 @@ mod normal {
     #[test]
     fn keypair_generation_from_seed() {
         test_keypair_generation_from_seed::<NormalConfiguration>();
+    }
+
+    #[test]
+    fn checked_keypair_generation_from_seed() {
+        test_try_keypair_generation_from_seed::<NormalConfiguration>();
     }
 
     #[test]
@@ -114,7 +164,8 @@ mod normal {
 
     #[test]
     fn verify_rejects_identity_signature_as_parse_error() {
-        let (pk, _sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, _sk) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let sig = G2Affine::identity().to_compressed();
         let err = BlsImpl::<NormalConfiguration>::verify(b"identity", sig.as_ref(), &pk)
             .expect_err("identity signature must be rejected");
@@ -123,11 +174,13 @@ mod normal {
 
     #[test]
     fn aggregate_same_message_roundtrip() {
-        let (pk1, sk1) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
-        let (pk2, sk2) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk1, sk1) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg = b"aggregate-same-message";
-        let sig1 = BlsImpl::<NormalConfiguration>::sign(msg, &sk1);
-        let sig2 = BlsImpl::<NormalConfiguration>::sign(msg, &sk2);
+        let sig1 = BlsImpl::<NormalConfiguration>::sign(msg, &sk1).expect("BLS sign");
+        let sig2 = BlsImpl::<NormalConfiguration>::sign(msg, &sk2).expect("BLS sign");
         let aggregate = BlsImpl::<NormalConfiguration>::aggregate_signatures(&[
             sig1.as_slice(),
             sig2.as_slice(),
@@ -157,9 +210,10 @@ mod normal {
 
     #[test]
     fn aggregate_same_message_rejects_duplicate_public_keys() {
-        let (pk, sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, sk) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg = b"aggregate-duplicate-pk";
-        let sig = BlsImpl::<NormalConfiguration>::sign(msg, &sk);
+        let sig = BlsImpl::<NormalConfiguration>::sign(msg, &sk).expect("BLS sign");
         let pk_bytes = pk.to_bytes();
         let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
         let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
@@ -182,6 +236,11 @@ mod normal {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_duplicate_public_key_content() {
+        test_aggregate_rejects_duplicate_public_key_content::<NormalConfiguration>();
     }
 
     #[test]
@@ -223,13 +282,16 @@ mod normal {
     fn sign_is_thread_safe() {
         use std::sync::Arc;
 
-        let (pk, sk) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, sk) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let sk = Arc::new(sk);
         let msg = b"concurrent-signing";
         let handles: Vec<_> = (0..4)
             .map(|_| {
                 let sk = Arc::clone(&sk);
-                std::thread::spawn(move || BlsImpl::<NormalConfiguration>::sign(msg, &sk))
+                std::thread::spawn(move || {
+                    BlsImpl::<NormalConfiguration>::sign(msg, &sk).expect("BLS sign")
+                })
             })
             .collect();
         for handle in handles {
@@ -279,13 +341,15 @@ mod normal {
     #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
     #[test]
     fn aggregate_multi_message_verification() {
-        let (pk1, sk1) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
-        let (pk2, sk2) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk1, sk1) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
 
         let msg1 = b"aggregate-m1";
         let msg2 = b"aggregate-m2";
-        let sig1 = BlsImpl::<NormalConfiguration>::sign(msg1, &sk1);
-        let sig2 = BlsImpl::<NormalConfiguration>::sign(msg2, &sk2);
+        let sig1 = BlsImpl::<NormalConfiguration>::sign(msg1, &sk1).expect("BLS sign");
+        let sig2 = BlsImpl::<NormalConfiguration>::sign(msg2, &sk2).expect("BLS sign");
 
         let messages: Vec<&[u8]> = vec![msg1.as_ref(), msg2.as_ref()];
         let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
@@ -314,12 +378,14 @@ mod normal {
 
     #[test]
     fn aggregate_multi_message_rejects_duplicate_messages() {
-        let (pk1, sk1) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
-        let (pk2, sk2) = BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random);
+        let (pk1, sk1) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<NormalConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg1 = b"duplicate-msg".to_vec();
         let msg2 = msg1.clone();
-        let sig1 = BlsImpl::<NormalConfiguration>::sign(&msg1, &sk1);
-        let sig2 = BlsImpl::<NormalConfiguration>::sign(&msg2, &sk2);
+        let sig1 = BlsImpl::<NormalConfiguration>::sign(&msg1, &sk1).expect("BLS sign");
+        let sig2 = BlsImpl::<NormalConfiguration>::sign(&msg2, &sk2).expect("BLS sign");
         let messages: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
         let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
         let pk1_bytes = pk1.to_bytes();
@@ -372,9 +438,10 @@ mod small {
     #[cfg(feature = "bls-backend-blstrs")]
     #[test]
     fn detect_hash_variant_small_matches_concat() {
-        let (pk, sk) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, sk) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg = b"diagnostic-small";
-        let sig = BlsImpl::<SmallConfiguration>::sign(msg, &sk);
+        let sig = BlsImpl::<SmallConfiguration>::sign(msg, &sk).expect("BLS sign");
         let (concat_ok, aug_ok) = implementation::detect_variant_small(msg, &sig, &pk.to_bytes());
         assert!(concat_ok ^ aug_ok, "exactly one variant should succeed");
         assert!(
@@ -386,6 +453,11 @@ mod small {
     #[test]
     fn keypair_generation_from_seed() {
         test_keypair_generation_from_seed::<SmallConfiguration>();
+    }
+
+    #[test]
+    fn checked_keypair_generation_from_seed() {
+        test_try_keypair_generation_from_seed::<SmallConfiguration>();
     }
 
     #[test]
@@ -405,7 +477,8 @@ mod small {
 
     #[test]
     fn verify_rejects_identity_signature_as_parse_error() {
-        let (pk, _sk) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, _sk) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let sig = G1Affine::identity().to_compressed();
         let err = BlsImpl::<SmallConfiguration>::verify(b"identity-small", sig.as_ref(), &pk)
             .expect_err("identity signature must be rejected");
@@ -449,9 +522,10 @@ mod small {
 
     #[test]
     fn aggregate_same_message_rejects_duplicate_public_keys() {
-        let (pk, sk) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let (pk, sk) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg = b"aggregate-duplicate-pk-small";
-        let sig = BlsImpl::<SmallConfiguration>::sign(msg, &sk);
+        let sig = BlsImpl::<SmallConfiguration>::sign(msg, &sk).expect("BLS sign");
         let pk_bytes = pk.to_bytes();
         let signatures: Vec<&[u8]> = vec![sig.as_slice(), sig.as_slice()];
         let public_keys: Vec<&[u8]> = vec![pk_bytes.as_slice(), pk_bytes.as_slice()];
@@ -474,6 +548,11 @@ mod small {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn aggregate_same_message_rejects_duplicate_public_key_content() {
+        test_aggregate_rejects_duplicate_public_key_content::<SmallConfiguration>();
     }
 
     #[test]
@@ -515,12 +594,14 @@ mod small {
 
     #[test]
     fn aggregate_multi_message_rejects_duplicate_messages() {
-        let (pk1, sk1) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
-        let (pk2, sk2) = BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random);
+        let (pk1, sk1) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
+        let (pk2, sk2) =
+            BlsImpl::<SmallConfiguration>::keypair(KeyGenOption::Random).expect("BLS keypair");
         let msg1 = b"duplicate-msg-small".to_vec();
         let msg2 = msg1.clone();
-        let sig1 = BlsImpl::<SmallConfiguration>::sign(&msg1, &sk1);
-        let sig2 = BlsImpl::<SmallConfiguration>::sign(&msg2, &sk2);
+        let sig1 = BlsImpl::<SmallConfiguration>::sign(&msg1, &sk1).expect("BLS sign");
+        let sig2 = BlsImpl::<SmallConfiguration>::sign(&msg2, &sk2).expect("BLS sign");
         let messages: Vec<&[u8]> = vec![msg1.as_slice(), msg2.as_slice()];
         let signature_refs: Vec<&[u8]> = vec![sig1.as_slice(), sig2.as_slice()];
         let pk1_bytes = pk1.to_bytes();

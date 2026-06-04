@@ -361,7 +361,8 @@ OCSP checks; it catches operator-package mistakes earlier by requiring
 lowercase nonzero SHA-256 pins, matching DER digests, no duplicate DER within a
 material class, unique DER labels within each material class, no trust anchor
 that is also revoked, CRL/OCSP material when the corresponding profile flags are
-enabled, clean HTTPS source URLs by default, timezone-aware non-future
+explicitly enabled, explicit CRL/OCSP revocation policy booleans, clean HTTPS
+source URLs by default, timezone-aware non-future
 `source.retrieved_at` values, and no runtime secret fields. Production bundles
 also need DER values that look like the expected material class; the checked-in
 templates use synthetic DER envelopes only so CI can validate schema and
@@ -391,12 +392,16 @@ The gate is offline and fails closed. By default it requires digest-bound,
 successful canary summaries with rail, notary, and receipt-verify stages;
 requires the receipt-verify stage output to be digest-bound and contain
 positive receipt counts, both rail/notary receipt kinds, and per-receipt
-`receipt_sha256` entries; rejects plan-only, dry-run, insecure-HTTP,
+`receipt_sha256` entries, with explicit boolean receipt policy fields rather
+than omitted defaults; rejects plan-only, dry-run, insecure-HTTP,
 default-profile, failed-receipt, legacy `colr.007`, and missing-source-file
 evidence; requires trust summaries produced without synthetic DER, record-only
 policy, insecure provenance overrides, or malformed/future trust-source
-retrieval timestamps; and scans archived commands/output for obvious secret
-leakage. Bearer-token file arguments must be redacted whether represented as
+retrieval timestamps, with trust-summary policy booleans present explicitly;
+requires archived trust profile overrides to carry explicit CRL/OCSP revocation
+policy booleans; and scans archived commands/output for obvious secret leakage.
+Plan-only diagnostic archives must still record each planned stage's `dry_run`
+boolean. Bearer-token file arguments must be redacted whether represented as
 `--bearer-token-file <path>` or `--bearer-token-file=<path>`. The `--allow-*`
 flags, including
 `--allow-legacy-colr007`, are for local test audits only and should not be
@@ -422,12 +427,15 @@ It also requires the evidence summary to include direct receipt archive
 verification from `--receipt` or `--receipt-dir`, not only the canary stage's
 captured verifier stdout. That archive verification summary must carry its own
 `summary_sha256`, production policy flags, and a `receipts[]` list binding each
-receipt path to its `receipt_sha256`. Evidence-level production policy flags
-must all be present as booleans; omitted policy flags are malformed input, not
-implicit production defaults. It exits `1` with a digest-bound blocker report
-when summaries are valid but not production-ready, and exits `2` for malformed
-or digest-tampered inputs, including nested receipt-summary tampering. Evidence
-summaries or nested receipt summaries that were produced with
+receipt path to its `receipt_sha256`. XSD strict-mode flags, evidence-level
+production policy flags, and nested receipt-summary policy flags must all be
+present as booleans; evidence `ok` and canary `plan_only` status fields are
+also required booleans, and trust-summary policy flags are enforced by the
+evidence gate before the rollup accepts an archive. Omitted flags are malformed
+input, not implicit production defaults. It exits `1` with a digest-bound
+blocker report when summaries are valid but not production-ready, and exits `2`
+for malformed or digest-tampered inputs, including nested receipt-summary
+tampering. Evidence summaries or nested receipt summaries that were produced with
 `allow_legacy_colr007=true` are production blockers.
 `--allow-reviewed-xsd-gaps` and `--allow-canary-stage-receipts-only` exist for
 local diagnostic audits of the current checked-in fixture corpus; production

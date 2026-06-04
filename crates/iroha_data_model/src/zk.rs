@@ -675,7 +675,7 @@ fn zk_ace_poseidon_bytes(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
 ///
 /// # Errors
 ///
-/// Returns a Norito error when the public inputs cannot be canonically encoded.
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_air_statement_digest(
     public_inputs: &ZkAcePublicInputsV1,
     witness: &ZkAceWitnessV1,
@@ -696,7 +696,7 @@ pub fn derive_zk_ace_air_statement_digest(
 ///
 /// # Errors
 ///
-/// Returns a Norito error when the public inputs cannot be canonically encoded.
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_air_public_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {
@@ -769,7 +769,7 @@ pub fn derive_zk_ace_transfer_digest(
 ///
 /// # Errors
 ///
-/// Returns a Norito error when the public inputs cannot be canonically encoded.
+/// Returns [`norito::Error`] if the public inputs cannot be encoded canonically.
 pub fn derive_zk_ace_public_inputs_digest(
     public_inputs: &ZkAcePublicInputsV1,
 ) -> Result<[u8; 32], norito::Error> {

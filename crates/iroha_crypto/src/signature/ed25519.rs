@@ -1,6 +1,6 @@
 use core::convert::{Infallible, TryFrom};
 
-use blake2::Blake2bVar;
+use blake2::{Blake2b, digest::consts::U32};
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
@@ -31,9 +31,30 @@ const PUBLIC_KEY_PARSE_MAP_INITIAL_CAPACITY: usize = 8192;
 
 #[inline]
 fn masked_cache_index(mixed: u64, cache_size: usize) -> usize {
-    debug_assert!(cache_size.is_power_of_two());
-    let mask = u64::try_from(cache_size - 1).expect("cache mask fits in u64");
-    usize::try_from(mixed & mask).expect("masked cache index fits in usize")
+    let Some(mask) = cache_size.checked_sub(1) else {
+        return 0;
+    };
+    if !cache_size.is_power_of_two() {
+        return 0;
+    }
+    let Ok(mask) = u64::try_from(mask) else {
+        return 0;
+    };
+    usize::try_from(mixed & mask).unwrap_or_default()
+}
+
+#[inline]
+fn u64_from_le_chunk(bytes: &[u8], offset: usize) -> u64 {
+    let Some(end) = offset.checked_add(8) else {
+        return 0;
+    };
+    let Some(chunk) = bytes.get(offset..end) else {
+        return 0;
+    };
+    let Ok(chunk) = <[u8; 8]>::try_from(chunk) else {
+        return 0;
+    };
+    u64::from_le_bytes(chunk)
 }
 
 #[derive(Clone)]
@@ -165,10 +186,10 @@ struct PublicKeyParseCacheStats {
 
 #[inline]
 fn public_key_parse_fast_index(bytes: &[u8; 32]) -> usize {
-    let a = u64::from_le_bytes(bytes[0..8].try_into().expect("slice length checked"));
-    let b = u64::from_le_bytes(bytes[8..16].try_into().expect("slice length checked"));
-    let c = u64::from_le_bytes(bytes[16..24].try_into().expect("slice length checked"));
-    let d = u64::from_le_bytes(bytes[24..32].try_into().expect("slice length checked"));
+    let a = u64_from_le_chunk(bytes, 0);
+    let b = u64_from_le_chunk(bytes, 8);
+    let c = u64_from_le_chunk(bytes, 16);
+    let d = u64_from_le_chunk(bytes, 24);
     let mixed = a ^ b.rotate_left(17) ^ c.rotate_left(31) ^ d.rotate_left(47);
     masked_cache_index(mixed, PUBLIC_KEY_PARSE_FAST_CACHE_SIZE)
 }
@@ -277,13 +298,13 @@ fn exact_verify_key(
 
 #[inline]
 fn verify_ok_exact_index(pk: &[u8; 32], message: &[u8; 32], signature: &[u8; 64]) -> usize {
-    let pk_a = u64::from_le_bytes(pk[0..8].try_into().expect("slice length checked"));
-    let pk_b = u64::from_le_bytes(pk[24..32].try_into().expect("slice length checked"));
-    let msg_a = u64::from_le_bytes(message[0..8].try_into().expect("slice length checked"));
-    let msg_b = u64::from_le_bytes(message[24..32].try_into().expect("slice length checked"));
-    let sig_a = u64::from_le_bytes(signature[0..8].try_into().expect("slice length checked"));
-    let sig_b = u64::from_le_bytes(signature[24..32].try_into().expect("slice length checked"));
-    let sig_c = u64::from_le_bytes(signature[56..64].try_into().expect("slice length checked"));
+    let pk_a = u64_from_le_chunk(pk, 0);
+    let pk_b = u64_from_le_chunk(pk, 24);
+    let msg_a = u64_from_le_chunk(message, 0);
+    let msg_b = u64_from_le_chunk(message, 24);
+    let sig_a = u64_from_le_chunk(signature, 0);
+    let sig_b = u64_from_le_chunk(signature, 24);
+    let sig_c = u64_from_le_chunk(signature, 56);
     let mixed = pk_a
         ^ pk_b.rotate_left(7)
         ^ msg_a.rotate_left(19)
@@ -355,16 +376,12 @@ fn verify_ok_cache_key(pk: &PublicKey, message: &[u8], signature: &[u8]) -> [u8;
     });
 
     let pk_bytes = pk.to_bytes();
-    let mut h = <Blake2bVar as blake2::digest::VariableOutput>::new(32)
-        .expect("blake2b init for signature verify cache");
-    blake2::digest::Update::update(&mut h, b"iroha:ed25519:verify_ok_cache:v1");
-    blake2::digest::Update::update(&mut h, &pk_bytes);
-    blake2::digest::Update::update(&mut h, message);
-    blake2::digest::Update::update(&mut h, signature);
-    let mut out = [0u8; 32];
-    blake2::digest::VariableOutput::finalize_variable(h, &mut out)
-        .expect("blake2b output length must match");
-    out
+    let mut h = Blake2b::<U32>::new();
+    h.update(b"iroha:ed25519:verify_ok_cache:v1");
+    h.update(pk_bytes);
+    h.update(message);
+    h.update(signature);
+    h.finalize().into()
 }
 
 fn remember_verify_ok(pk: &PublicKey, message: &[u8], signature: &[u8]) {
@@ -870,6 +887,31 @@ mod test {
     }
 
     #[test]
+    fn ed25519_masked_cache_index_is_total() {
+        assert_eq!(masked_cache_index(u64::MAX, 0), 0);
+        assert_eq!(masked_cache_index(u64::MAX, 3), 0);
+        assert_eq!(
+            masked_cache_index(u64::MAX, PUBLIC_KEY_PARSE_FAST_CACHE_SIZE),
+            PUBLIC_KEY_PARSE_FAST_CACHE_SIZE - 1
+        );
+        assert_eq!(
+            masked_cache_index(u64::MAX, VERIFY_OK_EXACT_CACHE_SIZE),
+            VERIFY_OK_EXACT_CACHE_SIZE - 1
+        );
+    }
+
+    #[test]
+    fn ed25519_u64_from_le_chunk_is_total() {
+        let mut bytes = [0u8; 10];
+        let value = 0x0807_0605_0403_0201u64;
+        bytes[1..9].copy_from_slice(&value.to_le_bytes());
+
+        assert_eq!(u64_from_le_chunk(&bytes, 1), value);
+        assert_eq!(u64_from_le_chunk(&bytes, 3), 0);
+        assert_eq!(u64_from_le_chunk(&bytes, usize::MAX), 0);
+    }
+
+    #[test]
     fn ed25519_exact_verify_cache_keeps_two_colliding_entries() {
         use std::collections::HashMap as StdHashMap;
 
@@ -1087,7 +1129,7 @@ mod test {
         let public_key = CryptoPublicKey::new(crate::PublicKeyFull::Ed25519(pk));
         let compact = public_key.0.clone();
 
-        let first = crate::PublicKeyFull::from(&compact);
+        let first = crate::PublicKeyFull::try_from(&compact).expect("compact key converts");
         match first {
             crate::PublicKeyFull::Ed25519(parsed) => assert_eq!(parsed.to_bytes(), pk.to_bytes()),
             _ => panic!("compact Ed25519 key converted to a non-Ed25519 full key"),
@@ -1101,7 +1143,7 @@ mod test {
             }
         );
 
-        let second = crate::PublicKeyFull::from(&compact);
+        let second = crate::PublicKeyFull::try_from(&compact).expect("compact key converts");
         match second {
             crate::PublicKeyFull::Ed25519(parsed) => assert_eq!(parsed.to_bytes(), pk.to_bytes()),
             _ => panic!("compact Ed25519 key converted to a non-Ed25519 full key"),

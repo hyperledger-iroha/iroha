@@ -2117,9 +2117,12 @@ pub fn gateway_key_rotate(
     )?;
 
     let public = keypair.public_key();
-    let (_, public_bytes) = public.to_bytes();
+    let public_bytes =
+        checked_ed25519_public_key_bytes(public, "generated token-signing public key")?;
     let public_key_hex = hex::encode(public_bytes);
-    let public_key_prefixed = public.to_prefixed_string();
+    let public_key_prefixed = public.try_to_prefixed_string().map_err(|err| {
+        format!("generated token-signing public key cannot be formatted as multihash: {err}")
+    })?;
 
     let mut public_out_path = None;
     if let Some(path) = options.public_out.as_ref() {
@@ -4628,6 +4631,44 @@ fn decode_hex(input: &str) -> Result<Vec<u8>, Box<dyn Error>> {
         .map_err(|err| format!("failed to decode hex value {input}: {err}").into())
 }
 
+fn checked_ed25519_public_key_bytes<'a>(
+    public_key: &'a PublicKey,
+    context: &str,
+) -> Result<&'a [u8], Box<dyn Error>> {
+    let (algorithm, public_bytes) = public_key
+        .try_to_bytes()
+        .map_err(|err| format!("{context} is malformed: {err}"))?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(format!(
+            "{context} must be Ed25519, got {}",
+            algorithm.as_static_str()
+        )
+        .into());
+    }
+    if public_bytes.len() != 32 {
+        return Err(format!(
+            "{context} must be a 32-byte Ed25519 public key, got {} bytes",
+            public_bytes.len()
+        )
+        .into());
+    }
+    Ok(public_bytes)
+}
+
+fn checked_ed25519_public_key_array(
+    public_key: &PublicKey,
+    context: &str,
+) -> Result<[u8; 32], Box<dyn Error>> {
+    let public_bytes = checked_ed25519_public_key_bytes(public_key, context)?;
+    public_bytes.try_into().map_err(|_| {
+        format!(
+            "{context} must be a 32-byte Ed25519 public key, got {} bytes",
+            public_bytes.len()
+        )
+        .into()
+    })
+}
+
 pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(target_dir)?;
 
@@ -4643,11 +4684,9 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     let provider_seed =
         decode_hex_array::<32>("505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f")?;
     let provider_pair = KeyPair::from_seed(provider_seed.to_vec(), Algorithm::Ed25519);
-    let (provider_algo, provider_public_bytes) = provider_pair.public_key().to_bytes();
-    debug_assert_eq!(provider_algo, Algorithm::Ed25519);
-    let provider_public_vec = provider_public_bytes.to_vec();
-    let provider_public: [u8; 32] = TryInto::<[u8; 32]>::try_into(provider_public_bytes)
-        .expect("ed25519 public key must be 32 bytes");
+    let provider_public =
+        checked_ed25519_public_key_array(provider_pair.public_key(), "provider public key")?;
+    let provider_public_vec = provider_public.to_vec();
 
     let provider_id =
         decode_hex_array::<32>("11223344556677889900aabbccddeeff00112233445566778899aabbccddeeff")?;
@@ -4830,10 +4869,8 @@ pub fn write_admission_fixtures(target_dir: &Path) -> Result<(), Box<dyn Error>>
     for seed in &council_seeds {
         let sk_bytes = decode_hex_array::<32>(seed)?;
         let council_pair = KeyPair::from_seed(sk_bytes.to_vec(), Algorithm::Ed25519);
-        let (algo, signer_bytes) = council_pair.public_key().to_bytes();
-        debug_assert_eq!(algo, Algorithm::Ed25519);
-        let signer: [u8; 32] = TryInto::<[u8; 32]>::try_into(signer_bytes)
-            .expect("ed25519 public key must be 32 bytes");
+        let signer =
+            checked_ed25519_public_key_array(council_pair.public_key(), "council public key")?;
         let signature = Signature::new(council_pair.private_key(), proposal_digest.as_slice());
         council_signatures.push(CouncilSignature {
             signer,
@@ -5588,10 +5625,8 @@ fn pin_fixture_alias_binding_for(
 
     let digest = alias_proof_signature_digest(&bundle);
     let signature = Signature::new(council_keys.private_key(), digest.as_ref());
-    let (_, public_bytes) = council_keys.public_key().to_bytes();
-    let signer: [u8; 32] = public_bytes
-        .try_into()
-        .map_err(|_| "expected ed25519 public key to be 32 bytes")?;
+    let signer =
+        checked_ed25519_public_key_array(council_keys.public_key(), "alias council public key")?;
 
     bundle.council_signatures.push(CouncilSignature {
         signer,
@@ -5619,7 +5654,10 @@ fn pin_fixture_build_envelope(
 ) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut sig_entry = json::Map::new();
     let signature = Signature::new(keypair.private_key(), record.digest.as_bytes());
-    let public_bytes_hex = hex::encode(keypair.public_key().to_bytes().1);
+    let public_bytes_hex = hex::encode(checked_ed25519_public_key_bytes(
+        keypair.public_key(),
+        "pin fixture signer public key",
+    )?);
     sig_entry.insert("algorithm".into(), Value::from("ed25519"));
     sig_entry.insert("signer".into(), Value::from(public_bytes_hex));
     sig_entry.insert(
@@ -7774,6 +7812,15 @@ mod tests {
             "docs.sora.gw.sora.name"
         );
         assert!(normalize_tls_host("invalid host").is_err());
+    }
+
+    #[test]
+    fn admission_fixtures_write_checked_public_key_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        write_admission_fixtures(temp.path()).expect("write admission fixtures");
+
+        assert!(temp.path().join("provider_alpha_envelope.to").is_file());
+        assert!(temp.path().join("provider_alpha_metadata.json").is_file());
     }
 
     #[test]
@@ -11211,6 +11258,35 @@ mod tests {
         assert!(
             outcome.public_key_prefixed.starts_with("ed"),
             "expected ed-prefixed multihash"
+        );
+        let public_contents = fs::read_to_string(&public_path).expect("read public key JSON");
+        let public_json: serde_json::Value =
+            serde_json::from_str(&public_contents).expect("public key JSON parses");
+        assert_eq!(public_json["algorithm"].as_str(), Some("ed25519"));
+        assert_eq!(
+            public_json["key_hex"].as_str(),
+            Some(outcome.public_key_hex.as_str())
+        );
+        assert_eq!(
+            public_json["key_multihash"].as_str(),
+            Some(outcome.public_key_prefixed.as_str())
+        );
+    }
+
+    #[test]
+    fn checked_ed25519_public_key_bytes_rejects_non_ed25519_key() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+
+        let error = checked_ed25519_public_key_bytes(
+            keypair.public_key(),
+            "gateway token-signing public key",
+        )
+        .expect_err("secp256k1 gateway key must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("gateway token-signing public key must be Ed25519, got secp256k1")
         );
     }
 

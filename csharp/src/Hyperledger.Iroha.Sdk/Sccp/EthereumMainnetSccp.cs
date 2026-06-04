@@ -297,6 +297,7 @@ public static class EthereumMainnetSccp
         }
 
         var items = new List<EvmTrieItem>(receipts.Count);
+        var seenTransactionHashes = new HashSet<string>(StringComparer.Ordinal);
         byte[]? targetReceiptRlp = null;
         for (var index = 0; index < receipts.Count; index++)
         {
@@ -309,6 +310,17 @@ public static class EthereumMainnetSccp
             {
                 throw new ArgumentException(
                     "block receipt transactionIndex must match receipt order.",
+                    nameof(receipts));
+            }
+
+            var transactionHash = NormalizeRpcHex(
+                FirstPresent(receipt, "transactionHash", "transaction_hash"),
+                $"blockReceipts[{index}].transactionHash",
+                32);
+            if (!seenTransactionHashes.Add(transactionHash))
+            {
+                throw new ArgumentException(
+                    "block receipt transactionHash values must be unique.",
                     nameof(receipts));
             }
 
@@ -525,7 +537,11 @@ public static class EthereumMainnetSccp
                 blockReceipts,
                 receiptTransactionIndex);
             var expectedReceiptsRoot = blockReceiptsRoot
-                ?? FirstPresent(beaconFinality, "executionReceiptsRoot", "execution_receipts_root") as string;
+                ?? (StrictFirstPresent(
+                    beaconFinality,
+                    "beaconFinality.executionReceiptsRoot",
+                    "executionReceiptsRoot",
+                    "execution_receipts_root") as string);
             if (expectedReceiptsRoot is null
                 || !string.Equals(receiptTrieProof.ReceiptsRoot, expectedReceiptsRoot, StringComparison.Ordinal))
             {
@@ -590,8 +606,9 @@ public static class EthereumMainnetSccp
             {
                 SourceEventDigest = sourceEvent.SourceEventDigest,
                 BeaconSlot = NormalizeUnsignedInteger(
-                    FirstPresent(
+                    StrictFirstPresent(
                         beaconFinality,
+                        "beaconFinality.beaconSlot",
                         "beaconSlot",
                         "beacon_slot",
                         "finalizedSlot",
@@ -599,19 +616,32 @@ public static class EthereumMainnetSccp
                         "slot"),
                     "beaconFinality.beaconSlot"),
                 ExecutionBlockNumber = NormalizeUnsignedInteger(
-                    FirstPresent(beaconFinality, "executionBlockNumber", "execution_block_number"),
+                    StrictFirstPresent(
+                        beaconFinality,
+                        "beaconFinality.executionBlockNumber",
+                        "executionBlockNumber",
+                        "execution_block_number"),
                     "beaconFinality.executionBlockNumber"),
                 ExecutionBlockHash = NormalizeRpcHex(
-                    FirstPresent(beaconFinality, "executionBlockHash", "execution_block_hash"),
+                    StrictFirstPresent(
+                        beaconFinality,
+                        "beaconFinality.executionBlockHash",
+                        "executionBlockHash",
+                        "execution_block_hash"),
                     "beaconFinality.executionBlockHash",
                     32),
                 ExecutionReceiptsRoot = NormalizeRpcHex(
-                    FirstPresent(beaconFinality, "executionReceiptsRoot", "execution_receipts_root"),
+                    StrictFirstPresent(
+                        beaconFinality,
+                        "beaconFinality.executionReceiptsRoot",
+                        "executionReceiptsRoot",
+                        "execution_receipts_root"),
                     "beaconFinality.executionReceiptsRoot",
                     32),
                 BeaconFinalizedRoot = NormalizeRpcHex(
-                    FirstPresent(
+                    StrictFirstPresent(
                         beaconFinality,
+                        "beaconFinality.finalizedHeaderRoot",
                         "finalizedHeaderRoot",
                         "finalized_header_root",
                         "beaconFinalizedRoot",
@@ -619,7 +649,11 @@ public static class EthereumMainnetSccp
                     "beaconFinality.finalizedHeaderRoot",
                     32),
                 SyncCommitteeRoot = NormalizeRpcHex(
-                    FirstPresent(beaconFinality, "syncCommitteeRoot", "sync_committee_root"),
+                    StrictFirstPresent(
+                        beaconFinality,
+                        "beaconFinality.syncCommitteeRoot",
+                        "syncCommitteeRoot",
+                        "sync_committee_root"),
                     "beaconFinality.syncCommitteeRoot",
                     32),
                 ReceiptRootIndex = targetIndex,
@@ -683,7 +717,7 @@ public static class EthereumMainnetSccp
                 "Ethereum mainnet SCCP inbound proof requires receiptProof.",
                 nameof(input));
         }
-        if (evidence.Receipt is not null && evidence.SourceEventDigest is null)
+        if (evidence.SourceEventDigest is null)
         {
             throw new ArgumentException(
                 "Ethereum mainnet SCCP inbound proof requires receipt source event validation.",
@@ -708,6 +742,22 @@ public static class EthereumMainnetSccp
             throw new ArgumentException(
                 "Ethereum mainnet SCCP inbound proof requires beaconFinality.beaconSlot.",
                 nameof(input));
+        }
+
+        foreach (var field in new[]
+                 {
+                     "syncCommitteeBits",
+                     "syncCommitteeSignature",
+                     "syncCommitteeParticipation",
+                     "syncSignatureSlot",
+                 })
+        {
+            if (!evidence.BeaconFinality.ContainsKey(field))
+            {
+                throw new ArgumentException(
+                    $"Ethereum mainnet SCCP inbound proof requires beaconFinality.{field}.",
+                    nameof(input));
+            }
         }
 
         var proofBytes = await inboundProver.ProveAsync(
@@ -2091,6 +2141,31 @@ public static class EthereumMainnetSccp
         return null;
     }
 
+    private static object? StrictFirstPresent(
+        IReadOnlyDictionary<string, object?> input,
+        string parameterName,
+        params string[] keys)
+    {
+        object? selected = null;
+        var found = false;
+        foreach (var key in keys)
+        {
+            if (input.TryGetValue(key, out var value))
+            {
+                if (found)
+                {
+                    throw new ArgumentException(
+                        $"{parameterName} must not use multiple aliases.",
+                        parameterName);
+                }
+                selected = value;
+                found = true;
+            }
+        }
+
+        return selected;
+    }
+
     private static IReadOnlyList<IReadOnlyDictionary<string, object?>> RequireDictionaryList(
         object? value,
         string label)
@@ -2640,7 +2715,11 @@ public static class EthereumMainnetSccp
                 }
 
                 var logTransactionHash = NormalizeRpcHex(
-                    FirstPresent(log, "transactionHash", "transaction_hash"),
+                    StrictFirstPresent(
+                        log,
+                        $"receipt.logs[{index}].transactionHash",
+                        "transactionHash",
+                        "transaction_hash"),
                     $"receipt.logs[{index}].transactionHash",
                     32);
                 if (transactionHash is not null
@@ -2652,7 +2731,11 @@ public static class EthereumMainnetSccp
                 }
 
                 var logBlockHash = NormalizeRpcHex(
-                    FirstPresent(log, "blockHash", "block_hash"),
+                    StrictFirstPresent(
+                        log,
+                        $"receipt.logs[{index}].blockHash",
+                        "blockHash",
+                        "block_hash"),
                     $"receipt.logs[{index}].blockHash",
                     32);
                 if (blockHash is not null
@@ -2664,7 +2747,11 @@ public static class EthereumMainnetSccp
                 }
 
                 var logBlockNumber = NormalizePositiveRpcQuantity(
-                    FirstPresent(log, "blockNumber", "block_number"),
+                    StrictFirstPresent(
+                        log,
+                        $"receipt.logs[{index}].blockNumber",
+                        "blockNumber",
+                        "block_number"),
                     $"receipt.logs[{index}].blockNumber");
                 if (blockNumber is not null
                     && !string.Equals(logBlockNumber, blockNumber, StringComparison.Ordinal))
@@ -2859,8 +2946,9 @@ public static class EthereumMainnetSccp
 
         if (beaconFinality is not null)
         {
-            var finalityFinalizedRootInput = FirstPresent(
+            var finalityFinalizedRootInput = StrictFirstPresent(
                 beaconFinality,
+                "beaconFinality.finalizedHeaderRoot",
                 "finalizedHeaderRoot",
                 "finalized_header_root",
                 "beaconFinalizedRoot",
@@ -2883,8 +2971,9 @@ public static class EthereumMainnetSccp
                 }
             }
 
-            var finalitySyncCommitteeRootInput = FirstPresent(
+            var finalitySyncCommitteeRootInput = StrictFirstPresent(
                 beaconFinality,
+                "beaconFinality.syncCommitteeRoot",
                 "syncCommitteeRoot",
                 "sync_committee_root");
             if (finalitySyncCommitteeRootInput is not null)
@@ -2905,8 +2994,9 @@ public static class EthereumMainnetSccp
                 }
             }
 
-            var finalityBeaconSlotInput = FirstPresent(
+            var finalityBeaconSlotInput = StrictFirstPresent(
                 beaconFinality,
+                "beaconFinality.beaconSlot",
                 "beaconSlot",
                 "beacon_slot",
                 "finalizedSlot",
@@ -3039,8 +3129,9 @@ public static class EthereumMainnetSccp
         string? expectedReceiptsRoot)
     {
         var executionBlockNumber = NormalizeUnsignedInteger(
-            FirstPresent(
+            StrictFirstPresent(
                 finality,
+                "beaconFinality.executionBlockNumber",
                 "executionBlockNumber",
                 "execution_block_number",
                 "finalityHeight",
@@ -3062,8 +3153,9 @@ public static class EthereumMainnetSccp
         }
 
         var executionBlockHash = NormalizeRpcHex(
-            FirstPresent(
+            StrictFirstPresent(
                 finality,
+                "beaconFinality.executionBlockHash",
                 "executionBlockHash",
                 "execution_block_hash",
                 "finalityBlockHash",
@@ -3079,8 +3171,9 @@ public static class EthereumMainnetSccp
         }
 
         var executionReceiptsRoot = NormalizeRpcHex(
-            FirstPresent(
+            StrictFirstPresent(
                 finality,
+                "beaconFinality.executionReceiptsRoot",
                 "executionReceiptsRoot",
                 "execution_receipts_root",
                 "receiptsRoot",
@@ -3101,8 +3194,9 @@ public static class EthereumMainnetSccp
             ["executionBlockHash"] = executionBlockHash,
             ["executionReceiptsRoot"] = executionReceiptsRoot,
         };
-        var finalizedHeaderRootInput = FirstPresent(
+        var finalizedHeaderRootInput = StrictFirstPresent(
             finality,
+            "beaconFinality.finalizedHeaderRoot",
             "finalizedHeaderRoot",
             "finalized_header_root",
             "beaconFinalizedRoot",
@@ -3115,8 +3209,9 @@ public static class EthereumMainnetSccp
                 32);
         }
 
-        var syncCommitteeRootInput = FirstPresent(
+        var syncCommitteeRootInput = StrictFirstPresent(
             finality,
+            "beaconFinality.syncCommitteeRoot",
             "syncCommitteeRoot",
             "sync_committee_root");
         if (syncCommitteeRootInput is not null)
@@ -3126,8 +3221,9 @@ public static class EthereumMainnetSccp
                 "beaconFinality.syncCommitteeRoot",
                 32);
         }
-        var beaconSlotInput = FirstPresent(
+        var beaconSlotInput = StrictFirstPresent(
             finality,
+            "beaconFinality.beaconSlot",
             "beaconSlot",
             "beacon_slot",
             "finalizedSlot",
@@ -3147,7 +3243,103 @@ public static class EthereumMainnetSccp
 
             normalized["beaconSlot"] = beaconSlot.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
+        var syncCommitteeBitsInput = StrictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeBits",
+            "syncCommitteeBits",
+            "sync_committee_bits");
+        if (syncCommitteeBitsInput is not null)
+        {
+            normalized["syncCommitteeBits"] = NormalizeFinalitySyncCommitteeBits(
+                syncCommitteeBitsInput,
+                "beaconFinality.syncCommitteeBits");
+        }
+
+        var syncCommitteeSignatureInput = StrictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeSignature",
+            "syncCommitteeSignature",
+            "sync_committee_signature");
+        if (syncCommitteeSignatureInput is not null)
+        {
+            normalized["syncCommitteeSignature"] = NormalizeRpcHex(
+                syncCommitteeSignatureInput,
+                "beaconFinality.syncCommitteeSignature",
+                96);
+        }
+
+        var syncSignatureSlotInput = StrictFirstPresent(
+            finality,
+            "beaconFinality.syncSignatureSlot",
+            "syncSignatureSlot",
+            "sync_signature_slot",
+            "signatureSlot",
+            "signature_slot");
+        if (syncSignatureSlotInput is not null)
+        {
+            var syncSignatureSlot = NormalizeUnsignedInteger(
+                syncSignatureSlotInput,
+                "beaconFinality.syncSignatureSlot");
+            if (syncSignatureSlot == 0)
+            {
+                throw new ArgumentException(
+                    "beaconFinality.syncSignatureSlot must be positive.",
+                    nameof(finality));
+            }
+
+            normalized["syncSignatureSlot"] = syncSignatureSlot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        var syncCommitteeParticipationInput = StrictFirstPresent(
+            finality,
+            "beaconFinality.syncCommitteeParticipation",
+            "syncCommitteeParticipation",
+            "sync_committee_participation");
+        if (syncCommitteeParticipationInput is not null)
+        {
+            var syncCommitteeParticipation = NormalizeUnsignedInteger(
+                syncCommitteeParticipationInput,
+                "beaconFinality.syncCommitteeParticipation");
+            if (syncCommitteeParticipation == 0)
+            {
+                throw new ArgumentException(
+                    "beaconFinality.syncCommitteeParticipation must be positive.",
+                    nameof(finality));
+            }
+
+            normalized["syncCommitteeParticipation"] = syncCommitteeParticipation.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         return normalized;
+    }
+
+    private static string NormalizeFinalitySyncCommitteeBits(object? value, string parameterName)
+    {
+        var bits = NormalizeRpcHex(value, parameterName, 64, allowZero: true);
+        if (FinalitySyncCommitteeParticipation(bits) == 0)
+        {
+            throw new ArgumentException(
+                $"{parameterName} must contain at least one participant.",
+                parameterName);
+        }
+
+        return bits;
+    }
+
+    private static ulong FinalitySyncCommitteeParticipation(string bits)
+    {
+        var text = bits[2..];
+        ulong count = 0;
+        for (var index = 0; index < text.Length; index += 2)
+        {
+            var value = Convert.ToByte(text[index..(index + 2)], 16);
+            while (value != 0)
+            {
+                count += (ulong)(value & 1);
+                value >>= 1;
+            }
+        }
+
+        return count;
     }
 
     private static byte[] RequireNonZeroProofBytes(byte[] proofBytes, string parameterName)
@@ -4217,6 +4409,17 @@ public sealed class EthereumMainnetBeaconRestHttpTransport(HttpClient? httpClien
 public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainnetConsensusProvider
 {
     private const int BeaconRestMaxResponseBytes = 1024 * 1024;
+    private const ulong EthereumMainnetSecondsPerSlot = 12;
+
+    private readonly record struct BeaconRestHeaderSummary(string Root, ulong Slot);
+
+    private readonly record struct BeaconRestBlockId(string Id, ulong? Slot = null, string? Root = null);
+
+    private readonly record struct BeaconRestFinalityUpdateSummary(
+        string SyncCommitteeBits,
+        string SyncCommitteeSignature,
+        ulong SyncCommitteeParticipation,
+        ulong SyncSignatureSlot);
 
     private readonly Uri endpoint;
     private readonly string syncCommitteeRoot;
@@ -4273,42 +4476,157 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             FirstPresent(block, "receiptsRoot", "receipts_root"),
             "block.receiptsRoot",
             32);
+        var targetBlockId = await BeaconRestBlockIdForTargetAsync(
+            block,
+            cancellationToken).ConfigureAwait(false);
 
-        using var headerDocument = await FetchJsonDocumentAsync(
+        var finalizedHeader = await FetchHeaderSummaryAsync(
             "/eth/v1/beacon/headers/finalized",
             "Ethereum mainnet Beacon REST finalized header",
             cancellationToken).ConfigureAwait(false);
-        var headerRoot = headerDocument.RootElement;
-        RejectUnsafeBeaconRestPayload(headerRoot, "Ethereum mainnet Beacon REST finalized header");
-        var headerData = RequireObject(
-            RequireProperty(headerRoot, "Ethereum mainnet Beacon REST finalized header", "data"),
-            "Ethereum mainnet Beacon REST finalized header.data");
-        RejectNonBooleanBeaconRestCanonical(
-            headerData,
-            "Ethereum mainnet Beacon REST finalized header");
-        var finalizedHeaderRoot = NormalizeRpcHex(
-            RequireString(
-                RequireProperty(headerData, "Ethereum mainnet Beacon REST finalized header.data", "root"),
-                "finalizedHeaderRoot"),
-            "finalizedHeaderRoot",
-            32);
-        var header = RequireObject(
-            RequireProperty(headerData, "Ethereum mainnet Beacon REST finalized header.data", "header"),
-            "Ethereum mainnet Beacon REST finalized header.data.header");
-        var message = RequireObject(
-            RequireProperty(header, "Ethereum mainnet Beacon REST finalized header.data.header", "message"),
-            "Ethereum mainnet Beacon REST finalized header.data.header.message");
-        var beaconSlot = NormalizeUnsignedInteger(
+        var targetHeader = targetBlockId.Id == "finalized"
+            ? finalizedHeader
+            : await FetchHeaderSummaryAsync(
+                $"/eth/v1/beacon/headers/{targetBlockId.Id}",
+                "Ethereum mainnet Beacon REST finalized target header",
+                cancellationToken).ConfigureAwait(false);
+        if (targetBlockId.Slot is { } expectedSlot && targetHeader.Slot != expectedSlot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finalized target header slot must match beaconSlot");
+        }
+        if (targetBlockId.Root is { } expectedRoot
+            && !string.Equals(targetHeader.Root, expectedRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finalized target header root must match beaconBlockRoot");
+        }
+        if (targetHeader.Slot > finalizedHeader.Slot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST target block is newer than the finalized header");
+        }
+        if (targetHeader.Slot == finalizedHeader.Slot
+            && !string.Equals(targetHeader.Root, finalizedHeader.Root, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST target header root must match finalized header root at the same slot");
+        }
+
+        using var finalizedBlockRootDocument = await FetchJsonDocumentAsync(
+            $"/eth/v1/beacon/blocks/{targetBlockId.Id}/root",
+            "Ethereum mainnet Beacon REST finalized block root",
+            cancellationToken).ConfigureAwait(false);
+        var finalizedBlockRootResponse = finalizedBlockRootDocument.RootElement;
+        RejectUnsafeBeaconRestPayload(
+            finalizedBlockRootResponse,
+            "Ethereum mainnet Beacon REST finalized block root");
+        var finalizedBlockRootData = RequireObject(
+            RequireProperty(
+                finalizedBlockRootResponse,
+                "Ethereum mainnet Beacon REST finalized block root",
+                "data"),
+            "Ethereum mainnet Beacon REST finalized block root.data");
+        var finalizedBlockRootHash = NormalizeRpcHex(
             RequireString(
                 RequireProperty(
-                    message,
-                    "Ethereum mainnet Beacon REST finalized header.data.header.message",
-                    "slot"),
-                "beaconFinality.beaconSlot"),
-            "beaconFinality.beaconSlot");
-        if (beaconSlot == 0)
+                    finalizedBlockRootData,
+                    "Ethereum mainnet Beacon REST finalized block root.data",
+                    "root"),
+                "finalizedBlockRoot"),
+            "finalizedBlockRoot",
+            32);
+        if (!string.Equals(finalizedBlockRootHash, targetHeader.Root, StringComparison.Ordinal))
         {
-            throw new ArgumentException("beaconFinality.beaconSlot must be positive");
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finalized block root must match finalized header root");
+        }
+
+        using var finalizedBlockDocument = await FetchJsonDocumentAsync(
+            $"/eth/v2/beacon/blocks/{targetBlockId.Id}",
+            "Ethereum mainnet Beacon REST finalized block",
+            cancellationToken).ConfigureAwait(false);
+        var finalizedBlockRoot = finalizedBlockDocument.RootElement;
+        RejectUnsafeBeaconRestPayload(
+            finalizedBlockRoot,
+            "Ethereum mainnet Beacon REST finalized block");
+        var finalizedBlockData = RequireObject(
+            RequireProperty(
+                finalizedBlockRoot,
+                "Ethereum mainnet Beacon REST finalized block",
+                "data"),
+            "Ethereum mainnet Beacon REST finalized block.data");
+        var finalizedBlockMessage = RequireObject(
+            RequireProperty(
+                finalizedBlockData,
+                "Ethereum mainnet Beacon REST finalized block.data",
+                "message"),
+            "Ethereum mainnet Beacon REST finalized block.data.message");
+        var finalizedBlockSlot = NormalizeUnsignedInteger(
+            RequireString(
+                RequireProperty(
+                    finalizedBlockMessage,
+                    "Ethereum mainnet Beacon REST finalized block.data.message",
+                    "slot"),
+                "Ethereum mainnet Beacon REST finalized block.data.message.slot"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.slot");
+        if (finalizedBlockSlot != targetHeader.Slot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finalized block slot must match finalized header slot");
+        }
+        var finalizedBlockBody = RequireObject(
+            RequireProperty(
+                finalizedBlockMessage,
+                "Ethereum mainnet Beacon REST finalized block.data.message",
+                "body"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body");
+        var executionPayload = RequireObject(
+            RequireProperty(
+                finalizedBlockBody,
+                "Ethereum mainnet Beacon REST finalized block.data.message.body",
+                "execution_payload"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload");
+        var payloadBlockHash = NormalizeRpcHex(
+            RequireString(
+                RequireProperty(
+                    executionPayload,
+                    "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                    "block_hash"),
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_hash",
+            32);
+        if (!string.Equals(payloadBlockHash, blockHash, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST execution payload block_hash must match block.hash");
+        }
+        var payloadBlockNumber = NormalizeUnsignedInteger(
+            RequireString(
+                RequireProperty(
+                    executionPayload,
+                    "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                    "block_number"),
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.block_number");
+        if (payloadBlockNumber != NormalizeUnsignedInteger(blockNumber, "block.number"))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST execution payload block_number must match block.number");
+        }
+        var payloadReceiptsRoot = NormalizeRpcHex(
+            RequireString(
+                RequireProperty(
+                    executionPayload,
+                    "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload",
+                    "receipts_root"),
+                "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root"),
+            "Ethereum mainnet Beacon REST finalized block.data.message.body.execution_payload.receipts_root",
+            32);
+        if (!string.Equals(payloadReceiptsRoot, receiptsRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST execution payload receipts_root must match block.receiptsRoot");
         }
 
         if (verifyFinalityCheckpoint)
@@ -4342,22 +4660,248 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
                     "finalizedCheckpointRoot"),
                 "finalizedCheckpointRoot",
                 32);
-            if (!string.Equals(finalizedCheckpointRoot, finalizedHeaderRoot, StringComparison.Ordinal))
+            if (!string.Equals(finalizedCheckpointRoot, finalizedHeader.Root, StringComparison.Ordinal))
             {
                 throw new ArgumentException(
                     "Ethereum mainnet Beacon REST finality checkpoint root must match finalized header root");
             }
         }
 
+        var finalityUpdate = await FetchFinalityUpdateSummaryAsync(
+            finalizedHeader.Slot,
+            cancellationToken).ConfigureAwait(false);
+
         return new Dictionary<string, object?>(StringComparer.Ordinal)
         {
             ["executionBlockNumber"] = NormalizeUnsignedInteger(blockNumber, "block.number").ToString(),
             ["executionBlockHash"] = blockHash,
             ["executionReceiptsRoot"] = receiptsRoot,
-            ["finalizedHeaderRoot"] = finalizedHeaderRoot,
+            ["finalizedHeaderRoot"] = targetHeader.Root,
             ["syncCommitteeRoot"] = syncCommitteeRoot,
-            ["beaconSlot"] = beaconSlot.ToString(),
+            ["beaconSlot"] = targetHeader.Slot.ToString(),
+            ["syncCommitteeBits"] = finalityUpdate.SyncCommitteeBits,
+            ["syncCommitteeSignature"] = finalityUpdate.SyncCommitteeSignature,
+            ["syncCommitteeParticipation"] = finalityUpdate.SyncCommitteeParticipation.ToString(),
+            ["syncSignatureSlot"] = finalityUpdate.SyncSignatureSlot.ToString(),
         };
+    }
+
+    private async ValueTask<BeaconRestBlockId> BeaconRestBlockIdForTargetAsync(
+        IReadOnlyDictionary<string, object?> block,
+        CancellationToken cancellationToken)
+    {
+        if (FirstPresent(
+                block,
+                "beaconBlockRoot",
+                "beacon_block_root",
+                "targetBeaconBlockRoot",
+                "target_beacon_block_root") is { } rootInput)
+        {
+            var root = NormalizeRpcHex(rootInput, "block.beaconBlockRoot", 32);
+            return new BeaconRestBlockId(root, Root: root);
+        }
+        if (FirstPresent(
+                block,
+                "beaconBlockId",
+                "beacon_block_id",
+                "targetBeaconBlockId",
+                "target_beacon_block_id") is { } idInput)
+        {
+            return BeaconRestBlockIdFromValue(idInput, "block.beaconBlockId");
+        }
+        if (FirstPresent(block, "beaconSlot", "beacon_slot", "finalizedSlot", "finalized_slot", "slot")
+            is { } slotInput)
+        {
+            var slot = NormalizeBeaconSlot(slotInput, "block.beaconSlot");
+            return new BeaconRestBlockId(slot.ToString(), Slot: slot);
+        }
+        if (FirstPresent(block, "timestamp", "blockTimestamp", "block_timestamp") is { } timestampInput)
+        {
+            var timestamp = NormalizeUnsignedInteger(timestampInput, "block.timestamp");
+            var genesisTime = await BeaconRestGenesisTimeAsync(cancellationToken).ConfigureAwait(false);
+            if (timestamp < genesisTime)
+            {
+                throw new ArgumentException("block.timestamp must not be before Beacon genesis time");
+            }
+            var elapsed = timestamp - genesisTime;
+            if (elapsed % EthereumMainnetSecondsPerSlot != 0)
+            {
+                throw new ArgumentException(
+                    "block.timestamp must align to an Ethereum mainnet Beacon slot");
+            }
+            var slot = elapsed / EthereumMainnetSecondsPerSlot;
+            if (slot == 0)
+            {
+                throw new ArgumentException("beaconFinality.beaconSlot must be positive");
+            }
+            return new BeaconRestBlockId(slot.ToString(), Slot: slot);
+        }
+        return new BeaconRestBlockId("finalized");
+    }
+
+    private async ValueTask<ulong> BeaconRestGenesisTimeAsync(CancellationToken cancellationToken)
+    {
+        using var genesisDocument = await FetchJsonDocumentAsync(
+            "/eth/v1/beacon/genesis",
+            "Ethereum mainnet Beacon REST genesis",
+            cancellationToken).ConfigureAwait(false);
+        var data = RequireObject(
+            RequireProperty(
+                genesisDocument.RootElement,
+                "Ethereum mainnet Beacon REST genesis",
+                "data"),
+            "Ethereum mainnet Beacon REST genesis.data");
+        return NormalizeUnsignedInteger(
+            RequireString(
+                RequireProperty(
+                    data,
+                    "Ethereum mainnet Beacon REST genesis.data",
+                    "genesis_time"),
+                "Ethereum mainnet Beacon REST genesis.data.genesis_time"),
+            "Ethereum mainnet Beacon REST genesis.data.genesis_time");
+    }
+
+    private async ValueTask<BeaconRestHeaderSummary> FetchHeaderSummaryAsync(
+        string path,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        using var document = await FetchJsonDocumentAsync(path, label, cancellationToken).ConfigureAwait(false);
+        return BeaconRestHeaderSummaryFromPayload(document.RootElement, label);
+    }
+
+    private static BeaconRestHeaderSummary BeaconRestHeaderSummaryFromPayload(
+        JsonElement payload,
+        string label)
+    {
+        RejectUnsafeBeaconRestPayload(payload, label);
+        var headerData = RequireObject(
+            RequireProperty(payload, label, "data"),
+            $"{label}.data");
+        RejectNonBooleanBeaconRestCanonical(headerData, label);
+        var rootLabel = label.Contains("target", StringComparison.Ordinal)
+            ? "targetHeaderRoot"
+            : "finalizedHeaderRoot";
+        var root = NormalizeRpcHex(
+            RequireString(
+                RequireProperty(headerData, $"{label}.data", "root"),
+                rootLabel),
+            rootLabel,
+            32);
+        var header = RequireObject(
+            RequireProperty(headerData, $"{label}.data", "header"),
+            $"{label}.data.header");
+        var message = RequireObject(
+            RequireProperty(header, $"{label}.data.header", "message"),
+            $"{label}.data.header.message");
+        foreach (var field in new[] { "parent_root", "state_root", "body_root" })
+        {
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(message, $"{label}.data.header.message", field),
+                    $"{label}.data.header.message.{field}"),
+                $"{label}.data.header.message.{field}",
+                32);
+        }
+        NormalizeRpcHex(
+            RequireString(
+                RequireProperty(header, $"{label}.data.header", "signature"),
+                $"{label}.data.header.signature"),
+            $"{label}.data.header.signature",
+            96);
+        var slot = NormalizeBeaconSlot(
+            RequireString(
+                RequireProperty(message, $"{label}.data.header.message", "slot"),
+                "beaconFinality.beaconSlot"),
+            "beaconFinality.beaconSlot");
+        return new BeaconRestHeaderSummary(root, slot);
+    }
+
+    private async ValueTask<BeaconRestFinalityUpdateSummary> FetchFinalityUpdateSummaryAsync(
+        ulong expectedFinalizedSlot,
+        CancellationToken cancellationToken)
+    {
+        using var document = await FetchJsonDocumentAsync(
+            "/eth/v1/beacon/light_client/finality_update",
+            "Ethereum mainnet Beacon REST light-client finality update",
+            cancellationToken).ConfigureAwait(false);
+        return BeaconRestFinalityUpdateSummaryFromPayload(document.RootElement, expectedFinalizedSlot);
+    }
+
+    private static BeaconRestFinalityUpdateSummary BeaconRestFinalityUpdateSummaryFromPayload(
+        JsonElement payload,
+        ulong expectedFinalizedSlot)
+    {
+        const string Label = "Ethereum mainnet Beacon REST light-client finality update";
+        RejectUnsafeBeaconRestPayload(payload, Label);
+        var data = RequireObject(RequireProperty(payload, Label, "data"), $"{Label}.data");
+        var finalizedHeader = RequireObject(
+            RequireProperty(data, $"{Label}.data", "finalized_header"),
+            $"{Label}.data.finalized_header");
+        var finalizedBeacon = RequireObject(
+            RequireProperty(finalizedHeader, $"{Label}.data.finalized_header", "beacon"),
+            $"{Label}.data.finalized_header.beacon");
+        var finalizedSlot = NormalizeBeaconSlot(
+            RequireString(
+                RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "slot"),
+                $"{Label}.data.finalized_header.beacon.slot"),
+            $"{Label}.data.finalized_header.beacon.slot");
+        if (finalizedSlot != expectedFinalizedSlot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot");
+        }
+        var signatureSlot = NormalizeBeaconSlot(
+            RequireString(RequireProperty(data, $"{Label}.data", "signature_slot"), $"{Label}.data.signature_slot"),
+            $"{Label}.data.signature_slot");
+        if (signatureSlot < expectedFinalizedSlot)
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finality update signature_slot must cover finalized header slot");
+        }
+        var syncAggregate = RequireObject(
+            RequireProperty(data, $"{Label}.data", "sync_aggregate"),
+            $"{Label}.data.sync_aggregate");
+        var syncCommitteeBits = NormalizeSyncCommitteeBits(
+            RequireString(
+                RequireProperty(syncAggregate, $"{Label}.data.sync_aggregate", "sync_committee_bits"),
+                $"{Label}.data.sync_aggregate.sync_committee_bits"),
+            $"{Label}.data.sync_aggregate.sync_committee_bits");
+        var syncCommitteeSignature = NormalizeRpcHex(
+            RequireString(
+                RequireProperty(syncAggregate, $"{Label}.data.sync_aggregate", "sync_committee_signature"),
+                $"{Label}.data.sync_aggregate.sync_committee_signature"),
+            $"{Label}.data.sync_aggregate.sync_committee_signature",
+            96);
+        return new BeaconRestFinalityUpdateSummary(
+            syncCommitteeBits,
+            syncCommitteeSignature,
+            SyncCommitteeParticipation(syncCommitteeBits),
+            signatureSlot);
+    }
+
+    private static BeaconRestBlockId BeaconRestBlockIdFromValue(object? value, string label)
+    {
+        if (value is string text
+            && text.Trim() == text
+            && text.StartsWith("0x", StringComparison.Ordinal)
+            && text.Length == 66)
+        {
+            var root = NormalizeRpcHex(text, label, 32);
+            return new BeaconRestBlockId(root, Root: root);
+        }
+        var slot = NormalizeBeaconSlot(value, label);
+        return new BeaconRestBlockId(slot.ToString(), Slot: slot);
+    }
+
+    private static ulong NormalizeBeaconSlot(object? value, string label)
+    {
+        var slot = NormalizeUnsignedInteger(value, label);
+        if (slot == 0)
+        {
+            throw new ArgumentException("beaconFinality.beaconSlot must be positive");
+        }
+        return slot;
     }
 
     private async ValueTask<JsonDocument> FetchJsonDocumentAsync(
@@ -4448,10 +4992,12 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
     {
         var builder = new UriBuilder(endpoint) { Fragment = string.Empty };
         var basePath = builder.Path.TrimEnd('/');
-        var apiPath = basePath.EndsWith("/eth/v1", StringComparison.Ordinal) && path.StartsWith("/eth/v1/", StringComparison.Ordinal)
-            ? path["/eth/v1".Length..]
-            : path;
-        builder.Path = basePath + apiPath;
+        var apiPath =
+            System.Text.RegularExpressions.Regex.IsMatch(basePath, "/eth/v[0-9]+$")
+            && System.Text.RegularExpressions.Regex.IsMatch(path, "^/eth/v[0-9]+/")
+                ? System.Text.RegularExpressions.Regex.Replace(basePath, "/eth/v[0-9]+$", string.Empty) + path
+                : basePath + path;
+        builder.Path = apiPath;
         return builder.Uri.ToString();
     }
 
@@ -4540,7 +5086,11 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         throw new ArgumentException($"{names[0]} is required");
     }
 
-    private static string NormalizeRpcHex(object? value, string parameterName, int byteLength)
+    private static string NormalizeRpcHex(
+        object? value,
+        string parameterName,
+        int byteLength,
+        bool allowZero = false)
     {
         if (value is not string text || text.Trim() != text || !text.StartsWith("0x", StringComparison.Ordinal))
         {
@@ -4551,11 +5101,37 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException($"{parameterName} must be {byteLength} bytes canonical lowercase 0x hex", parameterName);
         }
-        if (hex.All(static ch => ch == '0'))
+        if (!allowZero && hex.All(static ch => ch == '0'))
         {
             throw new ArgumentException($"{parameterName} must not be zero", parameterName);
         }
         return text;
+    }
+
+    private static string NormalizeSyncCommitteeBits(object? value, string parameterName)
+    {
+        var bits = NormalizeRpcHex(value, parameterName, 64, allowZero: true);
+        if (SyncCommitteeParticipation(bits) == 0)
+        {
+            throw new ArgumentException($"{parameterName} must contain at least one participant", parameterName);
+        }
+        return bits;
+    }
+
+    private static ulong SyncCommitteeParticipation(string bits)
+    {
+        var hex = bits[2..];
+        ulong count = 0;
+        for (var index = 0; index < hex.Length; index += 2)
+        {
+            var value = Convert.ToByte(hex.Substring(index, 2), 16);
+            while (value != 0)
+            {
+                count += (ulong)(value & 1);
+                value >>= 1;
+            }
+        }
+        return count;
     }
 
     private static string NormalizeRpcQuantity(object? value, string parameterName)
@@ -4623,7 +5199,11 @@ public sealed record EthereumMainnetBeaconFinalityEvidence(
     string ExecutionBlockNumber,
     string ExecutionBlockHash,
     string ExecutionReceiptsRoot,
-    string? BeaconSlot = null)
+    string? BeaconSlot = null,
+    string? SyncCommitteeBits = null,
+    string? SyncCommitteeSignature = null,
+    string? SyncCommitteeParticipation = null,
+    string? SyncSignatureSlot = null)
 {
     public IReadOnlyDictionary<string, object?> ToDictionary(
         IEnumerable<KeyValuePair<string, object?>>? additionalFields = null)
@@ -4637,6 +5217,22 @@ public sealed record EthereumMainnetBeaconFinalityEvidence(
         if (BeaconSlot is not null)
         {
             value["beaconSlot"] = BeaconSlot;
+        }
+        if (SyncCommitteeBits is not null)
+        {
+            value["syncCommitteeBits"] = SyncCommitteeBits;
+        }
+        if (SyncCommitteeSignature is not null)
+        {
+            value["syncCommitteeSignature"] = SyncCommitteeSignature;
+        }
+        if (SyncCommitteeParticipation is not null)
+        {
+            value["syncCommitteeParticipation"] = SyncCommitteeParticipation;
+        }
+        if (SyncSignatureSlot is not null)
+        {
+            value["syncSignatureSlot"] = SyncSignatureSlot;
         }
         return value;
     }

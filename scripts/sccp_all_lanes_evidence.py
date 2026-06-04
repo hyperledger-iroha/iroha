@@ -592,6 +592,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "evm_route_canary_proof_version",
         "evm_route_canary_proof_source_domain",
         "evm_route_canary_used_message_proof",
+        "evm_route_canary_receipt_block_finalized",
         "tron_route_canary_transaction_id",
         "tron_route_canary_transaction_owner_address",
         "tron_route_canary_block_number",
@@ -639,6 +640,7 @@ ROUTE_ALLOWLIST_FIELDS = frozenset(
         "_comment_evm_route_canary_proof_version",
         "_comment_evm_route_canary_proof_source_domain",
         "_comment_evm_route_canary_used_message_proof",
+        "_comment_evm_route_canary_receipt_block_finalized",
         "_comment_ton_route_canary_account_state_hash",
         "_comment_ton_route_canary_last_transaction_lt",
         "_comment_ton_route_canary_last_transaction_hash",
@@ -894,6 +896,9 @@ ROUTE_ALLOWLIST_COMMENT_KEYS = {
     ),
     "sccp_evm_route_canary_used_message_proof": (
         "_comment_evm_route_canary_used_message_proof"
+    ),
+    "sccp_evm_route_canary_receipt_block_finalized": (
+        "_comment_evm_route_canary_receipt_block_finalized"
     ),
     "sccp_ton_route_canary_account_state_hash": (
         "_comment_ton_route_canary_account_state_hash"
@@ -4525,6 +4530,13 @@ def _check_evm_route_canary_transaction_evidence(
         "_comment_evm_route_canary_used_message_proof",
         label="EVM route canary usedMessageProofs",
     )
+    _check_route_canary_bool_comment_matches_record(
+        errors,
+        record,
+        "evm_route_canary_receipt_block_finalized",
+        "_comment_evm_route_canary_receipt_block_finalized",
+        label="EVM route canary receipt block finalized",
+    )
     transaction_hash = _exact_hex_bytes(
         _first_record_value(
             record,
@@ -4743,6 +4755,15 @@ def _check_evm_route_canary_transaction_evidence(
     )
     if used_message_proof is not True:
         errors.append("EVM route canary usedMessageProofs metadata must be true")
+    receipt_block_finalized = _route_canary_used_message_proof_value(
+        _first_record_value(
+            record,
+            "evm_route_canary_receipt_block_finalized",
+            "_comment_evm_route_canary_receipt_block_finalized",
+        )
+    )
+    if receipt_block_finalized is not True:
+        errors.append("EVM route canary receipt block finalized metadata must be true")
     _expect_distinct_byte_values(
         errors,
         (
@@ -4911,6 +4932,7 @@ def _check_evm_route_canary_transaction_evidence(
         canary["proof_version"] = proof_version
         canary["proof_source_domain"] = proof_source_domain
         canary["message_proof_used"] = True
+        canary["receipt_block_finalized"] = True
     return errors
 
 

@@ -469,7 +469,10 @@ struct KaigiStreamOpen {
 }
 
 fn derive_relay_id(identity_key: &KeyPair) -> Result<RelayId, RelayError> {
-    let (algorithm, payload) = identity_key.public_key().to_bytes();
+    let (algorithm, payload) = identity_key
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| RelayError::Crypto(format!("malformed relay identity public key: {err}")))?;
     if algorithm != Algorithm::Ed25519 {
         return Err(RelayError::Crypto(format!(
             "unsupported relay identity algorithm `{algorithm:?}`"
@@ -1286,7 +1289,10 @@ impl RelayRuntime {
         let identity_key = Arc::new(identity_key);
 
         if let Some(bundle) = certificate_bundle.as_ref() {
-            let (algorithm, public_bytes) = identity_key.public_key().to_bytes();
+            let (algorithm, public_bytes) =
+                identity_key.public_key().try_to_bytes().map_err(|err| {
+                    RelayError::Crypto(format!("malformed relay identity public key: {err}"))
+                })?;
             if algorithm != Algorithm::Ed25519
                 || public_bytes != bundle.certificate.identity_ed25519
             {

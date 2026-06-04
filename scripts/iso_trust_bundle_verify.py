@@ -163,8 +163,8 @@ def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None
     return raw.strip()
 
 
-def _optional_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
-    raw = bundle.get(key, False)
+def _required_bool(bundle: dict[str, Any], key: str, label: str) -> bool:
+    raw = bundle.get(key)
     if not isinstance(raw, bool):
         raise TrustBundleError(f"{label}.{key} must be a boolean")
     return raw
@@ -644,8 +644,8 @@ def verify_bundle(
         f"{path}.trusted/revoked certificate pins",
     )
 
-    crl_required = _optional_bool(bundle, "x509_require_crl_revocation_check", str(path))
-    ocsp_required = _optional_bool(bundle, "x509_require_ocsp_revocation_check", str(path))
+    crl_required = _required_bool(bundle, "x509_require_crl_revocation_check", str(path))
+    ocsp_required = _required_bool(bundle, "x509_require_ocsp_revocation_check", str(path))
     if crl_required and not crl_values:
         raise TrustBundleError(f"{path} requires CRL revocation checking but has no x509_crls")
     if ocsp_required and not ocsp_values:

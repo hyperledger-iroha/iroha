@@ -971,7 +971,10 @@ pub fn generate_attestation(
         norito::json::to_vec(&report_value).wrap_err("failed to serialize conformance report")?;
     let digest = blake3::hash(&report_json);
     let signature = Signature::new(key_pair.private_key(), &report_json);
-    let (pk_alg, pk_bytes) = key_pair.public_key().to_bytes();
+    let (pk_alg, pk_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| eyre!("attestation public key is malformed: {err}"))?;
     let signed_at_secs = signed_at
         .duration_since(UNIX_EPOCH)
         .map_err(|err| eyre!("system clock is before UNIX_EPOCH: {err}"))?

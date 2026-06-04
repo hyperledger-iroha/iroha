@@ -265,7 +265,16 @@ fn run() -> Result<(), String> {
 
     let seed = hex::decode(SIGNING_SEED_HEX).map_err(|err| err.to_string())?;
     let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
-    let (_, public_key_bytes) = keypair.public_key().to_bytes();
+    let (algorithm, public_key_bytes) = keypair
+        .public_key()
+        .try_to_bytes()
+        .map_err(|err| format!("fixture public key is malformed: {err}"))?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(format!(
+            "fixture public key must be Ed25519, got {}",
+            algorithm.as_static_str()
+        ));
+    }
     let public_key_hex = hex::encode(public_key_bytes);
     let signed_schema_hash_hex = hex::encode(<SignedTransaction as NoritoSerialize>::schema_hash());
 

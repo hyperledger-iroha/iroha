@@ -21926,7 +21926,7 @@ impl State {
                     });
                 }
                 let peer = &committee[signer_index];
-                if peer.public_key().algorithm() != Algorithm::BlsNormal {
+                if !crate::sumeragi::is_bls_normal_public_key(peer.public_key()) {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 }
                 let Some(pop) = live_consensus_key_pop_for_peer(world, peer, block_height) else {
@@ -30122,7 +30122,6 @@ pub(crate) fn remap_block_signature_indices_to_topology(
     topology: &crate::sumeragi::network_topology::Topology,
 ) -> Result<(), crate::block::BlockValidationError> {
     use crate::block::SignatureVerificationError;
-    use iroha_crypto::Algorithm;
     use iroha_data_model::block::BlockSignature;
 
     let block_hash = block.hash();
@@ -30131,7 +30130,7 @@ pub(crate) fn remap_block_signature_indices_to_topology(
 
     for signature in block.signatures() {
         let is_eligible = |peer: &PeerId| {
-            peer.public_key().algorithm() == Algorithm::BlsNormal
+            crate::sumeragi::is_bls_normal_public_key(peer.public_key())
                 && !matches!(
                     topology.role(peer),
                     crate::sumeragi::network_topology::Role::Undefined

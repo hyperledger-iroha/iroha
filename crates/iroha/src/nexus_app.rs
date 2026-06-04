@@ -26,7 +26,10 @@ pub enum NexusSignatureAlgorithm {
 
 impl NexusSignatureAlgorithm {
     fn from_public_key(public_key: &PublicKey) -> Result<Self, NexusAppError> {
-        match public_key.algorithm() {
+        let algorithm = public_key
+            .try_algorithm()
+            .map_err(|source| NexusAppError::MalformedSigningPublicKey { source })?;
+        match algorithm {
             Algorithm::Ed25519 => Ok(Self::Ed25519),
             other => Err(NexusAppError::UnsupportedSignatureAlgorithm {
                 algorithm: other.as_static_str().to_owned(),
@@ -50,6 +53,13 @@ pub enum NexusAppError {
     /// The approved account did not expose a single Ed25519 signing key.
     #[error("approved account cannot provide a single Ed25519 signing public key")]
     MissingSigningPublicKey,
+    /// The selected signing public key is malformed.
+    #[error("signing public key is malformed")]
+    MalformedSigningPublicKey {
+        /// Underlying compact-key parse error.
+        #[source]
+        source: iroha_crypto::error::ParseError,
+    },
     /// No authority was supplied in the input, config, or approved Connect session.
     #[error("transfer authority is required before building a transfer draft")]
     MissingAuthority,
@@ -86,6 +96,7 @@ impl NexusAppError {
             Self::ConnectTransportUnavailable => "connect_transport_unavailable",
             Self::UnsupportedSignatureAlgorithm { .. } => "unsupported_signature_algorithm",
             Self::MissingSigningPublicKey => "missing_signing_public_key",
+            Self::MalformedSigningPublicKey { .. } => "malformed_signing_public_key",
             Self::MissingAuthority => "missing_authority",
             Self::SigningPublicKeyMismatch => "approval_account_mismatch",
             Self::InvalidSignature(_) | Self::SignatureVerification(_) => "invalid_signature",
@@ -248,7 +259,8 @@ pub trait NexusConnectTransport {
     /// Register a Connect session and return launch metadata.
     ///
     /// # Errors
-    /// Returns an error if the transport cannot create or register the session.
+    /// Returns an error if the transport is unavailable or cannot register the
+    /// Connect session.
     fn start_connect(
         &self,
         config: &NexusAppConfig,
@@ -258,7 +270,8 @@ pub trait NexusConnectTransport {
     /// Wait for wallet approval and return the approved account.
     ///
     /// # Errors
-    /// Returns an error if approval fails, times out, or yields invalid account data.
+    /// Returns an error if approval fails or the wallet response cannot be
+    /// converted into a Nexus-approved account.
     fn await_approval(
         &self,
         session: &mut NexusConnectSession,
@@ -267,7 +280,8 @@ pub trait NexusConnectTransport {
     /// Request a wallet signature for the canonical payload bytes.
     ///
     /// # Errors
-    /// Returns an error if the wallet rejects the request or returns an invalid response.
+    /// Returns an error if the transport cannot request or receive a wallet
+    /// signature.
     fn request_signature(
         &self,
         session: &NexusConnectSession,
@@ -280,7 +294,8 @@ pub trait NexusToriiSubmitter {
     /// Submit the signed transaction and optionally wait for final status.
     ///
     /// # Errors
-    /// Returns an error if submission fails or finalization does not complete successfully.
+    /// Returns an error if Torii submission fails or waiting for terminal status
+    /// fails.
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -383,7 +398,8 @@ where
     /// Register an app-role Connect session and return wallet launch metadata.
     ///
     /// # Errors
-    /// Returns an error if the configured Connect transport cannot start a session.
+    /// Returns an error if the configured Connect transport cannot register a
+    /// session.
     pub fn start_connect(
         &self,
         options: NexusConnectOptions,
@@ -394,7 +410,8 @@ where
     /// Wait for wallet approval and cache the resolved account on the session.
     ///
     /// # Errors
-    /// Returns an error if wallet approval fails or the approved account cannot be validated.
+    /// Returns an error if wallet approval fails, the approved signing key is
+    /// unsupported, or it does not match the approved account.
     pub fn await_approval(
         &self,
         session: &mut NexusConnectSession,
@@ -415,7 +432,8 @@ where
     /// Build a canonical signable numeric asset transfer.
     ///
     /// # Errors
-    /// Returns an error if required authority, signer, or transfer fields are missing or invalid.
+    /// Returns an error if the authority or signing key cannot be resolved, the
+    /// selected key is malformed, or the selected signing algorithm is unsupported.
     pub fn build_transfer_draft(
         &self,
         input: NexusTransferInput,
@@ -427,7 +445,8 @@ where
     /// Send a wallet `SIGN_REQUEST_TX` for the canonical transaction payload.
     ///
     /// # Errors
-    /// Returns an error if the Connect transport cannot obtain a wallet signature.
+    /// Returns an error if the configured Connect transport cannot request or
+    /// receive a wallet signature.
     pub fn request_signature(
         &self,
         session: &NexusConnectSession,
@@ -440,8 +459,9 @@ where
     /// and optionally wait for a terminal pipeline status.
     ///
     /// # Errors
-    /// Returns an error if the signature is invalid, the transaction fails verification,
-    /// submission fails, or the submitted transaction hash does not match the local hash.
+    /// Returns an error if the wallet signature is unsupported or malformed, if
+    /// signed transaction verification fails, or if Torii submission/status
+    /// waiting fails.
     pub fn finalize_and_submit(
         &self,
         signable: NexusSignableTransaction,
@@ -450,17 +470,17 @@ where
     ) -> Result<NexusTransferReceipt, NexusAppError> {
         let NexusWalletSignature {
             algorithm,
-            signature,
+            signature: signature_bytes,
         } = signature;
         if algorithm != NexusSignatureAlgorithm::Ed25519 {
             return Err(NexusAppError::UnsupportedSignatureAlgorithm {
                 algorithm: format!("{algorithm:?}"),
             });
         }
-        if signature.len() != 64 {
+        if signature_bytes.len() != 64 {
             return Err(NexusAppError::InvalidSignature(format!(
                 "Ed25519 signature must be 64 bytes, got {}",
-                signature.len()
+                signature_bytes.len()
             )));
         }
 
@@ -475,7 +495,7 @@ where
 
         let signed = signable
             .builder
-            .build_with_signature(Signature::from_bytes(&signature));
+            .build_with_signature(Signature::from_bytes(&signature_bytes));
         signed
             .verify_signature()
             .map_err(|err| NexusAppError::SignatureVerification(err.to_string()))?;
@@ -494,8 +514,8 @@ where
     /// Convenience wrapper over draft, wallet signature, finalize, submit, and wait.
     ///
     /// # Errors
-    /// Returns an error if account resolution, signing, transaction construction, submission,
-    /// or finalization fails.
+    /// Returns an error if authority resolution, wallet signing, transaction
+    /// verification, submission, or status waiting fails.
     pub fn transfer_with_wallet(
         &self,
         session: &NexusConnectSession,
@@ -958,6 +978,14 @@ mod tests {
             NexusAppError::MissingSigningPublicKey.code(),
             "missing_signing_public_key"
         );
+        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let malformed_or_unsupported =
+            NexusSignatureAlgorithm::from_public_key(secp_key_pair.public_key())
+                .expect_err("secp256k1 is unsupported by the V1 facade");
+        assert_eq!(
+            malformed_or_unsupported.code(),
+            "unsupported_signature_algorithm"
+        );
         assert_eq!(
             NexusAppError::SigningPublicKeyMismatch.code(),
             "approval_account_mismatch"
@@ -987,6 +1015,31 @@ mod tests {
             NexusAppError::StatusWait("timeout".to_owned()).code(),
             "status_wait_failed"
         );
+    }
+
+    #[test]
+    fn nexus_app_rejects_non_ed25519_signing_key_before_building_draft() {
+        let secp_key_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        let account = AccountId::new(secp_key_pair.public_key().clone());
+        let client = NexusAppClient::new(
+            NexusAppConfig {
+                authority: Some(account.clone()),
+                signing_public_key: Some(secp_key_pair.public_key().clone()),
+                ..NexusAppConfig::new("test-chain".into())
+            },
+            UnsupportedConnectTransport,
+            FakeSubmitter::default(),
+        );
+
+        let error = client
+            .build_transfer_draft(sample_input(account))
+            .expect_err("non-Ed25519 signing key must be rejected");
+
+        assert!(matches!(
+            error,
+            NexusAppError::UnsupportedSignatureAlgorithm { algorithm }
+                if algorithm == Algorithm::Secp256k1.as_static_str()
+        ));
     }
 
     #[test]

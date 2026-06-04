@@ -261,10 +261,15 @@ pub struct GuardDirectoryRelayEntryV2 {
 }
 
 /// Compute the canonical issuer fingerprint used by SRC v2.
-#[must_use]
-pub fn compute_issuer_fingerprint(ed25519: &[u8; 32], mldsa_public: &[u8]) -> [u8; 32] {
-    try_compute_issuer_fingerprint(ed25519, mldsa_public)
-        .expect("ML-DSA key length must fit into u32")
+///
+/// # Errors
+/// Returns an error if the ML-DSA public-key length cannot be represented in
+/// the fingerprint's fixed `u32` length field.
+pub fn compute_issuer_fingerprint(
+    ed25519: &[u8; 32],
+    mldsa_public: &[u8],
+) -> Result<[u8; 32], norito::Error> {
+    compute_issuer_fingerprint_inner(ed25519, mldsa_public)
 }
 
 /// Compute the canonical issuer fingerprint used by SRC v2.
@@ -273,6 +278,13 @@ pub fn compute_issuer_fingerprint(ed25519: &[u8; 32], mldsa_public: &[u8]) -> [u
 /// Returns an error if the ML-DSA public-key length cannot be represented in
 /// the fingerprint's fixed `u32` length field.
 pub fn try_compute_issuer_fingerprint(
+    ed25519: &[u8; 32],
+    mldsa_public: &[u8],
+) -> Result<[u8; 32], norito::Error> {
+    compute_issuer_fingerprint_inner(ed25519, mldsa_public)
+}
+
+fn compute_issuer_fingerprint_inner(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
 ) -> Result<[u8; 32], norito::Error> {
@@ -430,7 +442,8 @@ mod tests {
         let issuer_mldsa = sample_mldsa_keypair(b"directory-snapshot-issuer");
         let ed25519_public = issuer_signing_key.verifying_key().to_bytes();
         let mldsa65_public = issuer_mldsa.public_key().to_vec();
-        let fingerprint = compute_issuer_fingerprint(&ed25519_public, &mldsa65_public);
+        let fingerprint = compute_issuer_fingerprint(&ed25519_public, &mldsa65_public)
+            .expect("sample issuer fingerprint should compute");
         let directory_hash = [0xAB; 32];
         GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
@@ -463,7 +476,8 @@ mod tests {
         let issuer_mldsa = sample_mldsa_keypair(b"directory-snapshot-phase1-signer");
         let ed25519_public = issuer_signing_key.verifying_key().to_bytes();
         let mldsa65_public = Vec::new();
-        let fingerprint = compute_issuer_fingerprint(&ed25519_public, &mldsa65_public);
+        let fingerprint = compute_issuer_fingerprint(&ed25519_public, &mldsa65_public)
+            .expect("sample phase-1 issuer fingerprint should compute");
         let directory_hash = [0xAB; 32];
         GuardDirectorySnapshotV2 {
             version: GUARD_DIRECTORY_VERSION_V2,
@@ -514,9 +528,12 @@ mod tests {
         let ml_a = vec![0xAA; 1952];
         let ml_b = vec![0xBB; 1952];
 
-        let fingerprint_a = compute_issuer_fingerprint(&ed_a, &ml_a);
-        let fingerprint_b = compute_issuer_fingerprint(&ed_b, &ml_a);
-        let fingerprint_c = compute_issuer_fingerprint(&ed_a, &ml_b);
+        let fingerprint_a =
+            compute_issuer_fingerprint(&ed_a, &ml_a).expect("fingerprint A should compute");
+        let fingerprint_b =
+            compute_issuer_fingerprint(&ed_b, &ml_a).expect("fingerprint B should compute");
+        let fingerprint_c =
+            compute_issuer_fingerprint(&ed_a, &ml_b).expect("fingerprint C should compute");
 
         assert_ne!(fingerprint_a, fingerprint_b);
         assert_ne!(fingerprint_a, fingerprint_c);
@@ -524,15 +541,16 @@ mod tests {
     }
 
     #[test]
-    fn try_compute_fingerprint_matches_infallible_helper() {
+    fn compute_fingerprint_matches_try_helper() {
         let ed25519 = [0x11; 32];
         let mldsa_public = vec![0xAA; 1952];
 
-        let fallible = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+        let via_try = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect("canonical issuer fingerprint should compute");
-        let infallible = compute_issuer_fingerprint(&ed25519, &mldsa_public);
+        let direct = compute_issuer_fingerprint(&ed25519, &mldsa_public)
+            .expect("canonical issuer fingerprint should compute");
 
-        assert_eq!(fallible, infallible);
+        assert_eq!(via_try, direct);
     }
 
     #[test]
@@ -637,7 +655,8 @@ mod tests {
         snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
             &snapshot.issuers[0].ed25519_public,
             &snapshot.issuers[0].mldsa65_public,
-        );
+        )
+        .expect("sample issuer fingerprint should compute");
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
             .expect_err("invalid ML-DSA-65 public key length should fail");
@@ -671,7 +690,8 @@ mod tests {
         snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
             &snapshot.issuers[0].ed25519_public,
             &snapshot.issuers[0].mldsa65_public,
-        );
+        )
+        .expect("sample issuer fingerprint should compute");
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
             .expect_err("phase 2 requires ML-DSA-65 issuer key");
@@ -704,7 +724,8 @@ mod tests {
         snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
             &snapshot.issuers[0].ed25519_public,
             &snapshot.issuers[0].mldsa65_public,
-        );
+        )
+        .expect("sample issuer fingerprint should compute");
         let bytes = snapshot.to_bytes().expect("serialize");
 
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)

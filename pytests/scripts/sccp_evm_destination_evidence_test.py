@@ -134,6 +134,7 @@ def evm_runtime_material(module, *, domain=1):
         route_canary_proof_version=1,
         route_canary_proof_source_domain=0,
         route_canary_evidence_hash=route_canary_evidence_hash,
+        route_canary_receipt_block_finalized=True,
     )
 
 
@@ -159,6 +160,9 @@ def add_route_canary_args(args, material):
     args.route_canary_proof_version = material.route_canary_proof_version
     args.route_canary_proof_source_domain = material.route_canary_proof_source_domain
     args.route_canary_used_message_proof = True
+    args.route_canary_receipt_block_finalized = (
+        material.route_canary_receipt_block_finalized
+    )
     return args
 
 
@@ -677,6 +681,7 @@ def test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode():
         route_canary_proof_version=1,
         route_canary_proof_source_domain=0,
         route_canary_used_message_proof=True,
+        route_canary_receipt_block_finalized=True,
     )
 
     render_args = SimpleNamespace(
@@ -762,6 +767,7 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
             route_canary_proof_version=material.route_canary_proof_version,
             route_canary_proof_source_domain=material.route_canary_proof_source_domain,
             route_canary_used_message_proof=True,
+            route_canary_receipt_block_finalized=True,
         )
 
     eth_args = toml_args(eth)
@@ -882,6 +888,8 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
         + '"'
         in rendered
     )
+    assert '# sccp_evm_route_canary_receipt_block_finalized = "true"' in rendered
+    assert "evm_route_canary_receipt_block_finalized = true" in rendered
     assert 'blockers = []' in rendered
 
     bsc = evm_runtime_material(module, domain=2)
@@ -966,6 +974,7 @@ def test_evm_toml_rendering_carries_eth_and_bsc_profile_ids():
             "route_canary_proof_version": None,
             "route_canary_proof_source_domain": None,
             "route_canary_used_message_proof": None,
+            "route_canary_receipt_block_finalized": None,
         }
     )
     try:
@@ -1049,6 +1058,11 @@ def test_evm_full_toml_rejects_route_canary_transaction_readback_drift():
             "route_canary_transaction_block_hash",
             bytes.fromhex("fe" * 32),
             "transaction block hash must match receipt block hash",
+        ),
+        (
+            "route_canary_receipt_block_finalized",
+            False,
+            "route-canary-receipt-block-finalized=true",
         ),
     ]
     for field, value, expected in cases:
@@ -1160,6 +1174,8 @@ def test_evm_cli_json_summary_toml_and_expected_binding_check(capsys):
         "--route-canary-proof-source-domain",
         str(eth.route_canary_proof_source_domain),
         "--route-canary-used-message-proof",
+        "true",
+        "--route-canary-receipt-block-finalized",
         "true",
     ]
 

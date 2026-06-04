@@ -43,6 +43,10 @@ pub struct PublicKey<C: BlsConfiguration> {
     _m: PhantomData<C>,
 }
 impl<C: BlsConfiguration> PublicKey<C> {
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub fn to_bytes(&self) -> Vec<u8> {
         self.bytes.clone()
     }
@@ -75,7 +79,16 @@ pub struct BlsImpl<C: BlsConfiguration + ?Sized>(PhantomData<C>);
 
 impl<C: BlsConfiguration> BlsImpl<C> {
     #[allow(clippy::similar_names)]
-    pub fn keypair(mut option: KeyGenOption<SecretKey<C>>) -> (PublicKey<C>, SecretKey<C>) {
+    pub fn keypair(
+        option: KeyGenOption<SecretKey<C>>,
+    ) -> Result<(PublicKey<C>, SecretKey<C>), Error> {
+        Self::try_keypair(option)
+    }
+
+    #[allow(clippy::similar_names)]
+    pub fn try_keypair(
+        mut option: KeyGenOption<SecretKey<C>>,
+    ) -> Result<(PublicKey<C>, SecretKey<C>), Error> {
         let sk = match option {
             #[cfg(feature = "rand")]
             KeyGenOption::Random => {
@@ -84,9 +97,7 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                 } else {
                     w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::generate(os_rng()).to_bytes()
                 };
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                SecretKey::from_bytes(arr)
+                Self::secret_key_from_generated_bytes(&bytes)?
             }
             KeyGenOption::UseSeed(ref mut seed) => {
                 let bytes = if C::NORMAL {
@@ -95,19 +106,29 @@ impl<C: BlsConfiguration> BlsImpl<C> {
                     w3f_bls::SecretKeyVT::<w3f_bls::TinyBLS381>::from_seed(seed).to_bytes()
                 };
                 seed.zeroize();
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&bytes);
-                SecretKey::from_bytes(arr)
+                Self::secret_key_from_generated_bytes(&bytes)?
             }
             KeyGenOption::FromPrivateKey(key) => key,
         };
 
-        let public_key = Self::derive_public_key(&sk).expect("valid w3f secret from bytes");
-        (public_key, sk)
+        let public_key =
+            Self::derive_public_key(&sk).map_err(|err| Error::KeyGen(err.to_string()))?;
+        Ok((public_key, sk))
     }
 
-    pub fn sign(message: &[u8], sk: &SecretKey<C>) -> Vec<u8> {
-        Self::try_sign(message, sk).expect("valid w3f secret from bytes")
+    fn secret_key_from_generated_bytes(bytes: &[u8]) -> Result<SecretKey<C>, Error> {
+        let mut arr = [0u8; 32];
+        if bytes.len() != arr.len() {
+            return Err(Error::KeyGen(
+                "invalid generated BLS secret key length".into(),
+            ));
+        }
+        arr.copy_from_slice(bytes);
+        Ok(SecretKey::from_bytes(arr))
+    }
+
+    pub fn sign(message: &[u8], sk: &SecretKey<C>) -> Result<Vec<u8>, Error> {
+        Self::try_sign(message, sk)
     }
 
     pub fn try_sign(message: &[u8], sk: &SecretKey<C>) -> Result<Vec<u8>, Error> {
@@ -305,15 +326,15 @@ fn aggregate_w3f_public_keys<E: EngineBLS>(
 
     let mut seen = BTreeSet::new();
     let mut public_keys = public_keys.iter();
-    let first = public_keys.next().ok_or(Error::BadSignature)?;
-    let first = parse_w3f_public_key::<E>(first)?;
-    if !seen.insert(first.to_bytes()) {
+    let first_bytes = public_keys.next().ok_or(Error::BadSignature)?;
+    let first = parse_w3f_public_key::<E>(first_bytes)?;
+    if !seen.insert(*first_bytes) {
         return Err(Error::BadSignature);
     }
     let mut aggregate = first.0;
-    for public_key in public_keys {
-        let public_key = parse_w3f_public_key::<E>(public_key)?;
-        if !seen.insert(public_key.to_bytes()) {
+    for public_key_bytes in public_keys {
+        let public_key = parse_w3f_public_key::<E>(public_key_bytes)?;
+        if !seen.insert(*public_key_bytes) {
             return Err(Error::BadSignature);
         }
         aggregate.add_assign(&public_key.0);
@@ -626,21 +647,24 @@ mod tests {
 
     #[test]
     fn smoke_normal() {
-        let (pk, sk) = BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![7; 10]));
-        let sig = BlsImpl::<CNormal>::sign(b"abc", &sk);
+        let (pk, sk) =
+            BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![7; 10])).expect("BLS keypair");
+        let sig = BlsImpl::<CNormal>::sign(b"abc", &sk).expect("BLS sign");
         assert!(BlsImpl::<CNormal>::verify(b"abc", &sig, &pk).is_ok());
     }
 
     #[test]
     fn smoke_small() {
-        let (pk, sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![9; 16]));
-        let sig = BlsImpl::<CSmall>::sign(b"xyz", &sk);
+        let (pk, sk) =
+            BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![9; 16])).expect("BLS keypair");
+        let sig = BlsImpl::<CSmall>::sign(b"xyz", &sk).expect("BLS sign");
         assert!(BlsImpl::<CSmall>::verify(b"xyz", &sig, &pk).is_ok());
     }
 
     #[test]
     fn public_key_cache_roundtrip_normal() {
-        let (pk, _sk) = BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![1; 8]));
+        let (pk, _sk) =
+            BlsImpl::<CNormal>::keypair(KeyGenOption::UseSeed(vec![1; 8])).expect("BLS keypair");
         let bytes = pk.to_bytes();
         let parsed = to_g1_public_key(&bytes).expect("valid public key");
         let cached = to_g1_public_key(&bytes).expect("cached public key");
@@ -649,7 +673,8 @@ mod tests {
 
     #[test]
     fn public_key_cache_roundtrip_small() {
-        let (pk, _sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![2; 8]));
+        let (pk, _sk) =
+            BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![2; 8])).expect("BLS keypair");
         let bytes = pk.to_bytes();
         let parsed = to_g2_public_key(&bytes).expect("valid public key");
         let cached = to_g2_public_key(&bytes).expect("cached public key");
@@ -665,7 +690,8 @@ mod tests {
 
     #[test]
     fn prepared_public_key_cache_roundtrip_small() {
-        let (pk, _sk) = BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![3; 8]));
+        let (pk, _sk) =
+            BlsImpl::<CSmall>::keypair(KeyGenOption::UseSeed(vec![3; 8])).expect("BLS keypair");
         let bytes = pk.to_bytes();
         let prepared = to_g2_prepared(&bytes).expect("valid prepared key");
         let cached = to_g2_prepared(&bytes).expect("cached prepared key");

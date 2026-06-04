@@ -449,7 +449,9 @@ fn write_manifest_signatures(
     let key_pair = KeyPair::from_private_key(private_key)
         .map_err(|err| format!("failed to derive public key from --signing-key: {err}"))?;
     let public_key = key_pair.public_key();
-    let (algorithm, public_bytes) = public_key.to_bytes();
+    let (algorithm, public_bytes) = public_key
+        .try_to_bytes()
+        .map_err(|err| format!("signing public key is malformed: {err}"))?;
     if algorithm != Algorithm::Ed25519 {
         return Err("signing key must use the Ed25519 algorithm".into());
     }
@@ -973,7 +975,11 @@ mod tests {
         let private_key =
             PrivateKey::from_hex(Algorithm::Ed25519, secret_hex).expect("valid private key");
         let key_pair = KeyPair::from_private_key(private_key).expect("derive public key");
-        let (_, public_bytes) = key_pair.public_key().to_bytes();
+        let (algorithm, public_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::Ed25519);
         to_hex(public_bytes)
     }
 

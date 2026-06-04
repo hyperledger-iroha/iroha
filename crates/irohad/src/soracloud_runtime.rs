@@ -15196,8 +15196,10 @@ mod tests {
     ) -> Result<Arc<AsyncRwLock<ProviderAdvertCache>>> {
         let advert_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0xA5; 32])?;
         let advert_public = PublicKey::from(advert_key.clone());
+        let advert_public_payload = ed25519_public_key_payload(&advert_public)?;
         let council_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x42; 32])?;
         let council_public = PublicKey::from(council_key.clone());
+        let council_public_payload = ed25519_public_key_payload(&council_public)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -15275,7 +15277,7 @@ mod tests {
             body: body.clone(),
             signature: sorafs_manifest::AdvertSignature {
                 algorithm: SignatureAlgorithm::Ed25519,
-                public_key: advert_public.to_bytes().1.to_vec(),
+                public_key: advert_public_payload.to_vec(),
                 signature: Signature::new(&advert_key, &body_bytes).payload().to_vec(),
             },
             signature_strict: true,
@@ -15301,11 +15303,7 @@ mod tests {
                     report: Vec::new(),
                 },
             }],
-            advert_key: advert_public
-                .to_bytes()
-                .1
-                .try_into()
-                .expect("ed25519 key is 32 bytes"),
+            advert_key: advert_public_payload,
             jurisdiction_code: "US".to_owned(),
             contact_uri: Some("mailto:ops@example.test".to_owned()),
             stream_budget,
@@ -15321,11 +15319,7 @@ mod tests {
             issued_at,
             retention_epoch: expires_at + 600,
             council_signatures: vec![CouncilSignature {
-                signer: council_public
-                    .to_bytes()
-                    .1
-                    .try_into()
-                    .expect("ed25519 key is 32 bytes"),
+                signer: council_public_payload,
                 signature: Signature::new(&council_key, &proposal_digest)
                     .payload()
                     .to_vec(),
@@ -15344,6 +15338,37 @@ mod tests {
             .ingest(advert, issued_at.saturating_add(1))
             .map_err(|error| eyre::eyre!(error.to_string()))?;
         Ok(Arc::new(AsyncRwLock::new(cache)))
+    }
+
+    fn ed25519_public_key_payload(public_key: &PublicKey) -> Result<[u8; 32]> {
+        let (algorithm, payload) = public_key
+            .try_to_bytes()
+            .wrap_err("extract Soracloud provider Ed25519 public-key payload")?;
+        if algorithm != Algorithm::Ed25519 {
+            eyre::bail!("expected Ed25519 public key, got {algorithm}");
+        }
+        payload.try_into().wrap_err_with(|| {
+            format!(
+                "expected 32-byte Soracloud provider Ed25519 public key, got {} bytes",
+                payload.len()
+            )
+        })
+    }
+
+    #[test]
+    fn ed25519_public_key_payload_rejects_non_ed25519_key() -> Result<()> {
+        let private_key = PrivateKey::from_bytes(Algorithm::Secp256k1, &[0x13; 32])?;
+        let public_key = PublicKey::from(private_key);
+
+        let error = ed25519_public_key_payload(&public_key)
+            .expect_err("secp256k1 provider key must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("expected Ed25519 public key, got secp256k1")
+        );
+        Ok(())
     }
 
     fn approve_remote_hydration_sources(

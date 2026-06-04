@@ -778,7 +778,11 @@ mod tests {
         bundle.registry_root = root;
         let digest = alias_proof_signature_digest(&bundle);
         let signature = Signature::new(keypair.private_key(), digest.as_ref());
-        let signer_vec = keypair.public_key().to_bytes().1;
+        let signer_vec = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid")
+            .1;
         let signer: [u8; 32] = signer_vec
             .try_into()
             .expect("ed25519 public key must be 32 bytes");

@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn envelope_roundtrip() {
         let mut rng = ChaCha20Rng::from_seed([0x55; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let payload = b"hybrid manifest payload".to_vec();
         let aad = b"sorafs:manifest:test";
 
@@ -145,7 +145,7 @@ mod tests {
     #[test]
     fn decrypt_with_incorrect_aad_fails() {
         let mut rng = ChaCha20Rng::from_seed([0x11; 32]);
-        let pair = HybridKeyPair::generate(&mut rng);
+        let pair = HybridKeyPair::generate(&mut rng).expect("generated hybrid keypair");
         let payload = b"hybrid manifest payload".to_vec();
 
         let envelope =

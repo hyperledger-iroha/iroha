@@ -156,19 +156,6 @@ def _required_bool(value: dict[str, Any], key: str, label: str) -> bool:
     return raw
 
 
-def _optional_bool(
-    value: dict[str, Any],
-    key: str,
-    label: str,
-    *,
-    default: bool = False,
-) -> bool:
-    raw = value.get(key, default)
-    if not isinstance(raw, bool):
-        raise EvidenceError(f"{label}.{key} must be a boolean")
-    return raw
-
-
 def _required_nonnegative_int(value: dict[str, Any], key: str, label: str) -> int:
     raw = value.get(key)
     if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
@@ -212,16 +199,16 @@ def _verify_receipt_verifier_summary(
         or verified_receipts <= 0
     ):
         raise EvidenceError(f"{label}.verified_receipts must be positive")
-    allow_failed = _optional_bool(receipt_obj, "allow_failed", label)
+    allow_failed = _required_bool(receipt_obj, "allow_failed", label)
     if allow_failed and not args.allow_failed_receipts:
         raise EvidenceError(f"{label} allowed failed receipts")
-    allow_insecure_http = _optional_bool(receipt_obj, "allow_insecure_http", label)
+    allow_insecure_http = _required_bool(receipt_obj, "allow_insecure_http", label)
     if allow_insecure_http and not args.allow_insecure_http:
         raise EvidenceError(f"{label} allowed insecure HTTP receipts")
-    allow_legacy_colr007 = _optional_bool(receipt_obj, "allow_legacy_colr007", label)
+    allow_legacy_colr007 = _required_bool(receipt_obj, "allow_legacy_colr007", label)
     if allow_legacy_colr007 and not args.allow_legacy_colr007:
         raise EvidenceError(f"{label} allowed legacy colr.007 receipts")
-    require_source_files = _optional_bool(
+    require_source_files = _required_bool(
         receipt_obj,
         "require_source_files",
         label,
@@ -476,7 +463,7 @@ def _planned_stage_summary(
     args: argparse.Namespace,
 ) -> str:
     name = _required_string(stage, "name", label)
-    dry_run = _optional_bool(stage, "dry_run", label)
+    dry_run = _required_bool(stage, "dry_run", label)
     if dry_run and not args.allow_dry_run:
         raise EvidenceError(f"{label} planned a dry-run stage")
     command = _require_list(stage.get("command"), f"{label}.command")
@@ -696,12 +683,12 @@ def _check_trust_bundle(
         bundle.get("profile_overrides"),
         f"{label}.profile_overrides",
     )
-    crl_required = _optional_bool(
+    crl_required = _required_bool(
         profile_overrides,
         "x509_require_crl_revocation_check",
         f"{label}.profile_overrides",
     )
-    ocsp_required = _optional_bool(
+    ocsp_required = _required_bool(
         profile_overrides,
         "x509_require_ocsp_revocation_check",
         f"{label}.profile_overrides",
@@ -732,16 +719,17 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     digest = _require_summary_digest(summary, str(path))
     _check_no_secret_material(summary)
 
-    if _optional_bool(summary, "allow_synthetic_der", str(path)) and not args.allow_synthetic_trust:
+    allow_synthetic_der = _required_bool(summary, "allow_synthetic_der", str(path))
+    allow_record_only = _required_bool(summary, "allow_record_only", str(path))
+    allow_insecure_source_url = _required_bool(summary, "allow_insecure_source_url", str(path))
+    profile_json_emittable = _required_bool(summary, "profile_json_emittable", str(path))
+    if allow_synthetic_der and not args.allow_synthetic_trust:
         raise EvidenceError(f"{path} was verified with --allow-synthetic-der")
-    if _optional_bool(summary, "allow_record_only", str(path)) and not args.allow_record_only_trust:
+    if allow_record_only and not args.allow_record_only_trust:
         raise EvidenceError(f"{path} was verified with --allow-record-only")
-    if _optional_bool(summary, "allow_insecure_source_url", str(path)) and not args.allow_insecure_http:
+    if allow_insecure_source_url and not args.allow_insecure_http:
         raise EvidenceError(f"{path} was verified with --allow-insecure-source-url")
-    if (
-        not _optional_bool(summary, "profile_json_emittable", str(path), default=True)
-        and not args.allow_synthetic_trust
-    ):
+    if not profile_json_emittable and not args.allow_synthetic_trust:
         raise EvidenceError(f"{path} cannot emit production profile JSON")
 
     verified_bundles = summary.get("verified_bundles")

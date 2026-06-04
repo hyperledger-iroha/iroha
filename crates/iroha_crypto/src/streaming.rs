@@ -247,6 +247,7 @@ fn key_material_error_from_mlkem(err: &MlKemError) -> KeyMaterialError {
         }
         MlKemError::BadEncoding { .. }
         | MlKemError::NonCanonicalEncoding { .. }
+        | MlKemError::BackendFailure { .. }
         | MlKemError::Rng(_) => KeyMaterialError::InvalidKyberSecretKey,
     }
 }
@@ -258,6 +259,7 @@ fn handshake_error_from_mlkem(err: &MlKemError) -> HandshakeError {
         }
         MlKemError::BadEncoding { .. }
         | MlKemError::NonCanonicalEncoding { .. }
+        | MlKemError::BackendFailure { .. }
         | MlKemError::Rng(_) => HandshakeError::InvalidKyberSecretKey,
     }
 }
@@ -1660,7 +1662,9 @@ impl StreamingSession {
         remote_identity: &PublicKey,
     ) -> Result<&TransportKeys, HandshakeError> {
         let message = key_update_transcript_bytes(frame)?;
-        let (algorithm, pk_bytes) = remote_identity.to_bytes();
+        let (algorithm, pk_bytes) = remote_identity
+            .try_to_bytes()
+            .map_err(|_| HandshakeError::BadSignature)?;
         if algorithm != Algorithm::Ed25519 {
             return Err(HandshakeError::UnsupportedAlgorithm(algorithm));
         }
@@ -2026,4 +2030,35 @@ pub fn key_update_transcript_bytes(frame: &KeyUpdate) -> Result<Vec<u8>, norito:
         key_counter: frame.key_counter,
     };
     norito::to_bytes(&payload)
+}
+
+#[cfg(test)]
+mod key_update_tests {
+    use super::*;
+
+    #[test]
+    fn process_remote_key_update_rejects_malformed_remote_identity_without_state_change() {
+        let publisher_keys = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+            .expect("seeded Ed25519 keypair");
+        let suite = EncryptionSuite::X25519ChaCha20Poly1305([0x42; 32]);
+
+        let mut publisher_session = StreamingSession::new(CapabilityRole::Publisher);
+        publisher_session.set_local_ephemeral_x25519([0x11; 32]);
+        let update = publisher_session
+            .build_key_update([0xC7; 32], &suite, 1, 1, publisher_keys.private_key())
+            .expect("key update");
+
+        let malformed_identity =
+            crate::PublicKey(crate::PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+
+        let mut viewer_session = StreamingSession::new(CapabilityRole::Viewer);
+        viewer_session.set_local_ephemeral_x25519([0x22; 32]);
+        let err = viewer_session
+            .process_remote_key_update(&update, &malformed_identity)
+            .expect_err("malformed identity must fail before signature verification");
+
+        assert!(matches!(err, HandshakeError::BadSignature));
+        assert!(viewer_session.transport_keys().is_none());
+        assert!(viewer_session.negotiated_suite().is_none());
+    }
 }

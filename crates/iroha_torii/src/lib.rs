@@ -59249,6 +59249,7 @@ mod tests {
                 let evaluation_keys = BfvEvaluationKeyBundle {
                     relinearization_key,
                     rotation_keys: Vec::new(),
+                    galois_keys: Vec::new(),
                     bootstrap_key: None,
                 };
                 let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
@@ -59410,6 +59411,7 @@ mod tests {
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key,
             rotation_keys: Vec::new(),
+            galois_keys: Vec::new(),
             bootstrap_key: None,
         };
         let programmed_public_parameters = bfv_programmed_public_parameters_with_program(

@@ -1057,7 +1057,7 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         },
     );
 
-    let (_, public_bytes) = keypair.public_key().to_bytes();
+    let public_bytes = checked_public_key_payload(keypair.public_key())?;
     let (_, private_bytes) = keypair.private_key().to_bytes();
 
     Ok(JsKeyPair {
@@ -1101,16 +1101,23 @@ fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
     Ok(algorithm)
 }
 
-fn js_keypair_from_keypair(keypair: KeyPair) -> JsKeyPair {
+fn checked_public_key_payload(public_key: &PublicKey) -> napi::Result<&[u8]> {
+    public_key
+        .try_to_bytes()
+        .map(|(_algorithm, payload)| payload)
+        .map_err(norito_to_napi)
+}
+
+fn js_keypair_from_keypair(keypair: KeyPair) -> napi::Result<JsKeyPair> {
     let algorithm = keypair.algorithm();
-    let (_, public_bytes) = keypair.public_key().to_bytes();
+    let public_bytes = checked_public_key_payload(keypair.public_key())?;
     let (_, private_bytes) = keypair.private_key().to_bytes();
-    JsKeyPair {
+    Ok(JsKeyPair {
         algorithm: algorithm.as_static_str().to_owned(),
         public_key: Buffer::from(public_bytes.to_vec()),
         private_key: Buffer::from(private_bytes),
         distid: None,
-    }
+    })
 }
 
 /// Return canonical algorithm labels available through the JavaScript native binding.
@@ -1143,7 +1150,7 @@ pub fn crypto_keypair(
         || KeyPair::random_with_algorithm(algorithm),
         |seed| KeyPair::from_seed(seed.to_vec(), algorithm),
     );
-    Ok(js_keypair_from_keypair(keypair))
+    js_keypair_from_keypair(keypair)
 }
 
 /// Reconstruct a key pair from private-key bytes for any supported Iroha signing algorithm.
@@ -1157,7 +1164,7 @@ pub fn crypto_keypair_from_private(
     let private_key =
         PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
     let keypair = KeyPair::from_private_key(private_key).map_err(norito_to_napi)?;
-    Ok(js_keypair_from_keypair(keypair))
+    js_keypair_from_keypair(keypair)
 }
 
 /// Derive public-key bytes from private-key bytes for any supported Iroha signing algorithm.
@@ -1171,7 +1178,7 @@ pub fn crypto_public_key_from_private(
     let private_key =
         PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
     let public_key = PublicKey::from(private_key);
-    let (_, public_bytes) = public_key.to_bytes();
+    let public_bytes = checked_public_key_payload(&public_key)?;
     Ok(Buffer::from(public_bytes.to_vec()))
 }
 
@@ -1215,7 +1222,7 @@ pub fn crypto_public_key_multihash(
 ) -> napi::Result<String> {
     let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
     PublicKey::from_bytes(algorithm, public_key.as_ref())
-        .map(|public_key| public_key.to_string())
+        .and_then(|public_key| public_key.try_to_multihash_string())
         .map_err(norito_to_napi)
 }
 
@@ -1229,7 +1236,9 @@ pub fn crypto_private_key_multihash(
     let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
     let private_key =
         PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
-    Ok(ExposedPrivateKey(private_key).to_string())
+    ExposedPrivateKey(private_key)
+        .try_to_multihash_string()
+        .map_err(norito_to_napi)
 }
 
 /// Derive an Ed25519 public key from a private key seed or keypair payload.
@@ -1239,7 +1248,7 @@ pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<
     let secret =
         PrivateKey::from_bytes(Algorithm::Ed25519, private_key.as_ref()).map_err(norito_to_napi)?;
     let keypair = KeyPair::from_private_key(secret).map_err(norito_to_napi)?;
-    let (_, public_bytes) = keypair.public_key().to_bytes();
+    let public_bytes = checked_public_key_payload(keypair.public_key())?;
     Ok(Buffer::from(public_bytes.to_vec()))
 }
 
@@ -1594,7 +1603,7 @@ pub fn sm2_public_key_multihash(
     let encoded = encode_sm2_public_key_payload(&distid, payload)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
     PublicKey::from_bytes(Algorithm::Sm2, &encoded)
-        .map(|pk| pk.to_string())
+        .and_then(|pk| pk.try_to_multihash_string())
         .map_err(norito_to_napi)
 }
 
@@ -2741,8 +2750,12 @@ pub fn sm2_fixture_from_seed(
     let payload =
         encode_sm2_public_key_payload(distid.as_str(), &public_bytes).map_err(norito_to_napi)?;
     let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).map_err(norito_to_napi)?;
-    let multihash = public_key.to_string();
-    let prefixed = public_key.to_prefixed_string();
+    let multihash = public_key
+        .try_to_multihash_string()
+        .map_err(norito_to_napi)?;
+    let prefixed = public_key
+        .try_to_prefixed_string()
+        .map_err(norito_to_napi)?;
     let za = public.compute_z(distid.as_str()).map_err(norito_to_napi)?;
     let za_hex = hex::encode_upper(za);
     let signature = private.sign(&message_bytes);
@@ -3103,10 +3116,10 @@ fn sign_bundle_with_council(bundle: &mut AliasProofBundleV1) -> napi::Result<()>
     )
     .expect("derive keypair");
     let signature = Signature::new(keypair.private_key(), digest.as_ref());
-    let (_, signer_bytes) = keypair.public_key().to_bytes();
+    let signer_bytes = checked_public_key_payload(keypair.public_key())?;
     let signer: [u8; 32] = signer_bytes
         .try_into()
-        .expect("ed25519 public key must be 32 bytes");
+        .map_err(|_| generic_failure("ed25519 public key must be 32 bytes"))?;
     bundle
         .council_signatures
         .push(sorafs_manifest::CouncilSignature {
@@ -13482,8 +13495,14 @@ mod tests {
             ("algorithm_id", format!("confidential.transfer.v2{marker}")),
             ("algorithm_id", format!("_confidential-transfer-v2{marker}")),
             ("algorithm_id", format!("-confidential-transfer-v2{marker}")),
-            ("algorithm_id", format!("confidential-transfer-v2_{marker}")),
-            ("algorithm_id", format!("confidential-transfer-v2-{marker}")),
+            (
+                "algorithm_id",
+                format!("confidential-transfer-v2-{marker}_"),
+            ),
+            (
+                "algorithm_id",
+                format!("confidential-transfer-v2-{marker}-"),
+            ),
             (
                 "entrypoint",
                 format!("buildConfidentialTransferProofV2:{marker}"),
@@ -14948,6 +14967,134 @@ mod tests {
     }
 
     #[test]
+    fn crypto_keypair_exports_checked_public_key_payload() {
+        let seed = vec![0xA5; 32];
+        let expected = KeyPair::from_seed(seed.clone(), Algorithm::Ed25519);
+        let (_, expected_public_key) = expected
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+
+        let keypair = crypto_keypair(Some("ed25519".to_owned()), Some(Uint8Array::from(seed)))
+            .expect("derive keypair");
+
+        assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
+        assert_eq!(keypair.public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn crypto_public_key_from_private_exports_checked_payload() {
+        let mut private_key_bytes = [0u8; 32];
+        private_key_bytes[31] = 1;
+        let private_key =
+            PrivateKey::from_bytes(Algorithm::Secp256k1, &private_key_bytes).expect("private key");
+        let public_key = PublicKey::from(private_key);
+        let (_, expected_public_key) = public_key
+            .try_to_bytes()
+            .expect("checked public-key payload");
+
+        let public_key = crypto_public_key_from_private(
+            "secp256k1".to_owned(),
+            Uint8Array::from(private_key_bytes.to_vec()),
+        )
+        .expect("derive public key");
+
+        assert_eq!(public_key.as_ref(), expected_public_key);
+    }
+
+    #[test]
+    fn crypto_multihash_helpers_use_checked_formatters() {
+        let seed = vec![0x5A; 32];
+        let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let (_, public_payload) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+        let expected_public = keypair
+            .public_key()
+            .try_to_multihash_string()
+            .expect("checked public-key multihash");
+        let expected_private = ExposedPrivateKey(keypair.private_key().clone())
+            .try_to_multihash_string()
+            .expect("checked private-key multihash");
+        let (_, private_payload) = keypair.private_key().to_bytes();
+
+        assert_eq!(
+            crypto_public_key_multihash(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_payload.to_vec()),
+            )
+            .expect("format public key multihash"),
+            expected_public
+        );
+        assert_eq!(
+            crypto_private_key_multihash("ed25519".to_owned(), Uint8Array::from(private_payload),)
+                .expect("format private key multihash"),
+            expected_private
+        );
+    }
+
+    #[test]
+    fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
+        let distid = "js-sm2-fixture".to_owned();
+        let seed = b"js-sm2-fixture-seed".to_vec();
+        let message = b"js-sm2-fixture-message".to_vec();
+        let fixture = sm2_fixture_from_seed(
+            distid.clone(),
+            Uint8Array::from(seed.clone()),
+            Uint8Array::from(message),
+        )
+        .expect("build SM2 fixture");
+
+        let private = Sm2PrivateKey::from_seed(&distid, &seed).expect("derive SM2 key");
+        let public_bytes = private.public_key().to_sec1_bytes(false);
+        let payload =
+            encode_sm2_public_key_payload(&distid, &public_bytes).expect("SM2 public payload");
+        let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("SM2 public key");
+
+        assert_eq!(
+            fixture.public_key_multihash,
+            public_key
+                .try_to_multihash_string()
+                .expect("checked SM2 public-key multihash")
+        );
+        assert_eq!(
+            fixture.public_key_prefixed,
+            public_key
+                .try_to_prefixed_string()
+                .expect("checked SM2 public-key prefixed multihash")
+        );
+    }
+
+    #[test]
+    fn alias_proof_fixture_uses_checked_council_signer_payload() {
+        let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
+            generated_at_unix: Some(10),
+            expires_at_unix: Some(20),
+            ..Default::default()
+        }))
+        .expect("build alias proof fixture");
+        let proof_bytes = BASE64
+            .decode(fixture.proof_b64.as_bytes())
+            .expect("decode proof fixture");
+        let bundle = decode_alias_proof(&proof_bytes).expect("decode alias proof");
+        let keypair = KeyPair::from_private_key(
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x55; 32]).expect("seeded key"),
+        )
+        .expect("derive keypair");
+        let (_, expected_signer) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public-key payload");
+
+        assert_eq!(bundle.council_signatures.len(), 1);
+        assert_eq!(
+            bundle.council_signatures[0].signer.as_slice(),
+            expected_signer
+        );
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_bridge_abi_version_is_six() {
         assert_eq!(connect_norito_bridge_abi_version(), 6);
     }
@@ -15778,13 +15925,6 @@ mod tests {
 
     #[test]
     fn kagemusha_recursive_spend_redeem_instruction_rejects_malformed_lineage_witnesses() {
-        let base_request = {
-            let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
-            request.lineage_witness =
-                Some(sample_kagemusha_recursive_spend_lineage_witness_for_js_host(&request.bundle));
-            request
-        };
-
         fn assert_rejects(
             request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1,
             label: &str,
@@ -15798,6 +15938,13 @@ mod tests {
                 "JS host recursive redeem builder must report a reason for {label}"
             );
         }
+
+        let base_request = {
+            let mut request = sample_kagemusha_recursive_spend_redeem_request_for_js_host(42);
+            request.lineage_witness =
+                Some(sample_kagemusha_recursive_spend_lineage_witness_for_js_host(&request.bundle));
+            request
+        };
 
         let mut missing_record = base_request.clone();
         missing_record

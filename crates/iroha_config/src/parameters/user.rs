@@ -910,12 +910,23 @@ impl Root {
         let mut pops = BTreeMap::new();
         for entry in entries {
             let pk = &entry.public_key;
-            if pk.algorithm() != Algorithm::BlsNormal {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSumeragiConfig)
-                        .attach(format!("trusted_peers_pop entry uses non-BLS key: {pk}")),
-                );
-                continue;
+            match pk.try_algorithm() {
+                Ok(Algorithm::BlsNormal) => {}
+                Ok(_) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig)
+                            .attach(format!("trusted_peers_pop entry uses non-BLS key: {pk}")),
+                    );
+                    continue;
+                }
+                Err(err) => {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                            "trusted_peers_pop entry has malformed public key {pk}: {err}"
+                        )),
+                    );
+                    continue;
+                }
             }
 
             let pop_bytes =
@@ -956,10 +967,12 @@ impl Root {
         let mut non_bls: Vec<String> = Vec::new();
         for peer in std::iter::once(&trusted.myself).chain(trusted.others.iter()) {
             let pk = peer.id().public_key();
-            if pk.algorithm() == Algorithm::BlsNormal {
-                roster_keys.insert(pk.clone());
-            } else {
-                non_bls.push(pk.to_string());
+            match pk.try_algorithm() {
+                Ok(Algorithm::BlsNormal) => {
+                    roster_keys.insert(pk.clone());
+                }
+                Ok(_) => non_bls.push(pk.to_string()),
+                Err(err) => non_bls.push(format!("{pk} (malformed: {err})")),
             }
         }
         if !non_bls.is_empty() {
@@ -1007,7 +1020,10 @@ impl Root {
             .change_context(ParseError::BadKeyPair)
             .ok_or_emit(&mut emitter);
         if let Some(key_pair) = key_pair.as_ref()
-            && key_pair.public_key().algorithm() != Algorithm::BlsNormal
+            && !matches!(
+                key_pair.public_key().try_algorithm(),
+                Ok(Algorithm::BlsNormal)
+            )
         {
             emitter.emit(
                 Report::new(ParseError::InvalidSumeragiConfig)
@@ -11371,7 +11387,10 @@ impl Streaming {
                 .map(WithOrigin::into_tuple),
         ) {
             (Some((pub_key, pub_origin)), Some((priv_key, priv_origin))) => {
-                if pub_key.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                if !matches!(
+                    pub_key.try_algorithm(),
+                    Ok(iroha_crypto::Algorithm::Ed25519)
+                ) {
                     emitter.emit(
                         Report::new(ParseError::InvalidStreamingConfig)
                             .attach("streaming.identity_public_key must be Ed25519")
@@ -16952,10 +16971,11 @@ impl Torii {
             (Some(public_key), Some(private_key)) => {
                 let key_pair = KeyPair::new(public_key.clone(), private_key.0.clone())
                     .unwrap_or_else(|err| panic!("invalid torii receipt key pair: {err}"));
-                if matches!(
-                    key_pair.public_key().algorithm(),
-                    Algorithm::BlsNormal | Algorithm::BlsSmall
-                ) {
+                let algorithm = key_pair
+                    .public_key()
+                    .try_algorithm()
+                    .unwrap_or_else(|err| panic!("invalid torii receipt public key: {err}"));
+                if matches!(algorithm, Algorithm::BlsNormal | Algorithm::BlsSmall) {
                     panic!("torii.receipt_* must not use BLS keys; use ed25519 or secp256k1");
                 }
                 Some(key_pair)
@@ -17255,6 +17275,31 @@ impl Torii {
                 .or(super::defaults::torii::RBC_SAMPLING_RATE_PER_MIN)
                 .and_then(std::num::NonZeroU32::new),
         }
+    }
+}
+
+#[cfg(test)]
+mod torii_receipt_signer_tests {
+    use super::*;
+
+    #[test]
+    fn torii_receipt_signer_accepts_checked_non_bls_key_pair() {
+        let key_pair = KeyPair::from_seed(
+            b"iroha:config:test:torii-receipt-signer".to_vec(),
+            Algorithm::Ed25519,
+        );
+        let private_key = ExposedPrivateKey(key_pair.private_key().clone());
+
+        let parsed = Torii::parse_receipt_signer(Some(key_pair.public_key()), Some(&private_key))
+            .expect("receipt signer");
+
+        assert_eq!(
+            parsed
+                .public_key()
+                .try_algorithm()
+                .expect("receipt signer public key is valid"),
+            Algorithm::Ed25519
+        );
     }
 }
 
@@ -18252,18 +18297,24 @@ impl ToriiOfflineIssuer {
             });
         let key_pair = KeyPair::from_private_key(private_key.0.clone())
             .unwrap_or_else(|err| panic!("invalid torii.offline_issuer.private_key: {err}"));
-        if !matches!(
-            key_pair.public_key().algorithm(),
-            Algorithm::Ed25519 | Algorithm::Secp256k1
-        ) {
+        let issuer_algorithm = key_pair
+            .public_key()
+            .try_algorithm()
+            .unwrap_or_else(|err| panic!("invalid torii.offline_issuer.public_key: {err}"));
+        if !matches!(issuer_algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
             panic!("torii.offline_issuer.private_key must use ed25519 or secp256k1");
         }
         let attestation_verifier_public_key =
             self.attestation_verifier_public_key.unwrap_or_else(|| {
                 panic!("torii.offline_issuer.attestation_verifier_public_key is required")
             });
+        let verifier_algorithm = attestation_verifier_public_key
+            .try_algorithm()
+            .unwrap_or_else(|err| {
+                panic!("invalid torii.offline_issuer.attestation_verifier_public_key: {err}")
+            });
         if !matches!(
-            attestation_verifier_public_key.algorithm(),
+            verifier_algorithm,
             Algorithm::Ed25519 | Algorithm::Secp256k1
         ) {
             panic!(
@@ -18331,9 +18382,19 @@ mod torii_offline_issuer_tests {
             let parsed = sample_offline_issuer(algorithm)
                 .parse()
                 .expect("offline issuer");
-            assert_eq!(parsed.key_pair.public_key().algorithm(), algorithm);
             assert_eq!(
-                parsed.attestation_verifier_public_key.algorithm(),
+                parsed
+                    .key_pair
+                    .public_key()
+                    .try_algorithm()
+                    .expect("parsed public key must be valid"),
+                algorithm
+            );
+            assert_eq!(
+                parsed
+                    .attestation_verifier_public_key
+                    .try_algorithm()
+                    .expect("parsed attestation verifier public key must be valid"),
                 Algorithm::Ed25519
             );
         }
@@ -22580,6 +22641,28 @@ pin_torii_urls = [
                     .to_string(),
             ),
         );
+        assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
+    }
+
+    #[test]
+    fn root_rejects_non_bls_trusted_peer_pop_key() {
+        let mut table = base_table();
+        let trusted_peers_pop = table
+            .get_mut("trusted_peers_pop")
+            .and_then(Value::as_array_mut)
+            .expect("trusted_peers_pop array");
+        let first = trusted_peers_pop
+            .first_mut()
+            .and_then(Value::as_table_mut)
+            .expect("trusted_peers_pop entry");
+        first.insert(
+            "public_key".into(),
+            Value::String(
+                "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+                    .to_string(),
+            ),
+        );
+
         assert!(actual::Root::from_toml_source(TomlSource::inline(table)).is_err());
     }
 

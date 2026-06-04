@@ -512,6 +512,7 @@ def build_receipt_trie_proof_from_receipts(
         raise ValueError("transactionIndex is outside the block receipt list")
 
     items = []
+    seen_transaction_hashes: set[bytes] = set()
     target_receipt_rlp = b""
     for index, receipt in enumerate(receipts):
         if not isinstance(receipt, dict):
@@ -522,6 +523,14 @@ def build_receipt_trie_proof_from_receipts(
         )
         if receipt_index != index:
             raise RuntimeError("block receipt transactionIndex must match receipt order")
+        transaction_hash = _rpc_fixed_hex_data(
+            receipt.get("transactionHash"),
+            method=f"block receipts[{index}].transactionHash",
+            byte_length=32,
+        )
+        if transaction_hash in seen_transaction_hashes:
+            raise RuntimeError("block receipt transactionHash values must be unique")
+        seen_transaction_hashes.add(transaction_hash)
         receipt_rlp = canonical_receipt_rlp(receipt)
         if index == transaction_index:
             target_receipt_rlp = receipt_rlp
@@ -656,6 +665,7 @@ def collect_receipt_proof_evidence(
     transaction_hash: bytes,
     expected_rpc_chain_id: int | None = None,
     source_bridge_address: bytes | None = None,
+    allow_receipt_only_evidence: bool = False,
     opener: Urlopen = urllib.request.urlopen,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
@@ -668,6 +678,12 @@ def collect_receipt_proof_evidence(
         opener=opener,
         timeout=timeout,
     )
+    if source_bridge_address is None and not allow_receipt_only_evidence:
+        raise ValueError(
+            "source_bridge_address is required for SCCP source-event evidence; "
+            "set allow_receipt_only_evidence=True only for generic "
+            "receipt-trie diagnostics"
+        )
     receipt = _json_rpc(
         rpc_url,
         "eth_getTransactionReceipt",
@@ -777,6 +793,9 @@ def collect_receipt_proof_evidence(
         "domain": domain,
         "chain": "eth" if domain == SCCP_DOMAIN_ETH else "bsc",
         "read_only": True,
+        "evidence_mode": (
+            "receipt_only" if source_event_digest is None else "sccp_source_event"
+        ),
         "rpc_chain_id": chain_id,
         "transaction_hash": _hex(transaction_hash),
         "transaction_index": transaction_index,
@@ -792,6 +811,8 @@ def collect_receipt_proof_evidence(
         "receipt_trie_proof_nodes": [
             _hex(node) for node in proof["receipt_trie_proof_nodes"]
         ],
+        "source_event_validated": source_event_digest is not None,
+        "receipt_only_evidence": source_event_digest is None,
         **(
             {}
             if source_event_digest is None
@@ -823,7 +844,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source-bridge-address",
         type=lambda value: parse_evm_address(value, label="source bridge address"),
-        help="Optional SCCP source bridge address; when supplied, the receipt must contain exactly one source event log.",
+        help=(
+            "SCCP source bridge address. Required by default so the receipt "
+            "must contain exactly one canonical source event log."
+        ),
+    )
+    parser.add_argument(
+        "--allow-receipt-only-evidence",
+        action="store_true",
+        help=(
+            "Collect generic receipt-trie diagnostics without SCCP source-event "
+            "validation. Do not use this mode as source proof material."
+        ),
     )
     parser.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout in seconds.")
     return parser
@@ -832,6 +864,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.source_bridge_address is None and not args.allow_receipt_only_evidence:
+        parser.error(
+            "--source-bridge-address is required for SCCP source-event evidence; "
+            "pass --allow-receipt-only-evidence only for generic "
+            "receipt-trie diagnostics"
+        )
     try:
         summary = collect_receipt_proof_evidence(
             args.rpc_url,
@@ -839,6 +877,7 @@ def main(argv: list[str] | None = None) -> int:
             transaction_hash=args.transaction_hash,
             expected_rpc_chain_id=args.expected_rpc_chain_id,
             source_bridge_address=args.source_bridge_address,
+            allow_receipt_only_evidence=args.allow_receipt_only_evidence,
             timeout=args.timeout,
         )
     except (RuntimeError, ValueError, argparse.ArgumentTypeError) as exc:

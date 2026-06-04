@@ -44,6 +44,9 @@ cargo test  -p iroha_crypto --features "sm sm-neon sm-neon-force" \
     sm::sm_accel::tests::neon_sm3_digest_matches_scalar_under_force
 ```
 
+The forced feature makes auto dispatch exercise the NEON path during tests and
+benchmarks; an explicit runtime disable policy still pins the scalar fallback.
+
 License
 -------
 

@@ -2304,7 +2304,7 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     assert.match(
       text,
-      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2_[\s\S]*confidential-transfer-v2-[\s\S]*catalog identifier shapes/,
+      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2-\{marker\}_[\s\S]*confidential-transfer-v2-\{marker\}-[\s\S]*catalog identifier shapes/,
       `${label} must test invalid catalog-shape request rejection without reflection`,
     );
     assert.match(

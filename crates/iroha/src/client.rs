@@ -16,7 +16,7 @@ use std::{
 use base64::Engine as _;
 use bytes::Bytes;
 use derive_more::Display;
-use eyre::{Report, Result, WrapErr, eyre};
+use eyre::{Result, WrapErr, eyre};
 use futures_util::{Stream, StreamExt, stream};
 use http_default::{AsyncWebSocketStream, WebSocketStream};
 pub use iroha_config::client_api::{
@@ -321,55 +321,55 @@ impl SccpMessageProofQueryParams {
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "network_id_hex",
-            self.network_id_hex.as_ref(),
+            self.network_id_hex.as_deref(),
             "network_id_hex",
             Some(32),
         )?;
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "verifier_address_hex",
-            self.verifier_address_hex.as_ref(),
+            self.verifier_address_hex.as_deref(),
             "verifier_address_hex",
             Some(20),
         )?;
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "bridge_address_hex",
-            self.bridge_address_hex.as_ref(),
+            self.bridge_address_hex.as_deref(),
             "bridge_address_hex",
             Some(20),
         )?;
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "verifier_code_hash_hex",
-            self.verifier_code_hash_hex.as_ref(),
+            self.verifier_code_hash_hex.as_deref(),
             "verifier_code_hash_hex",
             Some(32),
         )?;
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "verifier_key_hash_hex",
-            self.verifier_key_hash_hex.as_ref(),
+            self.verifier_key_hash_hex.as_deref(),
             "verifier_key_hash_hex",
             Some(32),
         )?;
         let request = append_sccp_nonzero_hex_query_param(
             request,
             "expected_destination_binding_hash_hex",
-            self.expected_destination_binding_hash_hex.as_ref(),
+            self.expected_destination_binding_hash_hex.as_deref(),
             "expected_destination_binding_hash_hex",
             Some(32),
         )?;
         let request = append_sccp_tron_base58check_query_param(
             request,
             "tron_verifier_address",
-            self.tron_verifier_address.as_ref(),
+            self.tron_verifier_address.as_deref(),
             "tron_verifier_address",
         )?;
         let request = append_sccp_groth16_bn254_proof_query_param(
             request,
             "proof_bytes_hex",
-            self.proof_bytes_hex.as_ref(),
+            self.proof_bytes_hex.as_deref(),
             "proof_bytes_hex",
             expected_message_id_hex,
         )?;
@@ -478,7 +478,7 @@ impl SccpMessageProofQueryParams {
 fn append_sccp_nonzero_hex_query_param(
     request: DefaultRequestBuilder,
     key: &'static str,
-    value: Option<&String>,
+    value: Option<&str>,
     name: &'static str,
     expected_bytes: Option<usize>,
 ) -> Result<DefaultRequestBuilder> {
@@ -492,7 +492,7 @@ fn append_sccp_nonzero_hex_query_param(
 fn append_sccp_tron_base58check_query_param(
     request: DefaultRequestBuilder,
     key: &'static str,
-    value: Option<&String>,
+    value: Option<&str>,
     name: &'static str,
 ) -> Result<DefaultRequestBuilder> {
     let Some(value) = value else {
@@ -505,7 +505,7 @@ fn append_sccp_tron_base58check_query_param(
 fn append_sccp_groth16_bn254_proof_query_param(
     request: DefaultRequestBuilder,
     key: &'static str,
-    value: Option<&String>,
+    value: Option<&str>,
     name: &'static str,
     expected_message_id_hex: &str,
 ) -> Result<DefaultRequestBuilder> {
@@ -541,9 +541,9 @@ fn normalize_sccp_nonzero_hex_query_param(
         .or_else(|| trimmed.strip_prefix("0X"))
         .unwrap_or(trimmed);
     if hex.is_empty() || !hex.len().is_multiple_of(2) {
-        return Err(sccp_hex_string_error(name, expected_bytes));
+        return Err(sccp_hex_query_param_error(name, expected_bytes));
     }
-    let decoded = hex::decode(hex).map_err(|_| sccp_hex_string_error(name, expected_bytes))?;
+    let decoded = hex::decode(hex).map_err(|_| sccp_hex_query_param_error(name, expected_bytes))?;
     if decoded.iter().all(|byte| *byte == 0) {
         return Err(eyre!("{name} must not be all zero"));
     }
@@ -553,13 +553,6 @@ fn normalize_sccp_nonzero_hex_query_param(
         return Err(eyre!("{name} must be a {bytes}-byte hex string"));
     }
     Ok(hex.to_ascii_lowercase())
-}
-
-fn sccp_hex_string_error(name: &str, expected_bytes: Option<usize>) -> Report {
-    expected_bytes.map_or_else(
-        || eyre!("{name} must be a non-empty byte-aligned hex string"),
-        |bytes| eyre!("{name} must be a {bytes}-byte hex string"),
-    )
 }
 
 fn normalize_sccp_tron_base58check_address(value: &str, name: &str) -> Result<String> {
@@ -616,9 +609,16 @@ fn normalize_sccp_hex_query_param(
         |bytes| hex.len() == bytes * 2,
     );
     if !valid_length || hex::decode(hex).is_err() {
-        return Err(sccp_hex_string_error(name, expected_bytes));
+        return Err(sccp_hex_query_param_error(name, expected_bytes));
     }
     Ok(hex.to_ascii_lowercase())
+}
+
+fn sccp_hex_query_param_error(name: &str, expected_bytes: Option<usize>) -> eyre::Report {
+    expected_bytes.map_or_else(
+        || eyre!("{name} must be a non-empty byte-aligned hex string"),
+        |bytes| eyre!("{name} must be a {bytes}-byte hex string"),
+    )
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -6610,7 +6610,10 @@ mod evidence_http_tests {
         )
         .expect("derive keypair");
         let signature = Signature::new(keypair.private_key(), digest.as_ref());
-        let (_, signer_bytes) = keypair.public_key().to_bytes();
+        let (_, signer_bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
         let signer: [u8; 32] = signer_bytes
             .try_into()
             .expect("ed25519 public key must be 32 bytes");

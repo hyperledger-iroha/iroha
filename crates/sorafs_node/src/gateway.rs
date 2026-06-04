@@ -633,8 +633,23 @@ fn build_por_proof(
     let proof_digest = por_proof.proof_digest();
     let keypair = KeyPair::from_private_key(signing_key.clone())
         .wrap_err("failed to derive gateway signing keypair")?;
+    let (algorithm, public_key) = keypair
+        .public_key()
+        .try_to_bytes()
+        .wrap_err("failed to extract gateway signing public key")?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(eyre::eyre!(
+            "gateway signing key must derive an Ed25519 public key, found {}",
+            algorithm.as_static_str()
+        ));
+    }
+    if public_key.len() != 32 {
+        return Err(eyre::eyre!(
+            "gateway signing public key must be 32 bytes, found {}",
+            public_key.len()
+        ));
+    }
     let signature = Signature::new(signing_key, proof_digest.as_ref());
-    let (_, public_key) = keypair.public_key().to_bytes();
     por_proof.signature = AdvertSignature {
         algorithm: SignatureAlgorithm::Ed25519,
         public_key: public_key.to_vec(),
@@ -2304,6 +2319,23 @@ mod tests {
             .expect("load storage-backed dataset")
     }
 
+    fn sample_por_tree_payload() -> (Vec<u8>, PorMerkleTree) {
+        let payload = b"sorafs gateway proof builder checked signing key".to_vec();
+        let plan = CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT)
+            .expect("build plan");
+        let stored_chunks = plan
+            .chunks
+            .iter()
+            .map(|chunk| sorafs_car::StoredChunk {
+                offset: chunk.offset,
+                length: chunk.length,
+                blake3: chunk.digest,
+            })
+            .collect::<Vec<_>>();
+        let por_tree = PorMerkleTree::from_payload(&payload, &stored_chunks);
+        (payload, por_tree)
+    }
+
     #[test]
     fn sora_headers_populated_from_dataset() {
         let dataset = fixture_dataset();
@@ -2396,26 +2428,8 @@ mod tests {
 
     #[test]
     fn por_proof_signature_rejects_tampering() {
-        let fixtures =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");
-        let manifest_bytes =
-            fs::read(fixtures.join("manifest_v1.to")).expect("read manifest fixture");
-        let manifest: ManifestV1 =
-            norito::decode_from_bytes(&manifest_bytes).expect("decode manifest fixture");
-        let payload = fs::read(fixtures.join("payload.bin")).expect("read payload fixture");
-        let profile = chunk_profile_for_manifest(&manifest).expect("chunk profile");
-        let plan = CarBuildPlan::single_file_with_profile(&payload, profile).expect("build plan");
-        let stored_chunks = plan
-            .chunks
-            .iter()
-            .map(|chunk| sorafs_car::StoredChunk {
-                offset: chunk.offset,
-                length: chunk.length,
-                blake3: chunk.digest,
-            })
-            .collect::<Vec<_>>();
-        let por_tree = PorMerkleTree::from_payload(&payload, &stored_chunks);
-        let manifest_digest = manifest.digest().expect("manifest digest");
+        let (payload, por_tree) = sample_por_tree_payload();
+        let manifest_digest = [0xA5; 32];
         let provider_id = [0xCD; 32];
         let signing_key =
             PrivateKey::from_bytes(Algorithm::Ed25519, &[0x22; 32]).expect("private key");
@@ -2423,7 +2437,7 @@ mod tests {
         let mut proof = build_por_proof(
             &por_tree,
             &payload,
-            *manifest_digest.as_bytes(),
+            manifest_digest,
             provider_id,
             &signing_key,
         )
@@ -2432,6 +2446,29 @@ mod tests {
         proof.signature.signature[0] ^= 0xFF;
         let err = verify_proof_signature(&proof).expect_err("tampered proof should fail");
         assert_eq!(err.error_code(), "proof_mismatch");
+    }
+
+    #[test]
+    fn por_proof_builder_rejects_non_ed25519_signing_key() {
+        let (payload, por_tree) = sample_por_tree_payload();
+        let manifest_digest = [0xA5; 32];
+        let provider_id = [0xCD; 32];
+        let secp_keypair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+
+        let err = build_por_proof(
+            &por_tree,
+            &payload,
+            manifest_digest,
+            provider_id,
+            secp_keypair.private_key(),
+        )
+        .expect_err("gateway PoR proof signing must require Ed25519");
+
+        assert!(
+            err.to_string()
+                .contains("gateway signing key must derive an Ed25519 public key"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

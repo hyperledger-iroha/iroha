@@ -418,6 +418,13 @@ fn parse_algorithm_code(code: u8) -> BridgeResult<Algorithm> {
     Algorithm::try_from(code).map_err(|_| BridgeError::UnsupportedAlgorithm)
 }
 
+fn checked_public_key_payload(public_key: &PublicKey) -> BridgeResult<&[u8]> {
+    public_key
+        .try_to_bytes()
+        .map(|(_algorithm, payload)| payload)
+        .map_err(|_| BridgeError::PrivateKey)
+}
+
 fn parse_ttl(ttl_ms: u64, present: bool) -> BridgeResult<Option<NonZeroU64>> {
     if !present {
         return Ok(None);
@@ -2748,7 +2755,7 @@ pub unsafe extern "C" fn connect_norito_public_key_from_private(
         let private_key = parse_private_key_with_algorithm(private_bytes, algorithm)?;
         let key_pair =
             KeyPair::from_private_key(private_key).map_err(|_| BridgeError::PrivateKey)?;
-        let (_alg, public_bytes) = key_pair.public_key().to_bytes();
+        let public_bytes = checked_public_key_payload(key_pair.public_key())?;
         unsafe { write_bytes_bridge(out_public_ptr, out_public_len, public_bytes) }?;
         Ok(())
     })();
@@ -2780,7 +2787,7 @@ pub unsafe extern "C" fn connect_norito_keypair_from_seed(
         let key_pair = KeyPair::from_seed(seed_bytes.to_vec(), algorithm);
         let (public_key, private_key) = key_pair.into_parts();
         let (_alg, private_bytes) = private_key.to_bytes();
-        let (_alg, public_bytes) = public_key.to_bytes();
+        let public_bytes = checked_public_key_payload(&public_key)?;
         match unsafe { write_bytes(out_private_ptr, out_private_len, &private_bytes) } {
             Ok(()) => {}
             Err(code) => {
@@ -7236,7 +7243,10 @@ mod offline_note_prover_tests {
 
     fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificate {
         let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        let (_algorithm, public_key) = note_keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked public bytes");
         OfflineNoteKeyCertificate {
             version: iroha_data_model::offline::OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -7994,7 +8004,9 @@ mod offline_note_prover_tests {
 
     #[test]
     fn kagemusha_verified_compact_token_ffi_rejects_missing_trust_anchor_metadata() {
-        let cases: [(&str, fn(&mut KagemushaVerifiedFoldBundle)); 2] = [
+        type BundleMutator = fn(&mut KagemushaVerifiedFoldBundle);
+
+        let cases: [(&str, BundleMutator); 2] = [
             ("missing verifier-key commitment", |bundle| {
                 bundle.steps[0].attachment.vk_commitment = None;
             }),
@@ -13095,7 +13107,10 @@ pub unsafe extern "C" fn connect_norito_sm2_public_key_prefixed(
         Ok(pk) => pk,
         Err(_) => return ERR_SM2_PARSE,
     };
-    let prefixed = public.to_prefixed_string();
+    let prefixed = match public.try_to_prefixed_string() {
+        Ok(value) => value,
+        Err(_) => return ERR_SM2_PARSE,
+    };
     match unsafe { write_bytes(out_ptr, out_len, prefixed.as_bytes()) } {
         Ok(()) => 0,
         Err(code) => code,
@@ -13446,7 +13461,9 @@ mod accel_tests {
         let expected = KeyPair::from_seed(seed.clone(), Algorithm::Ed25519);
         let (expected_public, expected_private) = expected.into_parts();
         let (_alg, expected_private_bytes) = expected_private.to_bytes();
-        let (_alg, expected_public_bytes) = expected_public.to_bytes();
+        let (_alg, expected_public_bytes) = expected_public
+            .try_to_bytes()
+            .expect("checked public bytes");
         let mut out_private_ptr: *mut u8 = ptr::null_mut();
         let mut out_private_len: c_ulong = 0;
         let mut out_public_ptr: *mut u8 = ptr::null_mut();
@@ -13518,7 +13535,9 @@ mod accel_tests {
         let expected = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
         let (expected_public, expected_private) = expected.into_parts();
         let (_alg, expected_private_bytes) = expected_private.to_bytes();
-        let (_alg, expected_public_bytes) = expected_public.to_bytes();
+        let (_alg, expected_public_bytes) = expected_public
+            .try_to_bytes()
+            .expect("checked public bytes");
         let mut out_private_ptr: *mut u8 = ptr::null_mut();
         let mut out_private_len: c_ulong = 0;
         let mut out_public_ptr: *mut u8 = ptr::null_mut();
@@ -16015,7 +16034,11 @@ fn java_public_key_from_private_bytes(
         .map_err(|_| "invalid private key bytes".to_string())?;
     let key_pair = KeyPair::from_private_key(private_key)
         .map_err(|_| "failed to derive public key".to_string())?;
-    Ok(key_pair.public_key().to_bytes().1.to_vec())
+    key_pair
+        .public_key()
+        .try_to_bytes()
+        .map(|(_algorithm, payload)| payload.to_vec())
+        .map_err(|_| "failed to extract public key bytes".to_string())
 }
 
 #[cfg(any(
@@ -16032,10 +16055,11 @@ fn java_keypair_from_seed_bytes(
         .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
     let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
     let (public_key, private_key) = key_pair.into_parts();
-    Ok((
-        private_key.to_bytes().1.to_vec(),
-        public_key.to_bytes().1.to_vec(),
-    ))
+    let public_bytes = public_key
+        .try_to_bytes()
+        .map(|(_algorithm, payload)| payload.to_vec())
+        .map_err(|_| "failed to extract public key bytes".to_string())?;
+    Ok((private_key.to_bytes().1.to_vec(), public_bytes))
 }
 
 #[cfg(any(
@@ -20129,8 +20153,14 @@ mod tests {
             ("algorithm_id", format!("confidential.transfer.v2{marker}")),
             ("algorithm_id", format!("_confidential-transfer-v2{marker}")),
             ("algorithm_id", format!("-confidential-transfer-v2{marker}")),
-            ("algorithm_id", format!("confidential-transfer-v2_{marker}")),
-            ("algorithm_id", format!("confidential-transfer-v2-{marker}")),
+            (
+                "algorithm_id",
+                format!("confidential-transfer-v2-{marker}_"),
+            ),
+            (
+                "algorithm_id",
+                format!("confidential-transfer-v2-{marker}-"),
+            ),
             (
                 "entrypoint",
                 format!("buildConfidentialTransferProofV2:{marker}"),
@@ -22234,6 +22264,40 @@ mod tests {
                 "{algorithm:?} must be rejected",
             );
         }
+    }
+
+    #[test]
+    fn sm2_public_key_prefixed_ffi_uses_checked_formatter() {
+        let distid = "connect-sm2-prefixed";
+        let private =
+            Sm2PrivateKey::from_seed(distid, b"connect-sm2-prefixed-seed").expect("derive SM2 key");
+        let public = private.public_key();
+        let public_bytes = public.to_sec1_bytes(false);
+        let distid_c = CString::new(distid).expect("distid c string");
+
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+        let rc = unsafe {
+            connect_norito_sm2_public_key_prefixed(
+                distid_c.as_ptr(),
+                distid_c.as_bytes().len() as c_ulong,
+                public_bytes.as_ptr(),
+                public_bytes.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, 0, "SM2 prefixed formatting must succeed");
+
+        let formatted = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        let formatted = String::from_utf8(formatted).expect("prefixed UTF-8");
+        assert_eq!(
+            formatted,
+            public
+                .try_to_prefixed_string()
+                .expect("checked SM2 prefixed formatter")
+        );
     }
 
     #[test]

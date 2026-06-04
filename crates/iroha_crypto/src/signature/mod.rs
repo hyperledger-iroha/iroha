@@ -150,14 +150,40 @@ thread_local! {
 
 #[inline]
 fn ed25519_public_key_full_fast_index(payload: &[u8; 32]) -> usize {
-    let a = u64::from_le_bytes(payload[0..8].try_into().expect("slice length checked"));
-    let b = u64::from_le_bytes(payload[8..16].try_into().expect("slice length checked"));
-    let c = u64::from_le_bytes(payload[16..24].try_into().expect("slice length checked"));
-    let d = u64::from_le_bytes(payload[24..32].try_into().expect("slice length checked"));
+    ed25519_public_key_full_fast_index_for_size(payload, ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE)
+}
+
+#[inline]
+fn ed25519_public_key_full_fast_index_for_size(payload: &[u8; 32], cache_size: usize) -> usize {
+    let Some(a) = le_u64_chunk(payload, 0) else {
+        return 0;
+    };
+    let Some(b) = le_u64_chunk(payload, 8) else {
+        return 0;
+    };
+    let Some(c) = le_u64_chunk(payload, 16) else {
+        return 0;
+    };
+    let Some(d) = le_u64_chunk(payload, 24) else {
+        return 0;
+    };
+    let Some(mask) = cache_size
+        .checked_sub(1)
+        .and_then(|mask| u64::try_from(mask).ok())
+    else {
+        return 0;
+    };
     let mixed = a ^ b.rotate_left(17) ^ c.rotate_left(31) ^ d.rotate_left(47);
-    let mask =
-        u64::try_from(ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE - 1).expect("cache mask fits in u64");
-    usize::try_from(mixed & mask).expect("masked cache index fits in usize")
+    usize::try_from(mixed & mask).unwrap_or(0)
+}
+
+#[inline]
+fn le_u64_chunk(payload: &[u8; 32], start: usize) -> Option<u64> {
+    let end = start.checked_add(8)?;
+    let chunk = payload.get(start..end)?;
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(chunk);
+    Some(u64::from_le_bytes(bytes))
 }
 
 #[cfg(test)]
@@ -170,40 +196,38 @@ fn public_key_full_fast_cache_stats_for_tests() -> PublicKeyFullFastCacheStats {
     PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow().stats())
 }
 
-fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {
-    let (algorithm, payload) = public_key.to_bytes();
+pub(crate) fn public_key_full_cached(public_key: &PublicKey) -> Result<PublicKeyFull, Error> {
+    let (algorithm, payload) = public_key.try_to_bytes()?;
     if algorithm == Algorithm::Ed25519 {
         if let Some(full) =
             PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| cache.borrow_mut().get_ed25519(payload))
         {
-            return PublicKeyFull::Ed25519(full);
+            return Ok(PublicKeyFull::Ed25519(full));
         }
         let payload_bytes: [u8; 32] = payload
             .try_into()
-            .expect("Ed25519 PublicKey invariant requires 32-byte payload");
-        let full = ed25519::Ed25519Sha512::parse_public_key(&payload_bytes)
-            .expect("Ed25519 PublicKey invariant requires valid payload");
+            .map_err(|_| ParseError("invalid Ed25519 public key length".to_owned()))?;
+        let full = ed25519::Ed25519Sha512::parse_public_key(&payload_bytes)?;
         PUBLIC_KEY_FULL_FAST_CACHE.with(|cache| {
             cache.borrow_mut().insert_ed25519(payload_bytes, full);
         });
-        return PublicKeyFull::Ed25519(full);
+        return Ok(PublicKeyFull::Ed25519(full));
     }
 
-    let algorithm = algorithm as u8;
+    let algorithm_tag = algorithm as u8;
     PUBLIC_KEY_FULL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
-        if let Some(pos) = cache
-            .iter()
-            .position(|entry| entry.algorithm == algorithm && entry.payload.as_slice() == payload)
-        {
+        if let Some(pos) = cache.iter().position(|entry| {
+            entry.algorithm == algorithm_tag && entry.payload.as_slice() == payload
+        }) {
             let entry = cache.remove(pos);
             let full = entry.full.clone();
             cache.push(entry);
-            return full;
+            return Ok(full);
         }
-        let full: PublicKeyFull = (&public_key.0).into();
+        let full = PublicKeyFull::from_bytes(algorithm, payload)?;
         cache.push(PublicKeyFullCacheEntry {
-            algorithm,
+            algorithm: algorithm_tag,
             payload: payload.to_vec(),
             full: full.clone(),
         });
@@ -211,7 +235,7 @@ fn public_key_full_cached(public_key: &PublicKey) -> PublicKeyFull {
             let drain = cache.len() - PUBLIC_KEY_FULL_CACHE_LIMIT;
             cache.drain(0..drain);
         }
-        full
+        Ok(full)
     })
 }
 
@@ -285,7 +309,7 @@ impl Signature {
     /// # Errors
     /// Fails if the message doesn't pass verification
     pub fn verify(&self, public_key: &PublicKey, payload: &[u8]) -> Result<(), Error> {
-        let public_key_full = public_key_full_cached(public_key);
+        let public_key_full = public_key_full_cached(public_key)?;
         match &public_key_full {
             PublicKeyFull::Ed25519(pk) => {
                 ed25519::Ed25519Sha512::verify(payload, &self.payload, pk)
@@ -315,9 +339,17 @@ impl Signature {
             PublicKeyFull::Gost { algorithm, key } => {
                 gost::verify(*algorithm, payload, &self.payload, key)
             }
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            PublicKeyFull::BlsSmall { key, .. } => {
+                bls::BlsSmall::verify(payload, &self.payload, key)
+            }
+            #[cfg(all(feature = "bls", not(feature = "bls-backend-blstrs")))]
+            PublicKeyFull::BlsNormal { key, .. } => {
+                bls::BlsNormal::verify(payload, &self.payload, key)
+            }
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             PublicKeyFull::BlsSmall(pk) => bls::BlsSmall::verify(payload, &self.payload, pk),
-            #[cfg(feature = "bls")]
+            #[cfg(all(feature = "bls", feature = "bls-backend-blstrs"))]
             PublicKeyFull::BlsNormal(pk) => bls::BlsNormal::verify(payload, &self.payload, pk),
             #[cfg(feature = "sm")]
             PublicKeyFull::Sm2(pk) => {
@@ -658,7 +690,7 @@ impl<T: norito::codec::Encode> SignatureOf<T> {
 mod tests {
 
     use super::*;
-    use crate::{Algorithm, HashOf, KeyGenOption, KeyPair};
+    use crate::{Algorithm, HashOf, KeyGenOption, KeyPair, PublicKeyCompact};
 
     #[test]
     #[cfg(feature = "rand")]
@@ -729,7 +761,7 @@ mod tests {
         let public_key = PublicKey::new(PublicKeyFull::Ed25519(raw_public));
         reset_public_key_full_fast_cache_for_tests();
 
-        let first = public_key_full_cached(&public_key);
+        let first = public_key_full_cached(&public_key).expect("public key parses");
         assert!(matches!(first, PublicKeyFull::Ed25519(_)));
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
@@ -740,7 +772,7 @@ mod tests {
             }
         );
 
-        let second = public_key_full_cached(&public_key);
+        let second = public_key_full_cached(&public_key).expect("public key parses");
         assert!(matches!(second, PublicKeyFull::Ed25519(_)));
         assert_eq!(
             public_key_full_fast_cache_stats_for_tests(),
@@ -750,6 +782,30 @@ mod tests {
                 inserts: 1,
             }
         );
+    }
+
+    #[test]
+    fn ed25519_public_key_full_fast_index_is_total() {
+        let payload = [0xA5; 32];
+
+        assert_eq!(ed25519_public_key_full_fast_index_for_size(&payload, 0), 0);
+        assert_eq!(ed25519_public_key_full_fast_index_for_size(&payload, 1), 0);
+
+        let index = ed25519_public_key_full_fast_index(&payload);
+        assert!(index < ED25519_PUBLIC_KEY_FULL_FAST_CACHE_SIZE);
+        assert_eq!(index, ed25519_public_key_full_fast_index(&payload));
+    }
+
+    #[test]
+    fn signature_verify_rejects_malformed_cached_ed25519_public_key_without_panic() {
+        let malformed = PublicKey(PublicKeyCompact::new(Algorithm::Ed25519, &[]));
+        let signature = Signature::from_bytes(&[0u8; 64]);
+
+        let err = signature
+            .verify(&malformed, b"message")
+            .expect_err("malformed public key must fail verification");
+
+        assert!(matches!(err, Error::Parse(_)));
     }
 
     #[test]

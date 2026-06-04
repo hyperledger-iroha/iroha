@@ -99,7 +99,8 @@ async fn persist_vrf_council_and_get_current_matches() {
     let mut candidates = Vec::new();
     for i in 0..5u8 {
         let (pk, sk) =
-            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]));
+            iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![i; 4]))
+                .expect("deterministic BLS normal keypair");
         let pk_bytes = KeyPair::from((pk.clone(), sk.clone()))
             .public_key()
             .to_bytes()

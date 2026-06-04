@@ -353,7 +353,8 @@ mod tests {
     fn structured_bytes(seed: u8, step: u8) -> [u8; 32] {
         let mut out = [0u8; 32];
         for (index, byte) in out.iter_mut().enumerate() {
-            *byte = seed.wrapping_add((index as u8).wrapping_mul(step));
+            let index = u8::try_from(index).expect("structured byte index fits u8");
+            *byte = seed.wrapping_add(index.wrapping_mul(step));
         }
         out
     }
@@ -476,7 +477,8 @@ mod tests {
         if lhs >= rhs {
             lhs - rhs
         } else {
-            ((u128::from(lhs) + MOD_P) - u128::from(rhs)) as u64
+            u64::try_from((u128::from(lhs) + MOD_P) - u128::from(rhs))
+                .expect("Goldilocks field subtraction result fits u64")
         }
     }
 
@@ -525,7 +527,7 @@ mod tests {
             asset(),
             25,
             ChainId::from_str("taira").expect("chain id"),
-            witness.clone(),
+            witness,
             [0x55; 32],
             zk_ace_verifier_key_id(ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID),
             vk_commitment,

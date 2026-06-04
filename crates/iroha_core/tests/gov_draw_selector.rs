@@ -22,12 +22,15 @@ fn make_candidate_material(
     };
 
     let input = build_input(seed, &account);
-    let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]));
+    let (pk_raw, sk) = BlsNormal::keypair(KeyGenOption::UseSeed(vec![key_seed; 4]))
+        .expect("deterministic BLS normal keypair");
     let (_vrf_output, proof) =
         prove_normal_with_chain(&sk, chain.as_str().as_bytes(), &input).expect("normal VRF proof");
     let key_pair = KeyPair::from((pk_raw, sk));
     let (public_key, _) = key_pair.into_parts();
-    let (algo, pk_payload) = public_key.to_bytes();
+    let (algo, pk_payload) = public_key
+        .try_to_bytes()
+        .expect("fixture BLS public key must be well-formed");
     assert_eq!(algo, Algorithm::BlsNormal);
     let proof_bytes = match proof {
         VrfProof::SigInG2(arr) => arr.to_vec(),

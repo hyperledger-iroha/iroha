@@ -303,6 +303,20 @@ impl Sm2PublicKey {
             .map(|der| encode_pem("PUBLIC KEY", &der))
     }
 
+    /// Fallibly format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
+    /// embedding the distinguishing identifier alongside the SEC1 payload.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the public key payload cannot be encoded into
+    /// the canonical SM2 multihash form.
+    #[cfg(not(feature = "ffi_import"))]
+    pub fn try_to_prefixed_string(&self) -> Result<String, ParseError> {
+        let sec1 = self.to_sec1_bytes(false);
+        let payload = encode_sm2_public_key_payload(self.distid(), &sec1)?;
+        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
+            .map_err(|err| ParseError(err.to_string()))
+    }
+
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
     ///
@@ -311,10 +325,7 @@ impl Sm2PublicKey {
     #[cfg(not(feature = "ffi_import"))]
     #[must_use]
     pub fn to_prefixed_string(&self) -> String {
-        let sec1 = self.to_sec1_bytes(false);
-        let payload = encode_sm2_public_key_payload(self.distid(), &sec1)
-            .expect("SM2 key generated internally must encode to a prefixed multihash");
-        crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
+        self.try_to_prefixed_string()
             .expect("SM2 key generated internally must encode to a prefixed multihash")
     }
 
@@ -893,8 +904,13 @@ fn sm3_digest_scalar(message: &[u8]) -> [u8; 32] {
 }
 
 #[inline]
+fn sm4_block_cipher(key: &[u8; 16]) -> sm4::Sm4 {
+    sm4::Sm4::new(key.into())
+}
+
+#[inline]
 fn sm4_encrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
-    let cipher = sm4::Sm4::new_from_slice(key).expect("SM4 keys must be exactly 16 bytes");
+    let cipher = sm4_block_cipher(key);
     let mut buf = Block::<sm4::Sm4>::default();
     buf.clone_from_slice(block);
     cipher.encrypt_block(&mut buf);
@@ -905,7 +921,7 @@ fn sm4_encrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
 
 #[inline]
 fn sm4_decrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
-    let cipher = sm4::Sm4::new_from_slice(key).expect("SM4 keys must be exactly 16 bytes");
+    let cipher = sm4_block_cipher(key);
     let mut buf = Block::<sm4::Sm4>::default();
     buf.clone_from_slice(block);
     cipher.decrypt_block(&mut buf);
@@ -1009,12 +1025,10 @@ mod sm_accel {
     }
 
     fn forced_override() -> Option<bool> {
-        if cfg!(feature = "sm-neon-force") {
-            return Some(true);
-        }
         match current_override() {
             IntrinsicOverride::ForceEnable => Some(true),
             IntrinsicOverride::ForceDisable => Some(false),
+            IntrinsicOverride::Auto if cfg!(feature = "sm-neon-force") => Some(true),
             IntrinsicOverride::Auto => None,
         }
     }
@@ -1186,9 +1200,6 @@ mod sm_accel {
     pub fn neon_policy() -> NeonPolicy {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         {
-            if cfg!(feature = "sm-neon-force") {
-                return NeonPolicy::ForceEnable;
-            }
             match forced_override() {
                 Some(true) => NeonPolicy::ForceEnable,
                 Some(false) => NeonPolicy::ForceDisable,
@@ -1348,6 +1359,9 @@ mod sm_accel {
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_force_feature_enables_accel() {
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
@@ -1367,6 +1381,9 @@ mod sm_accel {
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_force_feature_parity() {
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
@@ -1423,6 +1440,9 @@ mod sm_accel {
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_sm3_digest_matches_scalar_under_force() {
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
@@ -1466,6 +1486,9 @@ mod sm_accel {
         fn neon_sm4_block_cipher_matches_scalar_fixtures() {
             use super::super::{sm4_decrypt_block_scalar, sm4_encrypt_block_scalar};
 
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
@@ -1499,12 +1522,13 @@ mod sm_accel {
         fn neon_sm4_key_round_trip_matches_scalar() {
             use crate::sm::Sm4Key;
 
+            let _accel_lock = super::super::test_support::lock_accel_state();
+            let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
+
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
-            let _accel_lock = super::super::test_support::lock_accel_state();
 
             for (index, &(key_bytes, block_bytes)) in SM4_KEY_FIXTURES.iter().enumerate() {
                 let key = Sm4Key::new(key_bytes);
@@ -3055,6 +3079,32 @@ mod tests {
     }
 
     #[test]
+    fn sm4_scalar_fixed_key_constructor_matches_fallible_reference() {
+        let key = hex_to_array::<16>(SM4_GMT_VECTOR_KEY);
+        let block = hex_to_array::<16>(SM4_GMT_VECTOR_BLOCK);
+        let reference_cipher = sm4::Sm4::new_from_slice(&key).expect("valid reference SM4 key");
+
+        let mut reference_ciphertext_block = Block::<sm4::Sm4>::default();
+        reference_ciphertext_block.clone_from_slice(&block);
+        reference_cipher.encrypt_block(&mut reference_ciphertext_block);
+        let mut reference_ciphertext = [0u8; 16];
+        reference_ciphertext.copy_from_slice(reference_ciphertext_block.as_ref());
+
+        let scalar_ciphertext = sm4_encrypt_block_scalar(&key, &block);
+        assert_eq!(scalar_ciphertext, reference_ciphertext);
+
+        let mut reference_plaintext_block = Block::<sm4::Sm4>::default();
+        reference_plaintext_block.clone_from_slice(&scalar_ciphertext);
+        reference_cipher.decrypt_block(&mut reference_plaintext_block);
+        let mut reference_plaintext = [0u8; 16];
+        reference_plaintext.copy_from_slice(reference_plaintext_block.as_ref());
+
+        let scalar_plaintext = sm4_decrypt_block_scalar(&key, &scalar_ciphertext);
+        assert_eq!(scalar_plaintext, reference_plaintext);
+        assert_eq!(scalar_plaintext, block);
+    }
+
+    #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
         let private = Sm2PrivateKey::random("custom-distid", &mut rng).expect("valid distid");
@@ -3362,7 +3412,9 @@ mod tests {
         let private =
             Sm2PrivateKey::from_seed("prefixed-distid", b"prefixed-seed").expect("derive key");
         let public = private.public_key();
-        let prefixed = public.to_prefixed_string();
+        let prefixed = public
+            .try_to_prefixed_string()
+            .expect("checked SM2 prefixed formatting");
 
         assert!(
             prefixed.starts_with("sm2:"),
@@ -3373,7 +3425,12 @@ mod tests {
         let payload = encode_sm2_public_key_payload(public.distid(), &sec1).expect("SM2 payload");
         let general =
             PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("construct public key wrapper");
-        assert_eq!(prefixed, general.to_prefixed_string());
+        assert_eq!(
+            prefixed,
+            general
+                .try_to_prefixed_string()
+                .expect("generic checked SM2 prefixed formatting")
+        );
     }
 
     #[test]

@@ -2355,6 +2355,7 @@ class HttpClientTransportTest {
         assertEquals("soracloud-bfv-operation-v1", operationVectors["vector_set"])
         val publicParameters = obj(operationVectors, "public_parameters")
         val publicDegree = long(publicParameters, "polynomial_degree")
+        assertBfvRnsModulusChainFixture(operationVectors, publicDegree)
         val evaluationKey = obj(operationVectors, "evaluation_key_bundle")
         assertEquals(long(publicParameters, "decomposition_base_log"), long(evaluationKey, "decomposition_base_log"))
         assertEquals(long(evaluationKey, "relinearization_entry_count"), long(evaluationKey, "decomposition_digit_count"))
@@ -2366,6 +2367,62 @@ class HttpClientTransportTest {
             assertEquals(publicDegree, long(entry, "coefficient_count"), "relinearization entry coefficient count")
             assertBfvComponentDigest("relinearization entry $index b", string(entry, "b_sha256"), componentDigests)
             assertBfvComponentDigest("relinearization entry $index a", string(entry, "a_sha256"), componentDigests)
+        }
+        val galoisKeys = listOfMaps(operationVectors, "galois_keys")
+        assertEquals(long(evaluationKey, "galois_key_count").toInt(), galoisKeys.size)
+        for (key in galoisKeys) {
+            val power = long(key, "automorphism_power")
+            val entries = listOfMaps(key, "entries")
+            assertEquals(long(key, "entry_count").toInt(), entries.size)
+            for ((index, entry) in entries.withIndex()) {
+                assertEquals(index.toLong(), long(entry, "index"), "Galois key $power entry index")
+                assertEquals(publicDegree, long(entry, "coefficient_count"), "Galois key $power entry coefficient count")
+                assertBfvComponentDigest("Galois key $power entry $index b", string(entry, "b_sha256"), componentDigests)
+                assertBfvComponentDigest("Galois key $power entry $index a", string(entry, "a_sha256"), componentDigests)
+            }
+        }
+        val galoisSwitchVectors = listOfMaps(operationVectors, "galois_switch_vectors")
+        assert(galoisSwitchVectors.isNotEmpty()) { "Galois switch vectors must not be empty" }
+        for (vector in galoisSwitchVectors) {
+            val name = string(vector, "name")
+            val power = long(vector, "automorphism_power")
+            assert(galoisKeys.any { long(it, "automorphism_power") == power }) { "Galois switch vector $name has no matching key" }
+            val plaintextSlots = longList(vector, "input_plaintext_slots")
+            assert(plaintextSlots.isNotEmpty()) { "Galois switch vector $name plaintext slots must not be empty" }
+            assert(plaintextSlots.all { it >= 0 }) { "Galois switch vector $name plaintext slots must be non-negative" }
+            assert(long(vector, "expected_input_ciphertext_bytes") > 0) { "Galois switch vector $name input bytes must be positive" }
+            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "Galois switch vector $name output bytes must be positive" }
+            assertBfvUpperSha256("Galois switch vector $name input", string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("Galois switch vector $name output", string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("Galois switch vector $name plaintext", string(vector, "expected_plaintext_sha256"))
+            val components = obj(vector, "output_components")
+            assertEquals(publicDegree, long(components, "coefficient_count"), "Galois switch vector $name coefficient count")
+            assertBfvComponentDigest("Galois switch vector $name c0", string(components, "c0_sha256"), componentDigests)
+            assertBfvComponentDigest("Galois switch vector $name c1", string(components, "c1_sha256"), componentDigests)
+        }
+        val packedGaloisSwitchVectors = listOfMaps(operationVectors, "packed_galois_switch_vectors")
+        assert(packedGaloisSwitchVectors.isNotEmpty()) { "packed Galois switch vectors must not be empty" }
+        for (vector in packedGaloisSwitchVectors) {
+            val name = string(vector, "name")
+            val power = long(vector, "automorphism_power")
+            assert(galoisKeys.any { long(it, "automorphism_power") == power }) { "packed Galois switch vector $name has no matching key" }
+            val inputSlots = longList(vector, "input_packed_slots")
+            val permutation = longList(vector, "expected_slot_permutation")
+            val outputSlots = longList(vector, "expected_packed_slots")
+            assertEquals(publicDegree.toInt(), inputSlots.size, "packed Galois switch vector $name input slot count")
+            assertEquals(publicDegree.toInt(), permutation.size, "packed Galois switch vector $name permutation count")
+            assertEquals(publicDegree.toInt(), outputSlots.size, "packed Galois switch vector $name output slot count")
+            assert(inputSlots.all { it >= 0 }) { "packed Galois switch vector $name input slots must be non-negative" }
+            assert(permutation.all { it >= 0 }) { "packed Galois switch vector $name permutation slots must be non-negative" }
+            assert(outputSlots.all { it >= 0 }) { "packed Galois switch vector $name output slots must be non-negative" }
+            assertBfvUpperSha256("packed Galois switch vector $name packed plaintext", string(vector, "expected_packed_plaintext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector $name input", string(vector, "expected_input_ciphertext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector $name output", string(vector, "expected_output_ciphertext_sha256"))
+            assertBfvUpperSha256("packed Galois switch vector $name plaintext", string(vector, "expected_plaintext_coefficients_sha256"))
+            val components = obj(vector, "output_components")
+            assertEquals(publicDegree, long(components, "coefficient_count"), "packed Galois switch vector $name coefficient count")
+            assertBfvComponentDigest("packed Galois switch vector $name c0", string(components, "c0_sha256"), componentDigests)
+            assertBfvComponentDigest("packed Galois switch vector $name c1", string(components, "c1_sha256"), componentDigests)
         }
         val rotationKeys = listOfMaps(operationVectors, "rotation_keys")
         assertEquals(long(evaluationKey, "rotation_key_count").toInt(), rotationKeys.size)
@@ -2384,10 +2441,49 @@ class HttpClientTransportTest {
         assertBfvComponentDigest("bootstrap c1", string(bootstrapComponents, "c1_sha256"), componentDigests)
     }
 
+    private fun assertBfvRnsModulusChainFixture(operationVectors: Map<String, Any?>, publicDegree: Long) {
+        val rns = obj(operationVectors, "rns_modulus_chain")
+        val moduli = longList(rns, "moduli")
+        assertEquals(listOf(358273L, 448769L, 449921L), moduli, "RNS modulus-chain limbs")
+        assertEquals("72339115408190977", string(rns, "product"), "RNS modulus-chain product")
+        assertBfvLowerDigest("RNS modulus-chain digest", string(rns, "expected_digest_hex"))
+
+        val samples = obj(rns, "sample_polynomials")
+        assertEquals(publicDegree.toInt(), longList(samples, "lhs_coefficients").size, "RNS lhs coefficient count")
+        assertEquals(publicDegree.toInt(), longList(samples, "rhs_coefficients").size, "RNS rhs coefficient count")
+        for (label in listOf("lhs", "rhs", "sum", "negacyclic_product")) {
+            assertBfvRnsPolynomialFixture(label, obj(samples, label), publicDegree, moduli.size)
+        }
+    }
+
+    private fun assertBfvRnsPolynomialFixture(
+        label: String,
+        polynomial: Map<String, Any?>,
+        publicDegree: Long,
+        limbCount: Int,
+    ) {
+        assertEquals(publicDegree, long(polynomial, "coefficient_count"), "$label RNS coefficient count")
+        val limbHashes = stringList(polynomial, "residue_limb_sha256")
+        assertEquals(limbCount, limbHashes.size, "$label RNS residue limb count")
+        assertBfvUpperSha256("$label RNS reconstructed coefficients", string(polynomial, "reconstructed_sha256"))
+        for ((index, digest) in limbHashes.withIndex()) {
+            assertBfvUpperSha256("$label RNS residue limb $index", digest)
+        }
+    }
+
     private fun assertBfvComponentDigest(label: String, value: String, seen: MutableSet<String>) {
+        assertBfvUpperSha256(label, value)
+        assertTrue(seen.add(value), "$label must be unique")
+    }
+
+    private fun assertBfvUpperSha256(label: String, value: String) {
         assertTrue(Regex("[0-9A-F]{64}").matches(value), "$label must be canonical uppercase SHA-256")
         assertFalse(value == "0".repeat(64), "$label must not be zero")
-        assertTrue(seen.add(value), "$label must be unique")
+    }
+
+    private fun assertBfvLowerDigest(label: String, value: String) {
+        assertTrue(Regex("[0-9a-f]{64}").matches(value), "$label must be canonical lowercase hex")
+        assertFalse(value == "0".repeat(64), "$label must not be zero")
     }
 
     private fun loadSharedFixture(relativePath: String): Map<String, Any?> {
@@ -2561,6 +2657,11 @@ class HttpClientTransportTest {
 
     private fun string(root: Map<String, Any?>, key: String): String =
         root[key] as? String ?: error("$key must be a string")
+
+    private fun stringList(root: Map<String, Any?>, key: String): List<String> =
+        (root[key] as? List<*> ?: error("$key must be a list")).mapIndexed { index, value ->
+            value as? String ?: error("$key[$index] must be a string")
+        }
 
     private fun long(root: Map<String, Any?>, key: String): Long =
         (root[key] as? Number)?.toLong() ?: error("$key must be a number")

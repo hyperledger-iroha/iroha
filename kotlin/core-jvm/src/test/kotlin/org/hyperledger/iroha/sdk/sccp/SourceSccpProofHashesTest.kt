@@ -549,6 +549,52 @@ class SourceSccpProofHashesTest {
             )
         }
         assertTrue(zeroEvmDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
+        val emptyEvmReceiptNodes = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.canonicalEvmReceiptProofBytes(
+                sourceEventDigest = sourceEventDigest,
+                beaconSlot = "11",
+                executionBlockNumber = "12",
+                executionBlockHash = "aa".repeat(32),
+                executionReceiptsRoot = evmReceiptsRoot,
+                beaconFinalizedRoot = "cc".repeat(32),
+                syncCommitteeRoot = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = emptyList(),
+                inclusionBranch = branch,
+            )
+        }
+        assertTrue(emptyEvmReceiptNodes.message.orEmpty().contains("receiptTrieProofNodes"))
+        val emptyEvmInclusionBranch = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.evmReceiptProofHash(
+                sourceEventDigest = sourceEventDigest,
+                beaconSlot = "11",
+                executionBlockNumber = "12",
+                executionBlockHash = "aa".repeat(32),
+                executionReceiptsRoot = evmReceiptsRoot,
+                beaconFinalizedRoot = "cc".repeat(32),
+                syncCommitteeRoot = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = emptyList(),
+            )
+        }
+        assertTrue(emptyEvmInclusionBranch.message.orEmpty().contains("inclusionBranch must not be empty"))
+        val bscDomainEvmReceiptProof = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.evmReceiptProofHash(
+                sourceEventDigest = sourceEventDigest,
+                beaconSlot = "11",
+                executionBlockNumber = "12",
+                executionBlockHash = "aa".repeat(32),
+                executionReceiptsRoot = evmReceiptsRoot,
+                beaconFinalizedRoot = "cc".repeat(32),
+                syncCommitteeRoot = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = branch,
+                sourceDomain = SccpSourceProofs.DOMAIN_BSC,
+            )
+        }
+        assertTrue(bscDomainEvmReceiptProof.message.orEmpty().contains("sourceDomain must be ETH"))
 
         assertEquals(
             306,
@@ -580,6 +626,37 @@ class SourceSccpProofHashesTest {
             )
         }
         assertTrue(zeroBscDigest.message.orEmpty().contains("sourceEventDigest must not be zero"))
+        val emptyBscInclusionBranch = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.bscReceiptProofHash(
+                sourceEventDigest = sourceEventDigest,
+                validatorEpoch = "21",
+                blockNumber = "22",
+                blockHash = "aa".repeat(32),
+                receiptsRoot = evmReceiptsRoot,
+                validatorSetHash = "cc".repeat(32),
+                commitSealHash = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = emptyList(),
+            )
+        }
+        assertTrue(emptyBscInclusionBranch.message.orEmpty().contains("inclusionBranch must not be empty"))
+        val ethDomainBscReceiptProof = assertFailsWith<IllegalArgumentException> {
+            SccpSourceProofs.bscReceiptProofHash(
+                sourceEventDigest = sourceEventDigest,
+                validatorEpoch = "21",
+                blockNumber = "22",
+                blockHash = "aa".repeat(32),
+                receiptsRoot = evmReceiptsRoot,
+                validatorSetHash = "cc".repeat(32),
+                commitSealHash = "dd".repeat(32),
+                receiptRootIndex = "0",
+                receiptTrieProofNodes = evmReceiptTrieProofNodes,
+                inclusionBranch = branch,
+                sourceDomain = SccpSourceProofs.DOMAIN_ETH,
+            )
+        }
+        assertTrue(ethDomainBscReceiptProof.message.orEmpty().contains("sourceDomain must be BSC"))
         assertTrue(
             SccpSourceProofs.bscReceiptProofHash(
                 sourceEventDigest = sourceEventDigest,

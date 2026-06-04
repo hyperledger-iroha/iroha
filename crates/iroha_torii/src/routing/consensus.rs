@@ -748,7 +748,10 @@ pub async fn handle_v1_sumeragi_bls_keys(
         std::collections::BTreeMap::new();
     for p in peers {
         let net_pk = p.public_key().to_string();
-        let bls_pk_val = if p.public_key().algorithm() == iroha_crypto::Algorithm::BlsNormal {
+        let bls_pk_val = if matches!(
+            p.public_key().try_algorithm(),
+            Ok(iroha_crypto::Algorithm::BlsNormal)
+        ) {
             Some(p.public_key().to_string())
         } else {
             None

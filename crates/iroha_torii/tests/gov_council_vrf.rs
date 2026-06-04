@@ -60,11 +60,14 @@ async fn vrf_derive_orders_desc_and_tie_breaks_by_account() {
     );
 
     let (pk1, sk1) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![1, 2, 3, 4]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![1, 2, 3, 4]))
+            .expect("deterministic BLS normal keypair");
     let (pk2, sk2) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![4, 3, 2, 1]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![4, 3, 2, 1]))
+            .expect("deterministic BLS normal keypair");
     let (pk3, sk3) =
-        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![9, 9, 9, 9]));
+        iroha_crypto::BlsNormal::keypair(iroha_crypto::KeyGenOption::UseSeed(vec![9, 9, 9, 9]))
+            .expect("deterministic BLS normal keypair");
 
     let input_alice = parliament::build_input(&seed, &account_alice);
     let input_bob = parliament::build_input(&seed, &account_bob);

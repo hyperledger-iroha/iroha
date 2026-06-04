@@ -12,9 +12,18 @@ fn seeded_keypair(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
 
+fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
+    let (algorithm, payload) = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("bench Ed25519 public key must be well-formed");
+    assert_eq!(algorithm, Algorithm::Ed25519);
+    payload
+}
+
 fn bench_public_key_parse(c: &mut Criterion) {
     let warm = seeded_keypair(7);
-    let (_, warm_payload) = warm.public_key().to_bytes();
+    let warm_payload = checked_ed25519_public_key_payload(&warm);
     ed25519_parse_public_key(warm_payload).expect("warm public key parse");
 
     c.bench_function("ed25519/public_key_parse/warm_same_key", |b| {
@@ -23,7 +32,7 @@ fn bench_public_key_parse(c: &mut Criterion) {
 
     let keys = (0..=u8::MAX)
         .map(seeded_keypair)
-        .map(|keypair| keypair.public_key().to_bytes().1.to_vec())
+        .map(|keypair| checked_ed25519_public_key_payload(&keypair).to_vec())
         .collect::<Vec<_>>();
     c.bench_function("ed25519/public_key_parse/many_keys", |b| {
         b.iter(|| {
@@ -83,7 +92,7 @@ fn bench_batch_verify(c: &mut Criterion) {
         let parsed_public_keys = keypairs
             .iter()
             .map(|keypair| {
-                let (_, payload) = keypair.public_key().to_bytes();
+                let payload = checked_ed25519_public_key_payload(keypair);
                 ed25519_parse_public_key(payload).expect("parse batch public key")
             })
             .collect::<Vec<_>>();

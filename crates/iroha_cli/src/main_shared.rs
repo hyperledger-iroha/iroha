@@ -3977,7 +3977,10 @@ mod multisig {
                     .members()
                     .iter()
                     .map(|member| {
-                        let (algorithm, payload) = member.public_key().to_bytes();
+                        let (algorithm, payload) = member
+                            .public_key()
+                            .try_to_bytes()
+                            .wrap_err("account controller member public key is malformed")?;
                         let mut member_map = json::Map::new();
                         member_map.insert(
                             "algorithm".to_string(),
@@ -3988,9 +3991,9 @@ mod multisig {
                             "public_key_hex".to_string(),
                             json::Value::from(hex::encode_upper(payload)),
                         );
-                        json::Value::from(member_map)
+                        Ok(json::Value::from(member_map))
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>>>()?;
                 let mut doc_map = json::Map::new();
                 doc_map.insert(
                     "account_id".to_string(),
@@ -4031,7 +4034,10 @@ mod multisig {
                 ))?;
                 context.println("Members (algorithm, weight, public key hex):")?;
                 for member in controller.members() {
-                    let (algorithm, payload) = member.public_key().to_bytes();
+                    let (algorithm, payload) = member
+                        .public_key()
+                        .try_to_bytes()
+                        .wrap_err("account controller member public key is malformed")?;
                     context.println(format!(
                         "  - {}, {}, {}",
                         algorithm.as_static_str(),

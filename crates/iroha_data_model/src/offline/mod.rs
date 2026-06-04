@@ -6250,8 +6250,8 @@ impl KagemushaRecursiveSpendBundleV1 {
         ensure_field!(append_boundary_digest);
         ensure_field!(recursive_verifier_scalar_projection_digest);
         ensure_field!(verifier_opening_len);
-        ensure_field!(verifier_witness_count);
         ensure_field!(hop_count);
+        ensure_field!(verifier_witness_count);
         Ok(())
     }
 
@@ -7784,7 +7784,10 @@ fn validate_kagemusha_recursive_spend_lineage_witness(
         }
         let expected_hop_count = proof_index.saturating_add(1);
         let expected_hop_count_u32 =
-            u32::try_from(expected_hop_count).expect("hop count is bounded to u32");
+            u32::try_from(expected_hop_count).map_err(|_| KagemushaFoldError::TooManyHops {
+                max: KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS,
+                actual: expected_hop_count,
+            })?;
         if previous_proof.public_inputs.hop_count != expected_hop_count_u32 {
             return Err(KagemushaFoldError::HopCountMismatch {
                 expected: expected_hop_count,
@@ -8238,6 +8241,7 @@ pub fn kagemusha_recursive_aggregation_evidence_from_steps(
     Ok(evidence)
 }
 
+#[allow(clippy::struct_field_names)]
 struct KagemushaFoldDigestParts {
     nullifier: Hash,
     output_commitment: Hash,
@@ -9002,7 +9006,10 @@ mod offline_note_tests {
         );
         let asset = AssetId::new(definition, account_id.clone());
         let note_public_key = sample_public_key(0xA8);
-        let (_algorithm, note_key) = note_public_key.to_bytes();
+        let (algorithm, note_key) = note_public_key
+            .try_to_bytes()
+            .expect("fixture note public key must be well-formed");
+        assert_eq!(algorithm, Algorithm::Ed25519);
         let certificate = OfflineNoteKeyCertificate {
             version: OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
             platform: "ios-appattest".to_owned(),
@@ -15530,19 +15537,21 @@ mod offline_note_tests {
                 step,
                 format!("recursive-spend-cap-witness-{hop_index}").as_bytes(),
             );
-            let accumulator = match previous.as_ref() {
-                Some(previous) => kagemusha_recursive_spend_accumulator_append_evidence(
-                    previous,
-                    previous_proof.as_ref().expect("previous recursive proof"),
-                    &evidence,
-                    &note,
-                )
-                .expect("append capped accumulator"),
-                None => {
+            let accumulator = previous.as_ref().map_or_else(
+                || {
                     kagemusha_recursive_spend_accumulator_from_initial_evidence(&evidence, &note)
                         .expect("initial capped accumulator")
-                }
-            };
+                },
+                |previous| {
+                    kagemusha_recursive_spend_accumulator_append_evidence(
+                        previous,
+                        previous_proof.as_ref().expect("previous recursive proof"),
+                        &evidence,
+                        &note,
+                    )
+                    .expect("append capped accumulator")
+                },
+            );
             previous_proof = Some(kagemusha_recursive_spend_proof(&accumulator));
             previous = Some(accumulator);
         }
@@ -16563,6 +16572,16 @@ mod offline_note_tests {
                 step.verifier_key_poseidon_digest =
                     kagemusha_verifier_key_poseidon_digest("halo2/ipa", proof_label.as_bytes())
                         .expect("size verifier-key digest");
+                step.input_nullifiers = vec![
+                    fixed_hash(format!("{proof_label}:input-a").as_bytes()),
+                    fixed_hash(format!("{proof_label}:input-b").as_bytes()),
+                ];
+                step.input_nullifiers.sort_unstable();
+                step.output_commitments = vec![
+                    fixed_hash(format!("{proof_label}:output-a").as_bytes()),
+                    fixed_hash(format!("{proof_label}:output-b").as_bytes()),
+                ];
+                step.output_commitments.sort_unstable();
                 step
             })
             .collect::<Vec<_>>();

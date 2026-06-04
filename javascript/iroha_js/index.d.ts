@@ -4393,6 +4393,16 @@ export interface EthereumMainnetBeaconFinalityEvidenceInput {
   finalizedSlot?: string | number | bigint;
   finalized_slot?: string | number | bigint;
   slot?: string | number | bigint;
+  syncCommitteeBits?: string;
+  sync_committee_bits?: string;
+  syncCommitteeSignature?: string;
+  sync_committee_signature?: string;
+  syncSignatureSlot?: string | number | bigint;
+  sync_signature_slot?: string | number | bigint;
+  signatureSlot?: string | number | bigint;
+  signature_slot?: string | number | bigint;
+  syncCommitteeParticipation?: string | number | bigint;
+  sync_committee_participation?: string | number | bigint;
   [key: string]: unknown;
 }
 
@@ -4404,12 +4414,29 @@ export interface EthereumMainnetBeaconFinalityEvidence
   readonly finalizedHeaderRoot?: string;
   readonly syncCommitteeRoot?: string;
   readonly beaconSlot?: string;
+  readonly syncCommitteeBits?: string;
+  readonly syncCommitteeSignature?: string;
+  readonly syncSignatureSlot?: string;
+  readonly syncCommitteeParticipation?: string;
 }
 
 export interface EthereumMainnetConsensusProviderInput {
   readonly receipt?: Record<string, unknown>;
   readonly block?: Record<string, unknown>;
   readonly transactionHash?: string;
+  readonly beaconBlockId?: string | number | bigint;
+  readonly beacon_block_id?: string | number | bigint;
+  readonly targetBeaconBlockId?: string | number | bigint;
+  readonly target_beacon_block_id?: string | number | bigint;
+  readonly beaconBlockRoot?: string;
+  readonly beacon_block_root?: string;
+  readonly targetBeaconBlockRoot?: string;
+  readonly target_beacon_block_root?: string;
+  readonly beaconSlot?: string | number | bigint;
+  readonly beacon_slot?: string | number | bigint;
+  readonly finalizedSlot?: string | number | bigint;
+  readonly finalized_slot?: string | number | bigint;
+  readonly slot?: string | number | bigint;
 }
 
 export type EthereumMainnetConsensusProvider = {
@@ -4429,6 +4456,19 @@ export class EthereumMainnetBeaconRestConsensusProvider
       fetchFn?: EthereumMainnetBeaconRestFetch;
       fetch_fn?: EthereumMainnetBeaconRestFetch;
       headers?: unknown;
+      beaconBlockId?: string | number | bigint;
+      beacon_block_id?: string | number | bigint;
+      targetBeaconBlockId?: string | number | bigint;
+      target_beacon_block_id?: string | number | bigint;
+      beaconBlockRoot?: string;
+      beacon_block_root?: string;
+      targetBeaconBlockRoot?: string;
+      target_beacon_block_root?: string;
+      beaconSlot?: string | number | bigint;
+      beacon_slot?: string | number | bigint;
+      finalizedSlot?: string | number | bigint;
+      finalized_slot?: string | number | bigint;
+      slot?: string | number | bigint;
       syncCommitteeRoot?: string;
       sync_committee_root?: string;
       syncCommitteePayload?: EthSyncCommitteePayloadInput | BinaryLike;

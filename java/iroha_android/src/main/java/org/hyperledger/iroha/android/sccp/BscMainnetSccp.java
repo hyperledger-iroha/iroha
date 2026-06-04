@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.sccp;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -28,6 +29,7 @@ public final class BscMainnetSccp {
   private final InboundProver inboundProver;
   private final InboundSubmitter inboundSubmitter;
   private final OutboundSubmitter outboundSubmitter;
+  private final String sourceBridgeEmitterAddress;
 
   public BscMainnetSccp() {
     this(null, null, null, null, null);
@@ -73,6 +75,26 @@ public final class BscMainnetSccp {
       final InboundProver inboundProver,
       final InboundSubmitter inboundSubmitter,
       final OutboundSubmitter outboundSubmitter) {
+    this(
+        witnessProvider,
+        proofEngine,
+        executionProvider,
+        consensusProvider,
+        inboundProver,
+        inboundSubmitter,
+        outboundSubmitter,
+        null);
+  }
+
+  public BscMainnetSccp(
+      final EvmSccpProver.WitnessProvider witnessProvider,
+      final EvmSccpProver.ProofEngine proofEngine,
+      final ExecutionProvider executionProvider,
+      final ConsensusProvider consensusProvider,
+      final InboundProver inboundProver,
+      final InboundSubmitter inboundSubmitter,
+      final OutboundSubmitter outboundSubmitter,
+      final String sourceBridgeEmitterAddress) {
     this.witnessProvider = witnessProvider;
     this.proofEngine = proofEngine;
     this.executionProvider = executionProvider;
@@ -80,6 +102,7 @@ public final class BscMainnetSccp {
     this.inboundProver = inboundProver;
     this.inboundSubmitter = inboundSubmitter;
     this.outboundSubmitter = outboundSubmitter;
+    this.sourceBridgeEmitterAddress = sourceBridgeEmitterAddress;
   }
 
   public static void requireMainnetChainId(final long chainId) {
@@ -136,14 +159,17 @@ public final class BscMainnetSccp {
                   "eth_getTransactionReceipt", Collections.<Object>singletonList(transactionHash)),
               "eth_getTransactionReceipt");
     }
-    if (receipt == null && input.receiptProofHash() == null) {
+    final ReceiptProof receiptProof = input.receiptProof();
+    if (receipt == null && receiptProof == null && input.receiptProofHash() == null) {
       throw new IllegalArgumentException(
-          "BSC mainnet inbound evidence requires receipt, receiptProofHash, or transactionHash");
+          "BSC mainnet inbound evidence requires receipt, receiptProof, receiptProofHash, or transactionHash");
     }
 
     String blockHash = null;
     String receiptBlockNumber = null;
     String blockReceiptsRoot = null;
+    String sourceEventDigest = null;
+    String normalizedSourceBridgeEmitterAddress = null;
     if (receipt != null) {
       if (!"0x1".equals(receipt.get("status"))) {
         throw new IllegalArgumentException("BSC mainnet inbound receipt status must be 0x1");
@@ -161,6 +187,20 @@ public final class BscMainnetSccp {
           normalizeRpcHex(firstPresent(receipt, "blockHash", "block_hash"), "receipt.blockHash", 32);
       final Object receiptBlockNumberInput = firstPresent(receipt, "blockNumber", "block_number");
       receiptBlockNumber = normalizePositiveRpcQuantity(receiptBlockNumberInput, "receipt.blockNumber");
+      final SourceEvent sourceEvent =
+          normalizeEvmReceiptSourceEvent(
+              receipt,
+              input.sourceEventDigest(),
+              resolveSourceBridgeEmitterAddress(
+                  input.sourceBridgeEmitterAddress(), sourceBridgeEmitterAddress),
+              transactionHash,
+              blockHash,
+              receiptBlockNumber);
+      sourceEventDigest = sourceEvent.sourceEventDigest();
+      normalizedSourceBridgeEmitterAddress = sourceEvent.sourceBridgeEmitterAddress();
+    } else if (input.sourceEventDigest() != null || input.sourceBridgeEmitterAddress() != null) {
+      throw new IllegalArgumentException(
+          "receipt.logs is required for SCCP source event validation");
     }
 
     Map<String, Object> block = input.block();
@@ -197,10 +237,14 @@ public final class BscMainnetSccp {
             ? null
             : normalizeParliaFinality(
                 parliaFinality, blockHash, receiptBlockNumber, blockReceiptsRoot);
-    final String receiptProofHash =
-        input.receiptProofHash() == null
-            ? null
-            : normalizeRpcHex(input.receiptProofHash(), "receiptProofHash", 32);
+    requireReceiptProofMatchesEvidence(
+        receiptProof,
+        blockHash,
+        receiptBlockNumber,
+        blockReceiptsRoot,
+        normalizedParliaFinality,
+        sourceEventDigest);
+    final String receiptProofHash = normalizeReceiptProofHash(receiptProof, input.receiptProofHash());
     return new InboundEvidence(
         DOMAIN_BSC,
         DOMAIN_SORA,
@@ -208,7 +252,10 @@ public final class BscMainnetSccp {
         receipt,
         block,
         normalizedParliaFinality,
-        receiptProofHash);
+        receiptProofHash,
+        receiptProof,
+        sourceEventDigest,
+        normalizedSourceBridgeEmitterAddress);
   }
 
   public byte[] proveInboundToSora(final InboundEvidence input) {
@@ -218,6 +265,13 @@ public final class BscMainnetSccp {
     final InboundEvidence evidence = collectInboundEvidenceFromReceipt(input);
     if (evidence.parliaFinality() == null) {
       throw new IllegalArgumentException("BSC mainnet SCCP inbound proof requires parliaFinality");
+    }
+    if (evidence.receiptProof() == null) {
+      throw new IllegalArgumentException("BSC mainnet SCCP inbound proof requires receiptProof");
+    }
+    if (evidence.sourceEventDigest() == null) {
+      throw new IllegalArgumentException(
+          "BSC mainnet SCCP inbound proof requires receipt source event validation");
     }
     final byte[] proofBytes = inboundProver.prove(evidence);
     if (proofBytes == null || proofBytes.length == 0) {
@@ -424,6 +478,11 @@ public final class BscMainnetSccp {
 
   private static String normalizeRpcHex(
       final Object value, final String label, final int byteLength) {
+    return normalizeRpcHex(value, label, byteLength, false);
+  }
+
+  private static String normalizeRpcHex(
+      final Object value, final String label, final int byteLength, final boolean allowZero) {
     if (!(value instanceof String)) {
       throw new IllegalArgumentException(label + " must be canonical lowercase 0x hex");
     }
@@ -440,10 +499,271 @@ public final class BscMainnetSccp {
     for (int index = 0; index < hex.length(); index++) {
       nonzero |= hex.charAt(index) != '0';
     }
-    if (!nonzero) {
+    if (!allowZero && !nonzero) {
       throw new IllegalArgumentException(label + " must not be zero");
     }
     return text;
+  }
+
+  private static String normalizeReceiptProofHash(
+      final ReceiptProof receiptProof, final String suppliedHash) {
+    final String normalizedHash =
+        suppliedHash == null ? null : normalizeRpcHex(suppliedHash, "receiptProofHash", 32);
+    if (receiptProof == null) {
+      return normalizedHash;
+    }
+    if (receiptProof.sourceDomain() != DOMAIN_BSC) {
+      throw new IllegalArgumentException("receiptProof.sourceDomain must be BSC");
+    }
+    final String computedHash =
+        SourceSccpProofs.bscReceiptProofHash(
+            receiptProof.sourceEventDigest(),
+            receiptProof.validatorEpoch(),
+            receiptProof.blockNumber(),
+            receiptProof.blockHash(),
+            receiptProof.receiptsRoot(),
+            receiptProof.validatorSetHash(),
+            receiptProof.commitSealHash(),
+            receiptProof.receiptRootIndex(),
+            receiptProof.receiptTrieProofNodes(),
+            receiptProof.inclusionBranch(),
+            receiptProof.sourceDomain());
+    if (normalizedHash != null && !normalizedHash.equals(computedHash)) {
+      throw new IllegalArgumentException("receiptProofHash must match receiptProof");
+    }
+    return computedHash;
+  }
+
+  private static void requireReceiptProofMatchesEvidence(
+      final ReceiptProof receiptProof,
+      final String blockHash,
+      final String receiptBlockNumber,
+      final String blockReceiptsRoot,
+      final Map<String, Object> parliaFinality,
+      final String sourceEventDigest) {
+    if (receiptProof == null) {
+      return;
+    }
+    final long proofBlockNumber =
+        normalizeUnsignedInteger(receiptProof.blockNumber(), "receiptProof.blockNumber");
+    if (receiptBlockNumber != null
+        && proofBlockNumber != normalizeUnsignedInteger(receiptBlockNumber, "block.number")) {
+      throw new IllegalArgumentException("receiptProof.blockNumber must match block.number");
+    }
+    if (parliaFinality != null
+        && proofBlockNumber
+            != normalizeUnsignedInteger(
+                parliaFinality.get("executionBlockNumber"),
+                "parliaFinality.executionBlockNumber")) {
+      throw new IllegalArgumentException(
+          "receiptProof.blockNumber must match parliaFinality.executionBlockNumber");
+    }
+    final String proofBlockHash =
+        normalizeRpcHex(receiptProof.blockHash(), "receiptProof.blockHash", 32);
+    if (blockHash != null && !proofBlockHash.equals(blockHash)) {
+      throw new IllegalArgumentException("receiptProof.blockHash must match block.hash");
+    }
+    if (parliaFinality != null
+        && !proofBlockHash.equals(parliaFinality.get("executionBlockHash"))) {
+      throw new IllegalArgumentException(
+          "receiptProof.blockHash must match parliaFinality.executionBlockHash");
+    }
+    final String proofReceiptsRoot =
+        normalizeRpcHex(receiptProof.receiptsRoot(), "receiptProof.receiptsRoot", 32);
+    if (blockReceiptsRoot != null && !proofReceiptsRoot.equals(blockReceiptsRoot)) {
+      throw new IllegalArgumentException("receiptProof.receiptsRoot must match block.receiptsRoot");
+    }
+    if (parliaFinality != null) {
+      if (!proofReceiptsRoot.equals(parliaFinality.get("executionReceiptsRoot"))) {
+        throw new IllegalArgumentException(
+            "receiptProof.receiptsRoot must match parliaFinality.executionReceiptsRoot");
+      }
+      final Object finalityValidatorEpoch =
+          firstPresent(parliaFinality, "validatorEpoch", "validator_epoch");
+      if (finalityValidatorEpoch != null
+          && normalizeUnsignedInteger(receiptProof.validatorEpoch(), "receiptProof.validatorEpoch")
+              != normalizeUnsignedInteger(finalityValidatorEpoch, "parliaFinality.validatorEpoch")) {
+        throw new IllegalArgumentException(
+            "receiptProof.validatorEpoch must match parliaFinality.validatorEpoch");
+      }
+      final Object finalityValidatorSetHash =
+          firstPresent(parliaFinality, "validatorSetHash", "validator_set_hash");
+      if (finalityValidatorSetHash != null) {
+        final String proofValidatorSetHash =
+            normalizeRpcHex(
+                receiptProof.validatorSetHash(), "receiptProof.validatorSetHash", 32);
+        final String normalizedValidatorSetHash =
+            normalizeRpcHex(
+                finalityValidatorSetHash, "parliaFinality.validatorSetHash", 32);
+        if (!proofValidatorSetHash.equals(normalizedValidatorSetHash)) {
+          throw new IllegalArgumentException(
+              "receiptProof.validatorSetHash must match parliaFinality.validatorSetHash");
+        }
+      }
+      final Object finalityCommitSealHash =
+          firstPresent(parliaFinality, "commitSealHash", "commit_seal_hash");
+      if (finalityCommitSealHash != null) {
+        final String proofCommitSealHash =
+            normalizeRpcHex(receiptProof.commitSealHash(), "receiptProof.commitSealHash", 32);
+        final String normalizedCommitSealHash =
+            normalizeRpcHex(finalityCommitSealHash, "parliaFinality.commitSealHash", 32);
+        if (!proofCommitSealHash.equals(normalizedCommitSealHash)) {
+          throw new IllegalArgumentException(
+              "receiptProof.commitSealHash must match parliaFinality.commitSealHash");
+        }
+      }
+    }
+    if (sourceEventDigest != null) {
+      final String proofSourceEventDigest =
+          normalizeRpcHex(receiptProof.sourceEventDigest(), "receiptProof.sourceEventDigest", 32);
+      if (!proofSourceEventDigest.equals(sourceEventDigest)) {
+        throw new IllegalArgumentException(
+            "receiptProof.sourceEventDigest must match receipt source event");
+      }
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static SourceEvent normalizeEvmReceiptSourceEvent(
+      final Map<String, Object> receipt,
+      final String sourceEventDigestInput,
+      final String sourceBridgeEmitterAddressInput,
+      final String transactionHash,
+      final String blockHash,
+      final String blockNumber) {
+    final String sourceEventDigest =
+        sourceEventDigestInput == null
+            ? null
+            : normalizeRpcHex(sourceEventDigestInput, "sourceEventDigest", 32);
+    final String sourceBridgeEmitterAddress =
+        sourceBridgeEmitterAddressInput == null
+            ? null
+            : normalizeRpcHex(sourceBridgeEmitterAddressInput, "sourceBridgeEmitterAddress", 20);
+    if (sourceEventDigest == null && sourceBridgeEmitterAddress == null) {
+      return new SourceEvent(null, null);
+    }
+    if (sourceBridgeEmitterAddress == null) {
+      throw new IllegalArgumentException(
+          "sourceBridgeEmitterAddress is required when validating sourceEventDigest");
+    }
+    if (receipt == null || !(receipt.get("logs") instanceof List)) {
+      throw new IllegalArgumentException(
+          "receipt.logs is required for SCCP source event validation");
+    }
+    final List<Object> logs = (List<Object>) receipt.get("logs");
+    String matchedDigest = null;
+    for (int index = 0; index < logs.size(); index++) {
+      final Object logInput = logs.get(index);
+      if (!(logInput instanceof Map)) {
+        throw new IllegalArgumentException("receipt.logs[" + index + "] must be an object");
+      }
+      final Map<String, Object> log = (Map<String, Object>) logInput;
+      if (Boolean.TRUE.equals(log.get("removed"))) {
+        throw new IllegalArgumentException("receipt.logs must not contain removed logs");
+      }
+      final String logAddress =
+          normalizeRpcHex(log.get("address"), "receipt.logs[" + index + "].address", 20, true);
+      if (!(log.get("topics") instanceof List)) {
+        throw new IllegalArgumentException(
+            "receipt.logs[" + index + "].topics must be an array");
+      }
+      final List<Object> topics = (List<Object>) log.get("topics");
+      if (topics.size() > 4) {
+        throw new IllegalArgumentException(
+            "receipt.logs[" + index + "].topics must contain at most 4 entries");
+      }
+      final ArrayList<String> normalizedTopics = new ArrayList<>(topics.size());
+      for (int topicIndex = 0; topicIndex < topics.size(); topicIndex++) {
+        normalizedTopics.add(
+            normalizeRpcHex(
+                topics.get(topicIndex),
+                "receipt.logs[" + index + "].topics[" + topicIndex + "]",
+                32,
+                true));
+      }
+      if (sourceBridgeEmitterAddress.equals(logAddress)
+          && !normalizedTopics.isEmpty()
+          && EthereumMainnetSccp.SOURCE_EVENT_TOPIC_V1.equals(normalizedTopics.get(0))) {
+        if (normalizedTopics.size() != 2) {
+          throw new IllegalArgumentException(
+              "SCCP source event log must contain exactly 2 topics");
+        }
+        if (!(log.get("data") instanceof String)) {
+          throw new IllegalArgumentException("receipt.logs[" + index + "].data is required");
+        }
+        if (!"0x".equals(log.get("data"))) {
+          throw new IllegalArgumentException("SCCP source event log data must be 0x");
+        }
+        final String logTransactionHash =
+            normalizeRpcHex(
+                firstPresent(log, "transactionHash", "transaction_hash"),
+                "receipt.logs[" + index + "].transactionHash",
+                32);
+        if (transactionHash != null && !transactionHash.equals(logTransactionHash)) {
+          throw new IllegalArgumentException(
+              "receipt.logs transactionHash must match receipt.transactionHash");
+        }
+        final String logBlockHash =
+            normalizeRpcHex(
+                firstPresent(log, "blockHash", "block_hash"),
+                "receipt.logs[" + index + "].blockHash",
+                32);
+        if (blockHash != null && !blockHash.equals(logBlockHash)) {
+          throw new IllegalArgumentException(
+              "receipt.logs blockHash must match receipt.blockHash");
+        }
+        final String logBlockNumber =
+            normalizePositiveRpcQuantity(
+                firstPresent(log, "blockNumber", "block_number"),
+                "receipt.logs[" + index + "].blockNumber");
+        if (blockNumber != null && !blockNumber.equals(logBlockNumber)) {
+          throw new IllegalArgumentException(
+              "receipt.logs blockNumber must match receipt.blockNumber");
+        }
+        final String candidateDigest = normalizedTopics.get(1);
+        if (isZeroRpcHex(candidateDigest)) {
+          throw new IllegalArgumentException("SCCP source event digest must not be zero");
+        }
+        if (sourceEventDigest != null && !sourceEventDigest.equals(candidateDigest)) {
+          continue;
+        }
+        if (matchedDigest != null) {
+          throw new IllegalArgumentException(
+              "receipt.logs must contain exactly one matching SCCP source event");
+        }
+        matchedDigest = candidateDigest;
+      }
+    }
+    if (matchedDigest == null) {
+      throw new IllegalArgumentException(
+          "receipt.logs must contain the expected SCCP source event");
+    }
+    return new SourceEvent(matchedDigest, sourceBridgeEmitterAddress);
+  }
+
+  private static String resolveSourceBridgeEmitterAddress(
+      final String inputAddress, final String defaultAddress) {
+    final String normalizedInput =
+        inputAddress == null ? null : normalizeRpcHex(inputAddress, "sourceBridgeEmitterAddress", 20);
+    final String normalizedDefault =
+        defaultAddress == null
+            ? null
+            : normalizeRpcHex(defaultAddress, "sourceBridgeEmitterAddress", 20);
+    if (normalizedInput != null
+        && normalizedDefault != null
+        && !normalizedInput.equals(normalizedDefault)) {
+      throw new IllegalArgumentException("sourceBridgeEmitterAddress values must match");
+    }
+    return normalizedInput == null ? normalizedDefault : normalizedInput;
+  }
+
+  private static boolean isZeroRpcHex(final String text) {
+    for (int index = 2; index < text.length(); index++) {
+      if (text.charAt(index) != '0') {
+        return false;
+      }
+    }
+    return true;
   }
 
   private static String normalizeRpcQuantity(final Object value, final String label) {
@@ -586,6 +906,19 @@ public final class BscMainnetSccp {
           label + " must be at most " + NATIVE_RECURSIVE_MAX_PROOF_BYTES + " bytes");
     }
     return copy;
+  }
+
+  private static List<byte[]> copyByteArrayList(final List<byte[]> values, final String label) {
+    final List<byte[]> list = Objects.requireNonNull(values, label);
+    final List<byte[]> out = new ArrayList<>(list.size());
+    for (int index = 0; index < list.size(); index++) {
+      final byte[] value = Objects.requireNonNull(list.get(index), label + "[" + index + "]");
+      if (value.length == 0) {
+        throw new IllegalArgumentException(label + "[" + index + "] must not be empty");
+      }
+      out.add(Arrays.copyOf(value, value.length));
+    }
+    return Collections.unmodifiableList(out);
   }
 
   private static String normalizeNonZeroHex32(final String value, final String label) {
@@ -902,7 +1235,77 @@ public final class BscMainnetSccp {
       Map<String, Object> receipt,
       Map<String, Object> block,
       Map<String, Object> parliaFinality,
-      String receiptProofHash) {
+      String receiptProofHash,
+      ReceiptProof receiptProof,
+      String sourceEventDigest,
+      String sourceBridgeEmitterAddress) {
+    public InboundEvidence(
+        final int sourceDomain,
+        final int targetDomain,
+        final String transactionHash,
+        final Map<String, Object> receipt,
+        final Map<String, Object> block,
+        final Map<String, Object> parliaFinality,
+        final String receiptProofHash) {
+      this(
+          sourceDomain,
+          targetDomain,
+          transactionHash,
+          receipt,
+          block,
+          parliaFinality,
+          receiptProofHash,
+          null,
+          null,
+          null);
+    }
+
+    public InboundEvidence(
+        final int sourceDomain,
+        final int targetDomain,
+        final String transactionHash,
+        final Map<String, Object> receipt,
+        final Map<String, Object> block,
+        final Map<String, Object> parliaFinality,
+        final ReceiptProof receiptProof,
+        final String receiptProofHash) {
+      this(
+          sourceDomain,
+          targetDomain,
+          transactionHash,
+          receipt,
+          block,
+          parliaFinality,
+          receiptProofHash,
+          receiptProof,
+          null,
+          null);
+    }
+
+    public InboundEvidence(
+        final int sourceDomain,
+        final int targetDomain,
+        final String transactionHash,
+        final Map<String, Object> receipt,
+        final Map<String, Object> block,
+        final Map<String, Object> parliaFinality,
+        final ReceiptProof receiptProof,
+        final String receiptProofHash,
+        final String sourceEventDigest,
+        final String sourceBridgeEmitterAddress) {
+      this(
+          sourceDomain,
+          targetDomain,
+          transactionHash,
+          receipt,
+          block,
+          parliaFinality,
+          receiptProofHash,
+          receiptProof,
+          sourceEventDigest,
+          sourceBridgeEmitterAddress);
+    }
+
     public static InboundEvidence withParliaFinalityEvidence(
         final int sourceDomain,
         final int targetDomain,
@@ -918,7 +1321,113 @@ public final class BscMainnetSccp {
           receipt,
           block,
           parliaFinalityEvidence == null ? null : parliaFinalityEvidence.toMap(),
-          receiptProofHash);
+          receiptProofHash,
+          null,
+          null,
+          null);
+    }
+
+    public static InboundEvidence withParliaFinalityEvidence(
+        final int sourceDomain,
+        final int targetDomain,
+        final String transactionHash,
+        final Map<String, Object> receipt,
+        final Map<String, Object> block,
+        final ParliaFinalityEvidence parliaFinalityEvidence,
+        final ReceiptProof receiptProof,
+        final String receiptProofHash) {
+      return new InboundEvidence(
+          sourceDomain,
+          targetDomain,
+          transactionHash,
+          receipt,
+          block,
+          parliaFinalityEvidence == null ? null : parliaFinalityEvidence.toMap(),
+          receiptProofHash,
+          receiptProof,
+          null,
+          null);
+    }
+
+    public static InboundEvidence withParliaFinalityEvidence(
+        final int sourceDomain,
+        final int targetDomain,
+        final String transactionHash,
+        final Map<String, Object> receipt,
+        final Map<String, Object> block,
+        final ParliaFinalityEvidence parliaFinalityEvidence,
+        final ReceiptProof receiptProof,
+        final String receiptProofHash,
+        final String sourceEventDigest,
+        final String sourceBridgeEmitterAddress) {
+      return new InboundEvidence(
+          sourceDomain,
+          targetDomain,
+          transactionHash,
+          receipt,
+          block,
+          parliaFinalityEvidence == null ? null : parliaFinalityEvidence.toMap(),
+          receiptProofHash,
+          receiptProof,
+          sourceEventDigest,
+          sourceBridgeEmitterAddress);
+    }
+  }
+
+  /** Normalized SCCP source event material recovered from a BSC receipt log. */
+  private record SourceEvent(String sourceEventDigest, String sourceBridgeEmitterAddress) {}
+
+  /** BSC mainnet receipt-proof transcript collected from app-supplied providers. */
+  public record ReceiptProof(
+      int sourceDomain,
+      String sourceEventDigest,
+      String validatorEpoch,
+      String blockNumber,
+      String blockHash,
+      String receiptsRoot,
+      String validatorSetHash,
+      String commitSealHash,
+      String receiptRootIndex,
+      List<byte[]> receiptTrieProofNodes,
+      List<byte[]> inclusionBranch) {
+    public ReceiptProof {
+      receiptTrieProofNodes = copyByteArrayList(receiptTrieProofNodes, "receiptTrieProofNodes");
+      inclusionBranch = copyByteArrayList(inclusionBranch, "inclusionBranch");
+    }
+
+    @Override
+    public List<byte[]> receiptTrieProofNodes() {
+      return copyByteArrayList(receiptTrieProofNodes, "receiptTrieProofNodes");
+    }
+
+    @Override
+    public List<byte[]> inclusionBranch() {
+      return copyByteArrayList(inclusionBranch, "inclusionBranch");
+    }
+
+    public ReceiptProof(
+        final String sourceEventDigest,
+        final String validatorEpoch,
+        final String blockNumber,
+        final String blockHash,
+        final String receiptsRoot,
+        final String validatorSetHash,
+        final String commitSealHash,
+        final String receiptRootIndex,
+        final List<byte[]> receiptTrieProofNodes,
+        final List<byte[]> inclusionBranch) {
+      this(
+          DOMAIN_BSC,
+          sourceEventDigest,
+          validatorEpoch,
+          blockNumber,
+          blockHash,
+          receiptsRoot,
+          validatorSetHash,
+          commitSealHash,
+          receiptRootIndex,
+          receiptTrieProofNodes,
+          inclusionBranch);
     }
   }
 }

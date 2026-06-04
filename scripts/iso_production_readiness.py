@@ -98,13 +98,6 @@ def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     return raw.strip()
 
 
-def _optional_bool(value: dict[str, Any], key: str, label: str, default: bool = False) -> bool:
-    raw = value.get(key, default)
-    if not isinstance(raw, bool):
-        raise ReadinessError(f"{label}.{key} must be a boolean")
-    return raw
-
-
 def _require_bool(value: dict[str, Any], key: str, label: str) -> bool:
     raw = value.get(key)
     if not isinstance(raw, bool):
@@ -196,21 +189,24 @@ def _verify_receipt_summary(
             "receipt verification contains unsupported kinds: " + ", ".join(unsupported),
             path,
         )
-    if _optional_bool(receipt_obj, "allow_failed", label):
+    allow_failed = _require_bool(receipt_obj, "allow_failed", label)
+    allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
+    allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
+    require_source_files = _require_bool(receipt_obj, "require_source_files", label)
+    if allow_failed:
         _blocker(
             blockers,
             allow_failed_code,
             "receipt verifier evidence allowed failed receipts",
             path,
         )
-    if _optional_bool(receipt_obj, "allow_insecure_http", label):
+    if allow_insecure_http:
         _blocker(
             blockers,
             allow_insecure_code,
             "receipt verifier evidence allowed insecure HTTP endpoints",
             path,
         )
-    allow_legacy_colr007 = _optional_bool(receipt_obj, "allow_legacy_colr007", label)
     if allow_legacy_colr007:
         _blocker(
             blockers,
@@ -218,7 +214,7 @@ def _verify_receipt_summary(
             "receipt verifier evidence allowed legacy colr.007 rail receipts",
             path,
         )
-    if not _optional_bool(receipt_obj, "require_source_files", label):
+    if not require_source_files:
         _blocker(
             blockers,
             source_files_code,
@@ -262,10 +258,10 @@ def _verify_receipt_summary(
     return {
         "verified_receipts": verified_receipts,
         "receipt_kind": sorted(receipt_kind_set),
-        "allow_failed": _optional_bool(receipt_obj, "allow_failed", label),
-        "allow_insecure_http": _optional_bool(receipt_obj, "allow_insecure_http", label),
+        "allow_failed": allow_failed,
+        "allow_insecure_http": allow_insecure_http,
         "allow_legacy_colr007": allow_legacy_colr007,
-        "require_source_files": _optional_bool(receipt_obj, "require_source_files", label),
+        "require_source_files": require_source_files,
         "receipts": receipts,
         "summary_sha256": digest,
     }
@@ -300,12 +296,12 @@ def verify_xsd_summary(
         f"{path}.schema_only_entries",
     )
     strict = _require_object(summary.get("strict"), f"{path}.strict")
-    require_schema_backed = _optional_bool(
+    require_schema_backed = _require_bool(
         strict,
         "require_schema_backed_fixtures",
         f"{path}.strict",
     )
-    require_fixture_for_schema = _optional_bool(
+    require_fixture_for_schema = _require_bool(
         strict,
         "require_fixture_for_schema",
         f"{path}.strict",
@@ -387,7 +383,7 @@ def _verify_canary(
 ) -> dict[str, Any]:
     provider = _require_string(canary, "provider", label)
     environment = _require_string(canary, "environment", label)
-    plan_only = _optional_bool(canary, "plan_only", label)
+    plan_only = _require_bool(canary, "plan_only", label)
     if args.provider is not None and provider != args.provider:
         _blocker(
             blockers,
@@ -540,7 +536,7 @@ def verify_evidence_summary(
     version = summary.get("version")
     if version != EVIDENCE_VERSION:
         raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
-    if not _optional_bool(summary, "ok", str(path)):
+    if not _require_bool(summary, "ok", str(path)):
         _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
     _verify_policy(summary, path, blockers)
 

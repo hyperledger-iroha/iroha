@@ -38,6 +38,16 @@ fn map_mldsa_error(err: &MlDsaError) -> c_int {
     }
 }
 
+fn map_mlkem_error(err: &MlKemError) -> c_int {
+    match err {
+        MlKemError::BadEncoding { .. }
+        | MlKemError::KeyPairMismatch { .. }
+        | MlKemError::KeyPairPublicHashMismatch { .. }
+        | MlKemError::NonCanonicalEncoding { .. } => ERR_ENCODING,
+        MlKemError::BackendFailure { .. } | MlKemError::Rng(_) => ERR_KEYGEN,
+    }
+}
+
 fn usize_from_c_ulong(value: c_ulong) -> Result<usize, c_int> {
     usize::try_from(value).map_err(|_| ERR_LENGTH_MISMATCH)
 }
@@ -161,13 +171,7 @@ pub unsafe extern "C" fn soranet_mlkem_generate_keypair(
             secret_buf.copy_from_slice(pair.secret_key());
             0
         }
-        Err(
-            MlKemError::BadEncoding { .. }
-            | MlKemError::KeyPairMismatch { .. }
-            | MlKemError::KeyPairPublicHashMismatch { .. }
-            | MlKemError::NonCanonicalEncoding { .. },
-        ) => ERR_ENCODING,
-        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
+        Err(err) => map_mlkem_error(&err),
     }
 }
 
@@ -212,13 +216,7 @@ pub unsafe extern "C" fn soranet_mlkem_encapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(
-            MlKemError::BadEncoding { .. }
-            | MlKemError::KeyPairMismatch { .. }
-            | MlKemError::KeyPairPublicHashMismatch { .. }
-            | MlKemError::NonCanonicalEncoding { .. },
-        ) => ERR_ENCODING,
-        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
+        Err(err) => map_mlkem_error(&err),
     }
 }
 
@@ -261,13 +259,7 @@ pub unsafe extern "C" fn soranet_mlkem_decapsulate(
             shared_buf.copy_from_slice(shared.as_bytes());
             0
         }
-        Err(
-            MlKemError::BadEncoding { .. }
-            | MlKemError::KeyPairMismatch { .. }
-            | MlKemError::KeyPairPublicHashMismatch { .. }
-            | MlKemError::NonCanonicalEncoding { .. },
-        ) => ERR_ENCODING,
-        Err(MlKemError::Rng(_)) => ERR_KEYGEN,
+        Err(err) => map_mlkem_error(&err),
     }
 }
 

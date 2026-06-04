@@ -8,6 +8,15 @@ use iroha_crypto::{
 type ByteBuffers = Vec<Vec<u8>>;
 type Ed25519Batch = (ByteBuffers, ByteBuffers, ByteBuffers);
 
+fn checked_ed25519_public_key_payload(keypair: &KeyPair) -> &[u8] {
+    let (algorithm, payload) = keypair
+        .public_key()
+        .try_to_bytes()
+        .expect("fixture Ed25519 public key must be well-formed");
+    assert_eq!(algorithm, Algorithm::Ed25519);
+    payload
+}
+
 #[test]
 fn ed25519_verify_aggregate_accepts_valid_signatures() {
     let mut messages = Vec::new();
@@ -18,7 +27,7 @@ fn ed25519_verify_aggregate_accepts_valid_signatures() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let message = vec![idx; 32];
         let signature = Signature::new(keypair.private_key(), &message);
-        let (_alg, pk_bytes) = keypair.public_key().to_bytes();
+        let pk_bytes = checked_ed25519_public_key_payload(&keypair);
 
         messages.push(message);
         signatures.push(signature.payload().to_vec());
@@ -46,8 +55,8 @@ fn ed25519_verify_aggregate_rejects_tampered_signature() {
         .to_vec();
     signature_b[0] ^= 0xFF;
 
-    let (_alg_a, pk_a) = keypair_a.public_key().to_bytes();
-    let (_alg_b, pk_b) = keypair_b.public_key().to_bytes();
+    let pk_a = checked_ed25519_public_key_payload(&keypair_a);
+    let pk_b = checked_ed25519_public_key_payload(&keypair_b);
 
     let msg_refs: Vec<&[u8]> = vec![message_a.as_slice(), message_b.as_slice()];
     let sig_refs: Vec<&[u8]> = vec![signature_a.payload(), signature_b.as_slice()];
@@ -132,7 +141,7 @@ fn sample_ed25519_batch(count: u8) -> Ed25519Batch {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let message = vec![idx; 32];
         let signature = Signature::new(keypair.private_key(), &message);
-        let (_alg, pk_bytes) = keypair.public_key().to_bytes();
+        let pk_bytes = checked_ed25519_public_key_payload(&keypair);
 
         messages.push(message);
         signatures.push(signature.payload().to_vec());

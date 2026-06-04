@@ -467,7 +467,10 @@ fn verify_builder_signature(record: &ResolverDirectoryRecordV1) -> Result<(), Er
 }
 
 fn signing_payload_bytes(record: &ResolverDirectoryRecordV1) -> Result<Vec<u8>, Error> {
-    let (_, pk_bytes) = record.builder_public_key.to_bytes();
+    let (_, pk_bytes) = record
+        .builder_public_key
+        .try_to_bytes()
+        .map_err(|err| invalid_parameter(format!("builder public key is malformed: {err}")))?;
     let mut payload = norito::json::Map::new();
     payload.insert(
         "record_version".into(),

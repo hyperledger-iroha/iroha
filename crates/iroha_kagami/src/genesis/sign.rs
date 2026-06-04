@@ -773,7 +773,12 @@ mod tests {
     fn load_genesis_key_accepts_seed_and_algorithm() {
         let kp = load_genesis_key(None, Some("seed-123"), Algorithm::Secp256k1)
             .expect("seed path should work");
-        assert_eq!(kp.public_key().algorithm(), Algorithm::Secp256k1);
+        assert_eq!(
+            kp.public_key()
+                .try_algorithm()
+                .expect("fixture public key must be valid"),
+            Algorithm::Secp256k1
+        );
     }
 
     #[test]

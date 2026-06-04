@@ -493,7 +493,11 @@ pub mod isi {
         allowed_algorithms.sort();
         allowed_algorithms.dedup();
 
-        let algo = record.public_key.algorithm();
+        let algo = record.public_key.try_algorithm().map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("consensus key public key is malformed: {err}"),
+            ))
+        })?;
         if !sumeragi.key_allowed_algorithms.contains(&algo) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(format!(
@@ -12723,7 +12727,7 @@ pub mod isi {
             }
             let peer_id = self.peer.clone();
             // Enforce BLS-normal only for consensus peers.
-            if peer_id.public_key().algorithm() != iroha_crypto::Algorithm::BlsNormal {
+            if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
                 crate::sumeragi::status::record_peer_key_policy_reject(
                     PeerKeyPolicyRejectReason::DisallowedAlgorithm,
                 );
@@ -16212,20 +16216,20 @@ pub mod isi {
 
             let configured_material =
                 super::configured_sccp_source_verifier_material_for_domain(&zk, domain)
-                    .expect("configured BSC source material")
-                    .expect("BSC source material");
+                    .expect("configured ETH source material")
+                    .expect("ETH source material");
             let configured_deployment =
                 super::configured_sccp_source_adapter_engine_deployment_for_domain(&zk, domain)
-                    .expect("configured Ethereum source deployment")
-                    .expect("Ethereum source deployment");
+                    .expect("configured ETH source deployment")
+                    .expect("ETH source deployment");
             let configured_rollout =
                 super::configured_sccp_destination_rollout_for_domain(&zk, domain)
-                    .expect("configured Ethereum destination rollout")
-                    .expect("Ethereum destination rollout");
+                    .expect("configured ETH destination rollout")
+                    .expect("ETH destination rollout");
             let configured_allowlist =
                 super::configured_sccp_route_allowlist_for_domain(&zk, domain)
-                    .expect("configured Ethereum route allowlist")
-                    .expect("Ethereum route allowlist");
+                    .expect("configured ETH route allowlist")
+                    .expect("ETH route allowlist");
 
             super::validate_configured_sccp_lane_launch_ready(
                 &zk,

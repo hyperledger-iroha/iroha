@@ -747,7 +747,10 @@ fn resolve_canary_signer(config: &Config, use_config_signer: bool) -> Result<Can
     } else {
         KeyPair::random_with_algorithm(Algorithm::Ed25519)
     };
-    let (algorithm, public_key_bytes) = key_pair.public_key().to_bytes();
+    let (algorithm, public_key_bytes) = key_pair
+        .public_key()
+        .try_to_bytes()
+        .wrap_err("Taira canary signer public key is malformed")?;
     if algorithm != Algorithm::Ed25519 {
         eyre::bail!("Taira canary signer must use Ed25519");
     }
@@ -1628,7 +1631,10 @@ mod tests {
         let mut config = crate::fallback_config();
         config.key_pair = key_pair.clone();
         let signer = resolve_canary_signer(&config, true).expect("config signer");
-        let (_, public_key_bytes) = key_pair.public_key().to_bytes();
+        let (_, public_key_bytes) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
 
         assert!(!signer.generated);
         assert_eq!(
