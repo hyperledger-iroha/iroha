@@ -110,6 +110,63 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 VERIFIER.sha256_hex(VERIFIER._canonical_summary_json_bytes(body)),
             )
 
+    def test_duplicate_receipt_paths_and_digests_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicates receipt[0]", stderr)
+
+            copied = receipt.with_name("copied.receipt.json")
+            copied.write_bytes(receipt.read_bytes())
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--receipt",
+                    str(copied),
+                    "--allow-insecure-http",
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_sha256 duplicates", stderr)
+
+    def test_duplicate_receipt_json_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            receipt = Path(raw_root) / "receipt.json"
+            receipt.write_text('{"version":1,"version":1}\n', encoding="utf-8")
+
+            rc, _stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicate key", stderr)
+
     def test_tampered_receipt_digest_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)

@@ -817,7 +817,7 @@ function extractJsBackendFamilyEntries(text, label) {
 }
 
 function isBackendFamilyName(value) {
-  return /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/.test(value);
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value) && !value.includes("--");
 }
 
 function assertBackendFamilyRegistrationParity(pythonCatalog) {
@@ -860,8 +860,8 @@ function assertBackendFamilyRegistrationParity(pythonCatalog) {
     );
     assert.match(
       fileText(source.path),
-      /function\s+isBackendFamilyName\([^)]*\)\s*\{[\s\S]*\^\[a-z0-9\]\(\?:\[a-z0-9_\.\-\]\*\[a-z0-9\]\)\?\$/,
-      `${source.label} must reject uppercase and edge-separator backend-family aliases before vk_ref binding`,
+      /function\s+isBackendFamilyName\([^)]*\)\s*\{[\s\S]*\^\[a-z0-9\]\(\?:\[a-z0-9-\]\*\[a-z0-9\]\)\?\$[\s\S]*!value\.includes\("--"\)/,
+      `${source.label} must reject uppercase, dotted, underscored, and repeated-separator backend-family aliases before vk_ref binding`,
     );
     assert.ok(
       fileText(source.path).includes("compactProductionClaimText(value)") &&
@@ -887,6 +887,17 @@ function assertBackendFamilyRegistrationParity(pythonCatalog) {
       false,
       `${source.label} backend family validator must reject uppercase aliases`,
     );
+    for (const backendFamily of [
+      "halo2.ipa.pasta",
+      "halo2_ipa_pasta",
+      "halo2--ipa-pasta",
+    ]) {
+      assert.equal(
+        isBackendFamilyName(backendFamily),
+        false,
+        `${source.label} backend family validator must reject non-canonical separator ${backendFamily}`,
+      );
+    }
     for (const backendFamily of [
       ".halo2-ipa-pasta",
       "-halo2-ipa-pasta",
@@ -1783,13 +1794,23 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       { id: "claimed-mainnet-shield" },
       /id must not claim production\/mainnet\/audit readiness before production gates pass/,
     ],
+    [{ id: "Shield" }, /id must be lowercase and URL-safe/],
+    [{ id: "shield.v1" }, /id must be lowercase and URL-safe/],
+    [{ id: "shield/../../admin" }, /id must be lowercase and URL-safe/],
+    [{ id: "_shield" }, /id must be lowercase and URL-safe/],
+    [{ id: "-shield" }, /id must be lowercase and URL-safe/],
+    [{ id: "shield_" }, /id must be lowercase and URL-safe/],
+    [{ id: "shield-" }, /id must be lowercase and URL-safe/],
     [{ proofFamily: "" }, /proofFamily must be a non-empty string/],
     [{ proofFamily: " halo2-ipa" }, /proofFamily must be clean and already trimmed/],
     [{ proofFamily: "Halo2" }, /proofFamily must be a proof family name/],
     [{ proofFamily: "halo2..ipa" }, /proofFamily must be a proof family name/],
     [{ proofFamily: "halo2/../ipa" }, /proofFamily must be a proof family name/],
     [{ proofFamily: "halo2--ipa" }, /proofFamily must be a proof family name/],
+    [{ proofFamily: "/halo2" }, /proofFamily must be a proof family name/],
+    [{ proofFamily: "-halo2" }, /proofFamily must be a proof family name/],
     [{ proofFamily: "halo2/" }, /proofFamily must be a proof family name/],
+    [{ proofFamily: "halo2-" }, /proofFamily must be a proof family name/],
     [
       { proofFamily: "halo2/mainnet-ready" },
       /proofFamily must not claim production\/mainnet\/audit readiness before production gates pass/,
@@ -1820,6 +1841,14 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       { publicInputsSchema: "root,1proof" },
+      /publicInputsSchema token 1 must be a lowercase public input name/,
+    ],
+    [
+      { publicInputsSchema: "root,field_" },
+      /publicInputsSchema token 1 must be a lowercase public input name/,
+    ],
+    [
+      { publicInputsSchema: "root,field__digest" },
       /publicInputsSchema token 1 must be a lowercase public input name/,
     ],
     [
@@ -1871,6 +1900,14 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /verifierKeyId must be a verifier key id/,
     ],
     [
+      { publicInputsSchema: "root", verifierKeyId: "verifier_key_" },
+      /verifierKeyId must be a verifier key id/,
+    ],
+    [
+      { publicInputsSchema: "root", verifierKeyId: "verifier__key" },
+      /verifierKeyId must be a verifier key id/,
+    ],
+    [
       { publicInputsSchema: "root", verifierKeyId: "verifier.key" },
       /verifierKeyId must be a verifier key id/,
     ],
@@ -1879,7 +1916,19 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
       /verifierKeyId must be a verifier key id/,
     ],
     [
+      { publicInputsSchema: "root", verifierKeyId: "zk_::Shield" },
+      /verifierKeyId must be a verifier key id/,
+    ],
+    [
       { publicInputsSchema: "root", verifierKeyId: "zk::" },
+      /verifierKeyId must be a verifier key id/,
+    ],
+    [
+      { publicInputsSchema: "root", verifierKeyId: "zk::Shield_" },
+      /verifierKeyId must be a verifier key id/,
+    ],
+    [
+      { publicInputsSchema: "root", verifierKeyId: "zk::Shield__Key" },
       /verifierKeyId must be a verifier key id/,
     ],
     [
@@ -2049,6 +2098,42 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       { sourceReferences: [{ label: "paper", url: "https://user:pass@example.invalid" }] },
       /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.ca\u0455h/zip-0224" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://xn--cah-ghd.org/source" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/prot\u03bfcol/protocol.pdf" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/zip-0224?claim=m\u0430innet" }] },
+      /sourceReferences\[0\]\.url must use https/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://ZIPS.z.cash/zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash:443/zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash./zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/protocol/../zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
+    ],
+    [
+      { sourceReferences: [{ label: "paper", url: "https://zips.z.cash/protocol/%2e%2e/zip-0224" }] },
+      /sourceReferences\[0\]\.url must be canonical/,
     ],
     [
       { sourceReferences: [{ label: "paper", url: "https://127%2e0%2e0%2e1/source" }] },
@@ -2731,7 +2816,29 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [{ sdkEntrypoints: ["buildProof-withSuffix"] }, /must be an SDK entrypoint name/],
     [{ sdkEntrypoints: ["build$Proof"] }, /must be an SDK entrypoint name/],
+    [{ sdkEntrypoints: ["_buildProof"] }, /must be an SDK entrypoint name/],
+    [{ sdkEntrypoints: ["buildProof_"] }, /must be an SDK entrypoint name/],
+    [{ sdkEntrypoints: ["build_Proof"] }, /must be an SDK entrypoint name/],
+    [
+      { sdkEntrypoints: ["Iroha._Privacy.buildProof"] },
+      /must be an SDK entrypoint name/,
+    ],
+    [
+      { sdkEntrypoints: ["Iroha.Privacy_.buildProof"] },
+      /must be an SDK entrypoint name/,
+    ],
     [{ plannedSdkEntrypoints: ["buildFuture$Proof"] }, /must be an SDK entrypoint name/],
+    [{ plannedSdkEntrypoints: ["_buildFutureProof"] }, /must be an SDK entrypoint name/],
+    [{ plannedSdkEntrypoints: ["buildFutureProof_"] }, /must be an SDK entrypoint name/],
+    [{ plannedSdkEntrypoints: ["buildFuture_Proof"] }, /must be an SDK entrypoint name/],
+    [
+      { plannedSdkEntrypoints: ["Iroha._Privacy.buildFutureProof"] },
+      /must be an SDK entrypoint name/,
+    ],
+    [
+      { plannedSdkEntrypoints: ["Iroha.Privacy_.buildFutureProof"] },
+      /must be an SDK entrypoint name/,
+    ],
     [
       { plannedSdkEntrypoints: ["buildFutureDev.Proof.Fixture"] },
       /fixture\/mock entrypoint/,
@@ -3219,7 +3326,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "production-hardened",
-        sdkEntrypoints: ["buildFutureM_o_c_kProof"],
+        sdkEntrypoints: ["buildFutureMockProofV2"],
       },
       /production-hardened targets cannot advertise fixture\/mock SDK entrypoints/,
     ],
@@ -3285,7 +3392,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "validator-scaffold-as-of-2026-05",
-        sdkEntrypoints: ["buildM_o_c_kProof"],
+        sdkEntrypoints: ["buildMockProofV2"],
       },
       /fixture\/mock SDK entrypoints must use explicit DevFixture names/,
     ],

@@ -8299,7 +8299,7 @@ const normalizeEthereumMainnetBeaconRestSyncCommitteeBits = (value, label) => {
 
 const ethereumMainnetBeaconRestFinalityUpdateSummary = (
   payload,
-  { expectedFinalizedSlot, expectedSignatureSlot } = {},
+  { expectedFinalizedSlot, expectedFinalizedRoot, expectedSignatureSlot } = {},
 ) => {
   rejectEthereumMainnetBeaconRestUnfinalized(
     payload,
@@ -8342,6 +8342,12 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
       "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot",
     );
   }
+  const finalizedHeaderRoot = ethBeaconBlockHeaderRoot(finalizedBeacon);
+  if (expectedFinalizedRoot !== undefined && finalizedHeaderRoot !== expectedFinalizedRoot) {
+    throw new TypeError(
+      "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root",
+    );
+  }
   const signatureSlot = ethereumMainnetBeaconRestNormalizeBeaconSlot(
     requireEthereumMainnetBeaconRestField(
       data,
@@ -8381,6 +8387,8 @@ const ethereumMainnetBeaconRestFinalityUpdateSummary = (
     96,
   );
   return {
+    finalizedHeaderRoot,
+    beaconSlot: finalizedSlot.toString(),
     syncCommitteeBits,
     syncCommitteeSignature,
     syncCommitteeParticipation: ethereumMainnetBeaconRestPopcount(
@@ -8655,6 +8663,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
       finalityUpdateResponse,
       {
         expectedFinalizedSlot: finalizedHeader.slot,
+        expectedFinalizedRoot: finalizedHeader.root,
         expectedSignatureSlot: finalizedHeader.slot,
       },
     );
@@ -8663,9 +8672,7 @@ export class EthereumMainnetBeaconRestConsensusProvider {
         executionBlockNumber,
         executionBlockHash: blockHash,
         executionReceiptsRoot,
-        finalizedHeaderRoot: targetHeader.root,
         syncCommitteeRoot: ethereumMainnetBeaconRestSyncCommitteeRoot(this, options),
-        beaconSlot: targetHeader.slot.toString(),
         ...finalityUpdate,
       },
       {

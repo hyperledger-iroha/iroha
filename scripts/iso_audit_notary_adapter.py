@@ -74,11 +74,25 @@ class PublishResult:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise AdapterError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise AdapterError(f"JSON object contains duplicate key {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
 
 
 def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
@@ -87,7 +101,10 @@ def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
     try:
-        return json.loads(raw.decode("utf-8")), raw
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        ), raw
     except UnicodeDecodeError as error:
         raise AdapterError(f"{path} is not UTF-8 JSON") from error
     except json.JSONDecodeError as error:
@@ -262,6 +279,16 @@ def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
         )
 
 
+def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
+    seen: dict[str, int] = {}
+    for offset, endpoint in enumerate(endpoints):
+        if endpoint in seen:
+            raise AdapterError(
+                f"--endpoint[{offset}] duplicates --endpoint[{seen[endpoint]}]: {endpoint}"
+            )
+        seen[endpoint] = offset
+
+
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
@@ -378,6 +405,7 @@ def run(args: argparse.Namespace) -> int:
     endpoints = list(args.endpoint)
     for endpoint in endpoints:
         _validate_endpoint(endpoint, args.allow_insecure_http)
+    _reject_duplicate_endpoints(endpoints)
     bearer_token = _load_bearer_token(args.bearer_token_file)
 
     anchors = [

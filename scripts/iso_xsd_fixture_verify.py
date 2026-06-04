@@ -24,6 +24,8 @@ import datetime as dt
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -35,6 +37,14 @@ SUMMARY_DIGEST_FIELD = "summary_sha256"
 XML_SCHEMA_NS = "http://www.w3.org/2001/XMLSchema"
 ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.\d{3}\.\d{3}\.\d{2}$")
+PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SOURCE_REPOSITORY_RE = re.compile(
+    r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+)
+PROFILE_DIRECTIONS = {"inbound", "outbound", "follow-up"}
+ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 DEFAULT_MANIFEST = (
     Path(__file__).resolve().parents[1]
     / "fixtures"
@@ -42,9 +52,28 @@ DEFAULT_MANIFEST = (
     / "xsd"
     / "fixture_manifest.json"
 )
+DEFAULT_PROFILE_CATALOG = (
+    Path(__file__).resolve().parents[1]
+    / "crates"
+    / "iroha_core"
+    / "src"
+    / "iso_bridge"
+    / "profiles.rs"
+)
+PROFILE_CATALOG_RE = re.compile(
+    r'const\s+DEFAULT_PROFILES_JSON:\s*&str\s*=\s*r(?P<hashes>#*)"(?P<body>.*?)"(?P=hashes);',
+    re.S,
+)
+RESTRICTED_SCHEMA_TEXT_MARKERS = (
+    "may only be redistributed upon agreement",
+    "no right, or right to authorise others",
+    "rent, lease, or sell this component",
+    "display publicly, distribute or otherwise provide this component",
+)
 
 TOP_LEVEL_KEYS = {"version", "schemas", "fixtures"}
-SCHEMA_KEYS = {"path", "message_def_id", "payload_root", "schema_only_reason"}
+SCHEMA_KEYS = {"path", "message_def_id", "payload_root", "source", "schema_only_reason"}
+SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
 FIXTURE_KEYS = {
     "path",
     "message_def_id",
@@ -75,11 +104,54 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise FixtureManifestError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise FixtureManifestError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise FixtureManifestError(f"duplicate key {key!r} in JSON object")
+        result[key] = value
+    return result
+
+
+def _load_profile_catalog(path: Path) -> tuple[list[Any], str, str]:
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError as error:
+        raise FixtureManifestError(f"{path} does not exist") from error
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise FixtureManifestError(f"{path} is not valid UTF-8") from error
+    match = PROFILE_CATALOG_RE.search(text)
+    if match is None:
+        raise FixtureManifestError(
+            f"{path} does not contain DEFAULT_PROFILES_JSON raw string"
+        )
+    catalog_json = match.group("body")
+    try:
+        catalog = json.loads(
+            catalog_json,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except json.JSONDecodeError as error:
+        raise FixtureManifestError(
+            f"{path} DEFAULT_PROFILES_JSON is not valid JSON: {error}"
+        ) from error
+    return (
+        _require_array(catalog, f"{path}.DEFAULT_PROFILES_JSON"),
+        sha256_hex(raw),
+        sha256_hex(catalog_json.encode("utf-8")),
+    )
 
 
 def _parse_xml(path: Path) -> ET.Element:
@@ -89,6 +161,22 @@ def _parse_xml(path: Path) -> ET.Element:
         raise FixtureManifestError(f"{path} does not exist") from error
     except ET.ParseError as error:
         raise FixtureManifestError(f"{path} is not well-formed XML: {error}") from error
+
+
+def _reject_restricted_schema_terms(path: Path) -> None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as error:
+        raise FixtureManifestError(f"{path} does not exist") from error
+    except UnicodeDecodeError as error:
+        raise FixtureManifestError(f"{path} is not valid UTF-8") from error
+    lowered = text.casefold()
+    for marker in RESTRICTED_SCHEMA_TEXT_MARKERS:
+        if marker in lowered:
+            raise FixtureManifestError(
+                f"{path} contains restricted redistribution terms; "
+                "do not check in licensed Standards Editor packages without redistribution rights"
+            )
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -135,6 +223,78 @@ def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
     if raw != raw.strip():
         raise FixtureManifestError(f"{label}.{key} must not have surrounding whitespace")
     return raw
+
+
+def _is_lower_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+def _required_sha256(value: dict[str, Any], key: str, label: str) -> str:
+    raw = value.get(key)
+    if not _is_lower_sha256(raw):
+        raise FixtureManifestError(f"{label}.{key} must be a lowercase SHA-256 digest")
+    return raw
+
+
+def _validate_source_path(raw: str, label: str) -> str:
+    if "\\" in raw:
+        raise FixtureManifestError(f"{label} must use forward slashes")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise FixtureManifestError(f"{label} must not contain control characters")
+    path = Path(raw)
+    if path.is_absolute():
+        raise FixtureManifestError(f"{label} must be relative, got {raw}")
+    if not raw.endswith(".xsd"):
+        raise FixtureManifestError(f"{label} must point to an .xsd file")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise FixtureManifestError(f"{label} must not contain empty, dot, or parent segments")
+    return raw
+
+
+def _verify_schema_source(
+    value: Any,
+    label: str,
+    *,
+    message_def_id: str,
+    schema_sha256: str,
+) -> dict[str, str]:
+    source = _require_object(value, label)
+    _reject_unknown_keys(source, SCHEMA_SOURCE_KEYS, label)
+    repository = _required_string(source, "repository", label)
+    if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
+        raise FixtureManifestError(
+            f"{label}.repository must be a canonical https://github.com/<org>/<repo> URL"
+        )
+    commit = _required_string(source, "commit", label)
+    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
+        raise FixtureManifestError(f"{label}.commit must be a lowercase 40-hex Git commit")
+    source_path = _validate_source_path(_required_string(source, "path", label), f"{label}.path")
+    if Path(source_path).name != f"{message_def_id}.xsd":
+        raise FixtureManifestError(
+            f"{label}.path filename must match message_def_id {message_def_id!r}"
+        )
+    license_id = _required_string(source, "license", label)
+    if license_id not in ALLOWED_SCHEMA_SOURCE_LICENSES:
+        raise FixtureManifestError(
+            f"{label}.license must be one of "
+            + ", ".join(sorted(ALLOWED_SCHEMA_SOURCE_LICENSES))
+        )
+    source_sha256 = _required_sha256(source, "sha256", label)
+    if source_sha256 != schema_sha256:
+        raise FixtureManifestError(
+            f"{label}.sha256 does not match checked-in XSD bytes"
+        )
+    return {
+        "repository": repository,
+        "commit": commit,
+        "path": source_path,
+        "license": license_id,
+        "sha256": source_sha256,
+    }
 
 
 def _split_xml_name(name: str) -> tuple[str | None, str]:
@@ -233,6 +393,15 @@ def verify_schema_entry(
         raise FixtureManifestError(f"{label}.path stem must equal message_def_id")
 
     path = _validate_relative_path(rel_path, manifest_dir, manifest_dir, f"{label}.path")
+    _reject_restricted_schema_terms(path)
+    schema_bytes = path.read_bytes()
+    schema_sha256 = sha256_hex(schema_bytes)
+    source = _verify_schema_source(
+        entry.get("source"),
+        f"{label}.source",
+        message_def_id=message_def_id,
+        schema_sha256=schema_sha256,
+    )
     root = _parse_xml(path)
     namespace, local = _split_xml_name(root.tag)
     if namespace != XML_SCHEMA_NS or local != "schema":
@@ -257,7 +426,8 @@ def verify_schema_entry(
         "payload_root": payload_root,
         "schema_only": schema_only_reason is not None,
         "schema_only_reason": schema_only_reason,
-        "sha256": sha256_hex(path.read_bytes()),
+        "source": source,
+        "sha256": schema_sha256,
     }
 
 
@@ -268,11 +438,39 @@ def _first_element_child(root: ET.Element, path: Path) -> ET.Element:
     return children[0]
 
 
+def _validate_fixture_xml_schema(schema_path: Path, fixture_path: Path, label: str) -> None:
+    xmllint = shutil.which("xmllint")
+    if xmllint is None:
+        raise FixtureManifestError(
+            "--validate-xml-schema requires xmllint on PATH for offline XSD validation"
+        )
+    completed = subprocess.run(
+        [
+            xmllint,
+            "--noout",
+            "--nonet",
+            "--schema",
+            str(schema_path),
+            str(fixture_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()
+        if detail:
+            detail = ": " + detail[:4096]
+        raise FixtureManifestError(f"{label} failed XML schema validation{detail}")
+
+
 def verify_fixture_entry(
     entry: dict[str, Any],
     label: str,
     manifest_dir: Path,
     schemas_by_path: dict[str, dict[str, Any]],
+    *,
+    validate_xml_schema: bool,
 ) -> dict[str, Any]:
     """Verify one XML fixture manifest entry and return normalized metadata."""
 
@@ -315,6 +513,7 @@ def verify_fixture_entry(
         )
 
     schema_backed = False
+    schema_validated = False
     if schema_rel is not None:
         schema = schemas_by_path.get(schema_rel)
         if schema is None:
@@ -330,6 +529,15 @@ def verify_fixture_entry(
                 f"does not match fixture {expected_payload_root!r}"
             )
         schema_backed = True
+        if validate_xml_schema:
+            schema_path = _validate_relative_path(
+                schema_rel,
+                manifest_dir,
+                manifest_dir,
+                f"{label}.schema",
+            )
+            _validate_fixture_xml_schema(schema_path, path, label)
+            schema_validated = True
 
     return {
         "path": rel_path,
@@ -337,8 +545,132 @@ def verify_fixture_entry(
         "payload_root": payload_local,
         "schema": schema_rel,
         "schema_backed": schema_backed,
+        "schema_validated": schema_validated,
         "missing_schema_reason": missing_schema_reason,
         "sha256": sha256_hex(path.read_bytes()),
+    }
+
+
+def verify_profile_catalog(
+    path: Path,
+    schema_backed_message_ids: set[str],
+) -> dict[str, Any]:
+    """Verify profile catalog versions against schema-backed XML fixtures."""
+
+    profiles, profile_catalog_sha256, profile_catalog_json_sha256 = _load_profile_catalog(path)
+    versions: list[dict[str, Any]] = []
+    missing_schema_versions: list[dict[str, str]] = []
+    skipped_family_versions: list[dict[str, str]] = []
+    seen_profile_ids: set[str] = set()
+    seen_message_profiles: set[tuple[str, str, str]] = set()
+    seen_profile_versions: set[tuple[str, str, str, str]] = set()
+
+    for profile_offset, profile_raw in enumerate(profiles):
+        profile_label = f"{path}.profiles[{profile_offset}]"
+        profile = _require_object(profile_raw, profile_label)
+        profile_id = _required_string(profile, "id", profile_label)
+        if PROFILE_ID_RE.fullmatch(profile_id) is None:
+            raise FixtureManifestError(
+                f"{profile_label}.id must be a canonical lowercase profile id"
+            )
+        if profile_id in seen_profile_ids:
+            raise FixtureManifestError(f"{profile_label}.id duplicates profile id {profile_id!r}")
+        seen_profile_ids.add(profile_id)
+        message_profiles = _require_array(
+            profile.get("message_profiles"),
+            f"{profile_label}.message_profiles",
+        )
+        if not message_profiles:
+            raise FixtureManifestError(f"{profile_label}.message_profiles must not be empty")
+        for message_offset, message_raw in enumerate(message_profiles):
+            message_label = f"{profile_label}.message_profiles[{message_offset}]"
+            message = _require_object(message_raw, message_label)
+            message_type = _required_string(message, "message_type", message_label)
+            if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
+                raise FixtureManifestError(
+                    f"{message_label}.message_type must be lowercase ISO family id"
+                )
+            direction = _required_string(message, "direction", message_label)
+            if direction not in PROFILE_DIRECTIONS:
+                raise FixtureManifestError(
+                    f"{message_label}.direction must be one of "
+                    + ", ".join(sorted(PROFILE_DIRECTIONS))
+                )
+            message_key = (profile_id, message_type, direction)
+            if message_key in seen_message_profiles:
+                raise FixtureManifestError(
+                    f"{message_label} duplicates profile/message/direction entry"
+                )
+            seen_message_profiles.add(message_key)
+            raw_versions = _require_array(
+                message.get("versions"),
+                f"{message_label}.versions",
+            )
+            if not raw_versions:
+                raise FixtureManifestError(f"{message_label}.versions must not be empty")
+            for version_offset, raw_version in enumerate(raw_versions):
+                version_label = f"{message_label}.versions[{version_offset}]"
+                if not isinstance(raw_version, str) or not raw_version.strip():
+                    raise FixtureManifestError(
+                        f"{version_label} must be a non-empty string"
+                    )
+                if raw_version != raw_version.strip():
+                    raise FixtureManifestError(
+                        f"{version_label} must not have surrounding whitespace"
+                    )
+                if MESSAGE_DEF_ID_RE.fullmatch(raw_version) is None:
+                    skipped_family_versions.append(
+                        {
+                            "profile_id": profile_id,
+                            "message_type": message_type,
+                            "direction": direction,
+                            "version": raw_version,
+                        }
+                    )
+                    continue
+                if not raw_version.startswith(message_type + "."):
+                    raise FixtureManifestError(
+                        f"{version_label} {raw_version!r} does not match "
+                        f"message_type {message_type!r}"
+                    )
+                key = (profile_id, message_type, direction, raw_version)
+                if key in seen_profile_versions:
+                    raise FixtureManifestError(
+                        f"{version_label} duplicates profile/message/direction version "
+                        f"{raw_version!r}"
+                    )
+                seen_profile_versions.add(key)
+                schema_backed = raw_version in schema_backed_message_ids
+                entry = {
+                    "profile_id": profile_id,
+                    "message_type": message_type,
+                    "direction": direction,
+                    "message_def_id": raw_version,
+                    "schema_backed": schema_backed,
+                }
+                versions.append(entry)
+                if not schema_backed:
+                    missing_schema_versions.append(
+                        {
+                            "profile_id": profile_id,
+                            "message_type": message_type,
+                            "direction": direction,
+                            "message_def_id": raw_version,
+                        }
+                    )
+
+    return {
+        "path": str(path),
+        "sha256": profile_catalog_sha256,
+        "catalog_json_sha256": profile_catalog_json_sha256,
+        "profiles": len(profiles),
+        "checked_versions": len(versions),
+        "schema_backed_versions": sum(
+            1 for version in versions if version["schema_backed"]
+        ),
+        "missing_schema_versions": missing_schema_versions,
+        "skipped_family_versions": skipped_family_versions,
+        "versions": versions,
     }
 
 
@@ -367,6 +699,19 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
     schema_ids = [schema["message_def_id"] for schema in schemas]
     if len(schema_ids) != len(set(schema_ids)):
         raise FixtureManifestError(f"{path}.schemas contains duplicate message_def_id values")
+    schema_digests = [schema["sha256"] for schema in schemas]
+    if len(schema_digests) != len(set(schema_digests)):
+        raise FixtureManifestError(f"{path}.schemas contains duplicate schema SHA-256 values")
+    schema_sources = [
+        (
+            schema["source"]["repository"],
+            schema["source"]["commit"],
+            schema["source"]["path"],
+        )
+        for schema in schemas
+    ]
+    if len(schema_sources) != len(set(schema_sources)):
+        raise FixtureManifestError(f"{path}.schemas contains duplicate source provenance")
     schemas_by_path = {schema["path"]: schema for schema in schemas}
 
     fixtures = [
@@ -375,12 +720,16 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
             f"{path}.fixtures[{offset}]",
             manifest_dir,
             schemas_by_path,
+            validate_xml_schema=args.validate_xml_schema,
         )
         for offset, entry in enumerate(raw_fixtures)
     ]
     fixture_paths = [fixture["path"] for fixture in fixtures]
     if len(fixture_paths) != len(set(fixture_paths)):
         raise FixtureManifestError(f"{path}.fixtures contains duplicate fixture paths")
+    fixture_digests = [fixture["sha256"] for fixture in fixtures]
+    if len(fixture_digests) != len(set(fixture_digests)):
+        raise FixtureManifestError(f"{path}.fixtures contains duplicate fixture SHA-256 values")
     backed_schema_paths = {fixture["schema"] for fixture in fixtures if fixture["schema"]}
     schema_only = [
         schema
@@ -405,13 +754,45 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
         raise FixtureManifestError(
             f"{first['path']} has no standalone fixture: {first['schema_only_reason']}"
         )
+    if args.require_profile_schema_backed_versions and args.profile_catalog is None:
+        raise FixtureManifestError(
+            "--require-profile-schema-backed-versions requires --profile-catalog"
+        )
+
+    schema_backed_message_ids = {
+        fixture["message_def_id"] for fixture in fixtures if fixture["schema_backed"]
+    }
+    profile_catalog = (
+        verify_profile_catalog(args.profile_catalog.resolve(), schema_backed_message_ids)
+        if args.profile_catalog is not None
+        else None
+    )
+    missing_profile_schema_versions = (
+        profile_catalog["missing_schema_versions"] if profile_catalog else []
+    )
+    if args.require_profile_schema_backed_versions and missing_profile_schema_versions:
+        first = missing_profile_schema_versions[0]
+        raise FixtureManifestError(
+            f"profile {first['profile_id']} version {first['message_def_id']} "
+            "is not schema-backed by any checked-in XML fixture"
+        )
 
     summary: dict[str, Any] = {
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "manifest": str(path),
+        "manifest_sha256": sha256_hex(path.read_bytes()),
         "verified_schemas": len(schemas),
         "verified_fixtures": len(fixtures),
         "schema_backed_fixtures": len(fixtures) - len(missing_schema_fixtures),
+        "schema_validated_fixtures": sum(
+            1 for fixture in fixtures if fixture["schema_validated"]
+        ),
+        "profile_checked_versions": (
+            profile_catalog["checked_versions"] if profile_catalog else 0
+        ),
+        "profile_schema_backed_versions": (
+            profile_catalog["schema_backed_versions"] if profile_catalog else 0
+        ),
         "missing_schema_fixtures": [
             {
                 "path": fixture["path"],
@@ -428,11 +809,17 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
             }
             for schema in schema_only
         ],
+        "missing_profile_schema_versions": missing_profile_schema_versions,
         "schemas": schemas,
         "fixtures": fixtures,
+        "profile_catalog": profile_catalog,
         "strict": {
             "require_schema_backed_fixtures": args.require_schema_backed_fixtures,
             "require_fixture_for_schema": args.require_fixture_for_schema,
+            "require_profile_schema_backed_versions": (
+                args.require_profile_schema_backed_versions
+            ),
+            "validate_xml_schema": args.validate_xml_schema,
         },
     }
     summary[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(summary))
@@ -473,6 +860,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-fixture-for-schema",
         action="store_true",
         help="Fail if any checked-in XSD lacks a standalone XML fixture.",
+    )
+    parser.add_argument(
+        "--profile-catalog",
+        type=Path,
+        default=None,
+        help=(
+            "Optional Rust profile catalog file containing DEFAULT_PROFILES_JSON "
+            f"(default catalog: {DEFAULT_PROFILE_CATALOG})."
+        ),
+    )
+    parser.add_argument(
+        "--require-profile-schema-backed-versions",
+        action="store_true",
+        help=(
+            "Fail if any concrete message version advertised by --profile-catalog "
+            "lacks a schema-backed checked-in XML fixture."
+        ),
+    )
+    parser.add_argument(
+        "--validate-xml-schema",
+        action="store_true",
+        help="Validate every schema-backed XML fixture against its checked-in XSD with xmllint.",
     )
     return parser
 

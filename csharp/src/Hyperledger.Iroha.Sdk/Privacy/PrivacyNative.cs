@@ -36,6 +36,13 @@ internal static class PrivacyArchiveBytes
                 parameterName);
         }
 
+        if (!PrivacyNative.HasNonEmptyPrivacyNoritoPayload(noritoBytes))
+        {
+            throw new ArgumentException(
+                "Norito V1 archive must contain a non-empty privacy result payload.",
+                parameterName);
+        }
+
         if (!PrivacyNative.HasNoritoSchema(noritoBytes, expectedSchemaBytes))
         {
             throw new ArgumentException(
@@ -374,6 +381,12 @@ public static class PrivacyNative
                     "Request archive must use the privacy request schema.",
                     nameof(requestArchive));
             }
+            if (!HasNonEmptyPrivacyNoritoPayload(request))
+            {
+                throw new ArgumentException(
+                    "Request archive must contain a non-empty privacy request payload.",
+                    nameof(requestArchive));
+            }
 
             if (requireAbi)
             {
@@ -452,6 +465,11 @@ public static class PrivacyNative
             {
                 throw new InvalidOperationException($"{symbol} returned invalid Norito V1 archive.");
             }
+            if (!HasNonEmptyPrivacyNoritoPayload(result))
+            {
+                throw new InvalidOperationException(
+                    $"{symbol} returned empty privacy result payload.");
+            }
             var schemas = expectedSchemaBytes.Length == 0
                 ? ExpectedPrivacyResultSchemas(symbol)
                 : expectedSchemaBytes;
@@ -504,7 +522,9 @@ public static class PrivacyNative
 
         var output = new byte[(int)length];
         Marshal.Copy(outPtr, output, 0, output.Length);
-        return IsNoritoV1Archive(output) && HasNoritoSchema(output, expectedSchemaBytes);
+        return IsNoritoV1Archive(output)
+            && HasNonEmptyPrivacyNoritoPayload(output)
+            && HasNoritoSchema(output, expectedSchemaBytes);
     }
 
     internal static bool IsNoritoV1Archive(byte[] archive)
@@ -571,6 +591,11 @@ public static class PrivacyNative
         var payloadOffset = PrivacyNoritoHeaderBytes + paddingLength;
         var expectedCrc = ReadUInt64LittleEndian(archive, 31);
         return PrivacyCrc64(archive, payloadOffset, archive.Length - payloadOffset) == expectedCrc;
+    }
+
+    internal static bool HasNonEmptyPrivacyNoritoPayload(byte[] archive)
+    {
+        return IsNoritoV1Archive(archive) && ReadUInt64LittleEndian(archive, 23) > 0;
     }
 
     internal static bool HasNoritoSchema(byte[] archive, params byte[] expectedSchemaBytes)

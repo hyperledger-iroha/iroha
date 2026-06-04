@@ -12,6 +12,9 @@ import java.util.List;
 import java.util.Map;
 
 public final class EvmSccpProverTests {
+  private static final String BEACON_HEADER_ROOT_SLOT_64 =
+      "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c";
+
   private EvmSccpProverTests() {}
 
   public static void main(final String[] args) throws Exception {
@@ -3304,7 +3307,7 @@ public final class EvmSccpProverTests {
           }
           if ("https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints"
               .equals(url)) {
-            return beaconResponse(beaconCheckpointJson("dd"));
+            return beaconResponse(beaconCheckpointJson());
           }
           if ("https://beacon.example/eth/v1/beacon/light_client/finality_update".equals(url)) {
             return beaconResponse(beaconFinalityUpdateJson());
@@ -3334,9 +3337,9 @@ public final class EvmSccpProverTests {
     assert "4660".equals(evidence.beaconFinality().get("executionBlockNumber"));
     assert blockHash.equals(evidence.beaconFinality().get("executionBlockHash"));
     assert ("0x" + repeat("cc", 32)).equals(evidence.beaconFinality().get("executionReceiptsRoot"));
-    assert ("0x" + repeat("aa", 32)).equals(evidence.beaconFinality().get("finalizedHeaderRoot"));
+    assert BEACON_HEADER_ROOT_SLOT_64.equals(evidence.beaconFinality().get("finalizedHeaderRoot"));
     assert ("0x" + repeat("ee", 32)).equals(evidence.beaconFinality().get("syncCommitteeRoot"));
-    assert "32".equals(evidence.beaconFinality().get("beaconSlot"));
+    assert "64".equals(evidence.beaconFinality().get("beaconSlot"));
     assert ("0x01" + repeat("00", 63)).equals(evidence.beaconFinality().get("syncCommitteeBits"));
     assert ("0x" + repeat("34", 96)).equals(evidence.beaconFinality().get("syncCommitteeSignature"));
     assert "1".equals(evidence.beaconFinality().get("syncCommitteeParticipation"));
@@ -3388,7 +3391,7 @@ public final class EvmSccpProverTests {
           }
           if ("https://beacon.example/eth/v1/beacon/states/finalized/finality_checkpoints"
               .equals(url)) {
-            return beaconResponse(beaconCheckpointJson("dd"));
+            return beaconResponse(beaconCheckpointJson());
           }
           if ("https://beacon.example/eth/v1/beacon/light_client/finality_update".equals(url)) {
             return beaconResponse(beaconFinalityUpdateJson());
@@ -3415,8 +3418,8 @@ public final class EvmSccpProverTests {
                     null,
                     null));
 
-    assert ("0x" + repeat("aa", 32)).equals(evidence.beaconFinality().get("finalizedHeaderRoot"));
-    assert "32".equals(evidence.beaconFinality().get("beaconSlot"));
+    assert BEACON_HEADER_ROOT_SLOT_64.equals(evidence.beaconFinality().get("finalizedHeaderRoot"));
+    assert "64".equals(evidence.beaconFinality().get("beaconSlot"));
     assert calls.equals(
         Arrays.asList(
             "https://beacon.example/eth/v1/beacon/genesis",
@@ -3469,7 +3472,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, null, null);
@@ -3483,7 +3486,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               new EthereumMainnetSccp.BeaconRestResponse(
                   503, "{}".getBytes(StandardCharsets.UTF_8), "Unavailable"),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3496,7 +3499,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               new EthereumMainnetSccp.BeaconRestResponse(200, new byte[1024 * 1024 + 1]),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3509,7 +3512,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(true, true)),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3524,7 +3527,7 @@ public final class EvmSccpProverTests {
               beaconResponse(
                   beaconHeaderJson(false, true)
                       .replace("\"execution_optimistic\":false", "\"execution_optimistic\":\"false\"")),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3538,7 +3541,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(
                   beaconHeaderJson(false, true).replace("\"finalized\":true", "\"finalized\":\"true\"")),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3552,7 +3555,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(
                   beaconHeaderJson(false, true).replace("\"canonical\":true", "\"canonical\":\"true\"")),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3575,7 +3578,7 @@ public final class EvmSccpProverTests {
                         .replace(
                             "\"" + rootCase[0] + "\":\"0x" + repeat(rootCase[1], 32) + "\"",
                             "\"" + rootCase[0] + "\":\"0x\"")),
-                beaconResponse(beaconCheckpointJson("dd")),
+                beaconResponse(beaconCheckpointJson()),
                 "0x" + repeat("ee", 32),
                 null)
             .collectFinalityEvidence(null, block, null);
@@ -3593,7 +3596,7 @@ public final class EvmSccpProverTests {
                       .replace(
                           "\"signature\":\"0x" + repeat("12", 96) + "\"",
                           "\"signature\":\"0x" + repeat("12", 95) + "\"")),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3608,7 +3611,7 @@ public final class EvmSccpProverTests {
               beaconResponse(beaconHeaderJson(false, true)),
               beaconResponse(beaconBlockRootJson("99")),
               beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3622,7 +3625,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
               beaconResponse(beaconBlockJson("65", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3636,7 +3639,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
               beaconResponse(beaconBlockJson("64", "0x" + repeat("99", 32), "4660", "0x" + repeat("cc", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3650,7 +3653,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
               beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4661", "0x" + repeat("cc", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3664,7 +3667,7 @@ public final class EvmSccpProverTests {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
               beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("99", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3677,7 +3680,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, false)),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3703,9 +3706,9 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
-              beaconResponse(beaconBlockRootJson("dd")),
+              beaconResponse(beaconBlockRootJson()),
               beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               beaconResponse(beaconFinalityUpdateJson("64", "65", "0x" + repeat("00", 64))),
               "0x" + repeat("ee", 32),
               null)
@@ -3719,7 +3722,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               null,
               null)
           .collectFinalityEvidence(null, block, null);
@@ -3739,7 +3742,7 @@ public final class EvmSccpProverTests {
     try {
       beaconRestProvider(
               beaconResponse(beaconHeaderJson(false, true)),
-              beaconResponse(beaconCheckpointJson("dd")),
+              beaconResponse(beaconCheckpointJson()),
               "0x" + repeat("ee", 32),
               syncCommitteePayload)
           .collectFinalityEvidence(null, block, null);
@@ -5219,7 +5222,7 @@ public final class EvmSccpProverTests {
       final byte[] syncCommitteePayload) {
     return beaconRestProvider(
         header,
-        beaconResponse(beaconBlockRootJson("dd")),
+        beaconResponse(beaconBlockRootJson()),
         beaconResponse(beaconBlockJson("64", "0x" + repeat("bb", 32), "4660", "0x" + repeat("cc", 32))),
         checkpoint,
         beaconResponse(beaconFinalityUpdateJson()),
@@ -5286,7 +5289,7 @@ public final class EvmSccpProverTests {
       final byte[] syncCommitteePayload) {
     return beaconRestProvider(
         header,
-        beaconResponse(beaconBlockRootJson("dd")),
+        beaconResponse(beaconBlockRootJson()),
         finalizedBlock,
         checkpoint,
         beaconResponse(beaconFinalityUpdateJson()),
@@ -5296,7 +5299,8 @@ public final class EvmSccpProverTests {
 
   private static String beaconHeaderJson(
       final boolean executionOptimistic, final boolean finalized) {
-    return beaconHeaderJson(executionOptimistic, finalized, "dd", "64");
+    return beaconHeaderJsonWithRoot(
+        executionOptimistic, finalized, BEACON_HEADER_ROOT_SLOT_64, "64");
   }
 
   private static String beaconHeaderJson(
@@ -5304,14 +5308,23 @@ public final class EvmSccpProverTests {
       final boolean finalized,
       final String rootByte,
       final String slot) {
+    return beaconHeaderJsonWithRoot(
+        executionOptimistic, finalized, "0x" + repeat(rootByte, 32), slot);
+  }
+
+  private static String beaconHeaderJsonWithRoot(
+      final boolean executionOptimistic,
+      final boolean finalized,
+      final String root,
+      final String slot) {
     return "{"
         + "\"execution_optimistic\":"
         + executionOptimistic
         + ",\"finalized\":"
         + finalized
         + ",\"data\":{"
-        + "\"root\":\"0x"
-        + repeat(rootByte, 32)
+        + "\"root\":\""
+        + root
         + "\",\"canonical\":true,"
         + "\"header\":{\"message\":{"
         + "\"slot\":\""
@@ -5329,21 +5342,37 @@ public final class EvmSccpProverTests {
         + "\"}}}";
   }
 
+  private static String beaconCheckpointJson() {
+    return beaconCheckpointJsonWithRoot(BEACON_HEADER_ROOT_SLOT_64);
+  }
+
   private static String beaconCheckpointJson(final String rootByte) {
+    return beaconCheckpointJsonWithRoot("0x" + repeat(rootByte, 32));
+  }
+
+  private static String beaconCheckpointJsonWithRoot(final String root) {
     return "{"
         + "\"execution_optimistic\":false,"
         + "\"finalized\":true,"
-        + "\"data\":{\"finalized\":{\"root\":\"0x"
-        + repeat(rootByte, 32)
+        + "\"data\":{\"finalized\":{\"root\":\""
+        + root
         + "\",\"epoch\":\"2\"}}}";
   }
 
+  private static String beaconBlockRootJson() {
+    return beaconBlockRootJsonWithRoot(BEACON_HEADER_ROOT_SLOT_64);
+  }
+
   private static String beaconBlockRootJson(final String rootByte) {
+    return beaconBlockRootJsonWithRoot("0x" + repeat(rootByte, 32));
+  }
+
+  private static String beaconBlockRootJsonWithRoot(final String root) {
     return "{"
         + "\"execution_optimistic\":false,"
         + "\"finalized\":true,"
-        + "\"data\":{\"root\":\"0x"
-        + repeat(rootByte, 32)
+        + "\"data\":{\"root\":\""
+        + root
         + "\"}}";
   }
 

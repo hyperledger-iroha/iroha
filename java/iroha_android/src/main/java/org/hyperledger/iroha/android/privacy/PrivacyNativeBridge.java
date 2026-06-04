@@ -100,6 +100,10 @@ public final class PrivacyNativeBridge {
     if (!hasPrivacyNoritoSchema(requestArchive, PRIVACY_SCHEMA_REQUEST)) {
       throw new IllegalArgumentException("requestArchive must use the privacy request schema");
     }
+    if (!hasNonEmptyPrivacyNoritoPayload(requestArchive)) {
+      throw new IllegalArgumentException(
+          "requestArchive must contain a non-empty privacy request payload");
+    }
     requireNative(nativeAvailable);
     final String outputLabel = "privacy " + label;
     final byte[] request = Arrays.copyOf(requestArchive, requestArchive.length);
@@ -140,6 +144,9 @@ public final class PrivacyNativeBridge {
     }
     if (!isValidPrivacyNoritoArchive(output)) {
       throw new IllegalStateException(label + " returned invalid Norito V1 archive");
+    }
+    if (!hasNonEmptyPrivacyNoritoPayload(output)) {
+      throw new IllegalStateException(label + " returned empty privacy result payload");
     }
     if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
       throw new IllegalStateException(label + " returned unexpected privacy result schema");
@@ -196,6 +203,7 @@ public final class PrivacyNativeBridge {
           && output.length > 0
           && output.length <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
           && isValidPrivacyNoritoArchive(output)
+          && hasNonEmptyPrivacyNoritoPayload(output)
           && hasPrivacyNoritoSchema(output, expectedSchemaByte);
     } catch (final RuntimeException error) {
       return false;
@@ -251,6 +259,10 @@ public final class PrivacyNativeBridge {
     final int payloadOffset = PRIVACY_NORITO_HEADER_BYTES + paddingLength;
     final long expectedCrc = readLongLittleEndian(output, 31);
     return privacyCrc64(output, payloadOffset, output.length - payloadOffset) == expectedCrc;
+  }
+
+  static boolean hasNonEmptyPrivacyNoritoPayload(final byte[] output) {
+    return isValidPrivacyNoritoArchive(output) && readLongLittleEndian(output, 23) > 0;
   }
 
   private static int expectedPrivacyResultSchema(final String label) {

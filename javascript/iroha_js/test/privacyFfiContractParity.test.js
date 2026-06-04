@@ -1475,7 +1475,7 @@ test("native privacy FFI hosts keep planned entrypoints non-executable", () => {
     )[1];
     assert.match(
       supportedBody,
-      /\.sdk_entrypoints\s*\n\s*\.iter\(\)/,
+      /sdk_entrypoints(?:\s*\.contains\(&entrypoint\)|[\s\S]*?\.iter\(\)[\s\S]*?entrypoint)/,
       `${label} executable entrypoint allowlist must use SDK entrypoints`,
     );
     assert.doesNotMatch(
@@ -1522,9 +1522,10 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
         backendFamilyHelper.includes("let Some(last)") &&
         backendFamilyHelper.includes("first.is_ascii_lowercase()") &&
         backendFamilyHelper.includes("last.is_ascii_lowercase()") &&
+        backendFamilyHelper.includes('!field.contains("--")') &&
         backendFamilyHelper.includes("byte.is_ascii_lowercase()") &&
         backendFamilyHelper.includes("byte.is_ascii_digit()") &&
-        backendFamilyHelper.includes("b'-' | b'_' | b'.'"),
+        backendFamilyHelper.includes("byte == b'-'"),
       `${label} must keep backend families lowercase edge-safe and portable as vk_ref backend components`,
     );
     assert.ok(
@@ -1532,8 +1533,11 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
       `${label} must reject uppercase backend-family aliases before vk_ref binding`,
     );
     assert.ok(
-      !backendFamilyHelper.includes("b':'") && !backendFamilyHelper.includes("b'/'"),
-      `${label} must reject vk_ref delimiter and path separators in backend families`,
+      !backendFamilyHelper.includes("b':'") &&
+        !backendFamilyHelper.includes("b'/'") &&
+        !backendFamilyHelper.includes("b'_'") &&
+        !backendFamilyHelper.includes("b'.'"),
+      `${label} must reject vk_ref delimiter, path, dot, and underscore separators in backend families`,
     );
     const vkRefNameHelper = requireMatch(
       text,
@@ -1542,7 +1546,10 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
     )[0];
     assert.ok(
       vkRefNameHelper.includes("let Some(first)") &&
+        vkRefNameHelper.includes("let Some(last)") &&
         vkRefNameHelper.includes("first.is_ascii_lowercase()") &&
+        vkRefNameHelper.includes("last.is_ascii_lowercase()") &&
+        vkRefNameHelper.includes('!field.contains("__")') &&
         vkRefNameHelper.includes("byte.is_ascii_lowercase()") &&
         vkRefNameHelper.includes("byte.is_ascii_digit()") &&
         vkRefNameHelper.includes("byte == b'_'"),
@@ -1577,18 +1584,25 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
         !algorithmIdHelper.includes("is_ascii_alphanumeric()"),
       `${label} must reject uppercase, delimiter, and dotted algorithm ids`,
     );
-    assert.match(
+    const sdkEntryPointHelper = requireMatch(
       text,
-      /fn\s+privacy_sdk_entrypoint_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*split\('\.'\)[\s\S]*first\.is_ascii_alphabetic\(\)[\s\S]*byte\.is_ascii_alphanumeric\(\)[\s\S]*byte\s*==\s*b'_'/,
-      `${label} must validate SDK entrypoint names as dot-separated identifier segments`,
+      /fn\s+privacy_sdk_entrypoint_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
+      `${label} SDK entrypoint helper`,
+    )[0];
+    assert.ok(
+      sdkEntryPointHelper.includes("split('.')") &&
+        sdkEntryPointHelper.includes("let Some(first)") &&
+        sdkEntryPointHelper.includes("let Some(last)") &&
+        sdkEntryPointHelper.includes("first.is_ascii_alphabetic()") &&
+        sdkEntryPointHelper.includes("last.is_ascii_alphanumeric()") &&
+        sdkEntryPointHelper.includes("byte.is_ascii_alphanumeric()"),
+      `${label} must validate SDK entrypoint names as dot-separated alphanumeric identifier segments`,
     );
     assert.ok(
-      !requireMatch(
-        text,
-        /fn\s+privacy_sdk_entrypoint_is_portable\([^)]*field:\s*&str[^)]*\)\s*->\s*bool\s*\{[\s\S]*?\n\}/,
-        `${label} SDK entrypoint helper`,
-      )[0].includes("b'$'"),
-      `${label} must reject JavaScript-only dollar identifiers in SDK entrypoints`,
+      !sdkEntryPointHelper.includes("b'_'") &&
+        !sdkEntryPointHelper.includes("b'-'") &&
+        !sdkEntryPointHelper.includes("b'$'"),
+      `${label} must reject underscore, hyphen, and dollar aliases in SDK entrypoints`,
     );
     assert.match(
       text,
@@ -1617,7 +1631,7 @@ test("native privacy FFI catalogs keep algorithm rows unique and portable", () =
     );
     assert.match(
       text,
-      /privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels[\s\S]*duplicate algorithm IDs[\s\S]*unportable algorithm id[\s\S]*delimited algorithm id[\s\S]*uppercase algorithm id[\s\S]*leading underscore algorithm id[\s\S]*leading hyphen algorithm id[\s\S]*trailing underscore algorithm id[\s\S]*trailing hyphen algorithm id[\s\S]*unportable proof family[\s\S]*uppercase proof family[\s\S]*delimited proof family[\s\S]*empty proof-family segment[\s\S]*unportable backend family[\s\S]*delimited backend family[\s\S]*uppercase backend family[\s\S]*leading separator backend family[\s\S]*trailing separator backend family[\s\S]*duplicate sdk entrypoint[\s\S]*sdk planned overlap[\s\S]*unportable entrypoint[\s\S]*delimited entrypoint[\s\S]*hyphenated entrypoint[\s\S]*dollar entrypoint[\s\S]*empty sdk entrypoint[\s\S]*empty planned entrypoint/,
+      /privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels[\s\S]*duplicate algorithm IDs[\s\S]*unportable algorithm id[\s\S]*delimited algorithm id[\s\S]*uppercase algorithm id[\s\S]*leading underscore algorithm id[\s\S]*leading hyphen algorithm id[\s\S]*trailing underscore algorithm id[\s\S]*trailing hyphen algorithm id[\s\S]*unportable proof family[\s\S]*uppercase proof family[\s\S]*delimited proof family[\s\S]*empty proof-family segment[\s\S]*leading slash proof family[\s\S]*leading hyphen proof family[\s\S]*trailing slash proof family[\s\S]*trailing hyphen proof family[\s\S]*unportable backend family[\s\S]*delimited backend family[\s\S]*uppercase backend family[\s\S]*leading separator backend family[\s\S]*trailing separator backend family[\s\S]*duplicate sdk entrypoint[\s\S]*sdk planned overlap[\s\S]*unportable entrypoint[\s\S]*delimited entrypoint[\s\S]*hyphenated entrypoint[\s\S]*leading underscore entrypoint[\s\S]*trailing underscore entrypoint[\s\S]*dotted leading underscore entrypoint[\s\S]*dotted trailing underscore entrypoint[\s\S]*dollar entrypoint[\s\S]*empty sdk entrypoint[\s\S]*empty planned entrypoint/,
       `${label} must test adversarial catalog invariant violations`,
     );
   }
@@ -2132,7 +2146,7 @@ test("native privacy FFI hosts reject verifier-key backend drift before producti
     );
     assert.match(
       text,
-      /privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection[\s\S]*missing-separator[\s\S]*empty-vk-name[\s\S]*extra-separator[\s\S]*delimited-backend[\s\S]*uppercase-backend[\s\S]*leading-separator-backend[\s\S]*trailing-separator-backend[\s\S]*uppercase-vk-name[\s\S]*dotted-vk-name[\s\S]*dashed-vk-name[\s\S]*leading-underscore-vk-name[\s\S]*backend:name/,
+      /privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection[\s\S]*missing-separator[\s\S]*empty-vk-name[\s\S]*extra-separator[\s\S]*delimited-backend[\s\S]*uppercase-backend[\s\S]*leading-separator-backend[\s\S]*trailing-separator-backend[\s\S]*dotted-backend-alias[\s\S]*underscored-backend-alias[\s\S]*repeated-backend-separator[\s\S]*uppercase-vk-name[\s\S]*dotted-vk-name[\s\S]*dashed-vk-name[\s\S]*leading-underscore-vk-name[\s\S]*trailing-underscore-vk-name[\s\S]*repeated-underscore-vk-name[\s\S]*backend:name/,
       `${label} must test malformed vk_ref rejection without reflection`,
     );
     assert.match(
@@ -2259,6 +2273,16 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     assert.match(
       text,
+      /request\.algorithm_id\.trim\(\)\.is_empty\(\)\s*\|\|\s*request\.entrypoint\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty algorithm_id and entrypoint[\s\S]*None/,
+      `${label} must reject empty algorithm_id and entrypoint without request reflection`,
+    );
+    assert.match(
+      text,
+      /request\.vk_ref\.trim\(\)\.is_empty\(\)[\s\S]*privacy proof request must include non-empty vk_ref[\s\S]*None/,
+      `${label} must reject empty vk_ref without request reflection`,
+    );
+    assert.match(
+      text,
       /fn\s+privacy_request_has_exposed_production_claim_text_field\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_request_text_fields\(request\)[\s\S]*privacy_exposed_label_claims_production_readiness\(field\)[\s\S]*\}/,
       `${label} must define a request text-field production-claim guard`,
     );
@@ -2304,9 +2328,27 @@ test("native privacy FFI hosts bound reflected request fields before production 
     );
     assert.match(
       text,
-      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2-\{marker\}_[\s\S]*confidential-transfer-v2-\{marker\}-[\s\S]*catalog identifier shapes/,
+      /privacy_request_rejects_invalid_catalog_shapes_without_reflection[\s\S]*catalog-shape-text-never-echo[\s\S]*_confidential-transfer-v2[\s\S]*-confidential-transfer-v2[\s\S]*confidential-transfer-v2-\{marker\}_[\s\S]*confidential-transfer-v2-\{marker\}-[\s\S]*_buildConfidentialTransferProofV2\{marker\}[\s\S]*buildConfidentialTransferProofV2_\{marker\}[\s\S]*Iroha\._Privacy\.buildConfidentialTransferProofV2\{marker\}[\s\S]*Iroha\.Privacy_\.buildConfidentialTransferProofV2\{marker\}[\s\S]*catalog identifier shapes/,
       `${label} must test invalid catalog-shape request rejection without reflection`,
     );
+    const emptyRequiredTextFieldTest = requireMatch(
+      text,
+      /fn\s+privacy_request_rejects_empty_required_text_fields_without_reflection\([^)]*\)\s*\{[\s\S]*?assert_subslice_absent\(&encoded,\s*marker,\s*"empty required field failure result"\);\s*\n\s*\}/,
+      `${label} empty required text-field regression`,
+    )[0];
+    for (const snippet of [
+      "required-text-field-never-echo",
+      "algorithm_id",
+      "entrypoint",
+      "vk_ref",
+      "non-empty algorithm_id and entrypoint",
+      "non-empty vk_ref",
+    ]) {
+      assert.ok(
+        emptyRequiredTextFieldTest.includes(snippet),
+        `${label} empty required text-field regression must include ${snippet}`,
+      );
+    }
     assert.match(
       text,
       /privacy_request_rejects_exposed_production_claims_without_reflection[\s\S]*forged-mainnet-ready-algorithm[\s\S]*claimed-mainnet-algorithm[\s\S]*buildAuditSignoffProof[\s\S]*buildClaimedAuditProof[\s\S]*buildS\.e\.c\.u\.r\.i\.t\.yReviewPassedProof[\s\S]*externally-audited-confidential-transfer[\s\S]*audit-claim-confidential-transfer[\s\S]*production\/mainnet\/audit readiness/,
@@ -2825,6 +2867,11 @@ test("native chain proof admission uses explicit production verifier backend all
   );
   assert.match(
     coreZk,
+    /fn\s+production_verify_backend_label_is_portable\([^)]*\)\s*->\s*bool\s*\{[\s\S]*is_ascii_alphanumeric[\s\S]*b'a'\.\.=b'z'[\s\S]*"\/\/"[\s\S]*"::"[\s\S]*"\.\."/,
+    "Rust verifier dispatch must reject non-canonical backend labels before allowlist dispatch",
+  );
+  assert.match(
+    coreZk,
     /pub fn is_production_verify_backend_label\([^)]*\)\s*->\s*bool\s*\{[\s\S]*production_verify_backend_tag\(backend\)\.is_some\(\)/,
     "Rust verifier dispatch must expose a reusable production backend classifier",
   );
@@ -2862,9 +2909,14 @@ test("native chain proof admission uses explicit production verifier backend all
     "register_vk_rejects_production_claim_backend_labels",
     "verify_proof_rejects_production_claim_backend_labels_before_registry_lookup",
     "guardrails_reject_unsupported_backends_before_dispatch",
+    "production_verify_backend_label_is_portable",
     "register_vk_rejects_unsupported_backend_labels",
     "verifyproof_rejects_unsupported_backend_before_lookup",
     "halo2/unknown-native-v1",
+    "HALO2/IPA",
+    "stark/FRI",
+    "halo2/ipa::ivm-execution-v1",
+    "stark/fri/sha256..goldilocks",
     "halo2/ipa:production-ready",
   ]) {
     assert.ok(
@@ -5109,7 +5161,7 @@ test("Swift privacy native availability requires valid Norito proof probes", () 
 
   assert.match(
     swiftNativeBridge,
-    /privacyRequestSchemaByte:\s*UInt8\s*=\s*0x52[\s\S]*privacyNativeAvailabilityProbeArchive[\s\S]*archive\[0\]\s*=\s*0x4E[\s\S]*archive\[1\]\s*=\s*0x52[\s\S]*archive\[2\]\s*=\s*0x54[\s\S]*archive\[3\]\s*=\s*0x30[\s\S]*for index in 6..<22[\s\S]*archive\[index\]\s*=\s*Self\.privacyRequestSchemaByte/,
+    /privacyRequestSchemaByte:\s*UInt8\s*=\s*0x52[\s\S]*privacyNativeAvailabilityProbeArchive[\s\S]*archive\[0\]\s*=\s*0x4E[\s\S]*archive\[1\]\s*=\s*0x52[\s\S]*archive\[2\]\s*=\s*0x54[\s\S]*archive\[3\]\s*=\s*0x30[\s\S]*for index in 6..<22[\s\S]*archive\[index\]\s*=\s*(?:Self|NoritoNativeBridge)\.privacyRequestSchemaByte/,
     "Swift privacy bridge must build the shared Norito availability probe archive",
   );
   assert.match(
@@ -5176,7 +5228,7 @@ test("privacy native availability proof probes use shared Norito request archive
       "Swift",
       swiftNativeBridge,
       [
-        /privacyRequestSchemaByte:\s*UInt8\s*=\s*0x52[\s\S]*privacyNativeAvailabilityProbeArchive[\s\S]*archive\[0\]\s*=\s*0x4E[\s\S]*archive\[1\]\s*=\s*0x52[\s\S]*archive\[2\]\s*=\s*0x54[\s\S]*archive\[3\]\s*=\s*0x30[\s\S]*for index in 6..<22[\s\S]*archive\[index\]\s*=\s*Self\.privacyRequestSchemaByte/,
+        /privacyRequestSchemaByte:\s*UInt8\s*=\s*0x52[\s\S]*privacyNativeAvailabilityProbeArchive[\s\S]*archive\[0\]\s*=\s*0x4E[\s\S]*archive\[1\]\s*=\s*0x52[\s\S]*archive\[2\]\s*=\s*0x54[\s\S]*archive\[3\]\s*=\s*0x30[\s\S]*for index in 6..<22[\s\S]*archive\[index\]\s*=\s*(?:Self|NoritoNativeBridge)\.privacyRequestSchemaByte/,
       ],
     ],
     [
@@ -5343,8 +5395,8 @@ test("privacy native availability proof probes use shared Norito request archive
       "private func probeKagemushaNativeAvailability",
       "Swift privacy native probe result",
     ),
-    /let\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
-    "Swift privacy availability probes must validate Norito frame headers",
+    /let\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
+    "Swift privacy availability probes must validate non-empty Norito result frames",
   );
   assert.match(
     sliceBetween(
@@ -5365,6 +5417,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
     "Swift privacy native output decoder must reject wrong-operation result schemas",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func readPrivacyNativeOutput",
+      "var canUseConnectCrypto",
+      "Swift privacy native output decoder",
+    ),
+    /Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)/,
+    "Swift privacy native output decoder must reject empty result payloads",
   );
   assert.match(
     sliceBetween(
@@ -5396,6 +5458,16 @@ test("privacy native availability proof probes use shared Norito request archive
     /hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
     "Swift public privacy bridge must reject wrong-operation result schemas",
   );
+  assert.match(
+    sliceBetween(
+      source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
+      "static func call(\n        bridgeAvailable: Bool",
+      "\n    }\n}",
+      "Swift privacy bridge output call",
+    ),
+    /NoritoNativeBridge\.hasNonEmptyPrivacyNoritoPayload\(archive\)/,
+    "Swift public privacy bridge must reject empty result payloads",
+  );
 
   assert.match(
     sliceBetween(
@@ -5420,6 +5492,16 @@ test("privacy native availability proof probes use shared Norito request archive
   assert.match(
     sliceBetween(
       javaBridge,
+      "static byte[] requireNativeOutput",
+      "private static void requireNative",
+      "Java privacy native output decoder",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(output\)/,
+    "Java privacy native output decoder must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
       "static boolean returnsOutputProbe",
       "static boolean detectNativeAvailability",
       "Java privacy native probe result",
@@ -5436,6 +5518,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /isValidPrivacyNoritoArchive\(output\)/,
     "Java privacy availability probes must validate Norito frame headers",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
+      "static boolean returnsOutputProbe",
+      "static boolean detectNativeAvailability",
+      "Java privacy native probe result",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(output\)/,
+    "Java privacy availability probes must reject empty result payloads",
   );
   assert.match(
     sliceBetween(
@@ -5471,6 +5563,16 @@ test("privacy native availability proof probes use shared Norito request archive
   assert.match(
     sliceBetween(
       kotlinBridge,
+      "internal fun requireNativeOutput",
+      "private fun loadLibrary",
+      "Kotlin privacy native output decoder",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(output\)/,
+    "Kotlin privacy native output decoder must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
       "internal fun returnsOutputProbe",
       "internal fun detectNativeAvailability",
       "Kotlin privacy native probe result",
@@ -5487,6 +5589,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /isValidPrivacyNoritoArchive\(output\)/,
     "Kotlin privacy availability probes must validate Norito frame headers",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun returnsOutputProbe",
+      "internal fun detectNativeAvailability",
+      "Kotlin privacy native probe result",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(output\)/,
+    "Kotlin privacy availability probes must reject empty result payloads",
   );
   assert.match(
     sliceBetween(
@@ -5526,6 +5638,16 @@ test("privacy native availability proof probes use shared Norito request archive
       "private static int CheckedArchiveLength",
       "C# privacy native output decoder",
     ),
+    /HasNonEmptyPrivacyNoritoPayload\(result\)/,
+    "C# privacy native output decoder must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static byte[] ReadPrivacyOutput",
+      "private static int CheckedArchiveLength",
+      "C# privacy native output decoder",
+    ),
     /ExpectedPrivacyResultSchemas\(symbol\)[\s\S]*HasNoritoSchema\(result,\s*schemas\)/,
     "C# privacy native output decoder must reject wrong-operation result schemas",
   );
@@ -5556,8 +5678,8 @@ test("privacy native availability proof probes use shared Norito request archive
       "internal static byte[] PrivacyNativeAvailabilityProbeArchive",
       "C# privacy native probe result",
     ),
-    /IsNoritoV1Archive\(output\)\s*&&\s*HasNoritoSchema\(output,\s*expectedSchemaBytes\)/,
-    "C# privacy availability probes must reject wrong-operation result schemas",
+    /IsNoritoV1Archive\(output\)[\s\S]*&&\s*HasNonEmptyPrivacyNoritoPayload\(output\)[\s\S]*&&\s*HasNoritoSchema\(output,\s*expectedSchemaBytes\)/,
+    "C# privacy availability probes must reject empty payloads and wrong-operation result schemas",
   );
   assert.match(
     sliceBetween(
@@ -5664,6 +5786,16 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
+      swiftNativeBridge,
+      "static func withTemporaryPrivacyRequestArchive",
+      "static func clearTemporaryPrivacyRequestArchive",
+      "Swift native privacy request copy",
+    ),
+    /Self\.hasNonEmptyPrivacyNoritoPayload\(requestArchive\)/,
+    "Swift native privacy request copy must reject empty request payloads before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
       source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
       "static func call(\n        requestArchive: Data",
       "static func call(\n        bridgeAvailable: Bool",
@@ -5691,6 +5823,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /hasPrivacyNoritoSchema\([\s\S]*requestArchive,[\s\S]*expectedSchemaByte:\s*privacyRequestSchemaByte[\s\S]*\)/,
     "Swift privacy bridge must validate the privacy request schema before bridge dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      source("IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift"),
+      "static func call(\n        requestArchive: Data",
+      "static func call(\n        bridgeAvailable: Bool",
+      "Swift privacy bridge request call",
+    ),
+    /NoritoNativeBridge\.hasNonEmptyPrivacyNoritoPayload\(requestArchive\)/,
+    "Swift privacy bridge must reject empty request payloads before bridge dispatch",
   );
 
   assert.match(
@@ -5725,6 +5867,16 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
+      javaBridge,
+      "static byte[] call(",
+      "static byte[] invokeNativeOutput",
+      "Java privacy native request call",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(requestArchive\)/,
+    "Java privacy bridge must reject empty request payloads before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
       kotlinBridge,
       "internal fun call(",
       "internal fun invokeNativeOutput",
@@ -5755,6 +5907,16 @@ test("privacy native availability proof probes use shared Norito request archive
   );
   assert.match(
     sliceBetween(
+      kotlinBridge,
+      "internal fun call(",
+      "internal fun invokeNativeOutput",
+      "Kotlin privacy native request call",
+    ),
+    /hasNonEmptyPrivacyNoritoPayload\(requestArchive\)/,
+    "Kotlin privacy bridge must reject empty request payloads before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
       csharpBridge,
       "internal static byte[] CallProof",
       "private static void RequireAbi",
@@ -5782,6 +5944,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /HasNoritoSchema\(request,\s*PrivacyRequestSchemaByte\)/,
     "C# privacy bridge must validate the privacy request schema before native dispatch",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static byte[] CallProof",
+      "private static void RequireAbi",
+      "C# privacy native request call",
+    ),
+    /HasNonEmptyPrivacyNoritoPayload\(request\)/,
+    "C# privacy bridge must reject empty request payloads before native dispatch",
   );
 
   assert.match(

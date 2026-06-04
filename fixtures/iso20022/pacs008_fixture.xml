@@ -12,7 +12,7 @@
         <pacs:InstrId>SAMPLE-INSTR-008</pacs:InstrId>
         <pacs:EndToEndId>SAMPLE-E2E-008</pacs:EndToEndId>
         <pacs:TxId>SAMPLE-TX-008</pacs:TxId>
-        <pacs:UETR>123e4567-e89b-12d3-a456-426614174000</pacs:UETR>
+        <pacs:UETR>123e4567-e89b-42d3-a456-426614174000</pacs:UETR>
       </pacs:PmtId>
       <pacs:PmtTpInf>
         <pacs:ClrChanl>RTNS</pacs:ClrChanl>

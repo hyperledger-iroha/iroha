@@ -144,6 +144,16 @@ public sealed class PrivacyNativeTests
         Assert.Contains("must not be empty", proofError.Message);
         Assert.Equal("noritoBytes", proofError.ParamName);
 
+        var emptyPayloadCapabilities = Assert.Throws<ArgumentException>(() =>
+            new PrivacyCapabilitiesArchive(PrivacyNoritoFrame(0x50)));
+        Assert.Contains("non-empty privacy result payload", emptyPayloadCapabilities.Message);
+        Assert.Equal("noritoBytes", emptyPayloadCapabilities.ParamName);
+
+        var emptyPayloadProof = Assert.Throws<ArgumentException>(() =>
+            new PrivacyProofResultArchive(PrivacyNoritoFrame(0x42)));
+        Assert.Contains("non-empty privacy result payload", emptyPayloadProof.Message);
+        Assert.Equal("noritoBytes", emptyPayloadProof.ParamName);
+
         foreach (var malformed in InvalidPrivacyRequestArchives())
         {
             var malformedCapabilities = Assert.Throws<ArgumentException>(() =>
@@ -169,6 +179,15 @@ public sealed class PrivacyNativeTests
     {
         Assert.Throws<ArgumentException>(() => PrivacyNative.BuildProofV1(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => PrivacyNative.VerifyProofV1(Array.Empty<byte>()));
+
+        var buildEmptyPayload = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.BuildProofV1(PrivacyNoritoFrame(0x52)));
+        var verifyEmptyPayload = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.VerifyProofV1(PrivacyNoritoFrame(0x52)));
+        Assert.Contains("non-empty privacy request payload", buildEmptyPayload.Message);
+        Assert.Contains("non-empty privacy request payload", verifyEmptyPayload.Message);
+        Assert.Equal("requestArchive", buildEmptyPayload.ParamName);
+        Assert.Equal("requestArchive", verifyEmptyPayload.ParamName);
     }
 
     [Fact]
@@ -198,7 +217,7 @@ public sealed class PrivacyNativeTests
             (byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen) =>
             {
                 Assert.Equal(requestArchive, requestPtr);
-                var output = PrivacyNoritoFrame(0x42);
+                var output = PrivacyNoritoFrameWithPayload(0x42);
                 outPtr = Marshal.AllocHGlobal(output.Length);
                 Marshal.Copy(output, 0, outPtr, output.Length);
                 outLen = (UIntPtr)output.Length;
@@ -207,7 +226,7 @@ public sealed class PrivacyNativeTests
             requireAbi: false,
             free: Marshal.FreeHGlobal);
 
-        Assert.Equal(PrivacyNoritoFrame(0x42), buildArchive);
+        Assert.Equal(PrivacyNoritoFrameWithPayload(0x42), buildArchive);
     }
 
     [Fact]
@@ -302,7 +321,7 @@ public sealed class PrivacyNativeTests
     [Fact]
     public void PrivacyNativeProbeRequiresSuccessfulNonemptyOutput()
     {
-        Assert.True(IsValidProbeOutput(0, PrivacyNoritoFrame(0x50)));
+        Assert.False(IsValidProbeOutput(0, PrivacyNoritoFrame(0x50)));
         Assert.True(IsValidProbeOutput(0, PrivacyNoritoFrameWithPayload(0x51)));
         Assert.True(IsValidProbeOutput(0, PrivacyNoritoFrameWithPadding(0x50, 64), 0x50));
         Assert.True(IsValidProbeOutput(0, PrivacyNoritoFrameWithPayload(0x50), 0x50));
@@ -421,6 +440,42 @@ public sealed class PrivacyNativeTests
 
         Assert.True(freed);
         Assert.Contains("empty output", error.Message);
+    }
+
+    [Fact]
+    public void PrivacyNativeReadOutputRejectsEmptyPayloadSuccessArchiveAndFreesPointer()
+    {
+        var bytes = PrivacyNoritoFrame(0x50);
+        var pointer = Marshal.AllocHGlobal(bytes.Length);
+        var freed = false;
+        try
+        {
+            Marshal.Copy(bytes, 0, pointer, bytes.Length);
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                PrivacyNative.ReadPrivacyOutput(
+                    "iroha_privacy_capabilities_v1",
+                    0,
+                    pointer,
+                    (UIntPtr)bytes.Length,
+                    ptr =>
+                    {
+                        Assert.Equal(pointer, ptr);
+                        Marshal.FreeHGlobal(ptr);
+                        freed = true;
+                    }));
+
+            Assert.True(freed);
+            Assert.Contains("empty privacy result payload", error.Message);
+            pointer = IntPtr.Zero;
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+            {
+                Marshal.FreeHGlobal(pointer);
+            }
+        }
     }
 
     [Fact]
@@ -678,7 +733,7 @@ public sealed class PrivacyNativeTests
                 buildRequest = requestPtr;
                 requestPtr[0] = 0x00;
                 requestPtr[6] = 0x7f;
-                var output = PrivacyNoritoFrame(0x42);
+                var output = PrivacyNoritoFrameWithPayload(0x42);
                 outPtr = Marshal.AllocHGlobal(output.Length);
                 Marshal.Copy(output, 0, outPtr, output.Length);
                 outLen = (UIntPtr)output.Length;
@@ -686,7 +741,7 @@ public sealed class PrivacyNativeTests
             },
             requireAbi: false,
             free: Marshal.FreeHGlobal);
-        Assert.Equal(PrivacyNoritoFrame(0x42), buildArchive);
+        Assert.Equal(PrivacyNoritoFrameWithPayload(0x42), buildArchive);
 
         var verifyArchive = PrivacyNative.CallProof(
             requestArchive,
@@ -696,7 +751,7 @@ public sealed class PrivacyNativeTests
                 verifyRequest = requestPtr;
                 requestPtr[0] = 0x00;
                 requestPtr[6] = 0x7f;
-                var output = PrivacyNoritoFrame(0x56);
+                var output = PrivacyNoritoFrameWithPayload(0x56);
                 outPtr = Marshal.AllocHGlobal(output.Length);
                 Marshal.Copy(output, 0, outPtr, output.Length);
                 outLen = (UIntPtr)output.Length;
@@ -704,7 +759,7 @@ public sealed class PrivacyNativeTests
             },
             requireAbi: false,
             free: Marshal.FreeHGlobal);
-        Assert.Equal(PrivacyNoritoFrame(0x56), verifyArchive);
+        Assert.Equal(PrivacyNoritoFrameWithPayload(0x56), verifyArchive);
 
         Assert.Equal(originalArchive, requestArchive);
         Assert.NotNull(buildRequest);

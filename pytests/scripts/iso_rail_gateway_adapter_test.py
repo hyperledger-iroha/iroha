@@ -246,6 +246,34 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertEqual(requests, [])
 
+    def test_duplicate_sidecar_json_keys_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            _xml_path, sidecar = write_message(inbox)
+            (inbox / "rail-status.xml.json").write_text(
+                (
+                    '{"message_type":"pacs.002","message_type":"pacs.008",'
+                    f'"profile":"swift-cbpr-plus",'
+                    f'"payload_sha256":"{sidecar["payload_sha256"]}",'
+                    '"rail_message_id":"rail-drop-1"}\n'
+                ),
+                encoding="utf-8",
+            )
+            with capture_server() as (base_url, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("duplicate key", stderr)
+
     def test_profile_is_required_for_live_rail_submission_by_default(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)

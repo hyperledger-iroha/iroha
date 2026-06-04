@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -47,8 +48,55 @@ def fixture_xml(message_id, payload_root, *, root="Document", payload_namespace=
     )
 
 
+def source_provenance(message_id, payload_root):
+    schema_text = xsd_text(message_id, payload_root)
+    return {
+        "repository": "https://github.com/example/iso20022-fixtures",
+        "commit": "0123456789abcdef0123456789abcdef01234567",
+        "path": f"xsd/iso/{message_id}.xsd",
+        "license": "Apache-2.0",
+        "sha256": VERIFIER.sha256_hex(schema_text.encode("utf-8")),
+    }
+
+
+def rewrite_schema(root, message_id, content, *, manifest_path=None):
+    schema_path = root / "xsd" / "iso" / f"{message_id}.xsd"
+    schema_path.write_text(content, encoding="utf-8")
+    if manifest_path is not None:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schemas"][0]["source"]["sha256"] = VERIFIER.sha256_hex(
+            content.encode("utf-8")
+        )
+        write_json(manifest_path, manifest)
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return path
+
+
+def write_profile_catalog(path, versions=None, catalog=None):
+    versions = versions or ["fooo.001.001.01"]
+    if catalog is None:
+        catalog = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": versions,
+                    }
+                ],
+            }
+        ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        'const DEFAULT_PROFILES_JSON: &str = r#"\n'
+        + json.dumps(catalog, indent=2, sort_keys=True)
+        + '\n"#;\n',
+        encoding="utf-8",
+    )
     return path
 
 
@@ -77,6 +125,7 @@ def minimal_manifest():
                 "path": "iso/fooo.001.001.01.xsd",
                 "message_def_id": "fooo.001.001.01",
                 "payload_root": "FooPayload",
+                "source": source_provenance("fooo.001.001.01", "FooPayload"),
             }
         ],
         "fixtures": [
@@ -114,9 +163,21 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
-            self.assertEqual(summary["verified_schemas"], 5)
-            self.assertEqual(summary["verified_fixtures"], 10)
-            self.assertEqual(summary["schema_backed_fixtures"], 5)
+            self.assertEqual(summary["verified_schemas"], 6)
+            self.assertEqual(summary["verified_fixtures"], 11)
+            self.assertEqual(summary["schema_backed_fixtures"], 6)
+            self.assertEqual(
+                summary["manifest_sha256"],
+                VERIFIER.sha256_hex(
+                    (
+                        REPO_ROOT
+                        / "fixtures"
+                        / "iso20022"
+                        / "xsd"
+                        / "fixture_manifest.json"
+                    ).read_bytes()
+                ),
+            )
             self.assertEqual(len(summary["missing_schema_fixtures"]), 5)
             missing_schema_ids = sorted(
                 entry["message_def_id"] for entry in summary["missing_schema_fixtures"]
@@ -165,26 +226,286 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(summary["missing_schema_fixtures"], [])
             self.assertEqual(summary["schema_only_entries"], [])
 
+    def test_profile_catalog_schema_backed_versions_are_recorded(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs")
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                    "--require-profile-schema-backed-versions",
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["strict"]["require_profile_schema_backed_versions"])
+            self.assertEqual(summary["profile_checked_versions"], 1)
+            self.assertEqual(summary["profile_schema_backed_versions"], 1)
+            self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["profile_catalog"]["profiles"], 1)
+            self.assertEqual(
+                summary["profile_catalog"]["sha256"],
+                VERIFIER.sha256_hex(profile_catalog.read_bytes()),
+            )
+            match = VERIFIER.PROFILE_CATALOG_RE.search(
+                profile_catalog.read_text(encoding="utf-8")
+            )
+            self.assertIsNotNone(match)
+            catalog_json = match.group("body")
+            self.assertEqual(
+                summary["profile_catalog"]["catalog_json_sha256"],
+                VERIFIER.sha256_hex(catalog_json.encode("utf-8")),
+            )
+
+    def test_profile_catalog_strict_flag_rejects_missing_schema_versions(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(
+                root / "profiles.rs",
+                ["fooo.001.001.01", "fooo.001.001.02"],
+            )
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertFalse(summary["strict"]["require_profile_schema_backed_versions"])
+            self.assertEqual(summary["profile_checked_versions"], 2)
+            self.assertEqual(summary["profile_schema_backed_versions"], 1)
+            self.assertEqual(
+                summary["missing_profile_schema_versions"][0]["message_def_id"],
+                "fooo.001.001.02",
+            )
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                    "--require-profile-schema-backed-versions",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("not schema-backed", stderr)
+
+    def test_profile_catalog_shape_is_fail_closed(self):
+        cases = []
+        duplicate_profile = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            },
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.002",
+                        "direction": "inbound",
+                        "versions": ["fooo.002.001.01"],
+                    }
+                ],
+            },
+        ]
+        cases.append((duplicate_profile, "duplicates profile id"))
+        duplicate_message = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    },
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.02"],
+                    },
+                ],
+            }
+        ]
+        cases.append((duplicate_message, "duplicates profile/message/direction entry"))
+        bad_direction = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "sideways",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((bad_direction, "direction must be one of"))
+        bad_message_type = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "FOOO.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append((bad_message_type, "message_type must be lowercase ISO family id"))
+        empty_versions = [
+            {
+                "id": "minimal-profile",
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": [],
+                    }
+                ],
+            }
+        ]
+        cases.append((empty_versions, "versions must not be empty"))
+
+        for catalog, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    profile_catalog = write_profile_catalog(
+                        root / "profiles.rs",
+                        catalog=catalog,
+                    )
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--profile-catalog",
+                            str(profile_catalog),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_checked_in_profile_catalog_records_advertised_schema_gaps(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            summary_out = Path(raw_root) / "summary.json"
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json"),
+                    "--profile-catalog",
+                    str(REPO_ROOT / "crates" / "iroha_core" / "src" / "iso_bridge" / "profiles.rs"),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            missing_ids = {
+                entry["message_def_id"]
+                for entry in summary["missing_profile_schema_versions"]
+            }
+            self.assertIn("pacs.004.001.09", missing_ids)
+            self.assertIn("pacs.002.001.12", missing_ids)
+            self.assertNotIn("camt.056.001.09", missing_ids)
+            self.assertGreater(summary["profile_checked_versions"], 0)
+            self.assertGreater(summary["profile_schema_backed_versions"], 0)
+            self.assertEqual(summary["profile_schema_backed_versions"], 26)
+            self.assertEqual(len(summary["missing_profile_schema_versions"]), 29)
+
+    @unittest.skipUnless(shutil.which("xmllint"), "xmllint is required for XSD validation")
+    def test_xml_schema_validation_flag_validates_schema_backed_fixtures(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--require-schema-backed-fixtures",
+                    "--require-fixture-for-schema",
+                    "--validate-xml-schema",
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["strict"]["validate_xml_schema"])
+            self.assertEqual(summary["schema_validated_fixtures"], 1)
+            self.assertTrue(summary["fixtures"][0]["schema_validated"])
+
+    @unittest.skipUnless(shutil.which("xmllint"), "xmllint is required for XSD validation")
+    def test_xml_schema_validation_rejects_schema_invalid_fixture(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            (root / "foo_fixture.xml").write_text(
+                fixture_xml("fooo.001.001.01", "FooPayload").replace(
+                    "<payload:FooPayload/>",
+                    "<payload:FooPayload><payload:Unexpected/></payload:FooPayload>",
+                ),
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(
+                ["--manifest", str(manifest_path), "--validate-xml-schema"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("failed XML schema validation", stderr)
+
     def test_schema_target_namespace_payload_and_element_form_drift_are_rejected(self):
         for mutate, message in [
             (
-                lambda root: (root / "xsd" / "iso" / "fooo.001.001.01.xsd").write_text(
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
                     xsd_text("fooo.001.001.01", "FooPayload", target_message_id="barr.001.001.01"),
-                    encoding="utf-8",
+                    manifest_path=manifest_path,
                 ),
                 "targetNamespace",
             ),
             (
-                lambda root: (root / "xsd" / "iso" / "fooo.001.001.01.xsd").write_text(
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
                     xsd_text("fooo.001.001.01", "DifferentPayload"),
-                    encoding="utf-8",
+                    manifest_path=manifest_path,
                 ),
                 "payload root",
             ),
             (
-                lambda root: (root / "xsd" / "iso" / "fooo.001.001.01.xsd").write_text(
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
                     xsd_text("fooo.001.001.01", "FooPayload", element_form="unqualified"),
-                    encoding="utf-8",
+                    manifest_path=manifest_path,
                 ),
                 "elementFormDefault",
             ),
@@ -193,7 +514,83 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as raw_root:
                     root = Path(raw_root)
                     manifest_path = write_minimal_tree(root, minimal_manifest())
-                    mutate(root)
+                    mutate(root, manifest_path)
+
+                    rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_restricted_schema_redistribution_terms_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            schema_path = root / "xsd" / "iso" / "fooo.001.001.01.xsd"
+            restricted_terms = """<!--Copyright (c) SWIFT scrl, 2020.
+
+ This is a licensed product, which may only be redistributed upon agreement with SWIFT scrl.
+ The user has no right, or right to authorise others, to:
+   - rent, lease, or sell this component;
+   - display publicly, distribute or otherwise provide this component;
+-->
+"""
+            schema_path.write_text(
+                xsd_text("fooo.001.001.01", "FooPayload").replace(
+                    "<xs:schema",
+                    restricted_terms + "<xs:schema",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("restricted redistribution terms", stderr)
+
+    def test_schema_source_provenance_shape_and_digest_are_rejected(self):
+        cases = []
+        missing_source = minimal_manifest()
+        missing_source["schemas"][0].pop("source")
+        cases.append((missing_source, "source must be a JSON object"))
+
+        unknown_source_key = minimal_manifest()
+        unknown_source_key["schemas"][0]["source"]["unexpected"] = "value"
+        cases.append((unknown_source_key, "unknown keys"))
+
+        bad_repository = minimal_manifest()
+        bad_repository["schemas"][0]["source"]["repository"] = (
+            "https://github.com/example/iso20022-fixtures.git"
+        )
+        cases.append((bad_repository, "repository must be a canonical"))
+
+        bad_commit = minimal_manifest()
+        bad_commit["schemas"][0]["source"]["commit"] = (
+            "0123456789abcdef0123456789abcdef0123456Z"
+        )
+        cases.append((bad_commit, "commit must be a lowercase 40-hex"))
+
+        escaped_path = minimal_manifest()
+        escaped_path["schemas"][0]["source"]["path"] = "../fooo.001.001.01.xsd"
+        cases.append((escaped_path, "must not contain empty, dot, or parent segments"))
+
+        mismatched_filename = minimal_manifest()
+        mismatched_filename["schemas"][0]["source"]["path"] = "xsd/other.001.001.01.xsd"
+        cases.append((mismatched_filename, "filename must match message_def_id"))
+
+        unsupported_license = minimal_manifest()
+        unsupported_license["schemas"][0]["source"]["license"] = "NOASSERTION"
+        cases.append((unsupported_license, "license must be one of"))
+
+        sha_drift = minimal_manifest()
+        sha_drift["schemas"][0]["source"]["sha256"] = "0" * 64
+        cases.append((sha_drift, "sha256 does not match checked-in XSD bytes"))
+
+        for manifest, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, manifest)
 
                     rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
 
@@ -268,6 +665,38 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_duplicate_manifest_json_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = root / "xsd" / "fixture_manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            manifest_path.write_text(
+                '{"version":1,"version":1,"schemas":[],"fixtures":[]}\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicate key", stderr)
+
+    def test_copied_fixture_payloads_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            copied_fixture = dict(manifest["fixtures"][0])
+            copied_fixture["path"] = "../foo_fixture_copy.xml"
+            manifest["fixtures"].append(copied_fixture)
+            manifest_path = write_minimal_tree(root, manifest)
+            (root / "foo_fixture_copy.xml").write_bytes(
+                (root / "foo_fixture.xml").read_bytes()
+            )
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicate fixture SHA-256", stderr)
 
 
 if __name__ == "__main__":

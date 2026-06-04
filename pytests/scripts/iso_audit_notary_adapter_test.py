@@ -195,6 +195,50 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn("error:", stderr)
 
+    def test_duplicate_endpoint_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("duplicates --endpoint[0]", stderr)
+
+    def test_duplicate_anchor_json_keys_are_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            write_export(export_dir)
+            (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
+                '{"version":1,"version":1}\n',
+                encoding="utf-8",
+            )
+            with capture_server() as (endpoint, requests):
+                rc, _stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(requests, [])
+            self.assertIn("duplicate key", stderr)
+
     def test_tampered_anchor_digest_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)

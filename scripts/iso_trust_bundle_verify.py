@@ -102,11 +102,25 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise TrustBundleError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise TrustBundleError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise TrustBundleError(f"JSON object contains duplicate key {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:

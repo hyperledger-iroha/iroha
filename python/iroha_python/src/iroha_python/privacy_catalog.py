@@ -7,7 +7,7 @@ import json
 import unicodedata
 from ipaddress import ip_address
 from typing import Any, Mapping
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 PRIVACY_CRITERIA = (
     "hide_amount",
@@ -17,7 +17,7 @@ PRIVACY_CRITERIA = (
     "post_quantum",
 )
 _ALGORITHM_ID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_")
-_BACKEND_FAMILY_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-_.")
+_BACKEND_FAMILY_NAME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
 PRODUCTION_GATE_VERSION = "privacy-production-gate-v1"
 PRODUCTION_GATE_REQUIREMENTS = (
     ("real_proving", "real proving engine is not registered"),
@@ -971,7 +971,7 @@ def _is_lowercase_hyphenated_identifier(value: str) -> bool:
 
 
 def _is_sdk_entrypoint_name(value: str) -> bool:
-    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_"
+    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
     rest_chars = first_chars + "0123456789"
     segments = value.split(".")
     if any(not segment for segment in segments):
@@ -987,6 +987,8 @@ def _is_public_input_schema_token(value: str) -> bool:
     return (
         bool(value)
         and value[0] in "abcdefghijklmnopqrstuvwxyz"
+        and value[-1] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and "__" not in value
         and all(char in _PUBLIC_INPUT_SCHEMA_TOKEN_CHARS for char in value)
     )
 
@@ -1023,7 +1025,30 @@ def _is_backend_family_name(value: str) -> bool:
         bool(value)
         and value[0] in "abcdefghijklmnopqrstuvwxyz0123456789"
         and value[-1] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and "--" not in value
         and all(char in _BACKEND_FAMILY_NAME_CHARS for char in value)
+    )
+
+
+def _is_verifier_key_name(value: str) -> bool:
+    return (
+        bool(value)
+        and value[0] in "abcdefghijklmnopqrstuvwxyz"
+        and value[-1] in "abcdefghijklmnopqrstuvwxyz0123456789"
+        and "__" not in value
+        and all(char in _PUBLIC_INPUT_SCHEMA_TOKEN_CHARS for char in value)
+    )
+
+
+def _is_verifier_key_suffix(value: str) -> bool:
+    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    rest_chars = first_chars + "0123456789_"
+    return (
+        bool(value)
+        and value[0] in first_chars
+        and value[-1] in first_chars + "0123456789"
+        and "__" not in value
+        and all(char in rest_chars for char in value)
     )
 
 
@@ -1031,24 +1056,17 @@ def _is_verifier_key_id(value: str) -> bool:
     parts = value.split("::")
     if len(parts) > 2 or any(not part for part in parts):
         return False
-    namespace = parts[0]
-    if (
-        namespace[0] not in "abcdefghijklmnopqrstuvwxyz"
-        or not all(char in _PUBLIC_INPUT_SCHEMA_TOKEN_CHARS for char in namespace)
-    ):
+    if not _is_verifier_key_name(parts[0]):
         return False
     if len(parts) == 1:
         return True
-    suffix = parts[1]
-    first_chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    rest_chars = first_chars + "0123456789_"
-    return suffix[0] in first_chars and all(char in rest_chars for char in suffix)
+    return _is_verifier_key_suffix(parts[1])
 
 
 def _is_safe_https_source_url(value: str) -> bool:
     if value != value.strip() or "\\" in value:
         return False
-    if any(ord(char) <= 0x20 or ord(char) == 0x7F for char in value):
+    if any(ord(char) < 0x21 or ord(char) > 0x7E for char in value):
         return False
     if not value.startswith("https://"):
         return False
@@ -1065,12 +1083,47 @@ def _is_safe_https_source_url(value: str) -> bool:
         parsed.hostname
     ):
         return False
+    if parsed.hostname is not None and _source_reference_hostname_uses_idna(
+        parsed.hostname
+    ):
+        return False
     return (
         parsed.scheme == "https"
         and bool(parsed.netloc)
         and bool(parsed.hostname)
         and parsed.username is None
         and parsed.password is None
+    )
+
+
+def _source_reference_hostname_uses_idna(hostname: str) -> bool:
+    return any(label.startswith("xn--") for label in hostname.lower().split("."))
+
+
+def _source_reference_path_has_dot_segments(path: str) -> bool:
+    return any(unquote(segment).lower() in (".", "..") for segment in path.split("/"))
+
+
+def _is_canonical_source_reference_url(value: str) -> bool:
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError:
+        return False
+    if parsed.hostname is None:
+        return False
+    hostname = parsed.hostname.lower()
+    if hostname.endswith(".") or parsed.port is not None:
+        return False
+    if parsed.netloc != hostname:
+        return False
+    if _source_reference_path_has_dot_segments(parsed.path):
+        return False
+    return (
+        urlunsplit(
+            (parsed.scheme, hostname, parsed.path or "/", parsed.query, parsed.fragment)
+        )
+        == value
     )
 
 
@@ -2087,6 +2140,12 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
                     f"{index} field 'source_references' item {item_index} "
                     "url must not be a placeholder, local, or "
                     "private-network URL"
+                )
+            if not _is_canonical_source_reference_url(item["url"]):
+                raise RuntimeError(
+                    "privacy algorithm catalog entry "
+                    f"{index} field 'source_references' item {item_index} "
+                    "url must be canonical"
                 )
             if _source_reference_url_claims_audit_or_readiness(item["url"]):
                 raise RuntimeError(

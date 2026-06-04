@@ -4163,12 +4163,25 @@ fn kagemusha_recursive_spend_init_py(
     request
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+    let lineage_verifier_key = request.lineage_verifier_key.as_ref().ok_or_else(|| {
+        PyValueError::new_err("Kagemusha Reserved-lineage init requires lineage_verifier_key")
+    })?;
+    let lineage_proving_key_archive =
+        request
+            .lineage_proving_key_archive
+            .as_deref()
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "Kagemusha Reserved-lineage init requires lineage_proving_key_archive",
+                )
+            })?;
     let bundle =
-        iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive(
+        iroha_core::zk::prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
             &request.record_bundle,
             &request.pallas_open_envelopes_archive,
             request.current_note,
-            None,
+            lineage_verifier_key,
+            lineage_proving_key_archive,
         )
         .map_err(PyRuntimeError::new_err)?;
     encode_kagemusha_recursive_archive(
@@ -4190,20 +4203,32 @@ fn kagemusha_recursive_spend_append_py(
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let output_proof_circuit_id = request.output_proof_circuit_id().to_owned();
+    let mut lineage_proving_key_archive = None;
     let vk_box = match output_proof_circuit_id.as_str() {
         iroha_core::zk::KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID => {
             iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
                 .map_err(PyRuntimeError::new_err)?
         }
-        iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID => {
+        output_circuit
+            if iroha_data_model::offline::is_kagemusha_recursive_spend_lineage_append_output_circuit_id(
+                output_circuit,
+            ) =>
+        {
             if iroha_data_model::offline::can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id(
                 output_proof_circuit_id.as_str(),
                 request.previous_bundle.accumulator.hop_count,
             ) {
-                iroha_core::zk::kagemusha_recursive_spend_lineage_append_vk_box_from_pallas_open_envelope_archive(
-                    &request.pallas_open_envelopes_archive,
-                )
-                .map_err(PyRuntimeError::new_err)?
+                lineage_proving_key_archive =
+                    Some(request.lineage_proving_key_archive.as_deref().ok_or_else(|| {
+                        PyValueError::new_err(
+                            "Kagemusha Reserved-lineage append requires lineage_proving_key_archive",
+                        )
+                    })?);
+                request.lineage_verifier_key.clone().ok_or_else(|| {
+                    PyValueError::new_err(
+                        "Kagemusha Reserved-lineage append requires lineage_verifier_key",
+                    )
+                })?
             } else {
                 iroha_data_model::proof::VerifyingKeyBox::new(
                     iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
@@ -4227,7 +4252,7 @@ fn kagemusha_recursive_spend_append_py(
             request.current_note,
             output_proof_circuit_id.as_str(),
             &vk_box,
-            None,
+            lineage_proving_key_archive,
         )
         .map_err(PyRuntimeError::new_err)?;
     encode_kagemusha_recursive_archive(
@@ -5059,6 +5084,10 @@ mod tests {
         const SDK_EMPTY: &[&str] = &[""];
         const SDK_DELIMITED: &[&str] = &["buildAlphaProof:shadow"];
         const SDK_HYPHENATED: &[&str] = &["build-AlphaProof"];
+        const SDK_LEADING_UNDERSCORE: &[&str] = &["_buildAlphaProof"];
+        const SDK_TRAILING_UNDERSCORE: &[&str] = &["buildAlphaProof_"];
+        const SDK_DOTTED_LEADING_UNDERSCORE: &[&str] = &["Iroha._Privacy.buildAlphaProof"];
+        const SDK_DOTTED_TRAILING_UNDERSCORE: &[&str] = &["Iroha.Privacy_.buildAlphaProof"];
         const SDK_DOLLAR: &[&str] = &["build$AlphaProof"];
         const SDK_UNPORTABLE: &[&str] = &["build Alpha Proof"];
         const SDK_MAINNET_READY: &[&str] = &["buildMainnetReadyProof"];
@@ -5227,6 +5256,46 @@ mod tests {
                 ),
             ),
             (
+                "leading slash proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "/halo2",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "leading hyphen proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "-halo2",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing slash proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2/",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing hyphen proof family",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-",
+                    "halo2-ipa-pasta",
+                    SDK_ALPHA,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
                 "unportable backend family",
                 privacy_catalog_entry_for_test(
                     "confidential-transfer-v2",
@@ -5327,6 +5396,46 @@ mod tests {
                 ),
             ),
             (
+                "leading underscore entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_LEADING_UNDERSCORE,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "trailing underscore entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_TRAILING_UNDERSCORE,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "dotted leading underscore entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_DOTTED_LEADING_UNDERSCORE,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
+                "dotted trailing underscore entrypoint",
+                privacy_catalog_entry_for_test(
+                    "confidential-transfer-v2",
+                    "halo2-ipa-pasta",
+                    "halo2-ipa-pasta",
+                    SDK_DOTTED_TRAILING_UNDERSCORE,
+                    PLANNED_BETA,
+                ),
+            ),
+            (
                 "dollar entrypoint",
                 privacy_catalog_entry_for_test(
                     "confidential-transfer-v2",
@@ -5419,8 +5528,7 @@ mod tests {
             "missing required production plan rows must be rejected",
         );
 
-        let mut wrong_backend: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+        let mut wrong_backend: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
         wrong_backend
             .iter_mut()
             .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
@@ -5431,8 +5539,7 @@ mod tests {
             "required production plan backend drift must be rejected",
         );
 
-        let mut wrong_proof: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+        let mut wrong_proof: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
         wrong_proof
             .iter_mut()
             .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
@@ -5443,8 +5550,7 @@ mod tests {
             "required production plan proof-family drift must be rejected",
         );
 
-        let mut missing_planned: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+        let mut missing_planned: Vec<PrivacyAlgorithmEntry> = PRIVACY_ALGORITHM_ENTRIES.to_vec();
         missing_planned
             .iter_mut()
             .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
@@ -5456,7 +5562,7 @@ mod tests {
         );
 
         let mut helper_only_planned: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+            PRIVACY_ALGORITHM_ENTRIES.to_vec();
         helper_only_planned
             .iter_mut()
             .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
@@ -5468,7 +5574,7 @@ mod tests {
         );
 
         let mut proof_helper_only_planned: Vec<PrivacyAlgorithmEntry> =
-            PRIVACY_ALGORITHM_ENTRIES.iter().copied().collect();
+            PRIVACY_ALGORITHM_ENTRIES.to_vec();
         proof_helper_only_planned
             .iter_mut()
             .find(|entry| entry.id == "anonymous-pgc-k-out-of-n-v1")
@@ -6268,6 +6374,10 @@ mod tests {
             ("uppercase proof family", "Halo2-ipa-pasta"),
             ("delimited proof family", "halo2:ipa:pasta"),
             ("empty proof-family segment", "halo2//ipa"),
+            ("leading slash proof family", "/halo2"),
+            ("leading hyphen proof family", "-halo2"),
+            ("trailing slash proof family", "halo2/"),
+            ("trailing hyphen proof family", "halo2-"),
         ] {
             let mut forged_proof_family = base.clone();
             forged_proof_family.proof_family = proof_family.to_owned();
@@ -6514,6 +6624,22 @@ mod tests {
                 "entrypoint",
                 format!("build-ConfidentialTransferProofV2{marker}"),
             ),
+            (
+                "entrypoint",
+                format!("_buildConfidentialTransferProofV2{marker}"),
+            ),
+            (
+                "entrypoint",
+                format!("buildConfidentialTransferProofV2_{marker}"),
+            ),
+            (
+                "entrypoint",
+                format!("Iroha._Privacy.buildConfidentialTransferProofV2{marker}"),
+            ),
+            (
+                "entrypoint",
+                format!("Iroha.Privacy_.buildConfidentialTransferProofV2{marker}"),
+            ),
         ] {
             let mut request = privacy_request(
                 "confidential-transfer-v2",
@@ -6535,6 +6661,35 @@ mod tests {
             );
             let encoded = norito::to_bytes(&result).expect("encode privacy result");
             assert_subslice_absent(&encoded, marker.as_bytes(), "catalog-shape failure result");
+        }
+    }
+
+    #[test]
+    fn privacy_request_rejects_empty_required_text_fields_without_reflection() {
+        let marker = b"required-text-field-never-echo";
+        for field in ["algorithm_id", "entrypoint", "vk_ref"] {
+            let mut request = privacy_request(
+                "confidential-transfer-v2",
+                "buildConfidentialTransferProofV2",
+                Vec::new(),
+            );
+            request.public_inputs = marker.to_vec();
+            match field {
+                "algorithm_id" => request.algorithm_id.clear(),
+                "entrypoint" => request.entrypoint.clear(),
+                "vk_ref" => request.vk_ref.clear(),
+                _ => unreachable!("unexpected privacy request field"),
+            }
+
+            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+            let message_fragment = match field {
+                "vk_ref" => "non-empty vk_ref",
+                _ => "non-empty algorithm_id and entrypoint",
+            };
+
+            assert_unreflected_invalid_privacy_request_result(&result, message_fragment, field);
+            let encoded = norito::to_bytes(&result).expect("encode privacy result");
+            assert_subslice_absent(&encoded, marker, "empty required field failure result");
         }
     }
 
@@ -6995,7 +7150,7 @@ mod tests {
 
     #[test]
     fn privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection() {
-        let marker = "vk-ref-shape-never-echo";
+        let marker = "vkrefshapeneverecho";
         for (case, vk_ref) in [
             (
                 "missing-separator",
@@ -7023,6 +7178,18 @@ mod tests {
                 format!("halo2-ipa-pasta.:confidential_transfer_v2_{marker}"),
             ),
             (
+                "dotted-backend-alias",
+                format!("halo2.ipa.pasta-{marker}:confidential_transfer_v2"),
+            ),
+            (
+                "underscored-backend-alias",
+                format!("halo2_ipa_pasta_{marker}:confidential_transfer_v2"),
+            ),
+            (
+                "repeated-backend-separator",
+                format!("halo2--ipa-pasta-{marker}:confidential_transfer_v2"),
+            ),
+            (
                 "uppercase-vk-name",
                 format!("halo2-ipa-pasta:Confidential_transfer_v2_{marker}"),
             ),
@@ -7037,6 +7204,14 @@ mod tests {
             (
                 "leading-underscore-vk-name",
                 format!("halo2-ipa-pasta:_confidential_transfer_v2_{marker}"),
+            ),
+            (
+                "trailing-underscore-vk-name",
+                format!("halo2-ipa-pasta:confidential_transfer_v2_{marker}_"),
+            ),
+            (
+                "repeated-underscore-vk-name",
+                format!("halo2-ipa-pasta:confidential_transfer__v2_{marker}"),
             ),
         ] {
             let request = PrivacyProofRequestV1 {
@@ -7105,36 +7280,35 @@ mod tests {
 
     #[test]
     fn privacy_proof_ffi_rejects_wrong_backend_vk_ref_before_production_gate() {
-        for (case, vk_ref) in [(
+        let (case, vk_ref) = (
             "wrong-backend",
             "groth16-bls12-377:confidential_transfer_v2",
-        )] {
-            let request = PrivacyProofRequestV1 {
-                algorithm_id: "confidential-transfer-v2".to_owned(),
-                entrypoint: "buildConfidentialTransferProofV2".to_owned(),
-                vk_ref: vk_ref.to_owned(),
-                public_inputs: b"public".to_vec(),
-                witness: b"secret witness".to_vec(),
-                proof: Vec::new(),
-            };
-            let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
+        );
+        let request = PrivacyProofRequestV1 {
+            algorithm_id: "confidential-transfer-v2".to_owned(),
+            entrypoint: "buildConfidentialTransferProofV2".to_owned(),
+            vk_ref: vk_ref.to_owned(),
+            public_inputs: b"public".to_vec(),
+            witness: b"secret witness".to_vec(),
+            proof: Vec::new(),
+        };
+        let result = privacy_result_for_request(request, PrivacyProofOperationV1::Build);
 
-            assert_eq!(
-                result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
-                "{case}",
-            );
-            assert!(
-                result.message.contains("vk_ref backend"),
-                "{case}: {}",
-                result.message,
-            );
-            assert!(result.message.contains("backend family"), "{case}");
-            assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{case}");
-            assert_eq!(result.vk_ref, vk_ref, "{case}");
-            assert_eq!(result.public_inputs, b"public", "{case}");
-            assert!(result.proof.is_empty(), "{case}");
-            assert!(!result.verified, "{case}");
-        }
+        assert_eq!(
+            result.error_code, PRIVACY_FFI_ERROR_INVALID_REQUEST,
+            "{case}",
+        );
+        assert!(
+            result.message.contains("vk_ref backend"),
+            "{case}: {}",
+            result.message,
+        );
+        assert!(result.message.contains("backend family"), "{case}");
+        assert_eq!(result.algorithm_id, "confidential-transfer-v2", "{case}");
+        assert_eq!(result.vk_ref, vk_ref, "{case}");
+        assert_eq!(result.public_inputs, b"public", "{case}");
+        assert!(result.proof.is_empty(), "{case}");
+        assert!(!result.verified, "{case}");
     }
 
     #[test]
@@ -7532,6 +7706,63 @@ mod tests {
         previous_bundle
     }
 
+    fn sample_reserved_lineage_append_request_missing_key_artifacts()
+    -> KagemushaRecursiveSpendAppendRequestV1 {
+        let init_request = sample_recursive_spend_init_request();
+        let mut previous_bundle = sample_reserved_lineage_previous_bundle();
+        let step = init_request
+            .record_bundle
+            .bundle
+            .steps
+            .first()
+            .expect("Python append record bundle has one hop");
+        let root_before = step.root_before;
+        let previous_note_nullifier = step.input_nullifiers[0];
+        let output_commitment = step.output_commitments[0];
+        previous_bundle.accumulator.chain_id = init_request.record_bundle.bundle.chain_id.clone();
+        previous_bundle.accumulator.asset = init_request.record_bundle.bundle.asset.clone();
+        if previous_bundle.accumulator.initial_root == root_before {
+            previous_bundle.accumulator.initial_root =
+                fixed_bytes(b"python-lineage-append-distinct-initial-root");
+        }
+        previous_bundle.accumulator.topup_anchor_nullifiers =
+            vec![fixed_bytes(b"python-lineage-append-distinct-topup-anchor")];
+        previous_bundle.accumulator.final_root = root_before;
+        previous_bundle.accumulator.current_note = KagemushaSpendableNoteDescriptorV1 {
+            note_commitment: fixed_bytes(b"python-lineage-append-previous-note"),
+            spend_nullifier: previous_note_nullifier,
+            amount: Numeric::new(42, 0),
+        };
+        refresh_recursive_spend_bundle_public_inputs(&mut previous_bundle);
+        attach_recursive_spend_previous_proof_open_verify_envelope(
+            &mut previous_bundle,
+            fixed_bytes(b"python-lineage-append-missing-artifact-previous-vk"),
+        );
+        let previous_recursive_proof_open_envelopes_archive =
+            sample_previous_recursive_proof_open_envelopes_archive(&previous_bundle);
+
+        let request = KagemushaRecursiveSpendAppendRequestV1 {
+            previous_bundle,
+            previous_lineage_verifier_record: Some(sample_recursive_spend_lineage_verifier_record()),
+            record_bundle: init_request.record_bundle,
+            pallas_open_envelopes_archive: init_request.pallas_open_envelopes_archive,
+            current_note: KagemushaSpendableNoteDescriptorV1 {
+                note_commitment: output_commitment,
+                spend_nullifier: fixed_bytes(b"python-lineage-append-current-nullifier"),
+                amount: Numeric::new(42, 0),
+            },
+            output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
+                .to_owned(),
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
+            previous_recursive_proof_open_envelopes_archive,
+        };
+        request
+            .validate_public_binding()
+            .expect("Python missing-key-artifact append request is otherwise well formed");
+        request
+    }
+
     fn refresh_recursive_spend_bundle_public_inputs(bundle: &mut KagemushaRecursiveSpendBundleV1) {
         let mut public_inputs =
             kagemusha_recursive_spend_public_inputs_from_accumulator(&bundle.accumulator)
@@ -7646,6 +7877,8 @@ mod tests {
                 spend_nullifier: fixed_bytes(b"python-current-hop-note-nullifier"),
                 amount: Numeric::new(42, 0),
             },
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
         }
     }
 
@@ -8625,6 +8858,8 @@ mod tests {
             pallas_open_envelopes_archive: witness.pallas_open_envelopes_archive.clone(),
             current_note,
             output_proof_circuit_id: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1.to_owned(),
+            lineage_verifier_key: None,
+            lineage_proving_key_archive: None,
             previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
         };
         request
@@ -8802,6 +9037,8 @@ mod tests {
                     current_note: previous_bundle.accumulator.current_note.clone(),
                     output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
                         .to_owned(),
+                    lineage_verifier_key: None,
+                    lineage_proving_key_archive: None,
                     previous_recursive_proof_open_envelopes_archive: norito::to_bytes(
                         &previous_open_envelopes,
                     )
@@ -8896,6 +9133,55 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_init_python_rejects_missing_lineage_key_artifacts() {
+        ensure_python();
+        Python::attach(|py| {
+            let request = sample_recursive_spend_init_request();
+            let archive = norito::to_bytes(&request).expect("encode Python init request archive");
+
+            let err = kagemusha_recursive_spend_init_py(py, &archive)
+                .expect_err("Python host must reject missing Reserved-lineage key artifacts")
+                .to_string();
+            assert!(
+                err.contains("lineage_verifier_key"),
+                "missing lineage key artifacts returned unexpected error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_append_python_rejects_missing_lineage_key_artifacts() {
+        ensure_python();
+        Python::attach(|py| {
+            for (case, expected_field, proving_key_archive) in [
+                (
+                    "missing both artifacts",
+                    "lineage_proving_key_archive",
+                    None,
+                ),
+                (
+                    "missing verifier key",
+                    "lineage_verifier_key",
+                    Some(vec![0xAC; 32]),
+                ),
+            ] {
+                let mut request = sample_reserved_lineage_append_request_missing_key_artifacts();
+                request.lineage_proving_key_archive = proving_key_archive;
+                let archive =
+                    norito::to_bytes(&request).expect("encode Python append request archive");
+
+                let err = kagemusha_recursive_spend_append_py(py, &archive)
+                    .expect_err("Python host must reject missing Reserved-lineage key artifacts")
+                    .to_string();
+                assert!(
+                    err.contains(expected_field),
+                    "{case} returned unexpected error: {err}"
+                );
+            }
+        });
+    }
+
+    #[test]
     fn kagemusha_recursive_spend_append_python_rejects_malformed_previous_proof_opening_archives() {
         ensure_python();
         Python::attach(|py| {
@@ -8946,6 +9232,8 @@ mod tests {
                     current_note: previous_bundle.accumulator.current_note.clone(),
                     output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
                         .to_owned(),
+                    lineage_verifier_key: None,
+                    lineage_proving_key_archive: None,
                     previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
                 };
                 let archive =
@@ -8995,6 +9283,8 @@ mod tests {
                 current_note: previous_bundle.accumulator.current_note.clone(),
                 output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
                     .to_owned(),
+                lineage_verifier_key: None,
+                lineage_proving_key_archive: None,
                 previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
             };
             let archive = norito::to_bytes(&request).expect("encode Python append request archive");
@@ -9044,6 +9334,8 @@ mod tests {
                 current_note: previous_bundle.accumulator.current_note.clone(),
                 output_proof_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1
                     .to_owned(),
+                lineage_verifier_key: None,
+                lineage_proving_key_archive: None,
                 previous_recursive_proof_open_envelopes_archive: previous_proof_open_archive,
             };
             let archive = norito::to_bytes(&request).expect("encode Python append request archive");
@@ -9080,6 +9372,8 @@ mod tests {
                 record_bundle: witness.record_bundle.clone(),
                 pallas_open_envelopes_archive: witness.pallas_open_envelopes_archive.clone(),
                 current_note,
+                lineage_verifier_key: None,
+                lineage_proving_key_archive: None,
             };
             let request_archive = norito::to_bytes(&request).expect("encode init request");
             let bundle_archive = norito::to_bytes(&bundle).expect("encode init bundle");
@@ -15235,17 +15529,11 @@ fn privacy_algorithm_entry(algorithm_id: &str) -> Option<&'static PrivacyAlgorit
 }
 
 fn privacy_entrypoint_supported(entry: &PrivacyAlgorithmEntry, entrypoint: &str) -> bool {
-    entry
-        .sdk_entrypoints
-        .iter()
-        .any(|candidate| *candidate == entrypoint)
+    entry.sdk_entrypoints.contains(&entrypoint)
 }
 
 fn privacy_entrypoint_planned(entry: &PrivacyAlgorithmEntry, entrypoint: &str) -> bool {
-    entry
-        .planned_entrypoints
-        .iter()
-        .any(|candidate| *candidate == entrypoint)
+    entry.planned_entrypoints.contains(&entrypoint)
 }
 
 fn privacy_proof_family_is_portable(label: &str) -> bool {
@@ -15366,15 +15654,11 @@ fn privacy_entrypoint_is_production_proof_builder(entrypoint: &str) -> bool {
 }
 
 fn privacy_algorithm_entry_is_component(entry: &PrivacyAlgorithmEntry) -> bool {
-    PRIVACY_COMPONENT_ALGORITHM_IDS
-        .iter()
-        .any(|algorithm_id| *algorithm_id == entry.id)
+    PRIVACY_COMPONENT_ALGORITHM_IDS.contains(&entry.id)
 }
 
 fn privacy_algorithm_entry_is_research_target(entry: &PrivacyAlgorithmEntry) -> bool {
-    PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS
-        .iter()
-        .any(|algorithm_id| *algorithm_id == entry.id)
+    PRIVACY_RESEARCH_TARGET_ALGORITHM_IDS.contains(&entry.id)
 }
 
 fn privacy_algorithm_entry_is_proofed_privacy(entry: &PrivacyAlgorithmEntry) -> bool {
@@ -15730,16 +16014,22 @@ fn privacy_vk_ref_backend_family_is_portable(field: &str) -> bool {
     };
     (first.is_ascii_lowercase() || first.is_ascii_digit())
         && (last.is_ascii_lowercase() || last.is_ascii_digit())
-        && field.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
-        })
+        && !field.contains("--")
+        && field
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn privacy_vk_ref_name_is_portable(field: &str) -> bool {
     let Some(first) = field.bytes().next() else {
         return false;
     };
+    let Some(last) = field.bytes().last() else {
+        return false;
+    };
     first.is_ascii_lowercase()
+        && (last.is_ascii_lowercase() || last.is_ascii_digit())
+        && !field.contains("__")
         && field
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
@@ -15765,10 +16055,12 @@ fn privacy_sdk_entrypoint_is_portable(field: &str) -> bool {
             let Some(first) = segment.bytes().next() else {
                 return false;
             };
-            (first.is_ascii_alphabetic() || first == b'_')
-                && segment
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            let Some(last) = segment.bytes().last() else {
+                return false;
+            };
+            first.is_ascii_alphabetic()
+                && last.is_ascii_alphanumeric()
+                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric())
         })
 }
 
@@ -15976,7 +16268,7 @@ fn privacy_result_for_request(
         return privacy_failure_result(
             PRIVACY_FFI_ERROR_INVALID_REQUEST,
             "privacy proof request must include non-empty algorithm_id and entrypoint",
-            Some(&request),
+            None,
         );
     }
 
@@ -15992,7 +16284,7 @@ fn privacy_result_for_request(
         return privacy_failure_result(
             PRIVACY_FFI_ERROR_INVALID_REQUEST,
             "privacy proof request must include non-empty vk_ref",
-            Some(&request),
+            None,
         );
     }
 

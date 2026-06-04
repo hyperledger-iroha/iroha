@@ -25,6 +25,8 @@ public sealed class SccpEthereumMainnetTests
         "0xfeb62925410b1376a2cd3704c3822e335da96c3dcc283b041a559d7b08ab1cc4";
     private const string ExpectedSyncCommitteeRoot =
         "0xb3343685e8ab63a2d66bccebb6c03a149a53330389473b4a495598065c17b445";
+    private const string BeaconHeaderRootSlot64 =
+        "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c";
     private const string ExpectedPublicInputsBytes =
         "011111111111111111111111111111111111111111111111111111111111111111"
         + "2222222222222222222222222222222222222222222222222222222222222222"
@@ -551,14 +553,16 @@ public sealed class SccpEthereumMainnetTests
     private static string BeaconHeaderJson(
         bool executionOptimistic = false,
         bool finalized = true,
-        char rootNibble = 'd',
+        char? rootNibble = null,
         string slot = "64")
-        => $$"""
+    {
+        var root = rootNibble is null ? BeaconHeaderRootSlot64 : "0x" + new string(rootNibble.Value, 64);
+        return $$"""
         {
           "execution_optimistic": {{executionOptimistic.ToString().ToLowerInvariant()}},
           "finalized": {{finalized.ToString().ToLowerInvariant()}},
           "data": {
-            "root": "0x{{new string(rootNibble, 64)}}",
+            "root": "{{root}}",
             "canonical": true,
             "header": {
               "message": {
@@ -573,6 +577,7 @@ public sealed class SccpEthereumMainnetTests
           }
         }
         """;
+    }
 
     private static string BeaconBlockJson(
         string slot = "64",
@@ -598,19 +603,22 @@ public sealed class SccpEthereumMainnetTests
         }
         """;
 
-    private static string BeaconCheckpointJson(char rootNibble = 'd')
-        => $$"""
+    private static string BeaconCheckpointJson(char? rootNibble = null)
+    {
+        var root = rootNibble is null ? BeaconHeaderRootSlot64 : "0x" + new string(rootNibble.Value, 64);
+        return $$"""
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
             "finalized": {
-              "root": "0x{{new string(rootNibble, 64)}}",
+              "root": "{{root}}",
               "epoch": "2"
             }
           }
         }
         """;
+    }
 
     private static string BeaconGenesisJson(string genesisTime = "100")
         => $$"""
@@ -650,16 +658,19 @@ public sealed class SccpEthereumMainnetTests
         }
         """;
 
-    private static string BeaconBlockRootJson(char rootNibble = 'd')
-        => $$"""
+    private static string BeaconBlockRootJson(char? rootNibble = null)
+    {
+        var root = rootNibble is null ? BeaconHeaderRootSlot64 : "0x" + new string(rootNibble.Value, 64);
+        return $$"""
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
-            "root": "0x{{new string(rootNibble, 64)}}"
+            "root": "{{root}}"
           }
         }
         """;
+    }
 
     [Fact]
     public void MainnetGuardsAcceptEthereumAndRejectOtherRoutes()
@@ -2228,9 +2239,9 @@ public sealed class SccpEthereumMainnetTests
         Assert.Equal("4660", evidence.BeaconFinality?["executionBlockNumber"]);
         Assert.Equal(blockHash, evidence.BeaconFinality?["executionBlockHash"]);
         Assert.Equal("0x" + new string('c', 64), evidence.BeaconFinality?["executionReceiptsRoot"]);
-        Assert.Equal("0x" + new string('a', 64), evidence.BeaconFinality?["finalizedHeaderRoot"]);
+        Assert.Equal(BeaconHeaderRootSlot64, evidence.BeaconFinality?["finalizedHeaderRoot"]);
         Assert.Equal(ExpectedSyncCommitteeRoot, evidence.BeaconFinality?["syncCommitteeRoot"]);
-        Assert.Equal("32", evidence.BeaconFinality?["beaconSlot"]);
+        Assert.Equal("64", evidence.BeaconFinality?["beaconSlot"]);
         Assert.Equal("0x01" + new string('0', 126), evidence.BeaconFinality?["syncCommitteeBits"]);
         Assert.Equal("0x" + string.Concat(Enumerable.Repeat("34", 96)), evidence.BeaconFinality?["syncCommitteeSignature"]);
         Assert.Equal("1", evidence.BeaconFinality?["syncCommitteeParticipation"]);
@@ -2294,8 +2305,8 @@ public sealed class SccpEthereumMainnetTests
             new EthereumMainnetInboundEvidence { Receipt = receipt, Block = block },
             consensusProvider: provider);
 
-        Assert.Equal("0x" + new string('a', 64), evidence.BeaconFinality?["finalizedHeaderRoot"]);
-        Assert.Equal("32", evidence.BeaconFinality?["beaconSlot"]);
+        Assert.Equal(BeaconHeaderRootSlot64, evidence.BeaconFinality?["finalizedHeaderRoot"]);
+        Assert.Equal("64", evidence.BeaconFinality?["beaconSlot"]);
         Assert.Equal(
             [
                 "https://beacon.example/eth/v1/beacon/genesis",

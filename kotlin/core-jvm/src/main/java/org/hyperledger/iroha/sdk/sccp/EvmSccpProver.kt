@@ -848,6 +848,8 @@ private data class EthereumBeaconRestBlockId(
 )
 
 private data class EthereumBeaconRestFinalityUpdateSummary(
+    val finalizedHeaderRoot: String,
+    val beaconSlot: BigInteger,
     val syncCommitteeBits: String,
     val syncCommitteeSignature: String,
     val syncCommitteeParticipation: BigInteger,
@@ -2174,17 +2176,18 @@ class EthereumMainnetBeaconRestConsensusProvider @JvmOverloads constructor(
                 "Ethereum mainnet Beacon REST light-client finality update",
             ),
             finalizedHeader.slot,
+            finalizedHeader.root,
         )
         return mapOf(
             "executionBlockNumber" to normalizeEthereumBeaconRestUnsigned(blockNumber, "block.number").toString(),
             "executionBlockHash" to blockHash,
             "executionReceiptsRoot" to receiptsRoot,
-            "finalizedHeaderRoot" to targetHeader.root,
+            "finalizedHeaderRoot" to finalityUpdate.finalizedHeaderRoot,
             "syncCommitteeRoot" to resolveEthereumBeaconRestSyncCommitteeRoot(
                 syncCommitteeRoot,
                 syncCommitteePayload,
             ),
-            "beaconSlot" to targetHeader.slot.toString(),
+            "beaconSlot" to finalityUpdate.beaconSlot.toString(),
             "syncCommitteeBits" to finalityUpdate.syncCommitteeBits,
             "syncCommitteeSignature" to finalityUpdate.syncCommitteeSignature,
             "syncCommitteeParticipation" to finalityUpdate.syncCommitteeParticipation.toString(),
@@ -2339,6 +2342,7 @@ private fun ethereumBeaconRestHeaderSummary(
 private fun ethereumBeaconRestFinalityUpdateSummary(
     payload: Map<String, Any?>,
     expectedFinalizedSlot: BigInteger,
+    expectedFinalizedRoot: String,
 ): EthereumBeaconRestFinalityUpdateSummary {
     val label = "Ethereum mainnet Beacon REST light-client finality update"
     rejectUnsafeBeaconRestPayload(payload, label)
@@ -2361,6 +2365,31 @@ private fun ethereumBeaconRestFinalityUpdateSummary(
     require(finalizedSlot == expectedFinalizedSlot) {
         "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot"
     }
+    val finalizedHeaderRoot = SccpSourceProofs.ethBeaconBlockHeaderRoot(
+        beaconSlot = finalizedSlot.toString(),
+        beaconProposerIndex = normalizeEthereumBeaconRestUnsigned(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "proposer_index"),
+            "$label.data.finalized_header.beacon.proposer_index",
+        ).toString(),
+        beaconParentRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "parent_root"),
+            "$label.data.finalized_header.beacon.parent_root",
+            32,
+        ),
+        beaconStateRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "state_root"),
+            "$label.data.finalized_header.beacon.state_root",
+            32,
+        ),
+        beaconBodyRoot = normalizeEthereumBeaconRestHex(
+            requireBeaconRestField(finalizedBeacon, "$label.data.finalized_header.beacon", "body_root"),
+            "$label.data.finalized_header.beacon.body_root",
+            32,
+        ),
+    )
+    require(finalizedHeaderRoot == expectedFinalizedRoot) {
+        "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root"
+    }
     val syncSignatureSlot = normalizeEthereumBeaconRestSlot(
         requireBeaconRestField(data, "$label.data", "signature_slot"),
         "$label.data.signature_slot",
@@ -2382,6 +2411,8 @@ private fun ethereumBeaconRestFinalityUpdateSummary(
         96,
     )
     return EthereumBeaconRestFinalityUpdateSummary(
+        finalizedHeaderRoot = finalizedHeaderRoot,
+        beaconSlot = finalizedSlot,
         syncCommitteeBits = syncCommitteeBits,
         syncCommitteeSignature = syncCommitteeSignature,
         syncCommitteeParticipation = ethereumBeaconRestSyncCommitteeParticipation(syncCommitteeBits),
@@ -3718,7 +3749,7 @@ class EthereumMainnetSccp(
                         it,
                         "beaconFinality.syncSignatureSlot",
                     )
-                    require(normalizedSlot > BigInteger.ZERO) {
+                    require(normalizedSlot > 0L) {
                         "beaconFinality.syncSignatureSlot must be positive"
                     }
                     "syncSignatureSlot" to normalizedSlot.toString()
@@ -3728,7 +3759,7 @@ class EthereumMainnetSccp(
                         it,
                         "beaconFinality.syncCommitteeParticipation",
                     )
-                    require(normalizedParticipation > BigInteger.ZERO) {
+                    require(normalizedParticipation > 0L) {
                         "beaconFinality.syncCommitteeParticipation must be positive"
                     }
                     "syncCommitteeParticipation" to normalizedParticipation.toString()

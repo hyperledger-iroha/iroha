@@ -2,6 +2,502 @@
 
 Last updated: 2026-06-04
 
+## 2026-06-04 Privacy public input schema token canonicality gate
+
+- Hardened JS and Python public privacy catalog public-input schema token
+  validators so tokens must start with a lowercase ASCII letter, end with a
+  lowercase alphanumeric character, contain only lowercase alphanumeric
+  characters plus single underscores, and reject repeated or trailing
+  underscores.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  token validator shape to keep package output and source behavior aligned.
+- Added adversarial public-input schema coverage for `field_` and
+  `field__digest`, alongside existing uppercase, numeric-prefix, duplicate,
+  proof/witness payload metadata, and production-claim cases.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "invalid_descriptor_fields"`
+    (`54` passed, `404` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`458` passed)
+
+## 2026-06-04 Privacy public verifier-key ID canonicality gate
+
+- Hardened JS and Python public privacy catalog verifier-key ID validators so
+  unnamespaced verifier-key names and namespaced prefixes must start with a
+  lowercase letter, end with a lowercase alphanumeric character, contain only
+  lowercase alphanumeric characters plus single underscores, and reject repeated
+  or trailing underscores.
+- Preserved the existing legacy namespaced suffix shape needed by `zk::Shield`,
+  while rejecting malformed namespaced suffixes with trailing or repeated
+  underscores.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  verifier-key validator shape to keep package output and source behavior
+  aligned.
+- Added adversarial verifier-key ID coverage for `verifier_key_`,
+  `verifier__key`, `zk_::Shield`, `zk::Shield_`, and
+  `zk::Shield__Key`.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "verifier_key"`
+    (`17` passed, `439` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`456` passed)
+
+## 2026-06-04 Privacy public backend-family canonicality gate
+
+- Hardened the JS and Python public privacy catalog backend-family validators
+  so backend labels match the native `vk_ref` backend component rule:
+  lowercase alphanumeric labels with optional single hyphen separators only.
+  Dotted aliases, underscored aliases, and repeated hyphen separators are now
+  rejected before verifier-key backend binding.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  backend-family validator shape to keep package output and source behavior
+  aligned.
+- Added adversarial backend-family coverage for `halo2.ipa.pasta`,
+  `halo2_ipa_pasta`, and `halo2--ipa-pasta`, alongside the existing
+  uppercase and edge-separator cases.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm catalogs stay fail-closed and in parity across JS and Python"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "backend_family"`
+    (`11` passed, `440` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`451` passed)
+
+## 2026-06-04 Privacy public SDK catalog entrypoint canonicality gate
+
+- Hardened the JS and Python public privacy catalog validators so SDK
+  entrypoint names match the native FFI canonical shape: dot-separated ASCII
+  identifier segments, each starting with a letter and containing only
+  alphanumeric bytes. Underscore aliases are no longer accepted in public
+  `sdkEntrypoints` or `plannedSdkEntrypoints`.
+- Updated the checked-in JS `dist/privacyAlgorithms.js` copy with the same
+  validator shape to keep package output and source behavior aligned.
+- Added adversarial catalog validation cases for leading underscore, trailing
+  underscore, interior underscore, namespaced leading-underscore segment, and
+  namespaced trailing-underscore segment aliases across executable and planned
+  SDK entrypoint lists.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/dist/privacyAlgorithms.js`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js --test-name-pattern "privacy algorithm JS validators reject hostile catalog descriptor shapes"`
+    (`6` passed; Node ran the full file despite the name pattern)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q -k "malformed_rows or namespaced_sdk_entrypoints or fixture_entrypoints"`
+    (`29` passed, `419` deselected)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest python/iroha_python/tests/privacy_catalog_test.py -q`
+    (`448` passed)
+
+## 2026-06-04 Privacy native empty required-field non-reflection gate
+
+- Hardened the C bridge, JS NAPI host, and Python PyO3 host privacy FFI
+  request validators so empty `algorithm_id`, `entrypoint`, and `vk_ref`
+  failures return generic invalid-request results without attaching the
+  malformed request.
+- Added adversarial regressions that place
+  `required-text-field-never-echo` in `public_inputs` while clearing each
+  required text field, then assert the encoded failure result does not contain
+  the marker.
+- Strengthened the JS parity contract so all native host copies must reject
+  empty required text fields with `None` request context and keep the marker
+  non-reflection tests in sync.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "native privacy FFI hosts bound reflected request fields before production gate"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_request_rejects_empty_required_text_fields_without_reflection --lib -- --nocapture`
+    (`1` passed after waiting for shared Cargo lock/build activity)
+
+## 2026-06-04 Privacy native SDK entrypoint canonicality gate
+
+- Hardened the C bridge, JS NAPI host, and Python PyO3 host privacy FFI
+  request validators so SDK entrypoints remain dot-separated ASCII identifier
+  paths whose segments start with a letter, end alphanumeric, and contain only
+  alphanumeric bytes. Leading, trailing, and segment-local underscore aliases
+  now fail before catalog dispatch.
+- Added adversarial catalog and request-shape cases for leading underscore,
+  trailing underscore, dotted leading-underscore segment, and dotted
+  trailing-underscore segment entrypoints, with non-reflection checks for the
+  forged request markers.
+- Strengthened the JS parity contract so all native host copies must keep the
+  stricter helper body and catalog/request regression labels in sync.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable|native privacy FFI hosts bound reflected request fields before production gate"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --nocapture`
+    (`1` passed after waiting for shared Cargo lock/build activity)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-04 Privacy native vk_ref canonicality gate
+
+- Hardened the C bridge, JS NAPI host, and Python PyO3 host privacy FFI
+  request validators so `vk_ref` backend components are lowercase
+  hyphen-only identifiers with no repeated hyphen separators.
+- Verifier-key names now must start with lowercase ASCII, end with lowercase
+  ASCII or a digit, and reject repeated underscores before catalog binding.
+  Dotted/underscored backend aliases and trailing/repeated underscore key-name
+  aliases now fail without reflecting the forged `vk_ref` marker.
+- Added adversarial native-host regression cases for dotted backend aliases,
+  underscored backend aliases, repeated backend separators, trailing
+  underscore key names, and repeated underscore key names, plus JS parity
+  guards pinning the stricter helper shapes.
+- Validation:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+    (passed)
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable|native privacy FFI hosts reject malformed vk_ref"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_proof_ffi_rejects_malformed_vk_ref_without_reflection --lib -- --nocapture`
+    (`1` passed after waiting for shared Cargo lock/build activity)
+  - `git diff --check` and conflict-marker scans passed for the touched files;
+    lockfile/package manifest drift check was clean.
+  - Additional JS/Python Rust-host execution was not queued because unrelated
+    concurrent Cargo jobs were active in the shared `target/` directory; the JS
+    parity test covered those source copies statically.
+
+## 2026-06-04 Privacy native SDK non-empty payload gates
+
+- Hardened Swift, Java/Android, Kotlin/JVM, and C# privacy native bridges so
+  public build/verify request archives and native result archives must contain
+  non-empty Norito privacy payloads. Structurally valid zero-payload archives
+  remain allowed only for the shared availability request probe.
+- Added per-SDK guards for native availability probes, native output decoders,
+  public request dispatch, and C# result archive wrappers so zero-payload
+  result frames cannot be treated as usable capabilities/proof results.
+- Extended mobile, Swift, Kotlin/JVM, Java/Android, C#, and JS parity tests to
+  cover zero-payload request/result rejection while preserving max-padding,
+  field-bitset, wrong-schema, malformed-header, and defensive-copy coverage.
+- Validation:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "native privacy FFI hosts validate Norito frame headers"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "SDK privacy native availability probes reject adversarial native output archives|C# public privacy archive wrappers reject malformed Norito archives|Swift privacy native availability requires valid Norito proof probes|privacy native availability proof probes use shared Norito request archives"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `swift build --package-path IrohaSwift` (passed)
+  - `swift test --package-path IrohaSwift --filter PrivacyNativeBridgeTests`
+    (blocked by unrelated compile errors in
+    `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` missing `try`
+    on throwing `assertBfvComponentDigest` calls)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ./gradlew -q :jvm:compileTestJava`
+    (passed from `java/iroha_android`)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home /opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin/java -ea -cp java/iroha_android/core/build/classes/java/test:java/iroha_android/core/build/classes/java/main org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest`
+    (passed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home ../gradlew -q test --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest -Pkotlin.daemon.jvmargs=-Xmx2g`
+    (passed from `kotlin/core-jvm`; emitted Java 8 deprecation warnings)
+  - C# focused tests could not be executed because `dotnet`, `csc`, and `mcs`
+    are not installed in this environment; C# source parity was covered by the
+    JS contract tests above.
+
+## 2026-06-04 Privacy verifier backend label portability gate
+
+- Hardened `production_verify_backend_tag` so production verifier backend
+  labels must be portable canonical ASCII, start and end with alphanumeric
+  bytes, and avoid repeated or path-like separators before allowlist dispatch.
+- This prevents aliases such as `halo2/ipa::ivm-execution-v1`, uppercase
+  backend names, repeated separators, dot-segment-like labels, and non-ASCII
+  confusables from reaching OpenVerify, Halo2, or STARK verifier dispatch.
+- Added Rust negative coverage in
+  `production_verify_backend_allowlist_is_explicit` and
+  `guardrails_reject_unsupported_backends_before_dispatch`, plus a JS FFI
+  contract parity guard for the Rust portability check.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs` (passed)
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js --test-name-pattern "native chain proof admission uses explicit production verifier backend allowlist"`
+    (`57` passed; Node ran the full file despite the name pattern)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core production_verify_backend_allowlist_is_explicit --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_core guardrails_reject_unsupported_backends_before_dispatch --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-04 Privacy source-reference URL provenance gates
+
+- Hardened JS and Python privacy catalog source-reference URL validation so
+  protocol provenance links must be printable ASCII `https://` URLs and must
+  not use `xn--` IDNA/punycode host labels. Source URLs must also be already
+  canonical, rejecting parser-normalized aliases such as uppercase hosts,
+  default ports, trailing-dot hostnames, and raw or percent-encoded dot
+  segments.
+- This keeps cataloged protocol/audit source material fail-closed against
+  Unicode homograph hosts, raw Unicode path/query spoofing, and URL
+  canonicalization aliases that could bypass raw duplicate checks.
+- Added adversarial catalog-loader coverage for Cyrillic host confusables,
+  punycode host labels, Greek path confusables, Cyrillic query text, uppercase
+  hosts, default `:443`, trailing-dot hosts, and raw or encoded `..` path
+  segments.
+- Validation:
+  - `node --check javascript/iroha_js/src/privacyAlgorithms.js && node --check javascript/iroha_js/dist/privacyAlgorithms.js && node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+    (passed)
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+    (`6` passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py -k source_references`
+    (`49` passed)
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/privacy_catalog_test.py`
+    (`438` passed)
+  - JS and Python catalog invariant audits each checked `23` current
+    source-reference URLs for printable ASCII, absence of IDNA host labels, and
+    canonical URL form.
+
+## 2026-06-04 Halo2 adapter refactor
+
+- Added an internal `iroha_core::zk::halo2_backend` adapter for the vendored
+  Halo2 Pasta IPA backend. The adapter owns Pasta parameter construction,
+  verifying/proving key generation and decoding, advice assignment
+  compatibility, parameter fingerprinting, and raw IPA proof
+  creation/verification.
+- Refactored runtime Halo2 IPA verifier dispatch, IVM execution proof
+  builders, offline note proof builders, Kagemusha folded/recursive proof
+  builders, and confidential transfer v2 proof generation/self-verification
+  through the adapter. Circuit definitions, test fixtures, public proof
+  envelopes, feature flags, and verifying-key formats remain unchanged.
+- Kept the yanked `halo2_gadgets = 0.3.1` dependency removed; the
+  `zk-halo2-ipa-poseidon` feature now continues through local Poseidon bench
+  plumbing without resolving `halo2_gadgets` or `halo2_proofs v0.3`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/iroha_core/src/zk/confidential_v2.rs crates/iroha_core/src/zk/halo2_backend.rs`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-halo2-adapter-check cargo check -p iroha_core --features zk-halo2-ipa-poseidon`
+    (passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-halo2-adapter-check cargo check -p iroha_core --bench zk_poseidon --features zk-halo2-ipa-poseidon`
+    (passed)
+  - `cargo tree -p iroha_core --features zk-halo2-ipa-poseidon | rg -n "halo2_gadgets|halo2_proofs v0\.3" || true`
+    (no matches)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-halo2-adapter-check cargo check -p kaigi_zk -p ivm`
+    (passed)
+  - Shared-target `cargo check -p iroha_core --features zk-halo2-ipa-poseidon`
+    was blocked by concurrent Cargo jobs and then failed with `No space left on
+    device`; validation was rerun in the isolated target directory above after
+    removing a stale generated `/tmp/iroha-codex-iso-xsd-validated` build tree.
+
+## 2026-06-04 ISO 20022 readiness proof hardening
+
+- Tightened `scripts/iso_production_readiness.py` so aggregate evidence
+  canary summaries must carry the digest-bound `require_explicit_policy`
+  boolean emitted by `scripts/iso_operator_evidence_verify.py`; omitted values
+  are malformed input and `false` is a production blocker.
+- The readiness summary now preserves the per-canary explicit-policy proof, so
+  final release evidence cannot rely only on the upstream evidence gate's
+  command-line posture.
+- Threaded compact trust revocation posture through
+  `scripts/iso_operator_evidence_verify.py` into readiness summaries. The
+  final gate now requires explicit CRL/OCSP booleans and material counts,
+  treats omitted revocation proof as malformed, and blocks production when CRL
+  or OCSP revocation checks are disabled or required material counts are zero.
+  It also rejects compact trust summaries whose `verified_bundles` count does
+  not match the number of compact profiles.
+- The final readiness rollup now requires compact canary and trust summary
+  entries to retain non-empty source paths and canonical lowercase
+  `summary_sha256` pointers, and preserves those pointers in the release
+  summary for audit traceability.
+- The evidence and readiness gates now have direct negative coverage proving
+  they reject omitted whole canary/trust and XSD/evidence input summaries,
+  preventing empty archive or empty release reports from claiming readiness.
+- The evidence and final readiness commands now require explicit `--provider`
+  and `--environment` release context, and tests prove omitted or blank context
+  is malformed rather than inferred from archived summaries.
+- The evidence summary now records that expected provider/environment context
+  in its digest-bound policy block, and readiness rechecks the compact policy
+  context before accepting an evidence archive.
+- Evidence and readiness now reject repeated summary paths and copied summaries
+  with duplicate `summary_sha256` values, including compact canary/trust entries
+  inside an evidence summary.
+- All ISO operator JSON inputs now reject duplicate object keys before semantic
+  validation, covering rail sidecars, notary anchors/indexes, canary runbooks,
+  receipts, trust bundles, canary/evidence/readiness summaries, XSD manifests,
+  receipt-verifier JSON embedded in canary stdout, and direct archive
+  receipt-verifier stdout.
+- The checked-in schema-backed XML fixtures now pass offline `xmllint --nonet`
+  validation against their checked-in Standards Editor XSDs. This fixed the
+  `pacs.008` UETR to a UUIDv4 value, added required `pacs.009` debtor/creditor
+  branch elements, moved the `pacs.002` status free text under the standard
+  `StsRsnInf/AddtlInf` path, added required `camt.056` assignment parties, and
+  added a schema-backed `camt.056.001.09` cancellation fixture from the
+  Apache-2.0 Moov `iso20022` corpus.
+- `scripts/iso_xsd_fixture_verify.py` now has a `--validate-xml-schema` strict
+  proof mode. It records per-fixture `schema_validated` flags and a
+  `schema_validated_fixtures` count, and
+  `scripts/iso_production_readiness.py` blocks production summaries that do not
+  prove XML schema validation for every schema-backed fixture.
+- `scripts/iso_xsd_fixture_verify.py` can now parse the embedded default rail
+  profile catalog with `--profile-catalog`, record concrete advertised message
+  versions, and fail `--require-profile-schema-backed-versions` when an
+  advertised version lacks a schema-backed fixture. The current checked-in
+  profile scan records `55` concrete profile versions, `26` schema-backed
+  versions, and `29` missing profile-version schema proofs, with the strict
+  profile gate first failing on `generic-iso20022` / `pacs.008.001.10`.
+- XSD preflight summaries now bind the manifest SHA-256, each checked-in
+  schema's canonical source repository, commit, path, SPDX license, and
+  source SHA-256, plus profile catalog source-file and embedded JSON SHA-256
+  values. The production-readiness gate rechecks and preserves those provenance
+  digests in compact XSD summaries and treats omitted, non-canonical, or
+  digest-drifted provenance as malformed release evidence or blockers.
+- Profile catalog checks now fail closed on non-canonical profile ids, malformed
+  message family ids, unsupported directions, empty profile/version lists,
+  duplicate profile ids, duplicate profile/message/direction entries, duplicate
+  concrete versions, concrete versions incorrectly placed in skipped family
+  aliases, and inconsistent profile catalog count fields in readiness summaries.
+- XSD schema imports now fail closed if the manifest omits canonical source
+  provenance or if the file contains known restricted Standards Editor
+  redistribution terms. Public mirrors for
+  `pacs.008.001.10`, `pacs.009.001.10`, and `pacs.002.001.12` were inspected
+  but not imported because their embedded XSD headers prohibit redistribution.
+- `scripts/iso_production_readiness.py` now requires and rechecks the
+  profile-catalog schema-backed proof, including count consistency, duplicated
+  profile-version entries, and forged missing-version lists. Production
+  summaries that do not prove `--require-profile-schema-backed-versions` are
+  blocked.
+- The IVM pacs.002 field aliases now accept the standard
+  `TxInfAndSts/StsRsnInf/AddtlInf[*]` path as `AddtlInf[*]`, preserving the
+  status free-text field after making the fixture XSD-valid.
+- `scripts/iso_operator_receipt_verify.py` now rejects repeated receipt input
+  paths and copied receipt files with duplicate `receipt_sha256` values. The
+  evidence and readiness gates also reject or block duplicate per-receipt paths
+  and receipt digests in canary-stage and direct archive receipt summaries.
+- Archived trust summaries now reject duplicate compact `profile_id` entries at
+  the evidence gate, and readiness reports duplicated compact trust-profile IDs
+  as production blockers rather than allowing copied profile entries to inflate
+  trust material counts.
+- The XSD fixture preflight now rejects copied XML fixtures with duplicate
+  fixture SHA-256 values, and the readiness rollup independently rechecks
+  digest-bound XSD `schemas[]`/`fixtures[]` metadata for count consistency,
+  duplicate schema/fixture evidence, schema-reference drift, and
+  schema-backed/missing-schema count mismatches.
+- `scripts/iso_audit_notary_adapter.py` now rejects duplicate publication
+  endpoints before network delivery, preventing repeated anchor submissions
+  from overwriting a single endpoint-addressed receipt. The canary runner also
+  rejects duplicate notary endpoints, duplicate explicit receipt paths or
+  receipt directories, and shared stage receipt directories before a runbook can
+  be planned.
+- XSD, operator-evidence, and compact trust summaries now must retain
+  timezone-aware, non-future `verified_at` timestamps; missing, naive,
+  malformed, control-character, or future timestamps are malformed
+  readiness/evidence inputs.
+- `scripts/iso_production_readiness.py` now requires explicit freshness budgets
+  for XSD summaries, aggregate evidence summaries, canary `finished_at`
+  timestamps, and compact trust-summary `verified_at` timestamps. Digest-correct
+  but stale XSD/evidence/canary/trust summaries are production blockers, and
+  missing or non-positive freshness budgets are malformed release inputs.
+- `scripts/iso_operator_evidence_verify.py` now requires explicit freshness
+  budgets for canary `finished_at`, trust-summary `verified_at`, and
+  trust-source `retrieved_at` evidence before archival. It rejects stale
+  digest-correct archive inputs, records those budgets in the evidence policy,
+  and `scripts/iso_production_readiness.py` blocks evidence archives produced
+  with weaker freshness budgets than the final release gate.
+- `scripts/iso_operator_canary.py` now records per-stage `started_at` and
+  `finished_at` timestamps. The evidence gate compacts those as
+  `stage_windows`, and readiness rechecks the compact stage windows against the
+  top-level canary window and exact `stage_names` sequence, including
+  overlapping, reordered, duplicate, or unsupported stage-name forgery.
+- Operator canary summaries now must carry timezone-aware, non-future
+  `started_at`/`finished_at` windows, and evidence/readiness both reject
+  reversed canary time windows.
+- Updated the ISO interop audit, engineering backlog, and roadmap notes to
+  document the final readiness checks. Remaining production blockers are still
+  official schema-backed ISO XSD packages for the reviewed fixture and
+  profile-advertised version gaps, real rail PKI/revocation bundles, and live
+  provider canary evidence.
+- Validation:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`77` passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test`
+    (`49` passed)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`93` passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`16` passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (`54` passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
+    (`156` passed)
+  - `for f in fixtures/iso20022/operator_canary/*.json; do python3 scripts/iso_operator_canary.py --config "$f" --plan-only --require-explicit-policy --summary-out "/tmp/iroha-iso-canary-$(basename "$f").summary.json" >/tmp/iroha-iso-canary-template.stdout || exit $?; done`
+    (passed)
+  - `for f in fixtures/iso20022/trust_bundles/*.json; do python3 scripts/iso_trust_bundle_verify.py --bundle "$f" --allow-synthetic-der --summary-out "/tmp/iroha-iso-trust-$(basename "$f").summary.json" >/tmp/iroha-iso-trust-template.stdout || exit $?; done`
+    (passed)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --summary-out /tmp/iroha-iso-xsd-fixture-summary.json`
+    (passed)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-fixture-for-schema --summary-out /tmp/iroha-iso-xsd-fixture-strict-fixture-summary.json`
+    (passed)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-fixture-validated-summary.json`
+    (passed)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-fixture-profile-validated-summary.json`
+    (passed; recorded `55` concrete advertised profile versions, `26`
+    schema-backed versions, and `29` missing profile-version schema proofs)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-fixture-for-schema --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-provenance-summary.json`
+    (passed; emitted canonical `manifest_sha256`,
+    `profile_catalog.sha256`, and `profile_catalog.catalog_json_sha256`
+    provenance digests)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --require-profile-schema-backed-versions --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-profile-strict-summary.json`
+    (expected blocker: `generic-iso20022` / `pacs.008.001.10` is not
+    schema-backed by any checked-in XML fixture)
+  - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --require-schema-backed-fixtures --validate-xml-schema --summary-out /tmp/iroha-iso-xsd-schema-backed-validated-summary.json`
+    (expected blocker: missing official schema-backed fixtures, beginning with
+    `../pacs004_fixture.xml` / `pacs.004.001.09`)
+  - `xmllint --noout --schema <checked-in-xsd> <checked-in-schema-backed-fixture>`
+    for `pacs008_fixture.xml`, `pacs009_fixture.xml`, `pacs002_fixture.xml`,
+    `pacs004_001_10_fixture.xml`, `camt056_fixture.xml`, and
+    `camt056_001_09_fixture.xml` (all validated)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p iroha_torii checked_in_pacs002_fixture_settles_known_original --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p iroha_torii checked_in_camt056_fixture_marks_original_pending_cancellation --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p ivm pacs002_fixture_parses_status_fields --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p ivm camt056_fixture_parses_cancellation_fields --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-xsd-validated cargo test -p ivm camt056_001_09_fixture_parses_cancellation_fields --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+    (passed)
+
 ## 2026-06-04 Soracloud BFV Galois switch fixture vectors
 
 - Added scalar Galois key-switch execution vectors to the shared Soracloud BFV
@@ -3524,6 +4020,11 @@ Last updated: 2026-06-04
   digest-correct trust archive. Archived trust profile overrides must also
   retain explicit CRL/OCSP revocation-policy booleans, and plan-only diagnostic
   canary summaries must retain each planned stage's `dry_run` boolean.
+- Hardened operator canary runbook policy provenance: `iso_operator_canary.py`
+  now supports `--require-explicit-policy`, which requires every runbook policy
+  boolean to be explicit and records that proof in the summary. The production
+  evidence gate rejects canary summaries that omit that policy proof or were
+  generated without it.
 - Hardened the XSD/XML fixture manifest preflight so schema and fixture entries
   must use canonical lowercase ISO message definition ids, checked-in schema
   paths must remain under the XSD manifest tree, and XML fixture paths remain
@@ -3595,9 +4096,14 @@ Last updated: 2026-06-04
   are similarly surfaced through `allow_legacy_colr007` and block production
   readiness. Evidence-level production policy flags must all be present as
   booleans, and nested receipt-summary policy flags are now required booleans
-  as well; XSD strict-mode flags plus evidence `ok` and canary `plan_only`
-  status fields are also required booleans. Omitted policy/status/strict flags
-  are malformed input instead of implicit production defaults.
+  as well; XSD strict-mode flags plus evidence `ok`, canary `plan_only`,
+  per-canary `require_explicit_policy`, and trust-profile CRL/OCSP revocation
+  booleans/counts are also required. Omitted policy/status/strict/revocation
+  fields are malformed input instead of implicit production defaults. Compact
+  canary/trust summary paths and `summary_sha256` pointers are also required
+  and preserved for audit traceability, and XSD/evidence `verified_at`
+  timestamps plus canary and per-stage `started_at`/`finished_at` windows must
+  be timezone-aware, non-future, and ordered.
 - Added dependency-free unittest coverage for strict positive readiness,
   checked-in XSD gap blockers, diagnostic XSD warnings, XSD/evidence digest
   tampering, non-production evidence policies, provider/environment mismatch,
@@ -3628,7 +4134,27 @@ Last updated: 2026-06-04
   omit strict-mode proof flags.
   Evidence coverage now also rejects digest-correct trust summaries that omit
   required trust-summary policy flags, trust profile revocation-policy flags,
-  or planned-stage `dry_run` status flags.
+  trust-profile revocation material counts, or planned-stage `dry_run` status
+  flags, and rejects required revocation posture with zero CRL/OCSP material.
+  Canary coverage now also rejects runbooks with omitted explicit-policy
+  booleans when `--require-explicit-policy` is used, and evidence coverage
+  rejects canary summaries that lack the explicit-policy proof. Readiness
+  coverage now also treats omitted per-canary explicit-policy proof as
+  malformed input and `false` proof as a production blocker, and rechecks
+  compact trust-profile CRL/OCSP booleans, material counts, and
+  `verified_bundles`/profile-count binding. It also rejects omitted or
+  non-canonical compact canary/trust summary digest pointers and missing,
+  timezone-less, or future XSD/evidence `verified_at` timestamps. Evidence and
+  readiness coverage now also reject missing, timezone-less, future, reversed,
+  out-of-canary, overlapping, name-mismatched, reordered, duplicate-name, or
+  unsupported-name canary stage windows. Evidence and readiness coverage now
+  also pins missing whole canary/trust and XSD/evidence input summaries as
+  malformed input. Evidence and readiness coverage also pin omitted or blank
+  release `--provider`/`--environment` context as malformed input, preserve
+  that evidence policy context, and recheck it in the readiness rollup.
+  Evidence and readiness coverage now also rejects repeated summary input paths
+  and copied summaries with duplicate `summary_sha256` values, including
+  duplicate compact canary/trust summaries inside an evidence summary.
 - Updated the TradFi ISO audit note, engineering backlog, and roadmap so the
   aggregate readiness gate is the final offline release artifact, the operator
   URL policy is explicit, `colr.012.001.05` is the active collateral
@@ -3637,12 +4163,16 @@ Last updated: 2026-06-04
 - Validation passed:
   - `cargo fmt --all`
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
-  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test` (22 tests)
-  - `python3 -m unittest pytests.scripts.iso_production_readiness_test` (14 tests)
-  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (36 tests)
-  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test` (33 tests)
-  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (53 tests)
-  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (95 tests)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test` (20 tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test` (12 tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test` (30 tests)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test` (28 tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (58 tests)
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test` (42 tests)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test` (75 tests)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test` (119 tests)
+  - `for f in fixtures/iso20022/operator_canary/*.json; do python3 scripts/iso_operator_canary.py --config "$f" --plan-only --require-explicit-policy --summary-out "/tmp/iroha-iso-canary-$(basename "$f").summary.json" >/tmp/iroha-iso-canary-template.stdout || exit $?; done`
+  - `for f in fixtures/iso20022/trust_bundles/*.json; do python3 scripts/iso_trust_bundle_verify.py --bundle "$f" --allow-synthetic-der --summary-out "/tmp/iroha-iso-trust-$(basename "$f").summary.json" >/tmp/iroha-iso-trust-template.stdout || exit $?; done`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p ivm colr012 --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_core default_catalog_exposes_inbound_lifecycle_messages --lib -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-iso-colr cargo test -p iroha_torii checked_in_colr012_fixture_records_collateral_context --lib -- --nocapture`
@@ -3748,6 +4278,71 @@ Last updated: 2026-06-04
   - Conflict-marker scan returned no matches across the same touched file set.
 - Validation blocked:
   - `python3 -m pytest pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py` could not run because `/opt/homebrew/opt/python@3.14/bin/python3.14` has no `pytest` installed.
+
+## 2026-06-04 - Privacy Proof Family Edge Separator Coverage
+
+- Pinned proof-family grammar at the public Python catalog boundary and native
+  FFI catalog/capability invariants so proof families with leading or trailing
+  `-` or `/` separators remain rejected before any production gate can expose
+  them.
+- Added Python and JS descriptor validation cases for `/halo2`, `-halo2`, and
+  `halo2-`, supplementing the existing trailing-slash and empty-segment
+  coverage.
+- Added native catalog and capability adversarial cases for leading slash,
+  leading hyphen, trailing slash, and trailing hyphen proof-family labels across
+  the C bridge, JS NAPI host, and Python PyO3 host. Updated the JS FFI parity
+  guard to require those native catalog cases and to accept both native SDK
+  entrypoint allowlist idioms (`contains` and iterator-based).
+- Updated Python native Kagemusha recursive-spend test fixtures to set the new
+  optional lineage proving/verifying key request fields explicitly to `None`.
+- Validation passed:
+  - `rustfmt --edition 2024 crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/tests/privacy_catalog_test.py`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "invalid_descriptor_fields"` (54 tests)
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (429 tests)
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --check javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+
+## 2026-06-04 - Privacy Algorithm Id Trailing Edge Grammar Gate
+
+- Tightened Python and native privacy algorithm-id validators so catalog and
+  request `algorithm_id` values must both start and end with lowercase ASCII
+  alphanumeric characters. Interior characters remain lowercase ASCII
+  alphanumerics plus `-` and `_`, matching the public JS catalog grammar.
+- Added adversarial public Python coverage for trailing separator algorithm IDs
+  (`shield_`, `shield-`), native catalog invariant coverage for trailing `_`
+  and `-` algorithm IDs, and native request no-reflection coverage where the
+  hostile marker appears before a final invalid separator.
+- Updated the JS FFI parity guard so the native host source checks pin the
+  stricter first/last-byte algorithm-id rule and the trailing-edge request
+  fixtures across the C bridge, JS NAPI host, and Python PyO3 host.
+- Cleared validation blockers encountered in the local dirty workspace:
+  pre-existing merge markers in `iroha_data_model`/`connect_norito_bridge`,
+  a P2P handshake public-key ownership mismatch, and missing Halo2 verifier
+  trait imports in `iroha_core`.
+- Validation passed:
+  - `node --check javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/privacy_catalog.py python/iroha_python/tests/privacy_catalog_test.py`
+  - `rustfmt --edition 2024 --check crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs crates/iroha_data_model/src/offline/mod.rs crates/iroha_data_model/src/zk.rs crates/iroha_p2p/src/peer.rs crates/iroha_core/src/zk.rs crates/iroha_core/src/zk/halo2_backend.rs`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py -k "unsafe_ids"` (16 tests)
+  - `node --test --test-name-pattern "native privacy FFI catalogs keep algorithm rows unique and portable" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `node --test --test-name-pattern "native privacy FFI hosts bound reflected request fields before production gate" javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p connect_norito_bridge privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p iroha_js_host privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_algorithm_catalog_rejects_adversarial_duplicates_and_unportable_labels --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml privacy_request_rejects_invalid_catalog_shapes_without_reflection --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/privacyCatalogParity.test.js`
+  - `node --test javascript/iroha_js/test/privacyFfiContractParity.test.js`
+  - `/private/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/iroha-privacy-python-sdk-venv/bin/python -m pytest -q tests/privacy_catalog_test.py` (426 tests)
 
 ## 2026-06-04 - Privacy Backend Family Edge Grammar Gate
 

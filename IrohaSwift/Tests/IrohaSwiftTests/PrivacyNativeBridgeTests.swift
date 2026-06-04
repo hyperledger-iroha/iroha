@@ -31,7 +31,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
     func testPrivacyNativeProbeResultRequiresSuccessfulNonemptyArchive() {
         #if canImport(Darwin)
         withPrivacyOutputPointer(privacyNoritoFrame(0x50)) { pointer, length in
-            XCTAssertTrue(
+            XCTAssertFalse(
                 NoritoNativeBridge.isValidPrivacyNativeProbeResult(
                     status: 0,
                     outPtr: pointer,
@@ -217,6 +217,12 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             XCTAssertThrowsError(try helper(Data()), "helper \(label) should reject empty archives") { error in
                 XCTAssertEqual(error as? PrivacyNativeBridgeError, .emptyRequestArchive)
             }
+            XCTAssertThrowsError(
+                try helper(privacyNoritoFrame(0x52)),
+                "helper \(label) should reject zero-payload request archives"
+            ) { error in
+                XCTAssertEqual(error as? PrivacyNativeBridgeError, .nativeRejected)
+            }
         }
     }
 
@@ -332,6 +338,17 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 bridgeAvailable: true
             ) { _ in
                 Data()
+            }
+        ) { error in
+            XCTAssertEqual(error as? PrivacyNativeBridgeError, .nativeRejected)
+        }
+
+        XCTAssertThrowsError(
+            try PrivacyNativeBridge.call(
+                requestArchive: privacyNoritoFrameWithPayload(0x52),
+                bridgeAvailable: true
+            ) { _ in
+                privacyNoritoFrame(0x42)
             }
         ) { error in
             XCTAssertEqual(error as? PrivacyNativeBridgeError, .nativeRejected)
@@ -612,6 +629,16 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? NativeBridgeError, .invalidPrivacyRequest)
         }
+
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.withTemporaryPrivacyRequestArchive(
+                requestArchive: privacyNoritoFrame(0x52)
+            ) { _ in
+                XCTFail("zero-payload request must not reach native dispatch")
+            }
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .invalidPrivacyRequest)
+        }
     }
 
     func testTemporaryPrivacyRequestArchiveRejectsWrongSchemaBeforeCopy() {
@@ -695,6 +722,34 @@ final class PrivacyNativeBridgeTests: XCTestCase {
 
     func testReadPrivacyNativeOutputRejectsInvalidArchiveAndFreesPointer() {
         let bytes: [UInt8] = [0x50, 0x01, 0x02]
+        let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: bytes.count)
+        pointer.initialize(from: bytes, count: bytes.count)
+        var freed = false
+        defer {
+            if !freed {
+                pointer.deinitialize(count: bytes.count)
+                pointer.deallocate()
+            }
+        }
+
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.readPrivacyNativeOutput(
+                pointer: pointer,
+                length: CUnsignedLong(bytes.count)
+            ) { freedPointer in
+                XCTAssertEqual(freedPointer, Optional(pointer))
+                freedPointer?.deinitialize(count: bytes.count)
+                freedPointer?.deallocate()
+                freed = true
+            }
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .invalidPrivacyOutput)
+        }
+        XCTAssertTrue(freed)
+    }
+
+    func testReadPrivacyNativeOutputRejectsEmptyPayloadArchiveAndFreesPointer() {
+        let bytes = [UInt8](privacyNoritoFrame(0x50))
         let pointer = UnsafeMutablePointer<UInt8>.allocate(capacity: bytes.count)
         pointer.initialize(from: bytes, count: bytes.count)
         var freed = false

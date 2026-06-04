@@ -55,16 +55,22 @@ public final class EthereumMainnetSccp {
   }
 
   private static final class BeaconRestFinalityUpdateSummary {
+    final String finalizedHeaderRoot;
+    final long beaconSlot;
     final String syncCommitteeBits;
     final String syncCommitteeSignature;
     final long syncCommitteeParticipation;
     final long syncSignatureSlot;
 
     BeaconRestFinalityUpdateSummary(
+        final String finalizedHeaderRoot,
+        final long beaconSlot,
         final String syncCommitteeBits,
         final String syncCommitteeSignature,
         final long syncCommitteeParticipation,
         final long syncSignatureSlot) {
+      this.finalizedHeaderRoot = finalizedHeaderRoot;
+      this.beaconSlot = beaconSlot;
       this.syncCommitteeBits = syncCommitteeBits;
       this.syncCommitteeSignature = syncCommitteeSignature;
       this.syncCommitteeParticipation = syncCommitteeParticipation;
@@ -1847,18 +1853,19 @@ public final class EthereumMainnetSccp {
               fetchJsonObject(
                   "/eth/v1/beacon/light_client/finality_update",
                   "Ethereum mainnet Beacon REST light-client finality update"),
-              finalizedHeader.slot);
+              finalizedHeader.slot,
+              finalizedHeader.root);
       final java.util.LinkedHashMap<String, Object> evidence = new java.util.LinkedHashMap<>();
       evidence.put(
           "executionBlockNumber",
           Long.toString(normalizeUnsignedInteger(blockNumber, "block.number")));
       evidence.put("executionBlockHash", blockHash);
       evidence.put("executionReceiptsRoot", receiptsRoot);
-      evidence.put("finalizedHeaderRoot", targetHeader.root);
+      evidence.put("finalizedHeaderRoot", finalityUpdate.finalizedHeaderRoot);
       evidence.put(
           "syncCommitteeRoot",
           resolveBeaconRestSyncCommitteeRoot(syncCommitteeRoot, syncCommitteePayload));
-      evidence.put("beaconSlot", Long.toString(targetHeader.slot));
+      evidence.put("beaconSlot", Long.toString(finalityUpdate.beaconSlot));
       evidence.put("syncCommitteeBits", finalityUpdate.syncCommitteeBits);
       evidence.put("syncCommitteeSignature", finalityUpdate.syncCommitteeSignature);
       evidence.put(
@@ -1972,7 +1979,9 @@ public final class EthereumMainnetSccp {
     }
 
     private static BeaconRestFinalityUpdateSummary beaconRestFinalityUpdateSummary(
-        final Map<String, Object> payload, final long expectedFinalizedSlot) {
+        final Map<String, Object> payload,
+        final long expectedFinalizedSlot,
+        final String expectedFinalizedRoot) {
       final String label = "Ethereum mainnet Beacon REST light-client finality update";
       rejectUnsafeBeaconRestPayload(payload, label);
       final Map<String, Object> data =
@@ -1994,6 +2003,33 @@ public final class EthereumMainnetSccp {
       if (finalizedSlot != expectedFinalizedSlot) {
         throw new IllegalArgumentException(
             "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot");
+      }
+      final String finalizedHeaderRoot =
+          SourceSccpProofs.ethBeaconBlockHeaderRoot(
+              Long.toString(finalizedSlot),
+              Long.toString(
+                  normalizeUnsignedInteger(
+                      requireBeaconRestField(
+                          finalizedBeacon, label + ".data.finalized_header.beacon", "proposer_index"),
+                      label + ".data.finalized_header.beacon.proposer_index")),
+              normalizeRpcHex(
+                  requireBeaconRestField(
+                      finalizedBeacon, label + ".data.finalized_header.beacon", "parent_root"),
+                  label + ".data.finalized_header.beacon.parent_root",
+                  32),
+              normalizeRpcHex(
+                  requireBeaconRestField(
+                      finalizedBeacon, label + ".data.finalized_header.beacon", "state_root"),
+                  label + ".data.finalized_header.beacon.state_root",
+                  32),
+              normalizeRpcHex(
+                  requireBeaconRestField(
+                      finalizedBeacon, label + ".data.finalized_header.beacon", "body_root"),
+                  label + ".data.finalized_header.beacon.body_root",
+                  32));
+      if (!finalizedHeaderRoot.equals(expectedFinalizedRoot)) {
+        throw new IllegalArgumentException(
+            "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root");
       }
       final long syncSignatureSlot =
           normalizeBeaconSlot(
@@ -2019,6 +2055,8 @@ public final class EthereumMainnetSccp {
               label + ".data.sync_aggregate.sync_committee_signature",
               96);
       return new BeaconRestFinalityUpdateSummary(
+          finalizedHeaderRoot,
+          finalizedSlot,
           syncCommitteeBits,
           syncCommitteeSignature,
           beaconRestSyncCommitteeParticipation(syncCommitteeBits),

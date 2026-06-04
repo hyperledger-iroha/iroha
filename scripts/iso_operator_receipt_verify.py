@@ -69,11 +69,25 @@ def _is_lower_hex_sha256(value: Any) -> bool:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise ReceiptError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise ReceiptError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ReceiptError(f"JSON object contains duplicate key {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
 
 
 def digest_without_field(obj: dict[str, Any], digest_field: str) -> str:
@@ -276,6 +290,17 @@ def discover_receipts(receipt_dir: Path) -> list[Path]:
     return receipts
 
 
+def _reject_duplicate_paths(paths: list[Path]) -> None:
+    seen: dict[str, int] = {}
+    for offset, path in enumerate(paths):
+        key = str(path.resolve())
+        if key in seen:
+            raise ReceiptError(
+                f"receipt[{offset}] duplicates receipt[{seen[key]}]: {key}"
+            )
+        seen[key] = offset
+
+
 def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "path": str(path),
@@ -309,9 +334,11 @@ def run(args: argparse.Namespace) -> int:
         paths.extend(discover_receipts(receipt_dir))
     if not paths:
         raise ReceiptError("provide at least one --receipt or --receipt-dir")
+    _reject_duplicate_paths(paths)
 
     verified: list[dict[str, Any]] = []
     receipt_entries: list[dict[str, Any]] = []
+    seen_receipt_digests: dict[str, Path] = {}
     for path in paths:
         receipt = verify_receipt_file(
             path,
@@ -320,6 +347,13 @@ def run(args: argparse.Namespace) -> int:
             allow_legacy_colr007=args.allow_legacy_colr007,
             require_source_files=args.require_source_files,
         )
+        receipt_digest = receipt[RECEIPT_DIGEST_FIELD]
+        if receipt_digest in seen_receipt_digests:
+            raise ReceiptError(
+                f"{path} {RECEIPT_DIGEST_FIELD} duplicates "
+                f"{seen_receipt_digests[receipt_digest]}: {receipt_digest}"
+            )
+        seen_receipt_digests[receipt_digest] = path
         verified.append(receipt)
         receipt_entries.append(_receipt_metadata(path, receipt))
 

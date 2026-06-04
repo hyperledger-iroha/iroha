@@ -7368,6 +7368,9 @@ mod settlement {
                 ReferenceDataError::MicInactive { .. } => {
                     eyre!("unexpected MIC validation error while checking `{id}`")
                 }
+                ReferenceDataError::MissingLedgerMapping { value, mapping, .. } => eyre!(
+                    "`--delivery-instrument-id` `{id}` is present in the supplied ISO reference crosswalk as `{value}`, but that row lacks required ledger mapping `{mapping}`"
+                ),
             }
         }
 
@@ -7527,6 +7530,7 @@ mod settlement {
         mod tests {
             use super::*;
             use iroha::crypto::{Algorithm, KeyPair};
+            use iroha_core::iso_bridge::reference_data::DatasetKind;
             use iroha_data_model::domain::DomainId;
             use iroha_primitives::numeric::Numeric;
             use std::io::Write;
@@ -7660,6 +7664,22 @@ mod settlement {
                     err.to_string()
                         .contains("not present in the supplied ISO reference crosswalk")
                 );
+            }
+
+            #[test]
+            fn instrument_reference_error_reports_missing_ledger_mapping() {
+                let err = instrument_reference_error(
+                    "037833100",
+                    ReferenceDataError::MissingLedgerMapping {
+                        kind: DatasetKind::IsinCusip,
+                        value: "US0378331005".to_owned(),
+                        mapping: "asset_definition_id_or_asset_id",
+                    },
+                );
+                let msg = err.to_string();
+                assert!(msg.contains("`--delivery-instrument-id` `037833100`"));
+                assert!(msg.contains("US0378331005"));
+                assert!(msg.contains("asset_definition_id_or_asset_id"));
             }
 
             #[test]
@@ -8140,7 +8160,7 @@ mod tests {
     fn data_verifying_key_filter_parser_rejects_unsafe_backend_and_name() {
         let id = trigger::parse_data_verifying_key_id("halo2/ipa: vk_main ")
             .expect("valid verifying-key event filter id");
-        assert_eq!(id.backend.as_ref(), "halo2/ipa");
+        assert_eq!(id.backend.as_str(), "halo2/ipa");
         assert_eq!(id.name, "vk_main");
 
         for spec in [
@@ -8168,7 +8188,7 @@ mod tests {
     fn data_proof_filter_parser_rejects_unsafe_backend_and_hash() {
         let id = trigger::parse_data_proof_id(&format!("halo2/ipa:0x{}", "A5".repeat(32)))
             .expect("valid proof event filter id");
-        assert_eq!(id.backend.as_ref(), "halo2/ipa");
+        assert_eq!(id.backend.as_str(), "halo2/ipa");
         assert_eq!(id.proof_hash, [0xA5; 32]);
 
         for spec in [

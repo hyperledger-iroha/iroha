@@ -164,6 +164,9 @@ public enum PrivacyNativeBridge {
         ) else {
             throw PrivacyNativeBridgeError.nativeRejected
         }
+        guard NoritoNativeBridge.hasNonEmptyPrivacyNoritoPayload(requestArchive) else {
+            throw PrivacyNativeBridgeError.nativeRejected
+        }
         return try call(
             bridgeAvailable: bridgeAvailable,
             expectedSchemaByte: expectedSchemaByte
@@ -196,6 +199,9 @@ public enum PrivacyNativeBridge {
             throw PrivacyNativeBridgeError.nativeRejected
         }
         guard NoritoNativeBridge.isValidPrivacyNoritoArchive(archive) else {
+            throw PrivacyNativeBridgeError.nativeRejected
+        }
+        guard NoritoNativeBridge.hasNonEmptyPrivacyNoritoPayload(archive) else {
             throw PrivacyNativeBridgeError.nativeRejected
         }
         guard hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte) else {

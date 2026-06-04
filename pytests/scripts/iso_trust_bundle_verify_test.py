@@ -208,6 +208,19 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"{flag} must be a boolean", stderr)
 
+    def test_duplicate_bundle_json_keys_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "trust-bundle.json"
+            path.write_text(
+                '{"version":1,"profile_id":"swift-cbpr-plus","profile_id":"fedwire-funds"}\n',
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicate key", stderr)
+
     def test_declared_der_digest_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

@@ -711,32 +711,75 @@ and completed history lives in [`status.md`](./status.md).
   `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
   lifecycle XML. An offline XSD/XML fixture-manifest preflight now pins checked-in
   schema target namespaces, `Document` payload roots, fixture namespaces, and
-  reviewed missing-schema exceptions; all checked-in payment XSDs now have
-  standalone XML fixtures, and remaining MDR/XSD work is making the strict
-  schema-backed release flag pass. The legacy `colr.007` collateral parser and
+  reviewed missing-schema exceptions, while rejecting copied XML fixtures with
+  duplicate fixture SHA-256 values and optionally validating schema-backed XML
+  fixtures against their checked-in XSDs with `xmllint --nonet`; it also
+  requires canonical repository/commit/path/license/source-SHA provenance for
+  every checked-in XSD, rejects XSD files with known restricted Standards
+  Editor redistribution terms, parses the embedded default rail profile catalog
+  on demand, and records which concrete advertised message versions are
+  schema-backed. All checked-in XSDs now
+  have standalone XML fixtures that pass XML schema validation, and remaining
+  MDR/XSD work is locating redistributable official packages and making the
+  strict schema-backed and profile-version release flags pass. The legacy
+  `colr.007` collateral parser and
   route are now local-compatibility only; operator receipt/evidence/readiness
   gates reject the explicit `--allow-legacy-colr007` override for production. An
-  aggregate ISO production-readiness rollup now combines strict XSD proof and
-  operator evidence summaries plus digest-bound direct receipt-archive
-  verification with per-receipt digests into one release gate; remaining
-  readiness work is making that gate pass without diagnostic overrides and
-  with real provider evidence. Durable ISO state now has
+  aggregate ISO production-readiness rollup now requires explicit expected
+  provider/environment context, non-empty strict XSD proof, operator evidence
+  summaries, and digest-bound direct receipt-archive verification with
+  unique per-receipt paths and digests into one release gate; remaining
+  readiness work is making that gate pass without diagnostic overrides and with
+  real provider evidence.
+  Durable ISO state now has
   versioned per-record digests plus a local
   tamper-evident audit index exposed through the
   `GET /v1/iso20022/audit/messages` route, with config-backed age/count
   retention/compaction, an `audit_export_dir` manifest/notary-preimage spool,
   and an operator adapter that verifies and publishes those preimages to clean
-  HTTPS archival/notary endpoints with local receipts; a read-only receipt
-  verifier now gates those receipts for canary use and emits a digest-bound
-  summary with per-receipt `receipt_sha256` entries, and a strict JSON-runbook
-  canary runner executes the rail/notary/verify path with one bounded summary.
+  duplicate-free HTTPS archival/notary endpoints with local receipts; a
+  read-only receipt verifier now gates those receipts for canary use and emits
+  a digest-bound summary with per-receipt `receipt_sha256` entries, and a
+  strict JSON-runbook canary runner rejects duplicate endpoint and receipt
+  inputs before executing the rail/notary/verify path with one bounded summary.
+  The operator scripts reject duplicate JSON object keys across runbooks,
+  sidecars, anchors/indexes, receipts, trust bundles, XSD manifests, evidence
+  summaries, readiness summaries, embedded receipt-verifier stdout, and direct
+  archive receipt-verifier stdout before semantic validation, so shadowed keys
+  cannot rewrite release evidence.
   An offline
-  evidence gate now recomputes canary/trust/receipt summary digests and rejects
+  evidence gate now requires explicit expected provider/environment context,
+  records that context in its digest-bound policy, recomputes
+  canary/trust/receipt summary digests, rejects repeated or copied
+  canary/trust summaries, rejects duplicate receipt paths or receipt digests,
+  rejects duplicate archived trust profile IDs, and rejects
   plan-only, dry-run, insecure-HTTP, default-profile, secret-leaking,
   smuggled-URL, synthetic-trust, record-only, or receipt-verifier-output-free
   evidence before archival, and requires trust-summary and receipt-summary
-  policy booleans plus trust revocation and plan-only status booleans to be
-  present explicitly so omissions cannot become production defaults. The repository also
+  policy booleans plus trust revocation booleans/counts and plan-only status
+  booleans to be present explicitly so omissions cannot become production
+  defaults. Canary summaries must also prove the runner used
+  `--require-explicit-policy`. The evidence gate requires explicit freshness
+  budgets for canary, trust-summary, and trust-source evidence before archival,
+  and the aggregate readiness gate rechecks that proof plus the evidence policy
+  context, requires explicit freshness budgets for
+  XSD/evidence/canary/trust/trust-source timestamps, blocks stale digest-correct
+  summaries and archive freshness policies weaker than the final release
+  budgets, and rechecks compact CRL/OCSP revocation posture and trust
+  profile-count binding, while rejecting repeated or copied
+  XSD/evidence and compact canary/trust summaries, requiring compact
+  canary/trust source paths and summary digests, rejecting duplicate receipt
+  paths or receipt digests, rejecting duplicate compact trust profile IDs,
+  rechecking XSD schema/fixture summary arrays for count, digest, and
+  schema-reference consistency, requiring XML schema-validation proof for every
+  schema-backed fixture, requiring profile-catalog source and embedded JSON
+  digest provenance plus duplicate-free profile/message/direction/version shape
+  and schema-backed proof for advertised concrete message versions, and
+  requiring timezone-aware non-future XSD/evidence/trust verification
+  timestamps and ordered canary and non-overlapping per-stage start/finish
+  windows for final evidence traceability. Compact stage-window names must
+  match the recorded stage sequence, and compact stage names are rechecked as
+  unique production rail/notary/verify stages. The repository also
   carries plan-valid templates for Swift CBPR+, Fedwire Funds, SEPA SCT Inst,
   and securities CSD operator canaries. Remaining persistence work is
   provider-specific live service canaries and vendor evidence that passes the

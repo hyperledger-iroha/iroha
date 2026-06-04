@@ -539,11 +539,11 @@ function isLowercaseHyphenatedIdentifier(value) {
 }
 
 function isSdkEntrypointName(value) {
-  return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(value);
+  return /^[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/.test(value);
 }
 
 function isPublicInputSchemaToken(value) {
-  return /^[a-z][a-z0-9_]*$/.test(value);
+  return /^[a-z](?:[a-z0-9_]*[a-z0-9])?$/.test(value) && !value.includes("__");
 }
 
 function publicInputSchemaTokenHasPayloadMetadata(value) {
@@ -557,11 +557,23 @@ function isProofFamilyName(value) {
 }
 
 function isBackendFamilyName(value) {
-  return /^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$/.test(value);
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value) && !value.includes("--");
+}
+
+function isVerifierKeyName(value) {
+  return /^[a-z](?:[a-z0-9_]*[a-z0-9])?$/.test(value) && !value.includes("__");
+}
+
+function isVerifierKeySuffix(value) {
+  return /^[A-Za-z](?:[A-Za-z0-9_]*[A-Za-z0-9])?$/.test(value) && !value.includes("__");
 }
 
 function isVerifierKeyId(value) {
-  return /^[a-z][a-z0-9_]*(?:::[A-Za-z][A-Za-z0-9_]*)?$/.test(value);
+  const parts = value.split("::");
+  if (parts.length === 1) {
+    return isVerifierKeyName(parts[0]);
+  }
+  return parts.length === 2 && isVerifierKeyName(parts[0]) && isVerifierKeySuffix(parts[1]);
 }
 
 function validatePublicInputsSchema(value, index) {
@@ -606,7 +618,7 @@ function isSafeHttpsSourceUrl(value) {
   if (
     value !== value.trim() ||
     value.includes("\\") ||
-    /[\u0000-\u0020\u007f]/.test(value) ||
+    /[^\u0021-\u007e]/.test(value) ||
     !value.startsWith("https://") ||
     /%(?![0-9a-fA-F]{2})/.test(value) ||
     sourceReferenceUrlAuthority(value).includes("%")
@@ -618,12 +630,25 @@ function isSafeHttpsSourceUrl(value) {
     return (
       parsed.protocol === "https:" &&
       parsed.hostname !== "" &&
+      !sourceReferenceHostnameUsesIdna(parsed.hostname) &&
       parsed.username === "" &&
       parsed.password === ""
     );
   } catch {
     return false;
   }
+}
+
+function sourceReferenceHostnameUsesIdna(hostname) {
+  return hostname
+    .toLowerCase()
+    .split(".")
+    .some((label) => label.startsWith("xn--"));
+}
+
+function isCanonicalSourceReferenceUrl(value) {
+  const parsed = new URL(value);
+  return parsed.href === value && !parsed.hostname.endsWith(".");
 }
 
 function sourceReferenceUrlAuthority(value) {
@@ -1181,7 +1206,7 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       `privacy algorithm descriptor ${index}.proofFamily must not claim production/mainnet/audit readiness before production gates pass`,
     );
   }
-  if (!/^[a-z0-9][a-z0-9_-]*$/.test(descriptor.id)) {
+  if (!/^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?$/.test(descriptor.id)) {
     throw new Error(`privacy algorithm descriptor ${index}.id must be lowercase and URL-safe`);
   }
   if (catalogLabelClaimsProductionReadiness(descriptor.id)) {
@@ -1645,6 +1670,11 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       ) {
         throw new Error(
           `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must not be a placeholder, local, or private-network URL`,
+        );
+      }
+      if (!isCanonicalSourceReferenceUrl(reference.url)) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.sourceReferences[${referenceIndex}].url must be canonical`,
         );
       }
       if (sourceReferenceUrlClaimsAuditOrReadiness(reference.url)) {

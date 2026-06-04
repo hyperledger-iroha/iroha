@@ -84,8 +84,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             summary = load_summary(stdout)
             self.assertTrue(summary["ok"])
             self.assertEqual(summary["provider"], "local-bank")
+            self.assertFalse(summary["policy"]["require_explicit_policy"])
             self.assertEqual([stage["name"] for stage in summary["stages"]], ["rail", "notary", "verify"])
             self.assertEqual([stage["returncode"] for stage in summary["stages"]], [0, 0, 0])
+            for stage in summary["stages"]:
+                self.assertRegex(stage["started_at"], r"^\d{4}-\d{2}-\d{2}T")
+                self.assertRegex(stage["finished_at"], r"^\d{4}-\d{2}-\d{2}T")
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, CANARY.sha256_hex(CANARY._canonical_json_bytes(body)))
@@ -158,15 +162,72 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertGreaterEqual(len(templates), 4)
         for template in templates:
             with self.subTest(template=template.name):
-                rc, stdout, stderr = run_canary(["--config", str(template), "--plan-only"])
+                rc, stdout, stderr = run_canary(
+                    [
+                        "--config",
+                        str(template),
+                        "--plan-only",
+                        "--require-explicit-policy",
+                    ]
+                )
                 self.assertEqual(rc, 0, stderr)
                 summary = load_summary(stdout)
                 self.assertTrue(summary["ok"])
                 self.assertTrue(summary["plan_only"])
+                self.assertTrue(summary["policy"]["require_explicit_policy"])
                 self.assertEqual(
                     [stage["name"] for stage in summary["planned_stages"]],
                     ["rail", "notary", "verify"],
                 )
+
+    def test_require_explicit_policy_rejects_omitted_policy_booleans(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.example.invalid",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = [
+                (
+                    lambda body: body["rail"].pop("allow_default_profile"),
+                    "rail.allow_default_profile",
+                ),
+                (
+                    lambda body: body["rail"].pop("dry_run"),
+                    "rail.dry_run",
+                ),
+                (
+                    lambda body: body["verify"].pop("skip_on_stage_failure"),
+                    "verify.skip_on_stage_failure",
+                ),
+            ]
+            for mutate, message in cases:
+                with self.subTest(message=message):
+                    body = json.loads(json.dumps(base))
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_unknown_config_key_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -184,6 +245,25 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("unknown keys", stderr)
+
+    def test_duplicate_runbook_json_keys_are_rejected_before_planning(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = root / "canary.json"
+            config.write_text(
+                (
+                    '{"provider":"local-bank","provider":"other-bank",'
+                    '"environment":"ci",'
+                    '"rail":{"inbox_dir":"inbox",'
+                    '"torii_base_url":"https://torii.example.invalid"}}\n'
+                ),
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("duplicate key", stderr)
 
     def test_endpoint_urls_are_validated_before_planning(self):
         cases = [
@@ -230,6 +310,81 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                 },
                 "must use HTTPS",
+            ),
+        ]
+        for body, message in cases:
+            with self.subTest(message=message):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+
+    def test_duplicate_runbook_evidence_inputs_are_rejected_before_planning(self):
+        cases = [
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": [
+                            "https://notary.example.invalid/iso-anchor",
+                            "https://notary.example.invalid/iso-anchor",
+                        ],
+                    },
+                },
+                "notary.endpoints[1] duplicates notary.endpoints[0]",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipts": ["receipts/a.receipt.json", "receipts/a.receipt.json"],
+                    },
+                },
+                "verify.receipts[1] duplicates verify.receipts[0]",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["receipts", "receipts"],
+                    },
+                },
+                "verify.receipt_dirs[1] duplicates verify.receipt_dirs[0]",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid",
+                        "receipt_dir": "shared-receipts",
+                    },
+                    "notary": {
+                        "export_dir": "export",
+                        "receipt_dir": "shared-receipts",
+                        "dry_run": True,
+                    },
+                },
+                "stage.receipt_dir[1] duplicates stage.receipt_dir[0]",
             ),
         ]
         for body, message in cases:

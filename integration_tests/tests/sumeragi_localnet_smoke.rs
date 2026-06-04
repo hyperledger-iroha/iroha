@@ -686,6 +686,7 @@ fn realistic_ram_lfe_email_policy_bundle(
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
+        galois_keys: Vec::new(),
         bootstrap_key: None,
     };
     let programmed_public_parameters = bfv_programmed_public_parameters_with_program(

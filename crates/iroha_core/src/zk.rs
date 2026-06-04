@@ -38,13 +38,14 @@ use std::sync::MutexGuard;
 use std::sync::OnceLock;
 use std::{
     collections::BTreeSet,
-    io,
     time::{Duration, Instant},
 };
 
 /// Confidential transfer v2 helpers, circuits, and proof builders.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+mod halo2_backend;
 
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId};
 #[cfg(feature = "zk-preverify")]
@@ -61,109 +62,21 @@ use tokio::sync::mpsc;
 use crate::kura::PipelineProofSnapshot;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type PastaParams =
-    halo2_proofs::poly::ipa::commitment::ParamsIPA<halo2_proofs::halo2curves::pasta::EqAffine>;
+pub(crate) use halo2_backend::{
+    PastaParams, assign_advice_compat, params_fingerprint, params_new as pasta_params_new,
+    read_proving_key, read_verifying_key,
+};
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn pasta_params_new(k: u32) -> PastaParams {
-    use halo2_proofs::poly::commitment::ParamsProver as _;
-
-    halo2_proofs::poly::ipa::commitment::ParamsIPA::<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >::new(k)
-}
-
+use halo2_proofs::poly::commitment::Params as _;
 #[cfg(all(
     test,
     feature = "zk-halo2-ipa-poseidon",
     any(feature = "zk-halo2", feature = "zk-halo2-ipa")
 ))]
 use halo2_proofs::poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA};
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use halo2_proofs::{
-    SerdeFormat, poly::VerificationStrategy, poly::commitment::Params as _,
-    transcript::TranscriptReadBuffer,
-};
 #[cfg(feature = "zk-halo2-ipa")]
 use norito::codec::{Decode, Encode};
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
-pub(crate) fn assign_advice_compat<'r, F, A, AR, V, T>(
-    region: &mut halo2_proofs::circuit::Region<'r, F>,
-    annotation: A,
-    column: halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>,
-    offset: usize,
-    mut to: V,
-) -> Result<
-    halo2_proofs::circuit::AssignedCell<&'r halo2_proofs::plonk::Assigned<F>, F>,
-    halo2_proofs::plonk::Error,
->
-where
-    F: halo2_proofs::halo2curves::ff::Field,
-    A: Fn() -> AR,
-    AR: Into<String>,
-    V: FnMut() -> halo2_proofs::circuit::Value<T>,
-    T: Into<halo2_proofs::plonk::Assigned<F>>,
-{
-    let _ = annotation;
-    let value = to().map(Into::into);
-    Ok(halo2_proofs::circuit::Region::assign_advice(
-        region, column, offset, value,
-    ))
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn read_verifying_key<C, R>(
-    reader: &mut R,
-) -> io::Result<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
-where
-    R: io::Read,
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    C::Params: Default,
-{
-    #[cfg(feature = "circuit-params")]
-    {
-        halo2_proofs::plonk::VerifyingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-            C::Params::default(),
-        )
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        halo2_proofs::plonk::VerifyingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-        )
-    }
-}
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn read_proving_key<C, R>(
-    reader: &mut R,
-) -> io::Result<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
-where
-    R: io::Read,
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    C::Params: Default,
-{
-    #[cfg(feature = "circuit-params")]
-    {
-        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-            C::Params::default(),
-        )
-    }
-    #[cfg(not(feature = "circuit-params"))]
-    {
-        halo2_proofs::plonk::ProvingKey::<halo2_proofs::halo2curves::pasta::EqAffine>::read::<_, C>(
-            reader,
-            SerdeFormat::Processed,
-        )
-    }
-}
 
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION: u16 = 1;
@@ -313,12 +226,10 @@ pub fn halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, String> {
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
     let circuit = pasta_tiny::IvmExecutionBindV1::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
@@ -397,6 +308,22 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K: u32 =
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_MIN_K;
 #[cfg(feature = "zk-halo2-ipa")]
 const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEYGEN_STACK_BYTES: usize = 4 * 1024 * 1024 * 1024;
+
+/// Environment switch for developer-only Reserved-lineage runtime key generation.
+///
+/// Production SDK and bridge paths should supply packaged verifier/proving key
+/// artifacts. Generating the recursive verifier-slice keys on-device or in
+/// request handling is intentionally disabled by default because the current
+/// non-native verifier circuit materialization is extremely expensive.
+pub const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV: &str =
+    "IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN";
+
+const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED: &str = "Kagemusha Reserved-lineage proving requires packaged verifier/proving key artifacts; runtime recursive verifier-slice key generation is disabled by default";
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn kagemusha_recursive_spend_lineage_runtime_keygen_enabled() -> bool {
+    std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some()
+}
 /// Maximum encoded proof payload accepted for Kagemusha folded proofs.
 pub const KAGEMUSHA_FOLDED_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 /// Maximum encoded proof payload accepted for Kagemusha recursive aggregation proofs.
@@ -1858,12 +1785,10 @@ pub(crate) fn ensure_offline_note_recursive_canonical_vk_box(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_offline_note_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(OFFLINE_NOTE_RECURSIVE_IPA_K);
     let circuit = pasta_tiny::OfflineNoteSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_RECURSIVE_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID);
@@ -1953,12 +1878,10 @@ fn ensure_kagemusha_folded_canonical_vk_box(vk_box: &VerifyingKeyBox) -> Result<
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+fn build_kagemusha_folded_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_FOLDED_IPA_K);
     let circuit = pasta_tiny::KagemushaFoldedSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_FOLDED_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_FOLDED_CIRCUIT_ID);
@@ -1992,12 +1915,10 @@ pub fn kagemusha_recursive_aggregation_proof_vk_box() -> Result<VerifyingKeyBox,
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_aggregation_proof_vk_box()
--> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
     zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID);
@@ -2202,16 +2123,14 @@ fn build_kagemusha_recursive_spend_lineage_vk_box_on_large_stack<const LEN: usiz
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_spend_lineage_vk_box<const LEN: usize>()
--> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     let circuit = pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
     >::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     zk1::wrap_append_circuit_id(
@@ -2247,16 +2166,14 @@ fn build_kagemusha_recursive_spend_lineage_append_vk_box_on_large_stack<const LE
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn build_kagemusha_recursive_spend_lineage_append_vk_box<const LEN: usize>()
--> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
-    use halo2_proofs::plonk::keygen_vk;
-
+-> Result<VerifyingKeyBox, halo2_backend::Error> {
     let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     let circuit = pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
         LEN,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
         KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
     >::default();
-    let vk = keygen_vk(&params, &circuit)?;
+    let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
     zk1::wrap_append_circuit_id(
@@ -3236,8 +3153,7 @@ pub fn is_ivm_execution_backend(backend: &str) -> bool {
 /// production verifier dispatch.
 #[must_use]
 pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::zk::BackendTag> {
-    if backend.is_empty()
-        || backend.trim() != backend
+    if !production_verify_backend_label_is_portable(backend)
         || is_pending_production_backend_label(backend)
         || is_production_claim_backend_label(backend)
         || is_trusted_setup_backend_label(backend)
@@ -3256,6 +3172,32 @@ pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::
         return Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta);
     }
     None
+}
+
+fn production_verify_backend_label_is_portable(backend: &str) -> bool {
+    if backend.is_empty() || backend.trim() != backend {
+        return false;
+    }
+    let Some(first) = backend.as_bytes().first() else {
+        return false;
+    };
+    let Some(last) = backend.as_bytes().last() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
+        return false;
+    }
+    if backend.as_bytes().iter().any(|&byte| {
+        !matches!(
+            byte,
+            b'a'..=b'z' | b'0'..=b'9' | b'/' | b':' | b'-' | b'_' | b'.'
+        )
+    }) {
+        return false;
+    }
+    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
+        .iter()
+        .any(|separator| backend.contains(separator))
 }
 
 /// Returns `true` when `backend` names a verifier family that can reach native
@@ -3413,6 +3355,83 @@ fn ivm_execution_public_inputs_columns(
         .collect()
 }
 
+#[cfg(feature = "zk-halo2-ipa")]
+fn ensure_halo2_ipa_proving_key_compatible(
+    proving_key: &halo2_backend::ProvingKey,
+    parsed_vk: &halo2_backend::VerifyingKey,
+    params: &PastaParams,
+    domain_message: &str,
+    vk_message: &str,
+) -> Result<(), String> {
+    if halo2_backend::proving_key_domain_k(proving_key) != params.k() {
+        return Err(domain_message.to_owned());
+    }
+    if halo2_backend::proving_key_vk_to_processed_bytes(proving_key)
+        != halo2_backend::verifying_key_to_processed_bytes(parsed_vk)
+    {
+        return Err(vk_message.to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn create_halo2_ipa_proof<C>(
+    params: &PastaParams,
+    proving_key: &halo2_backend::ProvingKey,
+    circuit: C,
+    instance_refs: &[&[&[halo2_backend::Scalar]]],
+    context: &str,
+) -> Result<Vec<u8>, String>
+where
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+{
+    halo2_backend::create_ipa_proof(params, proving_key, &[circuit], instance_refs)
+        .map_err(|err| format!("failed to create {context} proof: {err}"))
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_no_instances(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+) -> bool {
+    halo2_backend::verify_ipa_proof_no_instances(params, vk, proof_payload).is_ok()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns_result(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> Result<(), halo2_backend::Error> {
+    halo2_backend::verify_ipa_proof_with_columns(params, vk, proof_payload, col_refs)
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    verify_halo2_ipa_payload_columns_result(params, vk, proof_payload, col_refs).is_ok()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn verify_halo2_ipa_payload_optional_columns(
+    params: &PastaParams,
+    vk: &halo2_backend::VerifyingKey,
+    proof_payload: &[u8],
+    col_refs: &[&[halo2_backend::Scalar]],
+) -> bool {
+    if col_refs.is_empty() {
+        verify_halo2_ipa_payload_no_instances(params, vk, proof_payload)
+    } else {
+        verify_halo2_ipa_payload_columns(params, vk, proof_payload, col_refs)
+    }
+}
+
 /// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
@@ -3437,16 +3456,8 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
-    use rand_core_06::OsRng;
-
     if !is_ivm_execution_v1_circuit_id(circuit_id) {
         return Err(format!(
             "unsupported IVM execution circuit id `{circuit_id}`"
@@ -3458,11 +3469,10 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
-        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
-            .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
-            })?;
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::IvmExecutionBindV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
 
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
     let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
@@ -3495,7 +3505,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: halo2_backend::ProvingKey = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             IVM_EXECUTION_V1_CIRCUIT_ID,
@@ -3508,17 +3518,16 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
-            return Err("proving key domain does not match IPAK parameters".to_owned());
-        }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
-        {
-            return Err("proving key verifying key does not match vk_ref bytes".to_owned());
-        }
+        ensure_halo2_ipa_proving_key_compatible(
+            &pk,
+            &parsed_vk,
+            &params,
+            "proving key domain does not match IPAK parameters",
+            "proving key verifying key does not match vk_ref bytes",
+        )?;
         pk
     } else {
-        halo2_proofs::plonk::keygen_pk(
+        halo2_backend::keygen_pk(
             &params,
             parsed_vk.clone(),
             &pasta_tiny::IvmExecutionBindV1::default(),
@@ -3527,17 +3536,13 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     };
 
     let circuit = pasta_tiny::IvmExecutionBindV1 { values };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         &proving_key,
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "ivm-execution-v1",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3568,12 +3573,6 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err(
             "ivm execution proving key derivation requires halo2/ipa verifying key backend"
@@ -3583,13 +3582,12 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
-        zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
-            .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
-            })?;
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
+        pasta_tiny::IvmExecutionBindV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::IvmExecutionBindV1::default(),
@@ -3598,25 +3596,18 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         IVM_EXECUTION_V1_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_offline_note_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -3628,7 +3619,7 @@ fn cached_offline_note_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::OfflineNoteSemantic::default(),
@@ -3653,19 +3644,11 @@ fn prove_halo2_ipa_offline_note_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID {
         return Err(format!(
             "Offline recursive proving requires canonical circuit id `{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -3675,7 +3658,7 @@ fn prove_halo2_ipa_offline_note_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
+    let parsed_vk: halo2_backend::VerifyingKey =
         zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
                 "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
@@ -3689,7 +3672,7 @@ fn prove_halo2_ipa_offline_note_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
@@ -3702,11 +3685,11 @@ fn prove_halo2_ipa_offline_note_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err("proving key domain does not match IPAK parameters".to_owned());
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err("proving key verifying key does not match vk_ref bytes".to_owned());
         }
@@ -3720,17 +3703,13 @@ fn prove_halo2_ipa_offline_note_envelope(
         input_amounts: instance_values.input_amount_scalars(),
         output_amounts: instance_values.output_amount_scalars(),
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create offline-note-recursive proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "offline-note-recursive",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3759,23 +3738,17 @@ fn prove_halo2_ipa_offline_note_envelope(
 pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_offline_note_recursive_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> =
+    let parsed_vk: halo2_backend::VerifyingKey =
         zkparse::vk_from_bytes::<pasta_tiny::OfflineNoteSemantic>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
                 "missing/invalid H2VK payload for offline-note-recursive verifying key".to_owned()
             })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::OfflineNoteSemantic::default(),
@@ -3784,7 +3757,7 @@ pub fn derive_halo2_ipa_offline_note_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
@@ -3825,18 +3798,11 @@ pub fn prove_offline_note_audit(
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_folded_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -3848,7 +3814,7 @@ fn cached_kagemusha_folded_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaFoldedSemantic::default(),
@@ -3873,19 +3839,11 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::KAGEMUSHA_FOLDED_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != KAGEMUSHA_FOLDED_CIRCUIT_ID {
         return Err(format!(
             "Kagemusha folded proving requires canonical circuit id `{KAGEMUSHA_FOLDED_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -3895,7 +3853,7 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaFoldedSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -3914,7 +3872,7 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_FOLDED_CIRCUIT_ID,
@@ -3927,13 +3885,13 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
         if consumed != proving_key_raw.len() {
             return Err("failed to decode Kagemusha folded proving key: trailing bytes".to_owned());
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err(
                 "Kagemusha folded proving key domain does not match IPAK parameters".to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha folded proving key verifying key does not match vk_ref bytes".to_owned(),
@@ -3951,17 +3909,13 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
         root_difference_selectors,
         root_difference_inverse,
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create Kagemusha folded proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha folded",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -3990,24 +3944,18 @@ fn prove_halo2_ipa_kagemusha_folded_envelope(
 pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_kagemusha_folded_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaFoldedSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
         "missing/invalid H2VK payload for kagemusha-folded-v1 verifying key".to_owned()
     })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::KagemushaFoldedSemantic::default(),
@@ -4016,25 +3964,18 @@ pub fn derive_halo2_ipa_kagemusha_folded_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         KAGEMUSHA_FOLDED_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_recursive_aggregation_proving_key(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -4046,7 +3987,7 @@ fn cached_kagemusha_recursive_aggregation_proving_key(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
@@ -4067,18 +4008,11 @@ fn cached_kagemusha_recursive_aggregation_proving_key(
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -4090,7 +4024,7 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice::<
@@ -4115,18 +4049,11 @@ fn cached_kagemusha_recursive_spend_lineage_proving_key<const LEN: usize>(
 #[cfg(feature = "zk-halo2-ipa")]
 fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>(
     params: &PastaParams,
-    parsed_vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
+    parsed_vk: &halo2_backend::VerifyingKey,
     vk_commitment: [u8; 32],
-) -> Result<Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>, String>
-{
-    static CACHE: OnceLock<
-        Mutex<
-            BTreeMap<
-                [u8; 32],
-                Arc<halo2_proofs::plonk::ProvingKey<halo2_proofs::halo2curves::pasta::EqAffine>>,
-            >,
-        >,
-    > = OnceLock::new();
+) -> Result<Arc<halo2_backend::ProvingKey>, String> {
+    static CACHE: OnceLock<Mutex<BTreeMap<[u8; 32], Arc<halo2_backend::ProvingKey>>>> =
+        OnceLock::new();
 
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     if let Some(proving_key) = cache
@@ -4138,7 +4065,7 @@ fn cached_kagemusha_recursive_spend_lineage_append_proving_key<const LEN: usize>
         return Ok(proving_key);
     }
 
-    let proving_key = halo2_proofs::plonk::keygen_pk(
+    let proving_key = halo2_backend::keygen_pk(
         params,
         parsed_vk.clone(),
         &pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice::<
@@ -4774,21 +4701,11 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
     preflight: &PallasIpaBatchVerifierPreflight,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
     use iroha_data_model::{
         offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
+    use std::io::Cursor;
     ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
         vk_box,
         u32::try_from(LEN).expect("opening length fits u32"),
@@ -4864,7 +4781,7 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
             ipa_params.k()
         ));
     }
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationOneHopVerifierSlice<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
@@ -4877,7 +4794,7 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
         )
     })?;
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
@@ -4902,14 +4819,14 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
                     .to_owned(),
             );
         }
-        if pk.get_vk().get_domain().k() != ipa_params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != ipa_params.k() {
             return Err(
                 "Kagemusha recursive spend lineage proving key domain does not match IPAK parameters"
                     .to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha recursive spend lineage proving key verifying key does not match vk_ref bytes"
@@ -4918,6 +4835,11 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
         }
         Arc::new(pk)
     } else {
+        if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+            return Err(format!(
+                "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing one-hop proving key archive"
+            ));
+        }
         cached_kagemusha_recursive_spend_lineage_proving_key::<LEN>(
             &ipa_params,
             &parsed_vk,
@@ -4925,17 +4847,13 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_envelope<const LEN:
         )?
     };
 
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &ipa_params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create Kagemusha recursive spend lineage proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha recursive spend lineage",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -4985,21 +4903,11 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
     append_opening_preflight: &KagemushaRecursiveSpendLineageAppendOpeningPreflight,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
     use iroha_data_model::{
         offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
+    use std::io::Cursor;
     ensure_kagemusha_recursive_spend_lineage_verifier_key_cid(
         vk_box,
         u32::try_from(LEN).expect("opening length fits u32"),
@@ -5107,7 +5015,7 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
             ipa_params.k()
         ));
     }
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationAppendVerifierSlice<
             LEN,
             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOWS,
@@ -5120,7 +5028,7 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
         )
     })?;
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
@@ -5145,14 +5053,14 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
                     .to_owned(),
             );
         }
-        if pk.get_vk().get_domain().k() != ipa_params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != ipa_params.k() {
             return Err(
                 "Kagemusha recursive spend lineage append proving key domain does not match IPAK parameters"
                     .to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha recursive spend lineage append proving key verifying key does not match vk_ref bytes"
@@ -5161,6 +5069,11 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
         }
         Arc::new(pk)
     } else {
+        if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+            return Err(format!(
+                "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing append proving key archive"
+            ));
+        }
         cached_kagemusha_recursive_spend_lineage_append_proving_key::<LEN>(
             &ipa_params,
             &parsed_vk,
@@ -5168,19 +5081,13 @@ fn prove_halo2_ipa_kagemusha_recursive_spend_lineage_append_envelope<const LEN: 
         )?
     };
 
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &ipa_params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| {
-        format!("failed to create Kagemusha recursive spend lineage append proof: {err}")
-    })?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha recursive spend lineage append",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -5311,19 +5218,11 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 ) -> Result<ProofBox, String> {
     use std::io::Cursor;
 
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::{ProvingKey, VerifyingKey, create_proof},
-        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
-        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
-    };
+    use halo2_backend::Scalar;
     use iroha_data_model::{
         offline::KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_PUBLIC_INPUTS_SCHEMA,
         zk::{BackendTag, OpenVerifyEnvelope},
     };
-    use rand_core_06::OsRng;
-
     if circuit_id != KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID {
         return Err(format!(
             "Kagemusha recursive aggregation proving requires canonical circuit id `{KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID}` (found `{circuit_id}`)"
@@ -5333,7 +5232,7 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -5352,7 +5251,7 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
     let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
 
     let vk_commitment = hash_vk(vk_box);
-    let proving_key: Arc<ProvingKey<Curve>> = if let Some(bytes) = proving_key_bytes {
+    let proving_key: Arc<halo2_backend::ProvingKey> = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
             KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
@@ -5371,14 +5270,14 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
                     .to_owned(),
             );
         }
-        if pk.get_vk().get_domain().k() != params.k() {
+        if halo2_backend::proving_key_domain_k(&pk) != params.k() {
             return Err(
                 "Kagemusha recursive aggregation proving key domain does not match IPAK parameters"
                     .to_owned(),
             );
         }
-        if pk.get_vk().to_bytes(SerdeFormat::Processed)
-            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        if halo2_backend::proving_key_vk_to_processed_bytes(&pk)
+            != halo2_backend::verifying_key_to_processed_bytes(&parsed_vk)
         {
             return Err(
                 "Kagemusha recursive aggregation proving key verifying key does not match vk_ref bytes"
@@ -5396,17 +5295,13 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
         hop_count_minus_one_bits,
         non_zero_public_field_inverses,
     };
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+    let proof_raw = create_halo2_ipa_proof(
         &params,
         proving_key.as_ref(),
-        &[circuit],
+        circuit,
         &instance_refs,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create Kagemusha recursive aggregation proof: {err}"))?;
-    let proof_raw = transcript.finalize();
+        "Kagemusha recursive aggregation",
+    )?;
 
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
@@ -5434,17 +5329,11 @@ fn prove_halo2_ipa_kagemusha_recursive_aggregation_envelope(
 pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
-    use halo2_proofs::{
-        SerdeFormat,
-        halo2curves::pasta::EqAffine as Curve,
-        plonk::{VerifyingKey, keygen_pk},
-    };
-
     ensure_kagemusha_recursive_aggregation_canonical_vk_box(vk_box)?;
 
     let params = zkparse::params_any(vk_box.bytes.as_slice())
         .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
-    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
         pasta_tiny::KagemushaRecursiveAggregationSemantic,
     >(vk_box.bytes.as_slice(), &params)
     .ok_or_else(|| {
@@ -5452,7 +5341,7 @@ pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
             .to_owned()
     })?;
 
-    let pk = keygen_pk(
+    let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
         &pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
@@ -5463,7 +5352,7 @@ pub fn derive_halo2_ipa_kagemusha_recursive_aggregation_proving_key_bytes(
     encode_halo2_ipa_proving_key_archive(
         KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID,
         hash_vk(vk_box),
-        pk.to_bytes(SerdeFormat::Processed),
+        halo2_backend::proving_key_to_processed_bytes(&pk),
     )
 }
 
@@ -8329,6 +8218,11 @@ pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_palla
     current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
     proving_key_bytes: Option<&[u8]>,
 ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+        return Err(format!(
+            "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; set {KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV}=1 only for developer key-generation runs"
+        ));
+    }
     let vk_box = kagemusha_recursive_spend_lineage_vk_box_from_pallas_open_envelope_archive(
         pallas_open_envelopes_archive,
     )?;
@@ -8339,6 +8233,35 @@ pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_palla
         KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
         &vk_box,
         proving_key_bytes,
+    )
+}
+
+/// Verify the first offline Kagemusha hop and create a production lineage spend state with
+/// pre-packaged key artifacts.
+///
+/// # Errors
+///
+/// Returns an error when the supplied verifier key/proving key archive does not
+/// match the one-hop Reserved-lineage circuit, or when the checked hop,
+/// Pallas archive, note binding, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
+    record_bundle: &iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle,
+    pallas_open_envelopes_archive: &[u8],
+    current_note: iroha_data_model::offline::KagemushaSpendableNoteDescriptorV1,
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+    proving_key_bytes: &[u8],
+) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendBundleV1, String> {
+    if proving_key_bytes.is_empty() {
+        return Err("Kagemusha Reserved-lineage init proving key archive is empty".to_owned());
+    }
+    prove_kagemusha_recursive_spend_init_from_record_bundle_and_pallas_open_envelope_archive(
+        record_bundle,
+        pallas_open_envelopes_archive,
+        current_note,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        vk_box,
+        Some(proving_key_bytes),
     )
 }
 
@@ -12074,35 +11997,7 @@ struct VkCacheKey {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type CachedVk = Arc<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>;
-
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn params_fingerprint(params: &PastaParams) -> [u8; 32] {
-    use std::io::{self, Write};
-
-    use halo2_proofs::poly::commitment::Params as _;
-    use sha2::{Digest, Sha256};
-
-    struct HashWriter<'a, H: Digest>(&'a mut H);
-
-    impl<H: Digest> Write for HashWriter<'_, H> {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.0.update(buf);
-            Ok(buf.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut hasher = Sha256::new();
-    let mut writer = HashWriter(&mut hasher);
-    params
-        .write(&mut writer)
-        .expect("failed to hash Halo2 params");
-    hasher.finalize().into()
-}
+type CachedVk = Arc<halo2_backend::VerifyingKey>;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
@@ -12131,10 +12026,10 @@ fn record_vk_cache_event(cache: &'static str, event: &'static str) {
 fn record_vk_cache_event(_: &'static str, _: &'static str) {}
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_proofs::plonk::Error> {
+fn lock_cache<T>(cache: &Mutex<T>) -> Result<MutexGuard<'_, T>, halo2_backend::Error> {
     cache
         .lock()
-        .map_err(|_| halo2_proofs::plonk::Error::ConstraintSystemFailure)
+        .map_err(|_| halo2_backend::constraint_system_failure())
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -12144,16 +12039,11 @@ fn resolve_vk_cached<C, F>(
     vk_box: &VerifyingKeyBox,
     _circuit: &C,
     builder: F,
-) -> Result<CachedVk, halo2_proofs::plonk::Error>
+) -> Result<CachedVk, halo2_backend::Error>
 where
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
-    F: FnOnce() -> Result<
-        halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
-        halo2_proofs::plonk::Error,
-    >,
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
+    F: FnOnce() -> Result<halo2_backend::VerifyingKey, halo2_backend::Error>,
 {
-    use halo2_proofs::SerdeFormat;
-
     let cache = VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let params_fp = params_fingerprint(params);
     let vk_hash = hash_vk(vk_box);
@@ -12188,11 +12078,11 @@ where
     // Fall back to synthesising the verifying key via keygen.
     let built = builder()?;
     let built_hash = {
-        let bytes = built.to_bytes(SerdeFormat::Processed);
+        let bytes = halo2_backend::verifying_key_to_processed_bytes(&built);
         hash_vk_bytes(backend, &bytes)
     };
     if built_hash != vk_hash {
-        return Err(halo2_proofs::plonk::Error::ConstraintSystemFailure);
+        return Err(halo2_backend::constraint_system_failure());
     }
     let arc = Arc::new(built);
     let mut guard = lock_cache(cache)?;
@@ -12210,7 +12100,7 @@ macro_rules! cached_vk_for {
         let vk_ref = $vk_box;
         let circuit = $circuit;
         match resolve_vk_cached($backend, params_ref, vk_ref, &circuit, || {
-            halo2_proofs::plonk::keygen_vk(params_ref, &circuit)
+            halo2_backend::keygen_vk(params_ref, &circuit)
         }) {
             Ok(arc) => {
                 let $vk = arc.as_ref();
@@ -12235,9 +12125,9 @@ fn keygen_vk_cached<C>(
     backend: &str,
     params: &PastaParams,
     circuit: &C,
-) -> Result<CachedVk, halo2_proofs::plonk::Error>
+) -> Result<CachedVk, halo2_backend::Error>
 where
-    C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
+    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
 {
     let cache = BUILTIN_VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
     let key = BuiltinVkCacheKey {
@@ -12252,7 +12142,7 @@ where
         }
     }
     record_vk_cache_event("builtin", "miss");
-    let vk = halo2_proofs::plonk::keygen_vk(params, circuit)?;
+    let vk = halo2_backend::keygen_vk(params, circuit)?;
     let arc = Arc::new(vk);
     let mut guard = lock_cache(cache)?;
     let entry = match guard.entry(key) {
@@ -12561,11 +12451,8 @@ mod zk1 {
     /// Append a Halo2 verifying key (`H2VK`) for Pasta/IPA circuits.
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[allow(dead_code)]
-    pub fn wrap_append_vk_pasta(
-        buf: &mut Vec<u8>,
-        vk: &halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
-    ) {
-        let bytes = vk.to_bytes(SerdeFormat::Processed);
+    pub fn wrap_append_vk_pasta(buf: &mut Vec<u8>, vk: &super::halo2_backend::VerifyingKey) {
+        let bytes = super::halo2_backend::verifying_key_to_processed_bytes(vk);
         write_tlv(buf, *b"H2VK", &bytes);
     }
 
@@ -14896,8 +14783,6 @@ fn halo2_verify_with_instance_noncanonical_ipa() {
         poly::{Rotation, commitment::Params as _},
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     #[derive(Clone, Default)]
     struct TinyAddPublic;
     impl Circuit<Scalar> for TinyAddPublic {
@@ -15031,8 +14916,6 @@ fn ipa_vote_bool_commit_zk1() {
         poly::Rotation,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     // Build circuit and params
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
@@ -15111,8 +14994,6 @@ fn halo2_verify_rejects_vk_without_bytes() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -15204,8 +15085,6 @@ fn ipa_anon_transfer_commit_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -15304,8 +15183,6 @@ fn ipa_vote_bool_commit_merkle2_zk1() {
         poly::commitment::Params as _,
         transcript::{Blake2bWrite, Challenge255},
     };
-    use rand_core_06::OsRng;
-
     let k = 6u32;
     let params: PastaParams = pasta_params_new(k);
     let vk_h2: VerifyingKey<Curve> =
@@ -16141,6 +16018,8 @@ mod stark_backend_tag_tests {
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
+            "HALO2/IPA",
+            "stark/FRI",
             " halo2/ipa",
             "halo2/ipa ",
             "\thalo2/ipa",
@@ -16151,6 +16030,16 @@ mod stark_backend_tag_tests {
             "h\u{0430}lo2/ipa",
             "../halo2/ipa",
             "halo2/ipa/../tiny-add",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri//sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "stark/fri/sha256-goldilocks.",
             "halo2/ipa:ivm-execution-v1 ",
             "halo2/ipa/orchard",
             "halo2/ipa/penumbra",
@@ -17135,6 +17024,14 @@ mod guardrails_tests {
             "unknown/privacy/backend",
             "halo2/unknown-native-v1",
             "halo2/ipa:unknown-native-v1",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa.",
+            "stark//fri/sha256-goldilocks",
+            "stark/fri/sha256..goldilocks",
+            "h\u{0430}lo2/ipa",
             "halo2/pasta/tiny-add",
             "halo2/ipa/tiny-add",
             "halo2/ipa:tiny-add",
@@ -33052,6 +32949,49 @@ mod kagemusha_folded_real_prover_tests {
     }
 
     #[test]
+    fn kagemusha_recursive_spend_lineage_init_default_rejects_missing_key_artifacts_before_runtime_keygen()
+     {
+        if std::env::var_os(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_RUNTIME_KEYGEN_ENV).is_some() {
+            return;
+        }
+        let chain_id: ChainId = "kagemusha-recursive-spend-key-artifact-guard"
+            .parse()
+            .expect("chain id");
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgm-key-artifact-guard"
+                .parse()
+                .expect("asset definition name"),
+        );
+        let record_bundle = KagemushaVerifiedFoldRecordBundle {
+            bundle: KagemushaVerifiedFoldBundle {
+                chain_id,
+                asset,
+                steps: Vec::new(),
+            },
+            verifier_records: Vec::new(),
+        };
+        let current_note = sample_kagemusha_recursive_spend_note(
+            fixed_bytes(b"kagemusha-recursive-key-artifact-note"),
+            fixed_bytes(b"kagemusha-recursive-key-artifact-nullifier"),
+            7,
+        );
+
+        let err =
+            prove_kagemusha_recursive_spend_lineage_init_from_record_bundle_and_pallas_open_envelope_archive(
+                &record_bundle,
+                &[],
+                current_note,
+                None,
+            )
+            .expect_err("default Reserved-lineage init must require packaged key artifacts");
+        assert!(
+            err.contains("packaged verifier/proving key artifacts"),
+            "unexpected key-artifact guard error: {err}"
+        );
+    }
+
+    #[test]
     #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_spend_lineage_init_append_from_record_archives_proves_reserved_lineage_output()
      {
@@ -38425,9 +38365,9 @@ mod zkparse {
     pub fn vk_from_bytes<C>(
         vk_bytes: &[u8],
         params: &PastaParams,
-    ) -> Option<halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>>
+    ) -> Option<super::halo2_backend::VerifyingKey>
     where
-        C: halo2_proofs::plonk::Circuit<halo2_proofs::halo2curves::pasta::Fp>,
+        C: halo2_proofs::plonk::Circuit<super::halo2_backend::Scalar>,
         C::Params: Default,
     {
         let mut cursor = envelope_cursor(vk_bytes)?;
@@ -59332,14 +59272,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
             }
         }
     }
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::verify_proof,
-        poly::ipa::strategy::SingleStrategy as SingleVerifier,
-        transcript::Blake2bRead,
-    };
+    use halo2_backend::Scalar;
 
     let Some(vk_box) = vk else { return false };
     // Sanity: backends must match
@@ -59369,11 +59302,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::Add,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -59384,17 +59313,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::Mul,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59405,11 +59329,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddTwoRows,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -59420,17 +59340,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59441,17 +59356,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::MulPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    if col_refs.is_empty() {
-                        let instances: [&[Scalar]; 0] = [];
-                        verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
-                    } else {
-                        let proofs_instances = [&col_refs[..]];
-                        verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                            .is_ok()
-                    }
+                    verify_halo2_ipa_payload_optional_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59466,11 +59376,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::IdPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59481,11 +59392,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddThree,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -59499,11 +59406,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AddTwoInstPublic,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59517,11 +59425,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AssetHiddenTransferPublic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -59532,11 +59441,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 pasta_tiny::AnonTransfer2x2,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let instances: [&[Scalar]; 0] = [];
-                    verify_proof(&params, vk, strategy, &[&instances], &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_no_instances(&params, vk, proof_payload.as_slice())
                 }
             )
         }
@@ -59550,11 +59455,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 KaigiRosterJoinCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -59579,11 +59485,12 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 vk_box,
                 KaigiUsageCommitmentCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -59604,18 +59511,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         _ => false,
     }
@@ -59627,14 +59523,7 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
 #[cfg(feature = "zk-halo2-ipa")]
 #[allow(clippy::too_many_lines)]
 fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
-    use std::io::Cursor;
-
-    use halo2_proofs::{
-        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
-        plonk::verify_proof,
-        poly::ipa::strategy::SingleStrategy as SingleVerifier,
-        transcript::Blake2bRead,
-    };
+    use halo2_backend::Scalar;
     use iroha_zkp_halo2::Halo2ProofEnvelope;
 
     let reject = |reason: &'static str| {
@@ -59717,18 +59606,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-mul" => {
             let circuit = pasta_tiny::Mul;
@@ -59736,30 +59614,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-add-2rows" => {
             let circuit = pasta_tiny::AddTwoRows;
@@ -59767,18 +59627,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-add-public" => {
             let circuit = pasta_tiny::AddPublic;
@@ -59786,30 +59635,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-mul-public" => {
             let circuit = pasta_tiny::MulPublic;
@@ -59817,30 +59648,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            if col_refs.is_empty() {
-                let instances: [&[Scalar]; 0] = [];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &[&instances],
-                    &mut transcript,
-                )
-                .is_ok()
-            } else {
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
-                    &params,
-                    vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
-                )
-                .is_ok()
-            }
+            verify_halo2_ipa_payload_optional_columns(
+                &params,
+                vk_h2.as_ref(),
+                proof_payload.as_slice(),
+                &col_refs,
+            )
         }
         "halo2/pasta/tiny-id-public" => {
             let circuit = pasta_tiny::IdPublic;
@@ -59851,18 +59664,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/tiny-add3" => {
             let circuit = pasta_tiny::AddThree;
@@ -59870,18 +59677,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-add2inst-public" => {
             let circuit = pasta_tiny::AddTwoInstPublic;
@@ -59892,18 +59688,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 2 {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/asset-hidden-transfer-public-test" => {
             let circuit = pasta_tiny::AssetHiddenTransferPublic::default();
@@ -59914,18 +59704,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 10 || col_refs.iter().take(10).any(|col| col.len() != 1) {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/ivm-overlay-bind" => {
             // Instances: 8 columns (code_hash limbs + overlay_hash limbs), 1 row each.
@@ -59937,18 +59721,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/ivm-execution-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
@@ -59960,18 +59738,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/offline-note-recursive" => {
             if col_refs.len() != OFFLINE_NOTE_INSTANCE_COLUMNS
@@ -59985,11 +59757,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::OfflineNoteSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60005,11 +59778,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::KagemushaFoldedSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60028,11 +59802,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::KagemushaRecursiveAggregationSemantic::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60093,13 +59868,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
                         >::default(),
                         |vk| {
-                            let mut transcript = Blake2bRead::<_, Curve, _>::init(Cursor::new(
+                            verify_halo2_ipa_payload_columns(
+                                &params,
+                                vk,
                                 proof_payload.as_slice(),
-                            ));
-                            let strategy = SingleVerifier::new(&params);
-                            let proofs_instances = [&col_refs[..]];
-                            verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                                .is_ok()
+                                &col_refs,
+                            )
                         }
                     )
                 };
@@ -60117,13 +59891,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                             KAGEMUSHA_RECURSIVE_VESTA_IPA_WINDOW_BITS,
                         >::default(),
                         |vk| {
-                            let mut transcript = Blake2bRead::<_, Curve, _>::init(Cursor::new(
+                            verify_halo2_ipa_payload_columns(
+                                &params,
+                                vk,
                                 proof_payload.as_slice(),
-                            ));
-                            let strategy = SingleVerifier::new(&params);
-                            let proofs_instances = [&col_refs[..]];
-                            verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript)
-                                .is_ok()
+                                &col_refs,
+                            )
                         }
                     )
                 };
@@ -60162,18 +59935,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         circuit_id if confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id) => {
             if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
@@ -60187,11 +59949,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60207,11 +59970,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60227,11 +59991,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                     { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
                 >::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60246,11 +60011,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::AnonTransfer2x2Commit,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60265,11 +60031,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 pasta_tiny::AnonTransfer2x2CommitMerkle2,
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                    verify_halo2_ipa_payload_columns(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    )
                 }
             )
         }
@@ -60285,18 +60052,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::AnonTransfer2x2CommitMerkle::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -60306,18 +60067,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         "halo2/pasta/tiny-vote-bool" => {
@@ -60326,18 +60081,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 Ok(v) => v,
                 Err(_) => return false,
             };
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let instances: [&[Scalar]; 0] = [];
-            verify_proof(
-                &params,
-                vk_h2.as_ref(),
-                strategy,
-                &[&instances],
-                &mut transcript,
-            )
-            .is_ok()
+            verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         "halo2/pasta/tiny-commit-open" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
@@ -60352,18 +60096,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/tiny-merkle2" => {
             // If Poseidon gadgets are enabled, use the Poseidon-backed variant.
@@ -60378,18 +60116,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit" => {
             // Instances: [commit], 1 row
@@ -60401,18 +60133,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.is_empty() {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit-merkle2" => {
             // Instances: [commit, root], 1 row
@@ -60424,18 +60150,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             if col_refs.len() < 2 {
                 return false;
             }
-            let mut transcript =
-                Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-            let strategy = SingleVerifier::new(&params);
-            let proofs_instances = [&col_refs[..]];
-            verify_proof(
+            verify_halo2_ipa_payload_columns(
                 &params,
                 vk_h2.as_ref(),
-                strategy,
-                &proofs_instances,
-                &mut transcript,
+                proof_payload.as_slice(),
+                &col_refs,
             )
-            .is_ok()
         }
         "halo2/pasta/vote-bool-commit-merkle8" => {
             // Use depth-8 generic; select algorithm by backend suffix
@@ -60449,18 +60169,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::VoteBoolCommitMerkle::<8>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -60470,18 +60184,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         // Depth-16 variants
@@ -60496,18 +60204,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::AnonTransfer2x2CommitMerkle::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -60517,18 +60219,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 6 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         "halo2/pasta/vote-bool-commit-merkle16" => {
@@ -60542,18 +60238,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             } else {
                 let circuit = depth::VoteBoolCommitMerkle::<16>;
                 let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -60563,18 +60253,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 if col_refs.len() < 2 {
                     return false;
                 }
-                let mut transcript =
-                    Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                let strategy = SingleVerifier::new(&params);
-                let proofs_instances = [&col_refs[..]];
-                verify_proof(
+                verify_halo2_ipa_payload_columns(
                     &params,
                     vk_h2.as_ref(),
-                    strategy,
-                    &proofs_instances,
-                    &mut transcript,
+                    proof_payload.as_slice(),
+                    &col_refs,
                 )
-                .is_ok()
             }
         }
         KAIGI_ROSTER_BACKEND => {
@@ -60587,11 +60271,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 KaigiRosterJoinCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -60616,11 +60301,12 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 vk_box,
                 KaigiUsageCommitmentCircuit::default(),
                 |vk| {
-                    let mut transcript =
-                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
-                    let strategy = SingleVerifier::new(&params);
-                    let proofs_instances = [&col_refs[..]];
-                    match verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript) {
+                    match verify_halo2_ipa_payload_columns_result(
+                        &params,
+                        vk,
+                        proof_payload.as_slice(),
+                        &col_refs,
+                    ) {
                         Ok(()) => true,
                         Err(err) => {
                             iroha_logger::debug!(
@@ -61346,6 +61032,13 @@ mod tests {
     use std::sync::Arc;
 
     #[cfg(feature = "zk-halo2")]
+    use super::*;
+    #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
+    use crate::zk::pasta_tiny::{
+        VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
+        vote_bool_commit_merkle8_witnesses,
+    };
+    #[cfg(feature = "zk-halo2")]
     use ff::PrimeField;
     #[cfg(feature = "zk-halo2")]
     use halo2_proofs::poly::{
@@ -61354,15 +61047,6 @@ mod tests {
     };
     #[cfg(feature = "zk-halo2")]
     use halo2_proofs::transcript::TranscriptWriterBuffer;
-    #[cfg(feature = "zk-halo2")]
-    use rand_core_06::OsRng;
-
-    use super::*;
-    #[cfg(all(feature = "zk-tests", feature = "halo2-dev-tests"))]
-    use crate::zk::pasta_tiny::{
-        VoteBoolCommitMerkle8, vote_bool_commit_merkle8_sample_inputs,
-        vote_bool_commit_merkle8_witnesses,
-    };
 
     #[test]
     fn vote_bool_commit_merkle8_mock_prover_succeeds() {

@@ -630,6 +630,14 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return privacyCrc64(bytes[payloadStart..<bytes.count]) == expectedCrc
     }
 
+    static func hasNonEmptyPrivacyNoritoPayload(_ archive: Data) -> Bool {
+        guard isValidPrivacyNoritoArchive(archive) else {
+            return false
+        }
+        let bytes = [UInt8](archive)
+        return readPrivacyUInt64LittleEndian(bytes, offset: 23) > 0
+    }
+
     static func hasPrivacyNoritoSchema(_ archive: Data, expectedSchemaByte: UInt8?) -> Bool {
         guard let expectedSchemaByte else {
             return true
@@ -3126,7 +3134,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         archive[2] = 0x54
         archive[3] = 0x30
         for index in 6..<22 {
-            archive[index] = Self.privacyRequestSchemaByte
+            archive[index] = NoritoNativeBridge.privacyRequestSchemaByte
         }
         return archive
     }()
@@ -3153,6 +3161,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         let archive = Data(bytes: outPtr, count: Int(outLen))
         return Self.isValidPrivacyNoritoArchive(archive)
+            && Self.hasNonEmptyPrivacyNoritoPayload(archive)
             && Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte)
     }
 
@@ -6599,6 +6608,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         ) else {
             throw NativeBridgeError.invalidPrivacyRequest
         }
+        guard Self.hasNonEmptyPrivacyNoritoPayload(requestArchive) else {
+            throw NativeBridgeError.invalidPrivacyRequest
+        }
         var request = [UInt8](requestArchive)
         defer {
             Self.clearTemporaryPrivacyRequestArchive(&request)
@@ -6648,6 +6660,9 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }
         let archive = Data(bytes: pointer, count: Int(length))
         guard Self.isValidPrivacyNoritoArchive(archive) else {
+            throw NativeBridgeError.invalidPrivacyOutput
+        }
+        guard Self.hasNonEmptyPrivacyNoritoPayload(archive) else {
             throw NativeBridgeError.invalidPrivacyOutput
         }
         guard Self.hasPrivacyNoritoSchema(archive, expectedSchemaByte: expectedSchemaByte) else {

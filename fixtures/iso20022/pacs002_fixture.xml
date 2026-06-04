@@ -12,7 +12,9 @@
     <pacs:TxInfAndSts>
       <pacs:StsId>STATUS-TX-1</pacs:StsId>
       <pacs:TxSts>ACSC</pacs:TxSts>
-      <pacs:AddtlInf>settled by fixture report</pacs:AddtlInf>
+      <pacs:StsRsnInf>
+        <pacs:AddtlInf>settled by fixture report</pacs:AddtlInf>
+      </pacs:StsRsnInf>
     </pacs:TxInfAndSts>
   </pacs:FIToFIPmtStsRpt>
 </pacs:Document>

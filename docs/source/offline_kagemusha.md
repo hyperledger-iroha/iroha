@@ -199,6 +199,14 @@ uses the one-hop verifier-slice profile. Later offline hops use the append
 profile, which proves both the previous recursive proof opening and the next
 confidential-transfer hop opening while emitting a single new recursive spend
 bundle.
+Production init requests and Reserved-lineage append-output requests must carry
+packaged lineage key artifacts: `lineage_verifier_key` and
+`lineage_proving_key_archive`. The bridge validates the proving-key archive
+against that verifier key before proving. Runtime verifier-slice key generation
+is disabled by default and is available only behind the explicit developer
+environment override used to generate artifacts, so SDKs should treat missing
+artifacts as a deterministic request-construction error rather than a fallback
+to runtime keygen.
 Receivers can verify, store, and re-spend without contacting a node while the
 D2D payload keeps only this constant-size proof-chain commitment instead of
 prior proof bundles. The final holder submits the recursive bundle, public

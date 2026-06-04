@@ -93,6 +93,8 @@ class StageResult:
     """Bounded subprocess result for one canary stage."""
 
     name: str
+    started_at: str
+    finished_at: str
     returncode: int
     command: list[str]
     stdout_preview: str
@@ -121,11 +123,25 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise CanaryError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise CanaryError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise CanaryError(f"JSON object contains duplicate key {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -174,6 +190,21 @@ def _optional_bool(
     return raw
 
 
+def _policy_bool(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    default: bool = False,
+    require_explicit_policy: bool,
+) -> bool:
+    if require_explicit_policy and key not in value:
+        raise CanaryError(
+            f"{label}.{key} must be explicitly set when --require-explicit-policy is used"
+        )
+    return _optional_bool(value, key, label, default=default)
+
+
 def _optional_positive_int(
     value: dict[str, Any], key: str, label: str
 ) -> int | None:
@@ -207,7 +238,25 @@ def _string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
         value = item.strip()
         _reject_control_chars(value, f"{label}.{key}[{offset}]")
         result.append(value)
+    _reject_duplicate_strings(result, f"{label}.{key}")
     return result
+
+
+def _reject_duplicate_strings(values: list[str], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, value in enumerate(values):
+        if value in seen:
+            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[value]}]: {value}")
+        seen[value] = offset
+
+
+def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, path in enumerate(paths):
+        key = str(path.resolve())
+        if key in seen:
+            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}")
+        seen[key] = offset
 
 
 def _path_from_config(config_dir: Path, raw: str, label: str) -> Path:
@@ -256,7 +305,12 @@ def _append_value(argv: list[str], flag: str, value: object | None) -> None:
         argv.extend([flag, str(value)])
 
 
-def _build_rail_stage(config_dir: Path, raw: Any) -> StagePlan:
+def _build_rail_stage(
+    config_dir: Path,
+    raw: Any,
+    *,
+    require_explicit_policy: bool,
+) -> StagePlan:
     rail = _require_object(raw, "rail")
     _reject_unknown_keys(rail, RAIL_KEYS, "rail")
 
@@ -272,7 +326,12 @@ def _build_rail_stage(config_dir: Path, raw: Any) -> StagePlan:
         else None
     )
     torii_base_url = _required_string(rail, "torii_base_url", "rail")
-    allow_insecure_http = _optional_bool(rail, "allow_insecure_http", "rail")
+    allow_insecure_http = _policy_bool(
+        rail,
+        "allow_insecure_http",
+        "rail",
+        require_explicit_policy=require_explicit_policy,
+    )
     _validate_endpoint_url(
         torii_base_url,
         "rail.torii_base_url",
@@ -290,7 +349,18 @@ def _build_rail_stage(config_dir: Path, raw: Any) -> StagePlan:
         if bearer_raw is not None
         else None
     )
-    dry_run = _optional_bool(rail, "dry_run", "rail")
+    dry_run = _policy_bool(
+        rail,
+        "dry_run",
+        "rail",
+        require_explicit_policy=require_explicit_policy,
+    )
+    allow_default_profile = _policy_bool(
+        rail,
+        "allow_default_profile",
+        "rail",
+        require_explicit_policy=require_explicit_policy,
+    )
 
     argv = [
         sys.executable,
@@ -304,7 +374,7 @@ def _build_rail_stage(config_dir: Path, raw: Any) -> StagePlan:
     ]
     _append_path(argv, "--message", message_path)
     _append_bool(argv, "--dry-run", dry_run)
-    _append_bool(argv, "--allow-default-profile", _optional_bool(rail, "allow_default_profile", "rail"))
+    _append_bool(argv, "--allow-default-profile", allow_default_profile)
     _append_bool(argv, "--allow-insecure-http", allow_insecure_http)
     _append_path(argv, "--bearer-token-file", bearer_token_file)
     _append_value(argv, "--max-payload-bytes", _optional_positive_int(rail, "max_payload_bytes", "rail"))
@@ -317,7 +387,12 @@ def _build_rail_stage(config_dir: Path, raw: Any) -> StagePlan:
     return StagePlan("rail", argv, receipt_dir=receipt_dir, dry_run=dry_run)
 
 
-def _build_notary_stage(config_dir: Path, raw: Any) -> StagePlan:
+def _build_notary_stage(
+    config_dir: Path,
+    raw: Any,
+    *,
+    require_explicit_policy: bool,
+) -> StagePlan:
     notary = _require_object(raw, "notary")
     _reject_unknown_keys(notary, NOTARY_KEYS, "notary")
 
@@ -327,10 +402,20 @@ def _build_notary_stage(config_dir: Path, raw: Any) -> StagePlan:
         "notary.export_dir",
     )
     endpoints = _string_list(notary, "endpoints", "notary")
-    dry_run = _optional_bool(notary, "dry_run", "notary")
+    dry_run = _policy_bool(
+        notary,
+        "dry_run",
+        "notary",
+        require_explicit_policy=require_explicit_policy,
+    )
     if not dry_run and not endpoints:
         raise CanaryError("notary.endpoints must contain at least one endpoint unless dry_run is true")
-    allow_insecure_http = _optional_bool(notary, "allow_insecure_http", "notary")
+    allow_insecure_http = _policy_bool(
+        notary,
+        "allow_insecure_http",
+        "notary",
+        require_explicit_policy=require_explicit_policy,
+    )
     for offset, endpoint in enumerate(endpoints):
         _validate_endpoint_url(
             endpoint,
@@ -360,7 +445,16 @@ def _build_notary_stage(config_dir: Path, raw: Any) -> StagePlan:
     ]
     for endpoint in endpoints:
         argv.extend(["--endpoint", endpoint])
-    _append_bool(argv, "--all", _optional_bool(notary, "all", "notary"))
+    _append_bool(
+        argv,
+        "--all",
+        _policy_bool(
+            notary,
+            "all",
+            "notary",
+            require_explicit_policy=require_explicit_policy,
+        ),
+    )
     _append_bool(argv, "--dry-run", dry_run)
     _append_bool(
         argv,
@@ -383,13 +477,26 @@ def _build_verify_stage(
     stage_receipt_dirs: list[Path],
     *,
     prior_failure: bool,
+    require_explicit_policy: bool,
 ) -> StagePlan | None:
+    if require_explicit_policy and raw is None:
+        raise CanaryError("verify must be configured when --require-explicit-policy is used")
     verify = {} if raw is None else _require_object(raw, "verify")
     _reject_unknown_keys(verify, VERIFY_KEYS, "verify")
-    if not _optional_bool(verify, "enabled", "verify", default=True):
+    if not _policy_bool(
+        verify,
+        "enabled",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
+    ):
         return None
-    skip_on_failure = _optional_bool(
-        verify, "skip_on_stage_failure", "verify", default=True
+    skip_on_failure = _policy_bool(
+        verify,
+        "skip_on_stage_failure",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
     )
     if prior_failure and skip_on_failure:
         return StagePlan(
@@ -399,8 +506,12 @@ def _build_verify_stage(
             dry_run=False,
         )
 
-    include_stage_receipts = _optional_bool(
-        verify, "include_stage_receipts", "verify", default=True
+    include_stage_receipts = _policy_bool(
+        verify,
+        "include_stage_receipts",
+        "verify",
+        default=True,
+        require_explicit_policy=require_explicit_policy,
     )
     receipt_dirs = [
         _path_from_config(config_dir, item, "verify.receipt_dirs")
@@ -412,6 +523,8 @@ def _build_verify_stage(
         _path_from_config(config_dir, item, "verify.receipts")
         for item in _string_list(verify, "receipts", "verify")
     ]
+    _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
+    _reject_duplicate_paths(receipts, "verify.receipts")
     if not receipt_dirs and not receipts:
         raise CanaryError("verify requires generated stage receipts or explicit receipts/receipt_dirs")
 
@@ -423,16 +536,36 @@ def _build_verify_stage(
         argv.extend(["--receipt", str(receipt)])
     for receipt_dir in receipt_dirs:
         argv.extend(["--receipt-dir", str(receipt_dir)])
-    _append_bool(argv, "--allow-failed", _optional_bool(verify, "allow_failed", "verify"))
+    _append_bool(
+        argv,
+        "--allow-failed",
+        _policy_bool(
+            verify,
+            "allow_failed",
+            "verify",
+            require_explicit_policy=require_explicit_policy,
+        ),
+    )
     _append_bool(
         argv,
         "--allow-insecure-http",
-        _optional_bool(verify, "allow_insecure_http", "verify"),
+        _policy_bool(
+            verify,
+            "allow_insecure_http",
+            "verify",
+            require_explicit_policy=require_explicit_policy,
+        ),
     )
     _append_bool(
         argv,
         "--require-source-files",
-        _optional_bool(verify, "require_source_files", "verify", default=True),
+        _policy_bool(
+            verify,
+            "require_source_files",
+            "verify",
+            default=True,
+            require_explicit_policy=require_explicit_policy,
+        ),
     )
     return StagePlan("verify", argv)
 
@@ -464,16 +597,20 @@ def _redacted_command(argv: list[str]) -> list[str]:
 
 
 def _run_stage(stage: StagePlan, output_limit_bytes: int) -> StageResult:
+    started_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     completed = subprocess.run(
         stage.argv,
         capture_output=True,
         text=True,
         check=False,
     )
+    finished_at = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     stdout, stdout_truncated = _limit_text(completed.stdout, output_limit_bytes)
     stderr, stderr_truncated = _limit_text(completed.stderr, output_limit_bytes)
     return StageResult(
         name=stage.name,
+        started_at=started_at,
+        finished_at=finished_at,
         returncode=completed.returncode,
         command=_redacted_command(stage.argv),
         stdout_preview=stdout,
@@ -485,8 +622,11 @@ def _run_stage(stage: StagePlan, output_limit_bytes: int) -> StageResult:
 
 
 def _skipped_verify_result(reason: str) -> StageResult:
+    timestamp = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     return StageResult(
         name="verify",
+        started_at=timestamp,
+        finished_at=timestamp,
         returncode=0,
         command=[],
         stdout_preview="",
@@ -502,6 +642,8 @@ def _skipped_verify_result(reason: str) -> StageResult:
 def _result_to_json(result: StageResult) -> dict[str, Any]:
     return {
         "name": result.name,
+        "started_at": result.started_at,
+        "finished_at": result.finished_at,
         "returncode": result.returncode,
         "command": result.command,
         "stdout_preview": result.stdout_preview,
@@ -523,7 +665,12 @@ def _plan_to_json(stage: StagePlan) -> dict[str, Any]:
     }
 
 
-def build_stage_plans(config_path: Path, config: dict[str, Any]) -> tuple[str, str, list[StagePlan], Any]:
+def build_stage_plans(
+    config_path: Path,
+    config: dict[str, Any],
+    *,
+    require_explicit_policy: bool,
+) -> tuple[str, str, list[StagePlan], Any]:
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
@@ -533,18 +680,38 @@ def build_stage_plans(config_path: Path, config: dict[str, Any]) -> tuple[str, s
 
     stages: list[StagePlan] = []
     if "rail" in config:
-        stages.append(_build_rail_stage(config_dir, config["rail"]))
+        stages.append(
+            _build_rail_stage(
+                config_dir,
+                config["rail"],
+                require_explicit_policy=require_explicit_policy,
+            )
+        )
     if "notary" in config:
-        stages.append(_build_notary_stage(config_dir, config["notary"]))
+        stages.append(
+            _build_notary_stage(
+                config_dir,
+                config["notary"],
+                require_explicit_policy=require_explicit_policy,
+            )
+        )
     if not stages:
         raise CanaryError("configure at least one of rail or notary")
+    _reject_duplicate_paths(
+        [stage.receipt_dir for stage in stages if stage.receipt_dir is not None],
+        "stage.receipt_dir",
+    )
     return provider, environment, stages, config.get("verify")
 
 
 def run(args: argparse.Namespace) -> int:
     config_path = args.config.resolve()
     config = _require_object(_load_json(config_path), "config")
-    provider, environment, stages, verify_config = build_stage_plans(config_path, config)
+    provider, environment, stages, verify_config = build_stage_plans(
+        config_path,
+        config,
+        require_explicit_policy=args.require_explicit_policy,
+    )
     if args.output_limit_bytes <= 0:
         raise CanaryError("--output-limit-bytes must be positive")
 
@@ -560,6 +727,7 @@ def run(args: argparse.Namespace) -> int:
             verify_config,
             stage_receipt_dirs,
             prior_failure=False,
+            require_explicit_policy=args.require_explicit_policy,
         )
         planned_stages = [_plan_to_json(stage) for stage in stages]
         if verify_stage is not None:
@@ -572,6 +740,9 @@ def run(args: argparse.Namespace) -> int:
             "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
             "ok": True,
             "plan_only": True,
+            "policy": {
+                "require_explicit_policy": args.require_explicit_policy,
+            },
             "planned_stages": planned_stages,
         }
         summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
@@ -598,6 +769,7 @@ def run(args: argparse.Namespace) -> int:
         verify_config,
         stage_receipt_dirs,
         prior_failure=prior_failure,
+        require_explicit_policy=args.require_explicit_policy,
     )
     if verify_stage is not None:
         if not verify_stage.argv:
@@ -616,6 +788,9 @@ def run(args: argparse.Namespace) -> int:
         "finished_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "ok": not prior_failure,
         "plan_only": False,
+        "policy": {
+            "require_explicit_policy": args.require_explicit_policy,
+        },
         "stages": [_result_to_json(result) for result in results],
     }
     summary["summary_sha256"] = sha256_hex(_canonical_json_bytes(summary))
@@ -652,6 +827,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_OUTPUT_LIMIT_BYTES,
         help="Maximum stdout/stderr bytes retained per child stage in the summary.",
+    )
+    parser.add_argument(
+        "--require-explicit-policy",
+        action="store_true",
+        help="Require all runbook policy booleans to be explicit and record that in the summary.",
     )
     return parser
 

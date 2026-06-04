@@ -18,7 +18,9 @@
       <pacs:IntrBkSttlmDt>2024-01-03</pacs:IntrBkSttlmDt>
       <pacs:InstgAgt><pacs:FinInstnId><pacs:BICFI>DEUTDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstgAgt>
       <pacs:InstdAgt><pacs:FinInstnId><pacs:BICFI>MARKDEFF</pacs:BICFI></pacs:FinInstnId></pacs:InstdAgt>
+      <pacs:Dbtr><pacs:FinInstnId><pacs:BICFI>DEUTDEFF</pacs:BICFI></pacs:FinInstnId></pacs:Dbtr>
       <pacs:DbtrAcct><pacs:Id><pacs:IBAN>GB82WEST12345698765432</pacs:IBAN></pacs:Id></pacs:DbtrAcct>
+      <pacs:Cdtr><pacs:FinInstnId><pacs:BICFI>MARKDEFF</pacs:BICFI></pacs:FinInstnId></pacs:Cdtr>
       <pacs:CdtrAcct><pacs:Id><pacs:IBAN>GB33BUKB20201555555555</pacs:IBAN></pacs:Id></pacs:CdtrAcct>
       <pacs:Purp><pacs:Cd>SECU</pacs:Cd></pacs:Purp>
     </pacs:CdtTrfTxInf>

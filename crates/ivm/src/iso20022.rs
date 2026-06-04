@@ -503,6 +503,10 @@ const PACS002_ALIASES: &[AliasSpec] = &[
         alias: "Document/FIToFIPmtStsRpt/TxInfAndSts/AddtlInf[*]",
         canonical: "AddtlInf[*]",
     },
+    AliasSpec {
+        alias: "Document/FIToFIPmtStsRpt/TxInfAndSts/StsRsnInf/AddtlInf[*]",
+        canonical: "AddtlInf[*]",
+    },
 ];
 
 const PACS002_SCHEMA: MessageSchema = MessageSchema {
@@ -4405,6 +4409,8 @@ mod tests {
     const PACS002_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
     const PACS004_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs004_fixture.xml");
     const CAMT056_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/camt056_fixture.xml");
+    const CAMT056_001_09_FIXTURE: &str =
+        include_str!(r"../../../fixtures/iso20022/camt056_001_09_fixture.xml");
     const SESE023_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese023_fixture.xml");
     const SESE024_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese024_fixture.xml");
     const SESE025_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
@@ -5648,6 +5654,27 @@ mod tests {
         assert_eq!(
             msg_get("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId").as_deref(),
             Some(b"CANCEL-ORIG-1".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/CxlRsnInf/Rsn/Cd").as_deref(),
+            Some(b"CUST".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/CxlRsnInf/AddtlInf").as_deref(),
+            Some(b"customer requested recall".as_ref())
+        );
+    }
+
+    #[test]
+    fn camt056_001_09_fixture_parses_cancellation_fields() {
+        assert_validated("camt.056.001.09", CAMT056_001_09_FIXTURE);
+        assert_eq!(
+            msg_get("Assgnmt/Id").as_deref(),
+            Some(b"CANCEL-FIXTURE-9".as_ref())
+        );
+        assert_eq!(
+            msg_get("Undrlyg/TxInf/OrgnlGrpInf/OrgnlMsgId").as_deref(),
+            Some(b"CANCEL-ORIG-9".as_ref())
         );
         assert_eq!(
             msg_get("Undrlyg/TxInf/CxlRsnInf/Rsn/Cd").as_deref(),

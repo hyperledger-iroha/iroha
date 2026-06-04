@@ -123,11 +123,23 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise EvidenceError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{path} is not valid JSON: {error}") from error
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise EvidenceError(f"duplicate key {key!r} in JSON object")
+        result[key] = value
+    return result
 
 
 def _require_object(value: Any, label: str) -> dict[str, Any]:
@@ -147,6 +159,61 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     if not isinstance(raw, str) or not raw.strip():
         raise EvidenceError(f"{label}.{key} must be a non-empty string")
     return raw.strip()
+
+
+def _required_cli_string(value: str | None, label: str) -> str:
+    if value is None or not value.strip():
+        raise EvidenceError(f"provide {label}")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise EvidenceError(f"{label} must not contain control characters")
+    return value.strip()
+
+
+def _required_positive_cli_int(value: int | None, label: str) -> int:
+    if value is None:
+        raise EvidenceError(f"provide {label}")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise EvidenceError(f"{label} must be a positive integer")
+    return value
+
+
+def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, path in enumerate(paths):
+        key = str(path)
+        if key in seen:
+            raise EvidenceError(
+                f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}"
+            )
+        seen[key] = offset
+
+
+def _reject_duplicate_summary_digests(summaries: list[dict[str, Any]], label: str) -> None:
+    seen: dict[str, int] = {}
+    for offset, summary in enumerate(summaries):
+        digest = summary[SUMMARY_DIGEST_FIELD]
+        if digest in seen:
+            raise EvidenceError(
+                f"{label}[{offset}].{SUMMARY_DIGEST_FIELD} duplicates "
+                f"{label}[{seen[digest]}].{SUMMARY_DIGEST_FIELD}: {digest}"
+            )
+        seen[digest] = offset
+
+
+def _required_timestamp(value: dict[str, Any], key: str, label: str) -> tuple[str, dt.datetime]:
+    raw = _required_string(value, key, label)
+    return raw, _parse_timestamp(raw, f"{label}.{key}")
+
+
+def _reject_stale_timestamp(
+    timestamp: dt.datetime,
+    *,
+    max_age_days: int,
+    label: str,
+) -> None:
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=max_age_days)
+    if timestamp < cutoff:
+        raise EvidenceError(f"{label} is older than the {max_age_days}-day freshness budget")
 
 
 def _required_bool(value: dict[str, Any], key: str, label: str) -> bool:
@@ -236,16 +303,31 @@ def _verify_receipt_verifier_summary(
         raise EvidenceError(f"{label}.receipts length does not match verified_receipts")
     receipt_entries: list[dict[str, Any]] = []
     receipt_entry_kinds: set[str] = set()
+    seen_receipt_paths: dict[str, int] = {}
+    seen_receipt_digests: dict[str, int] = {}
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt_entry = _require_object(receipt_entry_raw, entry_label)
         receipt_path = _required_string(receipt_entry, "path", entry_label)
+        if receipt_path in seen_receipt_paths:
+            raise EvidenceError(
+                f"{entry_label}.path duplicates "
+                f"{label}.receipts[{seen_receipt_paths[receipt_path]}].path: {receipt_path}"
+            )
+        seen_receipt_paths[receipt_path] = offset
         entry_kind = _required_string(receipt_entry, "receipt_kind", entry_label)
         if entry_kind not in REQUIRED_RECEIPT_KINDS:
             raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {entry_kind!r}")
         receipt_sha256 = receipt_entry.get("receipt_sha256")
         if not _is_lower_sha256(receipt_sha256):
             raise EvidenceError(f"{entry_label}.receipt_sha256 must be a canonical SHA-256")
+        if receipt_sha256 in seen_receipt_digests:
+            raise EvidenceError(
+                f"{entry_label}.receipt_sha256 duplicates "
+                f"{label}.receipts[{seen_receipt_digests[receipt_sha256]}].receipt_sha256: "
+                f"{receipt_sha256}"
+            )
+        seen_receipt_digests[receipt_sha256] = offset
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
     if receipt_kind_set != receipt_entry_kinds:
@@ -405,7 +487,10 @@ def _verify_receipt_stdout(
     if not isinstance(stdout, str) or not stdout.strip():
         raise EvidenceError(f"{label}.stdout_preview must contain receipt verifier JSON")
     try:
-        receipt_summary = json.loads(stdout)
+        receipt_summary = json.loads(
+            stdout,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise EvidenceError(f"{label}.stdout_preview is not valid receipt verifier JSON") from error
     receipt_obj = _require_object(receipt_summary, f"{label}.stdout_preview")
@@ -416,8 +501,17 @@ def _stage_summary(
     stage: dict[str, Any],
     label: str,
     args: argparse.Namespace,
+    *,
+    canary_started_at: dt.datetime,
+    canary_finished_at: dt.datetime,
 ) -> dict[str, Any]:
     name = _required_string(stage, "name", label)
+    started_at_raw, started_at = _required_timestamp(stage, "started_at", label)
+    finished_at_raw, finished_at = _required_timestamp(stage, "finished_at", label)
+    if finished_at < started_at:
+        raise EvidenceError(f"{label}.finished_at must not be before started_at")
+    if started_at < canary_started_at or finished_at > canary_finished_at:
+        raise EvidenceError(f"{label} timestamp window must be inside canary window")
     skipped = _required_bool(stage, "skipped", label)
     if skipped:
         raise EvidenceError(f"{label} was skipped")
@@ -445,16 +539,27 @@ def _stage_summary(
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
     if name == "verify":
+        result = {
+            "name": name,
+            "_started_at": started_at,
+            "_finished_at": finished_at,
+            "started_at": started_at_raw,
+            "finished_at": finished_at_raw,
+        }
         if (
             not _command_has_flag(command, "--require-source-files")
             and not args.allow_receipt_source_missing
         ):
             raise EvidenceError(f"{label} did not require receipt source files")
-        return {
-            "name": name,
-            "receipt_summary": _verify_receipt_stdout(stage, label, args),
-        }
-    return {"name": name}
+        result["receipt_summary"] = _verify_receipt_stdout(stage, label, args)
+        return result
+    return {
+        "name": name,
+        "_started_at": started_at,
+        "_finished_at": finished_at,
+        "started_at": started_at_raw,
+        "finished_at": finished_at_raw,
+    }
 
 
 def _planned_stage_summary(
@@ -492,6 +597,15 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     provider = _required_string(summary, "provider", str(path))
     environment = _required_string(summary, "environment", str(path))
+    started_at_raw, started_at = _required_timestamp(summary, "started_at", str(path))
+    finished_at_raw, finished_at = _required_timestamp(summary, "finished_at", str(path))
+    if finished_at < started_at:
+        raise EvidenceError(f"{path}.finished_at must not be before started_at")
+    _reject_stale_timestamp(
+        finished_at,
+        max_age_days=args.max_canary_age_days,
+        label=f"{path}.finished_at",
+    )
     if args.provider is not None and provider != args.provider:
         raise EvidenceError(f"{path}.provider is {provider!r}, expected {args.provider!r}")
     if args.environment is not None and environment != args.environment:
@@ -505,6 +619,14 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
     plan_only = _required_bool(summary, "plan_only", str(path))
     if plan_only and not args.allow_plan_only:
         raise EvidenceError(f"{path} is plan-only evidence")
+    policy = _require_object(summary.get("policy"), f"{path}.policy")
+    require_explicit_policy = _required_bool(
+        policy,
+        "require_explicit_policy",
+        f"{path}.policy",
+    )
+    if not require_explicit_policy:
+        raise EvidenceError(f"{path} was not produced with --require-explicit-policy")
 
     stage_results: list[dict[str, Any]] = []
     if plan_only:
@@ -524,6 +646,8 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
                 _require_object(stage, f"{path}.stages[{offset}]"),
                 f"{path}.stages[{offset}]",
                 args,
+                canary_started_at=started_at,
+                canary_finished_at=finished_at,
             )
             for offset, stage in enumerate(stages)
         ]
@@ -531,6 +655,13 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     if len(stage_names) != len(set(stage_names)):
         raise EvidenceError(f"{path} contains duplicate canary stages")
+    previous_finished_at: dt.datetime | None = None
+    for offset, stage in enumerate(stage_results):
+        if previous_finished_at is not None and stage["_started_at"] < previous_finished_at:
+            raise EvidenceError(
+                f"{path}.stages[{offset}].started_at must not be before previous stage finished_at"
+            )
+        previous_finished_at = stage["_finished_at"]
     stage_name_set = set(stage_names)
     if args.allow_partial_canary:
         if "verify" not in stage_name_set:
@@ -556,8 +687,19 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         "path": str(path),
         "provider": provider,
         "environment": environment,
+        "started_at": started_at_raw,
+        "finished_at": finished_at_raw,
         "plan_only": plan_only,
+        "require_explicit_policy": require_explicit_policy,
         "stage_names": stage_names,
+        "stage_windows": [
+            {
+                "name": stage["name"],
+                "started_at": stage["started_at"],
+                "finished_at": stage["finished_at"],
+            }
+            for stage in stage_results
+        ],
         "receipt_summary": receipt_summary,
         "summary_sha256": digest,
     }
@@ -610,7 +752,9 @@ def _check_https_url(url: str, label: str, *, allow_insecure_http: bool) -> None
     )
 
 
-def _check_retrieved_at(value: str, label: str) -> None:
+def _parse_timestamp(value: Any, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise EvidenceError(f"{label} must be recorded")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise EvidenceError(f"{label} must not contain control characters")
     text = value.strip()
@@ -623,8 +767,19 @@ def _check_retrieved_at(value: str, label: str) -> None:
         raise EvidenceError(f"{label} must be an ISO 8601 timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise EvidenceError(f"{label} must include a timezone offset")
-    if parsed > dt.datetime.now(dt.UTC):
+    parsed_utc = parsed.astimezone(dt.UTC)
+    if parsed_utc > dt.datetime.now(dt.UTC):
         raise EvidenceError(f"{label} must not be in the future")
+    return parsed_utc
+
+
+def _check_retrieved_at(value: str, label: str, args: argparse.Namespace) -> None:
+    retrieved_at = _parse_timestamp(value, label)
+    _reject_stale_timestamp(
+        retrieved_at,
+        max_age_days=args.max_trust_source_age_days,
+        label=label,
+    )
 
 
 def _check_trust_bundle(
@@ -663,6 +818,7 @@ def _check_trust_bundle(
         _check_retrieved_at(
             retrieved_at,
             f"{label}.source.retrieved_at",
+            args,
         )
 
     material = _require_object(bundle.get("material"), f"{label}.material")
@@ -693,13 +849,19 @@ def _check_trust_bundle(
         "x509_require_ocsp_revocation_check",
         f"{label}.profile_overrides",
     )
-    if crl_required and _required_nonnegative_int(material, "x509_crl_count", f"{label}.material") == 0:
+    x509_crl_count = _required_nonnegative_int(
+        material,
+        "x509_crl_count",
+        f"{label}.material",
+    )
+    x509_ocsp_response_count = _required_nonnegative_int(
+        material,
+        "x509_ocsp_response_count",
+        f"{label}.material",
+    )
+    if crl_required and x509_crl_count == 0:
         raise EvidenceError(f"{label} requires CRL revocation checking but has no CRLs")
-    if (
-        ocsp_required
-        and _required_nonnegative_int(material, "x509_ocsp_response_count", f"{label}.material")
-        == 0
-    ):
+    if ocsp_required and x509_ocsp_response_count == 0:
         raise EvidenceError(f"{label} requires OCSP revocation checking but has no OCSP responses")
 
     return {
@@ -709,6 +871,10 @@ def _check_trust_bundle(
         "embedded_signature_policy": policy,
         "signature_public_key_pin_count": signature_pin_count,
         "x509_trust_anchor_pin_count": x509_anchor_pin_count,
+        "x509_require_crl_revocation_check": crl_required,
+        "x509_crl_count": x509_crl_count,
+        "x509_require_ocsp_revocation_check": ocsp_required,
+        "x509_ocsp_response_count": x509_ocsp_response_count,
     }
 
 
@@ -718,6 +884,12 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
     _check_no_secret_material(summary)
+    verified_at_raw, verified_at = _required_timestamp(summary, "verified_at", str(path))
+    _reject_stale_timestamp(
+        verified_at,
+        max_age_days=args.max_trust_age_days,
+        label=f"{path}.verified_at",
+    )
 
     allow_synthetic_der = _required_bool(summary, "allow_synthetic_der", str(path))
     allow_record_only = _required_bool(summary, "allow_record_only", str(path))
@@ -746,8 +918,18 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         )
         for offset, bundle in enumerate(bundles)
     ]
+    seen_profile_ids: dict[str, int] = {}
+    for offset, bundle in enumerate(bundle_summaries):
+        profile_id = bundle["profile_id"]
+        if profile_id in seen_profile_ids:
+            raise EvidenceError(
+                f"{path}.bundles[{offset}].profile_id duplicates "
+                f"{path}.bundles[{seen_profile_ids[profile_id]}].profile_id: {profile_id}"
+            )
+        seen_profile_ids[profile_id] = offset
     return {
         "path": str(path),
+        "verified_at": verified_at_raw,
         "verified_bundles": verified_bundles,
         "profiles": bundle_summaries,
         "summary_sha256": digest,
@@ -784,7 +966,10 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
             + completed.stderr.strip()[:4096]
         )
     try:
-        receipt_summary = json.loads(completed.stdout)
+        receipt_summary = json.loads(
+            completed.stdout,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except json.JSONDecodeError as error:
         raise EvidenceError("receipt verifier emitted invalid JSON") from error
     receipt_obj = _require_object(receipt_summary, "receipt verifier summary")
@@ -796,9 +981,30 @@ def run(args: argparse.Namespace) -> int:
         raise EvidenceError("provide at least one --canary-summary")
     if not args.trust_summary:
         raise EvidenceError("provide at least one --trust-summary")
+    args.provider = _required_cli_string(args.provider, "--provider")
+    args.environment = _required_cli_string(args.environment, "--environment")
+    args.max_canary_age_days = _required_positive_cli_int(
+        args.max_canary_age_days,
+        "--max-canary-age-days",
+    )
+    args.max_trust_age_days = _required_positive_cli_int(
+        args.max_trust_age_days,
+        "--max-trust-age-days",
+    )
+    args.max_trust_source_age_days = _required_positive_cli_int(
+        args.max_trust_source_age_days,
+        "--max-trust-source-age-days",
+    )
 
-    canaries = [verify_canary_summary(path.resolve(), args) for path in args.canary_summary]
-    trusts = [verify_trust_summary(path.resolve(), args) for path in args.trust_summary]
+    canary_paths = [path.resolve() for path in args.canary_summary]
+    trust_paths = [path.resolve() for path in args.trust_summary]
+    _reject_duplicate_paths(canary_paths, "--canary-summary")
+    _reject_duplicate_paths(trust_paths, "--trust-summary")
+
+    canaries = [verify_canary_summary(path, args) for path in canary_paths]
+    trusts = [verify_trust_summary(path, args) for path in trust_paths]
+    _reject_duplicate_summary_digests(canaries, "canary_summaries")
+    _reject_duplicate_summary_digests(trusts, "trust_summaries")
     receipt_summary = verify_receipts(args)
 
     output: dict[str, Any] = {
@@ -809,6 +1015,8 @@ def run(args: argparse.Namespace) -> int:
         "trust_summaries": trusts,
         "receipt_verification": receipt_summary,
         "policy": {
+            "provider": args.provider,
+            "environment": args.environment,
             "allow_plan_only": args.allow_plan_only,
             "allow_dry_run": args.allow_dry_run,
             "allow_insecure_http": args.allow_insecure_http,
@@ -820,6 +1028,9 @@ def run(args: argparse.Namespace) -> int:
             "allow_record_only_trust": args.allow_record_only_trust,
             "allow_synthetic_trust": args.allow_synthetic_trust,
             "allow_missing_trust_source": args.allow_missing_trust_source,
+            "max_canary_age_days": args.max_canary_age_days,
+            "max_trust_age_days": args.max_trust_age_days,
+            "max_trust_source_age_days": args.max_trust_source_age_days,
         },
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
@@ -875,6 +1086,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--summary-out",
         type=Path,
         help="Optional path to write the evidence verification summary JSON.",
+    )
+    parser.add_argument(
+        "--max-canary-age-days",
+        type=int,
+        help="Maximum age in days for canary finished_at timestamps.",
+    )
+    parser.add_argument(
+        "--max-trust-age-days",
+        type=int,
+        help="Maximum age in days for trust-bundle summary verified_at timestamps.",
+    )
+    parser.add_argument(
+        "--max-trust-source-age-days",
+        type=int,
+        help="Maximum age in days for trust source retrieved_at timestamps.",
     )
     parser.add_argument(
         "--allow-plan-only",

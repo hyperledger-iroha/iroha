@@ -28,6 +28,8 @@ const TX_HASH = hex32("aa");
 const BLOCK_HASH = hex32("bb");
 const SOURCE_EVENT_DIGEST = hex32("34");
 const SOURCE_BRIDGE_ADDRESS = `0x${"44".repeat(20)}`;
+const BEACON_HEADER_ROOT_SLOT_64 = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c";
+const BEACON_HEADER_ROOT_SLOT_96 = "0x503f2cd5b3926e0006f8ff49419e63d9588e13b792ef085b3639258112fa7ec2";
 const SAMPLE_SYNC_COMMITTEE_BITS = `0x01${"00".repeat(63)}`;
 const SAMPLE_SYNC_COMMITTEE_SIGNATURE = `0x${"34".repeat(96)}`;
 const sampleFinalityUpdateFields = () => ({
@@ -564,7 +566,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              root: hex32("ff"),
+              root: BEACON_HEADER_ROOT_SLOT_96,
               canonical: true,
               header: {
                 message: {
@@ -649,7 +651,7 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
             execution_optimistic: false,
             finalized: true,
             data: {
-              finalized: { root: hex32("ff"), epoch: "3" },
+              finalized: { root: BEACON_HEADER_ROOT_SLOT_96, epoch: "3" },
             },
           };
         },
@@ -719,9 +721,9 @@ test("EthereumMainnetBeaconRestConsensusProvider collects finalized Beacon REST 
   assert.equal(evidence.beaconFinality.executionBlockNumber, "4660");
   assert.equal(evidence.beaconFinality.executionBlockHash, BLOCK_HASH);
   assert.equal(evidence.beaconFinality.executionReceiptsRoot, hex32("cc"));
-  assert.equal(evidence.beaconFinality.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(evidence.beaconFinality.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_96);
   assert.equal(evidence.beaconFinality.syncCommitteeRoot, hex32("ee"));
-  assert.equal(evidence.beaconFinality.beaconSlot, "64");
+  assert.equal(evidence.beaconFinality.beaconSlot, "96");
   assert.equal(evidence.beaconFinality.syncCommitteeBits, `0x01${"00".repeat(63)}`);
   assert.equal(evidence.beaconFinality.syncCommitteeSignature, `0x${"34".repeat(96)}`);
   assert.equal(evidence.beaconFinality.syncCommitteeParticipation, "1");
@@ -755,7 +757,7 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     execution_optimistic: false,
     finalized: true,
     data: {
-      root: hex32("dd"),
+      root: BEACON_HEADER_ROOT_SLOT_64,
       canonical: true,
       header: {
         message: {
@@ -772,12 +774,12 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
   const validCheckpoint = () => ({
     execution_optimistic: false,
     finalized: true,
-    data: { finalized: { root: hex32("dd"), epoch: "2" } },
+    data: { finalized: { root: BEACON_HEADER_ROOT_SLOT_64, epoch: "2" } },
   });
   const validBlockRoot = () => ({
     execution_optimistic: false,
     finalized: true,
-    data: { root: hex32("dd") },
+    data: { root: BEACON_HEADER_ROOT_SLOT_64 },
   });
   const validBlock = () => ({
     execution_optimistic: false,
@@ -894,7 +896,7 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
       }),
     },
   ).collectFinalityEvidence({ block }, { verifyFinalityCheckpoint: false });
-  assert.equal(unchecked.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(unchecked.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   await assert.rejects(
     () =>
@@ -1015,13 +1017,13 @@ test("EthereumMainnetBeaconRestConsensusProvider rejects unsafe or incomplete Be
     { ok: true, text: async () => JSON.stringify(validHeader()) },
     { ok: true, text: async () => JSON.stringify(validCheckpoint()) },
   ).collectFinalityEvidence({ block });
-  assert.equal(textEvidence.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(textEvidence.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   const streamEvidence = await providerFor(
     streamResponse([Buffer.from(JSON.stringify(validHeader()))]),
     streamResponse([Buffer.from(JSON.stringify(validCheckpoint()))]),
   ).collectFinalityEvidence({ block });
-  assert.equal(streamEvidence.finalizedHeaderRoot, hex32("dd"));
+  assert.equal(streamEvidence.finalizedHeaderRoot, BEACON_HEADER_ROOT_SLOT_64);
 
   await assert.rejects(
     () =>

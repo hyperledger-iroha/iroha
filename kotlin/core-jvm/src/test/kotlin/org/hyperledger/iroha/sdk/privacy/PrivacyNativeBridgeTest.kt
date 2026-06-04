@@ -83,6 +83,12 @@ class PrivacyNativeBridgeTest {
         assertFailsWith<IllegalArgumentException> {
             PrivacyNativeBridge.verifyProof(oversized)
         }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52))
+        }
     }
 
     @Test
@@ -104,10 +110,10 @@ class PrivacyNativeBridgeTest {
 
     @Test
     fun nativeProbeRequiresAbiAndAllPrivacySymbols() {
-        assertTrue(PrivacyNativeBridge.returnsOutputProbe { privacyNoritoFrame(0x50) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe { privacyNoritoFrame(0x50) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe { privacyNoritoFrameWithPayload(0x51) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPadding(0x50, 64) })
-        assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x42) { privacyNoritoFrameWithPayload(0x42) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x56) { privacyNoritoFrameWithPayload(0x56) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x42) { privacyNoritoFrameWithFlags(0x42, 0x26) })
@@ -300,6 +306,14 @@ class PrivacyNativeBridgeTest {
         }
         assertTrue(empty.message.orEmpty().contains("returned empty output"))
 
+        val emptyPayload = assertFailsWith<IllegalStateException> {
+            PrivacyNativeBridge.requireNativeOutput(
+                privacyNoritoFrame(0x50),
+                "privacy capabilities",
+            )
+        }
+        assertTrue(emptyPayload.message.orEmpty().contains("empty privacy result payload"))
+
         val oversized = assertFailsWith<IllegalStateException> {
             PrivacyNativeBridge.requireNativeOutput(
                 ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1),
@@ -480,11 +494,11 @@ class PrivacyNativeBridgeTest {
                 buildRequest = request
                 assertTrue(request !== requestArchive)
                 assertTrue(request.contentEquals(originalArchive))
-                privacyNoritoFrame(0x42)
+                privacyNoritoFrameWithPayload(0x42)
             },
             bridgeAvailable = true,
         )
-        assertTrue(buildOutput.contentEquals(privacyNoritoFrame(0x42)))
+        assertTrue(buildOutput.contentEquals(privacyNoritoFrameWithPayload(0x42)))
 
         val verifyOutput = PrivacyNativeBridge.call(
             label = "verify proof",
@@ -493,11 +507,11 @@ class PrivacyNativeBridgeTest {
                 verifyRequest = request
                 assertTrue(request !== requestArchive)
                 assertTrue(request.contentEquals(originalArchive))
-                privacyNoritoFrame(0x56)
+                privacyNoritoFrameWithPayload(0x56)
             },
             bridgeAvailable = true,
         )
-        assertTrue(verifyOutput.contentEquals(privacyNoritoFrame(0x56)))
+        assertTrue(verifyOutput.contentEquals(privacyNoritoFrameWithPayload(0x56)))
 
         assertTrue(requestArchive.contentEquals(originalArchive))
         assertAllZero(buildRequest)
@@ -518,11 +532,11 @@ class PrivacyNativeBridgeTest {
                 buildRequest = request
                 request[0] = 0x00.toByte()
                 request[6] = 0x7f.toByte()
-                privacyNoritoFrame(0x42)
+                privacyNoritoFrameWithPayload(0x42)
             },
             bridgeAvailable = true,
         )
-        assertTrue(buildOutput.contentEquals(privacyNoritoFrame(0x42)))
+        assertTrue(buildOutput.contentEquals(privacyNoritoFrameWithPayload(0x42)))
 
         val verifyOutput = PrivacyNativeBridge.call(
             label = "verify proof",
@@ -531,11 +545,11 @@ class PrivacyNativeBridgeTest {
                 verifyRequest = request
                 request[0] = 0x00.toByte()
                 request[6] = 0x7f.toByte()
-                privacyNoritoFrame(0x56)
+                privacyNoritoFrameWithPayload(0x56)
             },
             bridgeAvailable = true,
         )
-        assertTrue(verifyOutput.contentEquals(privacyNoritoFrame(0x56)))
+        assertTrue(verifyOutput.contentEquals(privacyNoritoFrameWithPayload(0x56)))
 
         assertTrue(requestArchive.contentEquals(originalArchive))
         assertAllZero(buildRequest)

@@ -4416,6 +4416,8 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
     private readonly record struct BeaconRestBlockId(string Id, ulong? Slot = null, string? Root = null);
 
     private readonly record struct BeaconRestFinalityUpdateSummary(
+        string FinalizedHeaderRoot,
+        ulong BeaconSlot,
         string SyncCommitteeBits,
         string SyncCommitteeSignature,
         ulong SyncCommitteeParticipation,
@@ -4669,6 +4671,7 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
 
         var finalityUpdate = await FetchFinalityUpdateSummaryAsync(
             finalizedHeader.Slot,
+            finalizedHeader.Root,
             cancellationToken).ConfigureAwait(false);
 
         return new Dictionary<string, object?>(StringComparer.Ordinal)
@@ -4676,9 +4679,9 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             ["executionBlockNumber"] = NormalizeUnsignedInteger(blockNumber, "block.number").ToString(),
             ["executionBlockHash"] = blockHash,
             ["executionReceiptsRoot"] = receiptsRoot,
-            ["finalizedHeaderRoot"] = targetHeader.Root,
+            ["finalizedHeaderRoot"] = finalityUpdate.FinalizedHeaderRoot,
             ["syncCommitteeRoot"] = syncCommitteeRoot,
-            ["beaconSlot"] = targetHeader.Slot.ToString(),
+            ["beaconSlot"] = finalityUpdate.BeaconSlot.ToString(),
             ["syncCommitteeBits"] = finalityUpdate.SyncCommitteeBits,
             ["syncCommitteeSignature"] = finalityUpdate.SyncCommitteeSignature,
             ["syncCommitteeParticipation"] = finalityUpdate.SyncCommitteeParticipation.ToString(),
@@ -4819,18 +4822,23 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
 
     private async ValueTask<BeaconRestFinalityUpdateSummary> FetchFinalityUpdateSummaryAsync(
         ulong expectedFinalizedSlot,
+        string expectedFinalizedRoot,
         CancellationToken cancellationToken)
     {
         using var document = await FetchJsonDocumentAsync(
             "/eth/v1/beacon/light_client/finality_update",
             "Ethereum mainnet Beacon REST light-client finality update",
             cancellationToken).ConfigureAwait(false);
-        return BeaconRestFinalityUpdateSummaryFromPayload(document.RootElement, expectedFinalizedSlot);
+        return BeaconRestFinalityUpdateSummaryFromPayload(
+            document.RootElement,
+            expectedFinalizedSlot,
+            expectedFinalizedRoot);
     }
 
     private static BeaconRestFinalityUpdateSummary BeaconRestFinalityUpdateSummaryFromPayload(
         JsonElement payload,
-        ulong expectedFinalizedSlot)
+        ulong expectedFinalizedSlot,
+        string expectedFinalizedRoot)
     {
         const string Label = "Ethereum mainnet Beacon REST light-client finality update";
         RejectUnsafeBeaconRestPayload(payload, Label);
@@ -4850,6 +4858,36 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
         {
             throw new ArgumentException(
                 "Ethereum mainnet Beacon REST finality update finalized_header slot must match finalized header slot");
+        }
+        var finalizedHeaderRoot = BeaconBlockHeaderRoot(
+            finalizedSlot,
+            NormalizeUnsignedInteger(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "proposer_index"),
+                    $"{Label}.data.finalized_header.beacon.proposer_index"),
+                $"{Label}.data.finalized_header.beacon.proposer_index"),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "parent_root"),
+                    $"{Label}.data.finalized_header.beacon.parent_root"),
+                $"{Label}.data.finalized_header.beacon.parent_root",
+                32),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "state_root"),
+                    $"{Label}.data.finalized_header.beacon.state_root"),
+                $"{Label}.data.finalized_header.beacon.state_root",
+                32),
+            NormalizeRpcHex(
+                RequireString(
+                    RequireProperty(finalizedBeacon, $"{Label}.data.finalized_header.beacon", "body_root"),
+                    $"{Label}.data.finalized_header.beacon.body_root"),
+                $"{Label}.data.finalized_header.beacon.body_root",
+                32));
+        if (!string.Equals(finalizedHeaderRoot, expectedFinalizedRoot, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                "Ethereum mainnet Beacon REST finality update finalized_header root must match finalized header root");
         }
         var signatureSlot = NormalizeBeaconSlot(
             RequireString(RequireProperty(data, $"{Label}.data", "signature_slot"), $"{Label}.data.signature_slot"),
@@ -4874,6 +4912,8 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             $"{Label}.data.sync_aggregate.sync_committee_signature",
             96);
         return new BeaconRestFinalityUpdateSummary(
+            finalizedHeaderRoot,
+            finalizedSlot,
             syncCommitteeBits,
             syncCommitteeSignature,
             SyncCommitteeParticipation(syncCommitteeBits),
@@ -5165,6 +5205,64 @@ public sealed class EthereumMainnetBeaconRestConsensusProvider : IEthereumMainne
             int item when item >= 0 => (ulong)item,
             _ => throw new ArgumentException($"{parameterName} must be an unsigned integer", parameterName),
         };
+
+    private static string BeaconBlockHeaderRoot(
+        ulong slot,
+        ulong proposerIndex,
+        string parentRoot,
+        string stateRoot,
+        string bodyRoot)
+        => "0x" + Convert.ToHexString(SszMerkleizeChunks([
+            SszU64Chunk(slot),
+            SszU64Chunk(proposerIndex),
+            BeaconRestHexBytes(parentRoot),
+            BeaconRestHexBytes(stateRoot),
+            BeaconRestHexBytes(bodyRoot),
+        ])).ToLowerInvariant();
+
+    private static byte[] BeaconRestHexBytes(string normalizedHex)
+        => Convert.FromHexString(normalizedHex[2..]);
+
+    private static byte[] SszU64Chunk(ulong value)
+    {
+        var chunk = new byte[32];
+        BinaryPrimitives.WriteUInt64LittleEndian(chunk.AsSpan(0, 8), value);
+        return chunk;
+    }
+
+    private static byte[] SszMerkleizeChunks(IReadOnlyList<byte[]> inputChunks)
+    {
+        if (inputChunks.Count == 0 || inputChunks.Any(static chunk => chunk.Length != 32))
+        {
+            throw new ArgumentException("SSZ chunks must be non-empty 32-byte values.");
+        }
+
+        var chunks = inputChunks.Select(static chunk => chunk.ToArray()).ToList();
+        var width = 1;
+        while (width < chunks.Count)
+        {
+            width <<= 1;
+        }
+        while (chunks.Count < width)
+        {
+            chunks.Add(new byte[32]);
+        }
+
+        while (chunks.Count > 1)
+        {
+            var next = new List<byte[]>(chunks.Count / 2);
+            for (var index = 0; index < chunks.Count; index += 2)
+            {
+                var pair = new byte[64];
+                chunks[index].CopyTo(pair.AsSpan(0, 32));
+                chunks[index + 1].CopyTo(pair.AsSpan(32, 32));
+                next.Add(SHA256.HashData(pair));
+            }
+            chunks = next;
+        }
+
+        return chunks[0];
+    }
 }
 
 public interface IEthereumMainnetInboundProver

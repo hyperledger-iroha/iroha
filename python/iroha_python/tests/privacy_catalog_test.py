@@ -584,9 +584,14 @@ def test_privacy_catalog_loader_rejects_unpaired_verifier_metadata(
     "verifier_key_id",
     [
         "VerifierKey",
+        "verifier_key_",
+        "verifier__key",
         "verifier.key",
         "zk:Shield",
+        "zk_::Shield",
         "zk::",
+        "zk::Shield_",
+        "zk::Shield__Key",
         "zk::Shield/../../admin",
     ],
 )
@@ -1038,6 +1043,9 @@ def test_privacy_catalog_loader_rejects_backend_family_production_claims(
         "halo2/ipa/pasta",
         "halo2:ipa:pasta",
         "halo2 ipa pasta",
+        "halo2.ipa.pasta",
+        "halo2_ipa_pasta",
+        "halo2--ipa-pasta",
         "Halo2-ipa-pasta",
         ".halo2-ipa-pasta",
         "-halo2-ipa-pasta",
@@ -1095,6 +1103,42 @@ def test_privacy_catalog_loader_rejects_unportable_backend_families(
         ([{"label": "paper", "url": "https://user:pass@example.test"}], "must use an https URL"),
         ([{"label": "paper", "url": "https://"}], "must use an https URL"),
         ([{"label": "paper", "url": "https://example.test\\evil"}], "must use an https URL"),
+        (
+            [{"label": "paper", "url": "https://zips.z.ca\u0455h/zip-0224"}],
+            "must use an https URL",
+        ),
+        (
+            [{"label": "paper", "url": "https://xn--cah-ghd.org/source"}],
+            "must use an https URL",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash/prot\u03bfcol/protocol.pdf"}],
+            "must use an https URL",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash/zip-0224?claim=m\u0430innet"}],
+            "must use an https URL",
+        ),
+        (
+            [{"label": "paper", "url": "https://ZIPS.z.cash/zip-0224"}],
+            "url must be canonical",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash:443/zip-0224"}],
+            "url must be canonical",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash./zip-0224"}],
+            "url must be canonical",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash/protocol/../zip-0224"}],
+            "url must be canonical",
+        ),
+        (
+            [{"label": "paper", "url": "https://zips.z.cash/protocol/%2e%2e/zip-0224"}],
+            "url must be canonical",
+        ),
         ([{"label": "paper"}], "must include string label and url"),
         (
             [
@@ -2042,7 +2086,7 @@ def test_privacy_catalog_production_gate_remains_fail_closed_for_catalog_claims(
     [
         "buildShapeDevProofFixture",
         "buildFutureMockProof",
-        "buildFutureM_o_c_kProof",
+        "buildFutureMockProofV2",
         "buildFutureDev.Proof.Fixture",
     ],
 )
@@ -2079,7 +2123,7 @@ def test_privacy_catalog_loader_rejects_production_stage_fixture_entrypoints(
     [
         "buildProofFixture",
         "buildMockProof",
-        "buildM_o_c_kProof",
+        "buildMockProofV2",
         "buildProof.Fixture",
     ],
 )
@@ -3373,7 +3417,10 @@ def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
         ("proofFamily", "halo2..ipa", "field 'proof_family' must be a proof family name"),
         ("proofFamily", "halo2/../ipa", "field 'proof_family' must be a proof family name"),
         ("proofFamily", "halo2--ipa", "field 'proof_family' must be a proof family name"),
+        ("proofFamily", "/halo2", "field 'proof_family' must be a proof family name"),
+        ("proofFamily", "-halo2", "field 'proof_family' must be a proof family name"),
         ("proofFamily", "halo2/", "field 'proof_family' must be a proof family name"),
+        ("proofFamily", "halo2-", "field 'proof_family' must be a proof family name"),
         (
             "publicInputsSchema",
             "",
@@ -3402,6 +3449,16 @@ def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
         (
             "publicInputsSchema",
             "root,1proof",
+            "field 'public_inputs_schema' token 1 must be a lowercase public input name",
+        ),
+        (
+            "publicInputsSchema",
+            "root,field_",
+            "field 'public_inputs_schema' token 1 must be a lowercase public input name",
+        ),
+        (
+            "publicInputsSchema",
+            "root,field__digest",
             "field 'public_inputs_schema' token 1 must be a lowercase public input name",
         ),
         (
@@ -3469,8 +3526,58 @@ def test_privacy_catalog_loader_rejects_unsafe_ids(monkeypatch, bad_id) -> None:
             "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
         ),
         (
+            "sdkEntrypoints",
+            ["_buildProof"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "sdkEntrypoints",
+            ["buildProof_"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "sdkEntrypoints",
+            ["build_Proof"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "sdkEntrypoints",
+            ["Iroha._Privacy.buildProof"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "sdkEntrypoints",
+            ["Iroha.Privacy_.buildProof"],
+            "field 'sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
             "plannedSdkEntrypoints",
             ["buildFuture$Proof"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["_buildFutureProof"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["buildFutureProof_"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["buildFuture_Proof"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["Iroha._Privacy.buildFutureProof"],
+            "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
+        ),
+        (
+            "plannedSdkEntrypoints",
+            ["Iroha.Privacy_.buildFutureProof"],
             "field 'planned_sdk_entrypoints' item 0 must be an SDK entrypoint name",
         ),
         (

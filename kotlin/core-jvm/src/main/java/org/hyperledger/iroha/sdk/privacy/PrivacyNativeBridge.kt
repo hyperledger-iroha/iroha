@@ -80,6 +80,9 @@ class PrivacyNativeBridge private constructor() {
             require(hasPrivacyNoritoSchema(requestArchive, PRIVACY_SCHEMA_REQUEST)) {
                 "requestArchive must use the privacy request schema"
             }
+            require(hasNonEmptyPrivacyNoritoPayload(requestArchive)) {
+                "requestArchive must contain a non-empty privacy request payload"
+            }
             check(bridgeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val outputLabel = "privacy $label"
             val request = requestArchive.copyOf()
@@ -121,6 +124,9 @@ class PrivacyNativeBridge private constructor() {
             if (!isValidPrivacyNoritoArchive(output)) {
                 throw IllegalStateException("$label returned invalid Norito V1 archive")
             }
+            if (!hasNonEmptyPrivacyNoritoPayload(output)) {
+                throw IllegalStateException("$label returned empty privacy result payload")
+            }
             if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
                 throw IllegalStateException("$label returned unexpected privacy result schema")
             }
@@ -161,6 +167,7 @@ class PrivacyNativeBridge private constructor() {
                     output.isNotEmpty() &&
                     output.size <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES &&
                     isValidPrivacyNoritoArchive(output) &&
+                    hasNonEmptyPrivacyNoritoPayload(output) &&
                     hasPrivacyNoritoSchema(output, expectedSchemaByte)
             } catch (_: RuntimeException) {
                 false
@@ -220,6 +227,9 @@ class PrivacyNativeBridge private constructor() {
             val expectedCrc = readLongLittleEndian(output, 31)
             return privacyCrc64(output, payloadOffset, output.size - payloadOffset) == expectedCrc
         }
+
+        internal fun hasNonEmptyPrivacyNoritoPayload(output: ByteArray?): Boolean =
+            output != null && isValidPrivacyNoritoArchive(output) && readLongLittleEndian(output, 23) > 0
 
         private fun expectedPrivacyResultSchema(label: String): Int? =
             when (label) {

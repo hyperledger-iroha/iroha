@@ -5075,9 +5075,7 @@ mod tests {
         },
         transaction::signed::TransactionBuilder,
     };
-    use iroha_telemetry::metrics::{
-        GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
-    };
+    use iroha_telemetry::metrics::{Status as TelemetryStatus, Uptime};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
     use reqwest::{
         StatusCode,
@@ -7692,17 +7690,7 @@ mod tests {
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,
-            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
-            stack: iroha_telemetry::metrics::StackStatus::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            taikai_ingest: Vec::new(),
-            da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let encoded = norito::codec::encode_adaptive(&status);
 
@@ -7743,17 +7731,7 @@ mod tests {
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,
-            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
-            stack: iroha_telemetry::metrics::StackStatus::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            taikai_ingest: Vec::new(),
-            da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let encoded = norito::to_bytes(&status).expect("encode framed status");
 
@@ -7799,17 +7777,7 @@ mod tests {
             uptime: Uptime(Duration::from_secs(5)),
             view_changes: 0,
             queue_size: 4,
-            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
-            stack: iroha_telemetry::metrics::StackStatus::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            taikai_ingest: Vec::new(),
-            da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
         let updated = TelemetryStatus {
             build: Default::default(),
@@ -7825,17 +7793,7 @@ mod tests {
             uptime: Uptime(Duration::from_secs(7)),
             view_changes: 2,
             queue_size: 9,
-            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
-            stack: iroha_telemetry::metrics::StackStatus::default(),
-            sumeragi: None,
-            governance: GovernanceStatus::default(),
-            teu_lane_commit: Vec::new(),
-            teu_dataspace_backlog: Vec::new(),
-            tx_gossip: TxGossipSnapshot::default(),
-            sorafs_micropayments: Vec::new(),
-            taikai_alias_rotations: Vec::new(),
-            taikai_ingest: Vec::new(),
-            da_receipt_cursors: Vec::new(),
+            ..TelemetryStatus::default()
         };
 
         let responses = vec![

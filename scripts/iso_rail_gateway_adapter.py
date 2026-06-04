@@ -99,9 +99,23 @@ def _is_lower_hex_sha256(value: Any) -> bool:
     )
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise AdapterError(f"JSON object contains duplicate key {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
+
+
 def _load_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except FileNotFoundError as error:
         raise AdapterError(f"{path} does not exist") from error
     except json.JSONDecodeError as error:

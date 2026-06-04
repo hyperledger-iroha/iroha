@@ -1031,16 +1031,34 @@ track detailed unfinished engineering work.
   `TxInfAndSts/StsId` cannot shadow `GrpHdr/MsgId` for durable lifecycle ids or
   audit business-message ids.
 - Completed 2026-06-04: added Apache-2.0 mirrored Standards Editor XSD
-  fixtures for `pacs.002.001.10`, `pacs.004.001.10`, and `camt.056.001.08`.
-  The MDR/XSD live-profile matrix now validates BAH status, return, and
-  cancellation reports with rail-specific version and business-service controls
-  wherever the default profiles allow those exact versions.
+  fixtures for `pacs.002.001.10`, `pacs.004.001.10`, `camt.056.001.08`, and
+  `camt.056.001.09`. The MDR/XSD live-profile matrix now validates BAH status,
+  return, and cancellation reports with rail-specific version and
+  business-service controls wherever the default profiles allow those exact
+  versions.
+- Completed 2026-06-04: extended the XSD fixture preflight and production
+  readiness rollup with default profile-catalog coverage. The XSD verifier can
+  parse `DEFAULT_PROFILES_JSON`, record concrete profile-advertised message
+  versions, and fail `--require-profile-schema-backed-versions` when a version
+  lacks a schema-backed XML fixture; readiness rechecks those counts and
+  missing-version entries before accepting an XSD summary. The summaries now
+  also bind the manifest SHA-256, per-schema source repository/commit/path,
+  SPDX license, source SHA-256, profile source-file SHA-256, and embedded
+  catalog JSON SHA-256 values for release evidence provenance, and fail closed
+  on duplicated or malformed profile/message/direction/version catalog entries.
+  Candidate schema imports fail closed when source provenance is missing,
+  malformed, digest-drifted, or when an XSD contains known restricted Standards
+  Editor redistribution terms, preventing public mirrors with embedded
+  no-redistribution notices from being treated as production fixture evidence.
 - Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
   generated certificate-chain material, including complete canonical XML
   coverage for broader signed ISO envelopes, official
   rail/profile-specific trust-anchor packages, official CRL/OCSP or rail
   revocation-feed fixtures.
-- Add official MDR/XSD fixture coverage per profile.
+- Add official MDR/XSD fixture coverage per profile until both strict
+  schema-backed fixture checks and profile-advertised version checks pass; do
+  not import mirrored Standards Editor XSDs whose embedded terms prohibit
+  redistribution.
 - Completed 2026-06-01: tightened the deterministic XMLDSig/XAdES subset so
   `require-verified` profiles only accept the C14N 1.0 + single enveloped
   transform shape that the verifier actually checks. C14N 1.1, exclusive C14N,
@@ -1283,7 +1301,8 @@ track detailed unfinished engineering work.
   `messages.index.json` equality, and record-count consistency before any
   network delivery, rejects plaintext HTTP unless explicitly enabled for local
   tests, rejects endpoint URLs with credentials, params, query strings,
-  fragments, or control characters, and writes bounded per-endpoint receipts.
+  fragments, or control characters, rejects duplicate publication endpoints
+  before network delivery, and writes bounded per-endpoint receipts.
 - Completed 2026-06-04: added `scripts/iso_rail_gateway_adapter.py` for
   operator-side live rail file-drop ingress. Each XML payload requires a JSON
   sidecar with `message_type`, explicit `profile` by default, and
@@ -1302,18 +1321,22 @@ track detailed unfinished engineering work.
   params, query strings, fragments, malformed hosts, or control characters, can
   cross-check referenced XML or notary anchor source files, rejects legacy
   `colr.007` rail source files unless `--allow-legacy-colr007` is set for local
-  diagnostics, and emits a digest-bound verifier summary with per-receipt file
-  paths, `receipt_sha256` values, and policy flags.
+  diagnostics, rejects repeated receipt paths or copied receipts with duplicate
+  `receipt_sha256` values, and emits a digest-bound verifier summary with
+  per-receipt file paths, `receipt_sha256` values, and policy flags.
 - Completed 2026-06-04: added `scripts/iso_operator_canary.py` as the generic
   provider canary runner. The runner consumes a strict JSON runbook with
   explicit provider/environment labels, executes the rail file-drop adapter,
   audit notary adapter, and receipt verifier as subprocesses, rejects unknown
   runbook keys, rejects control characters in runbook strings, keeps relative
   paths inside the runbook directory, rejects endpoint URLs with credentials,
-  params, query strings, or fragments, verifies generated receipts by default
-  with source-file cross-checks, redacts bearer-token file arguments in the
-  summary, and writes a single bounded JSON summary suitable for CI or operator
-  evidence archives.
+  params, query strings, or fragments, rejects duplicate endpoint lists,
+  duplicate explicit receipt paths or receipt directories, and shared stage
+  receipt directories, verifies generated receipts by default with source-file
+  cross-checks, redacts bearer-token file arguments in the summary, supports
+  `--require-explicit-policy` so production runbooks must spell out every
+  policy boolean and the summary records that proof, and writes a single
+  bounded JSON summary suitable for CI or operator evidence archives.
   `--plan-only` validates runbooks and prints redacted child commands without
   contacting Torii or notary endpoints.
 - Completed 2026-06-04: added checked-in ISO operator canary runbook templates
@@ -1341,14 +1364,27 @@ track detailed unfinished engineering work.
   offline production evidence gate for ISO operator archives. The verifier
   recomputes canary and trust summary digests, requires successful
   rail/notary/verify canary stages plus digest-bound receipt-verifier JSON with
-  positive rail/notary receipt evidence and per-receipt digests by default,
+  positive rail/notary receipt evidence, unique receipt paths, and unique
+  per-receipt digests by default,
+  requires explicit expected `--provider` and `--environment` CLI context and
+  records that context in the digest-bound evidence policy for readiness
+  rechecking, requires explicit freshness budgets for canary, trust-summary,
+  and trust-source evidence while recording them in the evidence policy,
+  rejects stale digest-correct archive inputs, rejects repeated or copied
+  canary/trust summaries by path and `summary_sha256`,
+  requires canary summaries to prove they were generated with
+  `--require-explicit-policy`, rejects duplicate archived trust profile IDs,
+  rejects duplicate JSON object keys across raw canary, trust, receipt, XSD,
+  evidence, readiness, embedded receipt-verifier stdout, and direct archive
+  receipt-verifier stdout inputs before semantic validation,
   rejects plan-only or dry-run canaries, insecure HTTP evidence,
   default-profile fallbacks, legacy `colr.007` local overrides, unredacted
   bearer-token paths, secret-looking child output, smuggled trust-source URLs,
-  missing/malformed/future trust-source retrieval timestamps, smuggled child
-  command endpoint URLs, local-only child command flags in either `--flag` or
-  `--flag=value` form, unsupported child command flags outside the expected
-  rail/notary/receipt-verifier CLI surfaces, synthetic trust DER, and
+  missing/malformed/future trust-source retrieval timestamps,
+  missing/malformed/future trust-summary `verified_at` timestamps, smuggled
+  child command endpoint URLs, local-only child command flags in either
+  `--flag` or `--flag=value` form, unsupported child command flags outside the
+  expected rail/notary/receipt-verifier CLI surfaces, synthetic trust DER, and
   record-only trust policy before an archive is accepted as production
   evidence. Canary command redaction also handles
   `--bearer-token-file=<path>` in addition to the separated argument form.
@@ -1358,12 +1394,15 @@ track detailed unfinished engineering work.
   namespaces, `Document` payload roots, XML fixture namespaces and payload
   roots, canonical lowercase ISO message definition ids, schema path
   containment under the manifest tree, fixture path containment under the ISO
-  fixture tree, manifest duplicates/path escapes, and digest-bound summaries
-  while making reviewed missing-schema fixture exceptions explicit. All
-  checked-in payment XSDs now have standalone XML fixtures, so the
-  `--require-fixture-for-schema` strict flag passes; the schema-backed strict
-  flag still rejects the current official-package gaps until the remaining
-  securities/collateral/legacy-return XSDs are checked in.
+  fixture tree, manifest duplicates/path escapes, duplicate XML fixture
+  SHA-256 values, optional `xmllint --nonet` XML schema validation for
+  schema-backed fixtures, and digest-bound summaries while making reviewed
+  missing-schema fixture exceptions explicit. All
+  checked-in payment XSDs now have standalone XML fixtures and validate against
+  their checked-in XSDs, so the `--require-fixture-for-schema` strict flag
+  passes; the schema-backed strict flag still rejects the current
+  official-package gaps until the remaining securities/collateral/legacy-return
+  XSDs are checked in.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
   aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
   operator evidence summaries, requires strict schema-backed/fixture-backed XSD
@@ -1371,12 +1410,31 @@ track detailed unfinished engineering work.
   environment drift, missing rail/notary/verify canary stages, missing
   rail/notary receipt kinds, missing or weak direct receipt-archive
   verification, legacy `colr.007` local overrides, omitted XSD strict flags,
+  XSD summaries produced without XML schema validation,
+  inconsistent digest-bound XSD schema/fixture arrays, duplicate XSD schema or
+  fixture evidence digests, schema-reference drift,
   omitted evidence or nested receipt-summary policy flags, archived trust
   summaries with omitted policy/profile revocation flags, omitted planned-stage
-  `dry_run` flags, omitted evidence status booleans, nested receipt-summary
-  tampering, weak trust profiles, and record-only
-  trust policy, and emits a digest-bound blocker report for valid but
-  not-yet-production summaries.
+  `dry_run` flags, omitted evidence status booleans, omitted whole XSD or
+  evidence input summaries, omitted explicit release `--provider` or
+  `--environment` context, omitted explicit freshness budgets, stale
+  digest-correct XSD/evidence/canary/trust summaries, omitted or drifted
+  evidence policy context, omitted or weaker evidence freshness policy fields,
+  omitted canary explicit-policy proof, repeated or copied XSD/evidence summaries,
+  repeated or copied compact canary/trust summaries, nested receipt-summary
+  tampering, duplicate receipt paths or receipt digests, weak trust profiles,
+  duplicate compact trust profile IDs, record-only trust policy,
+  disabled CRL/OCSP revocation checks, and missing required revocation
+  material, mismatched trust `verified_bundles`/profile counts, missing compact
+  canary/trust source paths, non-canonical compact canary/trust summary
+  digests, and missing, timezone-less, or future XSD/evidence/trust
+  `verified_at` timestamps, malformed or reversed canary
+  `started_at`/`finished_at` windows,
+  missing or out-of-window compact `stage_windows`, overlapping stage
+  timelines, name-mismatched or reordered compact stage windows, and emits a
+  digest-bound blocker report for valid but not-yet-production summaries.
+  Compact canary stage names must also be unique and limited to the production
+  rail/notary/verify stages.
 - Completed 2026-06-04: hardened live securities lifecycle profile admission
   against local reference snapshots. `sese.023`/`sese.025` profile validation now
   rejects syntactically valid but unmapped settlement instrument ISIN/CUSIP

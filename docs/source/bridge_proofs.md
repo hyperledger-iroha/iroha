@@ -116,7 +116,10 @@ provider resolves the target Beacon block from an explicit slot/root/id or from
 the execution block timestamp, then fetches that target header, block root, and
 block body instead of binding the receipt to the moving finalized head. The
 current finalized header and finalized checkpoint still bound the target as
-finalized. SDK Beacon REST URL builders preserve endpoint query strings when
+finalized, while generated `beaconFinality.finalizedHeaderRoot` and
+`beaconFinality.beaconSlot` identify the finalized header covered by the
+Beacon REST light-client finality update. SDK Beacon REST URL builders preserve
+endpoint query strings when
 appending finalized-header and checkpoint paths, allowing apps to use provider
 URLs that carry query-scoped credentials while still sending headers separately.
 Browser fetch adapters also

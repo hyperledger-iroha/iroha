@@ -104,6 +104,10 @@ material: C# wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Production init requests and Reserved-lineage append-output requests must also
+include packaged lineage key artifacts in the raw Norito request:
+`lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
+rejected before runtime key generation.
 Semantic append is bounded by the separate `CompactTokenMaxHops` constant;
 witnessless Reserved-lineage append and redeem use
 `RecursiveSpendLineageWitnesslessMaxHopsV1`.

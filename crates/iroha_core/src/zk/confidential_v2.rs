@@ -8,23 +8,10 @@ use halo2_proofs::{
     circuit::{Layouter, SimpleFloorPlanner, Value},
     halo2curves::{
         ff::{Field as _, PrimeField as _},
-        pasta::{EqAffine as Curve, Fp as Scalar},
+        pasta::Fp as Scalar,
     },
-    plonk::{
-        Circuit, ConstraintSystem, Error as PlonkError, ProvingKey, Selector, VerifyingKey,
-        create_proof, keygen_pk, keygen_vk, verify_proof,
-    },
-    poly::{
-        Rotation, VerificationStrategy as _,
-        ipa::{
-            commitment::IPACommitmentScheme, multiopen::ProverIPA,
-            strategy::SingleStrategy as SingleVerifier,
-        },
-    },
-    transcript::{
-        Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer as _,
-        TranscriptWriterBuffer as _,
-    },
+    plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+    poly::Rotation,
 };
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 use iroha_crypto::Hash as CryptoHash;
@@ -35,9 +22,6 @@ use iroha_data_model::{
     proof::{ProofBox, VerifyingKeyRecord},
     zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
 };
-#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-use rand_core_06::OsRng;
-
 pub const CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID: &str =
     "halo2/pasta/ipa/anon-transfer-2x2-merkle16-poseidon-diversified";
 pub const CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID: &str =
@@ -145,10 +129,10 @@ pub fn is_confidential_unshield_v2_circuit_id(raw: &str) -> bool {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type ConfidentialV2ProvingKey = ProvingKey<Curve>;
+type ConfidentialV2ProvingKey = super::halo2_backend::ProvingKey;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-type ConfidentialV2VerifyingKey = VerifyingKey<Curve>;
+type ConfidentialV2VerifyingKey = super::halo2_backend::VerifyingKey;
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn build_confidential_v2_vk_box<C>(
@@ -160,7 +144,7 @@ where
     C: Circuit<Scalar>,
 {
     let params = super::pasta_params_new(k);
-    let vk = keygen_vk(&params, circuit)
+    let vk = super::halo2_backend::keygen_vk(&params, circuit)
         .map_err(|err| format!("failed to generate confidential v2 verifying key: {err}"))?;
     let mut bytes = super::zk1::wrap_start();
     super::zk1::wrap_append_ipa_k(&mut bytes, k);
@@ -2370,7 +2354,7 @@ impl<const DEPTH: usize> Circuit<Scalar> for ConfidentialUnshieldCircuitV3<DEPTH
 fn parse_vk_for_transfer(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, halo2_proofs::plonk::VerifyingKey<Curve>), String> {
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
     if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
         return Err("confidential v2 proving requires a halo2/ipa verifying key".to_owned());
     }
@@ -2394,7 +2378,7 @@ fn parse_vk_for_transfer(
 fn parse_vk_for_unshield_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
-) -> Result<(super::PastaParams, halo2_proofs::plonk::VerifyingKey<Curve>), String> {
+) -> Result<(super::PastaParams, ConfidentialV2VerifyingKey), String> {
     if vk_box.backend.as_str() != super::ZK_BACKEND_HALO2_IPA {
         return Err("confidential v2 proving requires a halo2/ipa verifying key".to_owned());
     }
@@ -2448,7 +2432,7 @@ fn derive_confidential_v2_proving_key<C>(
 where
     C: Circuit<Scalar>,
 {
-    keygen_pk(params, parsed_vk, empty_circuit)
+    super::halo2_backend::keygen_pk(params, parsed_vk, empty_circuit)
         .map_err(|err| format!("failed to derive confidential {context} proving key: {err}"))
 }
 
@@ -2529,17 +2513,10 @@ fn create_confidential_v2_proof<C>(
 where
     C: Circuit<Scalar>,
 {
-    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
-    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
-        params,
-        proving_key,
-        &[circuit],
-        instance_wrapper,
-        OsRng,
-        &mut transcript,
-    )
-    .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
-    Ok(transcript.finalize())
+    let proof_raw =
+        super::halo2_backend::create_ipa_proof(params, proving_key, &[circuit], instance_wrapper)
+            .map_err(|err| format!("failed to create confidential {context} proof: {err}"))?;
+    Ok(proof_raw)
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -2740,17 +2717,12 @@ pub fn build_confidential_transfer_proof_v2(
         )?
     };
     {
-        let mut verify_transcript = Blake2bRead::<_, Curve, Challenge255<Curve>>::init(
-            std::io::Cursor::new(proof_raw.as_slice()),
-        );
-        let strategy = SingleVerifier::new(&params);
         let proofs_instances = [&instance_refs[..]];
-        verify_proof(
+        super::halo2_backend::verify_ipa_proof(
             &params,
             &parsed_vk,
-            strategy,
+            proof_raw.as_slice(),
             &proofs_instances,
-            &mut verify_transcript,
         )
         .map_err(|err| {
             format!("generated confidential transfer proof failed local self-verification: {err}")

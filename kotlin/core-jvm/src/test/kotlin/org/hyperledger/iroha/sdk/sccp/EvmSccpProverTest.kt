@@ -961,9 +961,12 @@ class EvmSccpProverTest {
         assertEquals("4660", evidence.beaconFinality?.get("executionBlockNumber"))
         assertEquals(blockHash, evidence.beaconFinality?.get("executionBlockHash"))
         assertEquals("0x" + "cc".repeat(32), evidence.beaconFinality?.get("executionReceiptsRoot"))
-        assertEquals("0x" + "aa".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
+        assertEquals(
+            "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+            evidence.beaconFinality?.get("finalizedHeaderRoot"),
+        )
         assertEquals("0x" + "ee".repeat(32), evidence.beaconFinality?.get("syncCommitteeRoot"))
-        assertEquals("32", evidence.beaconFinality?.get("beaconSlot"))
+        assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
         assertEquals("0x01" + "00".repeat(63), evidence.beaconFinality?.get("syncCommitteeBits"))
         assertEquals("0x" + "34".repeat(96), evidence.beaconFinality?.get("syncCommitteeSignature"))
         assertEquals("1", evidence.beaconFinality?.get("syncCommitteeParticipation"))
@@ -1049,8 +1052,11 @@ class EvmSccpProverTest {
                 ),
             )
 
-        assertEquals("0x" + "aa".repeat(32), evidence.beaconFinality?.get("finalizedHeaderRoot"))
-        assertEquals("32", evidence.beaconFinality?.get("beaconSlot"))
+        assertEquals(
+            "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+            evidence.beaconFinality?.get("finalizedHeaderRoot"),
+        )
+        assertEquals("64", evidence.beaconFinality?.get("beaconSlot"))
         assertEquals(
             listOf(
                 "https://beacon.example/eth/v1/beacon/genesis",
@@ -2885,15 +2891,16 @@ class EvmSccpProverTest {
     private fun beaconHeaderJson(
         executionOptimistic: Boolean = false,
         finalized: Boolean = true,
-        rootByte: String = "dd",
+        rootByte: String? = null,
         slot: String = "64",
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
     ): String =
         """
         {
           "execution_optimistic": $executionOptimistic,
           "finalized": $finalized,
           "data": {
-            "root": "0x${rootByte.repeat(32)}",
+            "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}",
             "canonical": true,
             "header": {
               "message": {
@@ -2909,27 +2916,33 @@ class EvmSccpProverTest {
         }
         """.trimIndent()
 
-    private fun beaconCheckpointJson(rootByte: String = "dd"): String =
+    private fun beaconCheckpointJson(
+        rootByte: String? = null,
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+    ): String =
         """
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
             "finalized": {
-              "root": "0x${rootByte.repeat(32)}",
+              "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}",
               "epoch": "2"
             }
           }
         }
         """.trimIndent()
 
-    private fun beaconBlockRootJson(rootByte: String = "dd"): String =
+    private fun beaconBlockRootJson(
+        rootByte: String? = null,
+        root: String = "0xbb44a971e8c280f585ba430bfabfe87d9c59adf38bf9f77266b69687a148048c",
+    ): String =
         """
         {
           "execution_optimistic": false,
           "finalized": true,
           "data": {
-            "root": "0x${rootByte.repeat(32)}"
+            "root": "${rootByte?.let { "0x${it.repeat(32)}" } ?: root}"
           }
         }
         """.trimIndent()
