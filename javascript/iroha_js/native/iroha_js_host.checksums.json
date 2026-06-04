@@ -1,11 +1,7 @@
 {
   "entries": {
     "darwin-arm64": {
-<<<<<<< HEAD
       "sha256": "cf93750905c4660c2a7e161495f200a39bc3e00bff524101a5270170a2a4f38d"
-=======
-      "sha256": "5297eb4a9c1835398bf52ce99126fff27867eeb72289271a381cb024afbaf181"
->>>>>>> origin/optimizations
     }
   }
 }

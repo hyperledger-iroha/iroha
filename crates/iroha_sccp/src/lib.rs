@@ -18578,7 +18578,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
         payload_hash: bundle.commitment.payload_hash,
         target_domain: SCCP_DOMAIN_SORA,
         commitment_root: bundle.commitment_root,
-        finality_height: transfer.nonce.max(1),
+        finality_height: transfer.nonce.saturating_add(1),
         finality_block_hash,
     })
 }
@@ -35276,7 +35276,38 @@ mod tests {
         assert_eq!(public_inputs.payload_hash, bundle.commitment.payload_hash);
         assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
         assert_eq!(public_inputs.commitment_root, bundle.commitment_root);
-        assert_eq!(public_inputs.finality_height, 42);
+        assert_eq!(public_inputs.finality_height, 43);
+
+        let zero_nonce_bundle = {
+            let mut bundle = bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 0;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let one_nonce_bundle = {
+            let mut bundle = zero_nonce_bundle.clone();
+            let SccpPayloadV1::Transfer(ref mut transfer) = bundle.payload else {
+                unreachable!("sample bundle is a transfer");
+            };
+            transfer.nonce = 1;
+            bundle.commitment = hub_commitment_from_sccp_payload(&bundle.payload);
+            bundle.commitment_root =
+                merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+            bundle
+        };
+        let zero_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&zero_nonce_bundle)
+                .expect("zero-nonce diagnostic public inputs");
+        let one_nonce_inputs =
+            sccp_taira_tron_xor_diagnostic_message_public_inputs(&one_nonce_bundle)
+                .expect("one-nonce diagnostic public inputs");
+        assert_eq!(zero_nonce_inputs.finality_height, 1);
+        assert_eq!(one_nonce_inputs.finality_height, 2);
 
         let artifact = build_sccp_taira_tron_xor_diagnostic_transparent_proof(&bundle)
             .expect("diagnostic artifact");
